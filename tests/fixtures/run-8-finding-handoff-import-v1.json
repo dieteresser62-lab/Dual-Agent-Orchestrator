@@ -1,5 +1,6 @@
 {
   "source": "../Cookbook/.orchestrator/artifacts/watch-20260913-113942.183346Z-42803e178cac/records/ar1-efb0bbd9e148ea4c4473f4d01247576ad8ef95e54340735a6fa9353858ce22a9.json",
+  "state_projection_sha256": "ac659a29af3cedda9153d18f4b0feb9d6f66e408b11db888a91ac793432a4bc1",
   "finding_transitions_sha256": "580371cb96592b7c6dca3a255dd21a88871eaaa7c544e660966978a356ed67d8",
   "transitions": [
     {

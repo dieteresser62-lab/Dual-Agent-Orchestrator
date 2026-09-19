@@ -79,6 +79,8 @@ class RecordType(StrEnum):
     FINDING_HANDOFF_IMPORT = "finding_handoff_import"
     BRANCH_DISCOVERY_HANDOFF_EXPORT = "branch_discovery_handoff_export"
     BRANCH_DISCOVERY_HANDOFF_IMPORT = "branch_discovery_handoff_import"
+    PLAN_ASSIGNMENT = "plan_assignment"
+    REMEDIATION_COHORT_CHECKPOINT = "remediation_cohort_checkpoint"
     VALIDATION_REQUEST = "validation_request"
     VALIDATION_CONTENT = "validation_content"
     VALIDATION_ATTESTATION = "validation_attestation"
@@ -615,6 +617,56 @@ class CorrectionWorkUnitPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanTreatmentProposalPayload:
+    signature: str
+    finding_ids: tuple[str, ...]
+    treatment_kind: str
+    closing_slice_ids: tuple[str, ...] = ()
+    no_code_reason: str | None = None
+    evidence: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.signature, "plan treatment proposal signature")
+        _require_unique_finding_ids(
+            self.finding_ids,
+            "plan treatment proposal finding_ids",
+            allow_empty=False,
+        )
+        if self.finding_ids != sorted_finding_ids(self.finding_ids):
+            raise ArtifactValidationError(
+                "plan treatment proposal finding_ids must be ordered by finding_id"
+            )
+        if self.treatment_kind == "implementation":
+            _require_unique_identifiers(
+                self.closing_slice_ids,
+                "plan treatment proposal closing_slice_ids",
+                allow_empty=False,
+            )
+            if len(self.closing_slice_ids) != 1:
+                raise ArtifactValidationError(
+                    "implementation treatment requires exactly one closing Slice"
+                )
+            if self.no_code_reason is not None or self.evidence is not None:
+                raise ArtifactValidationError(
+                    "implementation treatment forbids No-Code disposition fields"
+                )
+            return
+        if self.treatment_kind != "no_code":
+            raise ArtifactValidationError("plan treatment proposal kind is invalid")
+        if self.closing_slice_ids:
+            raise ArtifactValidationError(
+                "No-Code disposition forbids closing Slice ids"
+            )
+        if self.no_code_reason not in {
+            "no_defect",
+            "out_of_scope",
+            "already_fixed",
+        }:
+            raise ArtifactValidationError("No-Code disposition reason is invalid")
+        _require_text(self.evidence, "No-Code disposition evidence")
+
+
+@dataclass(frozen=True, slots=True)
 class AgentResultPayload:
     role: Role
     work_unit_id: str
@@ -624,6 +676,7 @@ class AgentResultPayload:
     request_id: str
     response_sha256: str
     slice_plan: tuple[SliceSpec, ...] = ()
+    plan_treatments: tuple[PlanTreatmentProposalPayload, ...] = ()
     status: ClassVar[str] = "ready"
     record_type: ClassVar[RecordType] = RecordType.AGENT_RESULT
 
@@ -652,6 +705,26 @@ class AgentResultPayload:
         slice_ids = tuple(item.slice_id for item in self.slice_plan)
         if len(slice_ids) != len(set(slice_ids)):
             raise ArtifactValidationError("agent result slice_plan ids must be unique")
+        if any(
+            not isinstance(item, PlanTreatmentProposalPayload)
+            for item in self.plan_treatments
+        ):
+            raise ArtifactValidationError(
+                "agent result plan treatments must be typed"
+            )
+        if (
+            self.plan_treatments
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise ArtifactValidationError(
+                "agent result plan treatments require "
+                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        signatures = tuple(item.signature for item in self.plan_treatments)
+        if signatures != tuple(sorted(set(signatures))):
+            raise ArtifactValidationError(
+                "agent result plan treatments must be sorted and unique by signature"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -713,6 +786,7 @@ class ReviewPayload:
     test_files: tuple[str, ...] = ()
     pre_mortem: str | None = None
     stop_request: ReviewStopRequestPayload | None = None
+    plan_treatment_decisions: tuple[PlanTreatmentDecisionPayload, ...] = ()
     status: ClassVar[str] = "decided"
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
@@ -764,6 +838,28 @@ class ReviewPayload:
         if (self.verdict == "stop") != (self.stop_request is not None):
             raise ArtifactValidationError(
                 "review stop verdict and structured stop request differ"
+            )
+        if any(
+            not isinstance(item, PlanTreatmentDecisionPayload)
+            for item in self.plan_treatment_decisions
+        ):
+            raise ArtifactValidationError(
+                "plan treatment decisions must be typed"
+            )
+        if (
+            self.plan_treatment_decisions
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise ArtifactValidationError(
+                "plan treatment decisions require "
+                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        decision_signatures = tuple(
+            item.signature for item in self.plan_treatment_decisions
+        )
+        if decision_signatures != tuple(sorted(set(decision_signatures))):
+            raise ArtifactValidationError(
+                "plan treatment decisions must be sorted and unique by signature"
             )
         if self.transport_schema != "native-claude-review-v2":
             raise ArtifactValidationError("review transport_schema is unsupported")
@@ -1241,6 +1337,259 @@ class FindingSnapshotItem:
         if not isinstance(self.severity, FindingSeverity):
             raise ArtifactValidationError("finding_snapshot severity is invalid")
 
+    @property
+    def is_open(self) -> bool:
+        """Expose state without duplicating reducer vocabulary in consumers."""
+
+        return self.finding_status == "open"
+
+
+@dataclass(frozen=True, slots=True)
+class PlanTreatmentAssignment:
+    """Reviewer-authoritative treatment for one canonical Finding signature."""
+
+    signature: str
+    finding_ids: tuple[str, ...]
+    treatment_kind: str
+    closing_slice_ids: tuple[str, ...] = ()
+    no_code_reason: str | None = None
+    evidence: str | None = None
+    authoritative_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.signature, "plan treatment signature")
+        _require_unique_finding_ids(
+            self.finding_ids, "plan treatment finding_ids", allow_empty=False
+        )
+        if self.finding_ids != sorted_finding_ids(self.finding_ids):
+            raise ArtifactValidationError(
+                "plan treatment finding_ids must be ordered by finding_id"
+            )
+        if self.treatment_kind == "implementation":
+            _require_unique_identifiers(
+                self.closing_slice_ids,
+                "plan treatment closing_slice_ids",
+                allow_empty=False,
+            )
+            if len(self.closing_slice_ids) != 1:
+                raise ArtifactValidationError(
+                    "implementation treatment requires exactly one closing Slice"
+                )
+            if any(
+                value is not None
+                for value in (
+                    self.no_code_reason,
+                    self.evidence,
+                    self.authoritative_fingerprint,
+                )
+            ):
+                raise ArtifactValidationError(
+                    "implementation treatment forbids No-Code disposition fields"
+                )
+            return
+        if self.treatment_kind != "no_code":
+            raise ArtifactValidationError("plan treatment kind is invalid")
+        if self.closing_slice_ids:
+            raise ArtifactValidationError(
+                "No-Code disposition forbids closing Slice ids"
+            )
+        if self.no_code_reason not in {
+            "no_defect",
+            "out_of_scope",
+            "already_fixed",
+        }:
+            raise ArtifactValidationError("No-Code disposition reason is invalid")
+        _require_text(self.evidence, "No-Code disposition evidence")
+        _require_sha256(
+            self.authoritative_fingerprint,
+            "No-Code disposition authoritative_fingerprint",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PlanTreatmentDecisionPayload:
+    signature: str
+    decision: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.signature, "plan treatment decision signature")
+        if self.decision not in {"accepted", "rejected"}:
+            raise ArtifactValidationError("plan treatment decision is invalid")
+        _require_text(self.rationale, "plan treatment decision rationale")
+
+
+@dataclass(frozen=True, slots=True)
+class PlanAssignmentPayload:
+    """E3 authority created only from one positive, explicit plan review."""
+
+    family_id: str
+    cycle_number: int
+    remediation_round_number: int
+    source_snapshot_record_id: str
+    finding_snapshot_sha256: str
+    plan_result_record_id: str
+    review_record_id: str
+    review_fingerprint: str
+    treatments: tuple[PlanTreatmentAssignment, ...]
+    slices: tuple[SliceSpec, ...]
+    implementation_scope: tuple[str, ...]
+    authority: Role
+    status: ClassVar[str] = "assigned"
+    record_type: ClassVar[RecordType] = RecordType.PLAN_ASSIGNMENT
+
+    def __post_init__(self) -> None:
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            raise ArtifactValidationError(
+                "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        _require_identifier(self.family_id, "plan assignment family_id")
+        _require_positive(self.cycle_number, "plan assignment cycle_number")
+        _require_positive(
+            self.remediation_round_number,
+            "plan assignment remediation_round_number",
+        )
+        if self.remediation_round_number > (
+            native_finding_decisions.MAX_REMEDIATION_ROUNDS
+        ):
+            raise ArtifactValidationError(
+                "plan assignment exceeds the absolute remediation round limit"
+            )
+        _require_record_id(
+            self.source_snapshot_record_id,
+            "plan assignment source_snapshot_record_id",
+        )
+        _require_sha256(
+            self.finding_snapshot_sha256,
+            "plan assignment finding_snapshot_sha256",
+        )
+        _require_record_id(
+            self.plan_result_record_id,
+            "plan assignment plan_result_record_id",
+        )
+        _require_record_id(self.review_record_id, "plan assignment review_record_id")
+        _require_sha256(self.review_fingerprint, "plan assignment review_fingerprint")
+        if self.authority is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+            raise ArtifactValidationError(
+                "plan assignment authority must be the reviewer"
+            )
+        if any(
+            not isinstance(item, PlanTreatmentAssignment)
+            for item in self.treatments
+        ):
+            raise ArtifactValidationError(
+                "plan assignment treatments must be typed"
+            )
+        signatures = tuple(item.signature for item in self.treatments)
+        if not signatures or signatures != tuple(sorted(set(signatures))):
+            raise ArtifactValidationError(
+                "plan assignment treatments must be non-empty, sorted, and unique"
+            )
+        finding_ids = tuple(
+            finding_id
+            for treatment in self.treatments
+            for finding_id in treatment.finding_ids
+        )
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ArtifactValidationError(
+                "plan assignment Finding IDs must belong to exactly one signature"
+            )
+        if any(
+            treatment.treatment_kind == "no_code"
+            and treatment.authoritative_fingerprint != self.review_fingerprint
+            for treatment in self.treatments
+        ):
+            raise ArtifactValidationError(
+                "No-Code disposition fingerprint differs from its plan review"
+            )
+        slice_ids = tuple(item.slice_id for item in self.slices)
+        if slice_ids and slice_ids != tuple(str(index) for index in range(1, len(slice_ids) + 1)):
+            raise ArtifactValidationError(
+                "plan assignment Slice ids must be contiguous and 1-based"
+            )
+        available_slices = frozenset(slice_ids)
+        if any(
+            treatment.treatment_kind == "implementation"
+            and treatment.closing_slice_ids[0] not in available_slices
+            for treatment in self.treatments
+        ):
+            raise ArtifactValidationError(
+                "plan assignment closing Slice is absent from the implementation plan"
+            )
+        expected_scope = tuple(
+            sorted({path for item in self.slices for path in item.paths})
+        )
+        if self.implementation_scope != expected_scope:
+            raise ArtifactValidationError(
+                "plan assignment implementation_scope differs from the union of Slice paths"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationCohortCheckpointPayload:
+    """Pre-discovery E4 fact separating inherited S_r from later N_r."""
+
+    family_id: str
+    remediation_round_number: int
+    plan_assignment_record_id: str
+    implementation_run_id: str
+    implementation_head_record_id: str
+    inherited_signatures: tuple[str, ...]
+    unresolved_inherited_signatures: tuple[str, ...]
+    authority: Role
+    status: ClassVar[str] = "checked"
+    record_type: ClassVar[RecordType] = RecordType.REMEDIATION_COHORT_CHECKPOINT
+
+    def __post_init__(self) -> None:
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            raise ArtifactValidationError(
+                "remediation cohort checkpoint requires "
+                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        _require_identifier(self.family_id, "remediation cohort family_id")
+        _require_positive(
+            self.remediation_round_number,
+            "remediation cohort round number",
+        )
+        if self.remediation_round_number > (
+            native_finding_decisions.MAX_REMEDIATION_ROUNDS
+        ):
+            raise ArtifactValidationError(
+                "remediation cohort exceeds the absolute remediation round limit"
+            )
+        _require_record_id(
+            self.plan_assignment_record_id,
+            "remediation cohort plan_assignment_record_id",
+        )
+        _require_identifier(
+            self.implementation_run_id,
+            "remediation cohort implementation_run_id",
+        )
+        _require_record_id(
+            self.implementation_head_record_id,
+            "remediation cohort implementation_head_record_id",
+        )
+        _require_signature_sequence(
+            self.inherited_signatures,
+            "remediation cohort inherited_signatures",
+            allow_empty=False,
+        )
+        _require_signature_sequence(
+            self.unresolved_inherited_signatures,
+            "remediation cohort unresolved_inherited_signatures",
+            allow_empty=True,
+        )
+        if not set(self.unresolved_inherited_signatures).issubset(
+            self.inherited_signatures
+        ):
+            raise ArtifactValidationError(
+                "unresolved inherited signatures are not a subset of S_r"
+            )
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError(
+                "remediation cohort checkpoint authority must be orchestrator"
+            )
+
 
 def _validate_finding_snapshot(
     snapshot: Sequence[FindingSnapshotItem], *, allow_empty: bool = False
@@ -1274,6 +1623,7 @@ class BranchDiscoveryHandoffExportPayload:
     authority: Role
     target_execution_mode: str = "PLAN_ONLY"
     source_completion_record_id: str | None = None
+    remediation_cohort_checkpoint_record_id: str | None = None
     status: ClassVar[str] = "exported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT
 
@@ -1313,6 +1663,10 @@ class BranchDiscoveryHandoffExportPayload:
                 raise ArtifactValidationError(
                     "PLAN_ONLY branch discovery handoff forbids source_completion_record_id"
                 )
+            if self.remediation_cohort_checkpoint_record_id is not None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery handoff forbids a remediation cohort checkpoint"
+                )
         else:
             if self.discovery_review_record_id is not None:
                 raise ArtifactValidationError(
@@ -1325,6 +1679,11 @@ class BranchDiscoveryHandoffExportPayload:
             _require_record_id(
                 self.source_completion_record_id, "source_completion_record_id"
             )
+            if self.remediation_cohort_checkpoint_record_id is not None:
+                _require_record_id(
+                    self.remediation_cohort_checkpoint_record_id,
+                    "remediation_cohort_checkpoint_record_id",
+                )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
         _require_git_sha(self.family_base_commit, "family_base_commit")
         _require_positive(self.cycle_number, "cycle_number")
@@ -1367,6 +1726,7 @@ class BranchDiscoveryHandoffImportPayload:
     authority: Role
     target_execution_mode: str = "PLAN_ONLY"
     source_completion_record_id: str | None = None
+    remediation_cohort_checkpoint_record_id: str | None = None
     status: ClassVar[str] = "imported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT
 
@@ -1408,6 +1768,10 @@ class BranchDiscoveryHandoffImportPayload:
                 raise ArtifactValidationError(
                     "PLAN_ONLY branch discovery import forbids source_completion_record_id"
                 )
+            if self.remediation_cohort_checkpoint_record_id is not None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery import forbids a remediation cohort checkpoint"
+                )
         else:
             if self.discovery_review_record_id is not None:
                 raise ArtifactValidationError(
@@ -1420,6 +1784,11 @@ class BranchDiscoveryHandoffImportPayload:
             _require_record_id(
                 self.source_completion_record_id, "source_completion_record_id"
             )
+            if self.remediation_cohort_checkpoint_record_id is not None:
+                _require_record_id(
+                    self.remediation_cohort_checkpoint_record_id,
+                    "remediation_cohort_checkpoint_record_id",
+                )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
         _require_git_sha(self.family_base_commit, "family_base_commit")
         _require_positive(self.cycle_number, "cycle_number")
@@ -2515,6 +2884,7 @@ ArtifactPayload: TypeAlias = (
     | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
     | BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload
+    | PlanAssignmentPayload | RemediationCohortCheckpointPayload
     | ValidationRequestPayload | ValidationContentPayload
     | ValidationAttestationPayload | ProviderContentPayload
     | ReviewPacketPayload | GatePayload
@@ -2540,11 +2910,26 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         raw["slice_plan"] = [
             _slice_spec_document(item) for item in payload.slice_plan
         ]
+        if not payload.plan_treatments:
+            raw.pop("plan_treatments", None)
+        else:
+            treatments: list[dict[str, Any]] = []
+            for treatment in payload.plan_treatments:
+                item = asdict(treatment)
+                if treatment.treatment_kind == "implementation":
+                    item.pop("no_code_reason", None)
+                    item.pop("evidence", None)
+                else:
+                    item.pop("closing_slice_ids", None)
+                treatments.append(item)
+            raw["plan_treatments"] = treatments
     if isinstance(payload, ReviewPayload):
         if payload.review_evidence is None:
             raw.pop("review_evidence", None)
         if payload.red_state_followup_slice is None:
             raw.pop("red_state_followup_slice", None)
+        if not payload.plan_treatment_decisions:
+            raw.pop("plan_treatment_decisions", None)
     if (
         isinstance(payload, BranchDiscoveryCompletedPayload)
         and payload.scan_complete is None
@@ -2578,6 +2963,21 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("target_execution_mode", None)
         if payload.source_completion_record_id is None:
             raw.pop("source_completion_record_id", None)
+        if payload.remediation_cohort_checkpoint_record_id is None:
+            raw.pop("remediation_cohort_checkpoint_record_id", None)
+    if isinstance(payload, PlanAssignmentPayload):
+        raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
+        treatments: list[dict[str, Any]] = []
+        for treatment in payload.treatments:
+            item = asdict(treatment)
+            if treatment.treatment_kind == "implementation":
+                item.pop("no_code_reason", None)
+                item.pop("evidence", None)
+                item.pop("authoritative_fingerprint", None)
+            else:
+                item.pop("closing_slice_ids", None)
+            treatments.append(item)
+        raw["treatments"] = treatments
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None
@@ -2839,6 +3239,20 @@ def _finding_snapshot_item_from_dict(
     )
 
 
+def _plan_treatment_assignment_from_dict(
+    data: Mapping[str, Any],
+) -> PlanTreatmentAssignment:
+    return PlanTreatmentAssignment(
+        signature=data["signature"],
+        finding_ids=tuple(data["finding_ids"]),
+        treatment_kind=data["treatment_kind"],
+        closing_slice_ids=tuple(data.get("closing_slice_ids", ())),
+        no_code_reason=data.get("no_code_reason"),
+        evidence=data.get("evidence"),
+        authoritative_fingerprint=data.get("authoritative_fingerprint"),
+    )
+
+
 _PAYLOAD_READERS: dict[
     RecordType, Callable[[Mapping[str, Any]], ArtifactPayload]
 ] = {
@@ -2919,6 +3333,17 @@ _PAYLOAD_READERS: dict[
             data["request_id"],
             data["response_sha256"],
             tuple(_slice_spec_from_dict(item) for item in data["slice_plan"]),
+            tuple(
+                PlanTreatmentProposalPayload(
+                    item["signature"],
+                    tuple(item["finding_ids"]),
+                    item["treatment_kind"],
+                    tuple(item.get("closing_slice_ids", ())),
+                    item.get("no_code_reason"),
+                    item.get("evidence"),
+                )
+                for item in data.get("plan_treatments", ())
+            ),
         ),
     RecordType.DIAGNOSTIC: lambda data: DiagnosticPayload(
         Role(data["role"]), data["work_unit_id"], data["attempt"],
@@ -2953,6 +3378,12 @@ _PAYLOAD_READERS: dict[
                     data["stop_request"]["rationale"],
                     tuple(data["stop_request"]["remediation_paths"]),
                 )
+            ),
+            tuple(
+                PlanTreatmentDecisionPayload(
+                    item["signature"], item["decision"], item["rationale"]
+                )
+                for item in data.get("plan_treatment_decisions", ())
             ),
         ),
     RecordType.BRANCH_DISCOVERY_COMPLETED: lambda data: BranchDiscoveryCompletedPayload(
@@ -3059,6 +3490,7 @@ _PAYLOAD_READERS: dict[
             Role(data["authority"]),
             data.get("target_execution_mode", "PLAN_ONLY"),
             data.get("source_completion_record_id"),
+            data.get("remediation_cohort_checkpoint_record_id"),
         ),
     RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT: lambda data: BranchDiscoveryHandoffImportPayload(
             data["source_run_id"], data["source_head_record_id"],
@@ -3081,6 +3513,25 @@ _PAYLOAD_READERS: dict[
             Role(data["authority"]),
             data.get("target_execution_mode", "PLAN_ONLY"),
             data.get("source_completion_record_id"),
+            data.get("remediation_cohort_checkpoint_record_id"),
+        ),
+    RecordType.PLAN_ASSIGNMENT: lambda data: PlanAssignmentPayload(
+            data["family_id"], data["cycle_number"],
+            data["remediation_round_number"], data["source_snapshot_record_id"],
+            data["finding_snapshot_sha256"], data["plan_result_record_id"],
+            data["review_record_id"],
+            data["review_fingerprint"],
+            tuple(_plan_treatment_assignment_from_dict(item) for item in data["treatments"]),
+            tuple(_slice_spec_from_dict(item) for item in data["slices"]),
+            tuple(data["implementation_scope"]), Role(data["authority"]),
+        ),
+    RecordType.REMEDIATION_COHORT_CHECKPOINT: lambda data: RemediationCohortCheckpointPayload(
+            data["family_id"], data["remediation_round_number"],
+            data["plan_assignment_record_id"], data["implementation_run_id"],
+            data["implementation_head_record_id"],
+            tuple(data["inherited_signatures"]),
+            tuple(data["unresolved_inherited_signatures"]),
+            Role(data["authority"]),
         ),
     RecordType.VALIDATION_REQUEST: lambda data: ValidationRequestPayload(
         tuple(
@@ -3279,6 +3730,17 @@ def _require_finding_id(value: str, name: str) -> None:
 def _require_sha256(value: str, name: str) -> None:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ArtifactValidationError(f"{name} must be a lowercase SHA-256 digest")
+
+
+def _require_signature_sequence(
+    values: Sequence[str], name: str, *, allow_empty: bool
+) -> None:
+    if isinstance(values, (str, bytes)) or (not values and not allow_empty):
+        raise ArtifactValidationError(f"{name} must be a canonical list")
+    if tuple(values) != tuple(sorted(set(values))):
+        raise ArtifactValidationError(f"{name} must be sorted and unique")
+    for value in values:
+        _require_sha256(value, name)
 
 
 def _require_positive(value: int, name: str) -> None:

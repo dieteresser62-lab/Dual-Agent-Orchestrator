@@ -87,6 +87,7 @@ RECORD_RENDERER_HELPERS = {
     "_render_finding_transition_record",
     "_render_gate_record",
     "_render_provider_input_measurement_record",
+    "_render_remediation_planning_record",
     "_render_review_anchor_record",
     "_render_review_record",
     "_render_review_validation_binding_record",

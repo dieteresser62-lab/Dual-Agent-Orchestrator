@@ -64,6 +64,14 @@ from native_finding_decisions import (
     NativeRejectionReason,
     NativeResponsibilityProposal,
     NativeResponsibilityRoute,
+    PlanTreatmentDecision,
+    PlanTreatmentDecisionKind,
+    PlanTreatmentKind,
+)
+from finding_planning import (
+    PlanTreatmentProposal,
+    canonical_open_signature_groups,
+    validate_plan_treatment_decisions,
 )
 
 
@@ -276,7 +284,15 @@ def validate_native_review_disposition_budget(
     routes = document.get("responsibility_routes", []) if enabled else []
     if not isinstance(routes, list):
         return
-    actual_items = len(status_changes) + len(reclassifications) + len(routes)
+    plan_decisions = document.get("plan_treatment_decisions", []) if enabled else []
+    if not isinstance(plan_decisions, list):
+        return
+    actual_items = (
+        len(status_changes)
+        + len(reclassifications)
+        + len(routes)
+        + len(plan_decisions)
+    )
     maximum_items = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS,
         native_review_disposition_capacity(context),
@@ -288,6 +304,7 @@ def validate_native_review_disposition_budget(
             f"status_changes={len(status_changes)}, "
             f"reclassifications={len(reclassifications)}, "
             f"responsibility_routes={len(routes)}"
+            f", plan_treatment_decisions={len(plan_decisions)}"
             if enabled
             else "final-review disposition count "
             f"{actual_items} exceeds bound maximum {maximum_items}"
@@ -305,6 +322,8 @@ def validate_native_review_disposition_budget(
 def native_review_disposition_capacity(context: NativeReviewContext) -> int:
     """Count reviewer-owned open findings eligible for one disposition."""
 
+    if context.approval_marker is ApprovalMarker.PLAN and context.plan_treatments:
+        return len(context.plan_treatments)
     return sum(
         item.origin.reporter is context.reviewer
         for item in project_open_set(context.previous_findings).findings
@@ -367,6 +386,7 @@ class NativeReviewResult:
     evidence: ReviewEvidence | None
     pre_mortem: str | None
     responsibility_routes: tuple[NativeResponsibilityRoute, ...] = ()
+    plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,6 +482,7 @@ class NativeReviewContext:
     max_new_findings: int | None = None
     implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
     planned_slices: tuple[PlannedSlice, ...] = ()
+    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -652,6 +673,7 @@ class NativeReviewContext:
                 "validation command prefixes must be unique safe argv prefixes",
             )
         _validate_implementer_responsibility_proposals(self)
+        _validate_plan_treatments(self)
 
     @property
     def effective_known_open_findings(self) -> tuple[FindingRecord, ...]:
@@ -710,6 +732,50 @@ def _validate_implementer_responsibility_proposals(
             "implementer responsibility proposal rationale",
             max_length=3000,
             code=NativeReviewErrorCode.CONTEXT_INVALID,
+        )
+
+
+def _validate_plan_treatments(context: NativeReviewContext) -> None:
+    treatments = context.plan_treatments
+    if any(not isinstance(item, PlanTreatmentProposal) for item in treatments):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatments must be typed",
+        )
+    if treatments and not native_finding_decisions.native_finding_decisions_enabled():
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatments are disabled until the joint 67/68 cutover",
+        )
+    if treatments and context.approval_marker is not ApprovalMarker.PLAN:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatments are valid only for a plan review",
+        )
+    if not treatments:
+        return
+    expected = canonical_open_signature_groups(context.previous_findings)
+    signatures = tuple(item.signature for item in treatments)
+    if signatures != tuple(sorted(set(signatures))):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatments must be sorted and unique by signature",
+        )
+    expected_groups = {
+        item.signature: item.finding_ids for item in expected
+    }
+    if set(signatures) != set(expected_groups):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatments must cover every canonical open signature exactly once",
+        )
+    if any(
+        item.finding_ids != expected_groups[item.signature]
+        for item in treatments
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "plan treatment Finding IDs differ from their canonical signature group",
         )
 
 
@@ -1124,7 +1190,7 @@ def native_review_provider_response_schema(
             "oneOf": status_options
         }
     approved["properties"]["reclassifications"].update(maxItems=0)
-    _bind_responsibility_route_collection(approved, disposition_max)
+    _bind_native_decision_collections(approved, context, disposition_max)
     if observations_allowed and own_open_ids:
         approved_reclassification = _bound_review_definition(
             reclassification,
@@ -1182,7 +1248,7 @@ def native_review_provider_response_schema(
         maxItems=disposition_max,
         items={"$ref": "#/$defs/bound_reclassification"},
     )
-    _bind_responsibility_route_collection(denied, disposition_max)
+    _bind_native_decision_collections(denied, context, disposition_max)
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
             {"type": "null"},
@@ -1271,6 +1337,58 @@ def _bind_responsibility_route_collection(
         maxItems=disposition_max,
         items={"$ref": "#/$defs/bound_responsibility_route"},
     )
+
+
+def _bind_native_decision_collections(
+    review: dict[str, Any],
+    context: NativeReviewContext,
+    disposition_max: int,
+) -> None:
+    _bind_responsibility_route_collection(review, disposition_max)
+    _bind_plan_treatment_decision_collection(review, context)
+
+
+def _bind_plan_treatment_decision_collection(
+    review: dict[str, Any], context: NativeReviewContext
+) -> None:
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        return
+    decisions = review["properties"].get("plan_treatment_decisions")
+    if not isinstance(decisions, dict):
+        return
+    if not context.plan_treatments:
+        decisions["maxItems"] = 0
+        return
+    options: list[dict[str, Any]] = []
+    for treatment in context.plan_treatments:
+        option = {
+            "type": "object",
+            "properties": {
+                "signature": {
+                    "type": "string",
+                    "const": treatment.signature,
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": [item.value for item in PlanTreatmentDecisionKind],
+                },
+                "rationale": {
+                    "type": "string",
+                    "pattern": NONBLANK_TEXT_PATTERN,
+                    "maxLength": 3000,
+                },
+            },
+            "required": ["signature", "decision", "rationale"],
+            "additionalProperties": False,
+        }
+        options.append(option)
+    decisions.update(
+        minItems=len(options),
+        maxItems=len(options),
+        items={"oneOf": options},
+    )
+    if "plan_treatment_decisions" not in review["required"]:
+        review["required"].append("plan_treatment_decisions")
 
 
 def _bound_review_definition(
@@ -1474,6 +1592,14 @@ def _parse_native_review_response(
             _parse_native_responsibility_route(item)
             for item in document.get("responsibility_routes", [])
         ),
+        plan_treatment_decisions=tuple(
+            PlanTreatmentDecision(
+                item["signature"],
+                PlanTreatmentDecisionKind(item["decision"]),
+                item["rationale"],
+            )
+            for item in document.get("plan_treatment_decisions", [])
+        ),
         anchors=tuple(
             NativeAnchor(
                 anchor_id=item["anchor_id"],
@@ -1597,6 +1723,7 @@ def _native_response_to_contract_result(
         red_state_followup_slice=(
             context.red_state_followup_slice if response.approved else None
         ),
+        plan_treatment_decisions=response.plan_treatment_decisions,
     )
 
 
@@ -1789,12 +1916,36 @@ def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> Non
     result["anyOf"].append(
         {"properties": {"responsibility_routes": {"minItems": 1}}}
     )
+    definitions["plan_treatment_decision"] = {
+        "type": "object",
+        "properties": {
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "decision": {
+                "type": "string",
+                "enum": [item.value for item in PlanTreatmentDecisionKind],
+            },
+            "rationale": {
+                "type": "string",
+                "pattern": NONBLANK_TEXT_PATTERN,
+                "maxLength": 3000,
+            },
+        },
+        "required": ["signature", "decision", "rationale"],
+        "additionalProperties": False,
+    }
+    result["properties"]["plan_treatment_decisions"] = {
+        "type": "array",
+        "maxItems": MAX_NATIVE_REVIEW_DISPOSITIONS,
+        "items": {"$ref": "#/$defs/plan_treatment_decision"},
+    }
 
 
 def _reject_dormant_native_review_fields(document: Mapping[str, Any]) -> None:
     if native_finding_decisions.native_finding_decisions_enabled():
         return
-    if "responsibility_routes" in document:
+    if "plan_treatment_decisions" in document:
+        field = "plan_treatment_decisions"
+    elif "responsibility_routes" in document:
         field = "responsibility_routes"
     else:
         status_changes = document.get("status_changes")
@@ -1872,6 +2023,23 @@ def _validate_active_native_review_field_shapes(
                 ) from exc
 
 
+def _validate_plan_treatment_response_decisions(
+    response: NativeReviewResult,
+    context: NativeReviewContext,
+) -> None:
+    try:
+        validate_plan_treatment_decisions(
+            context.plan_treatments,
+            response.plan_treatment_decisions,
+            plan_approved=response.approved,
+        )
+    except ValueError as exc:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+            str(exc),
+        ) from exc
+
+
 def _validate_response_events(
     response: NativeReviewResult, context: NativeReviewContext
 ) -> None:
@@ -1880,6 +2048,7 @@ def _validate_response_events(
         or response.status_changes
         or response.reclassifications
         or response.responsibility_routes
+        or response.plan_treatment_decisions
     ) and response.evidence is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
@@ -1936,6 +2105,7 @@ def _validate_response_events(
             max_length=3000,
             code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
+    _validate_plan_treatment_response_decisions(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     previous_open_ids = frozenset(
         project_open_set(context.previous_findings).finding_ids
@@ -2038,6 +2208,12 @@ def _validate_response_events(
             )
         known_signatures[signature] = [finding.finding_id]
     touched = set(status_ids) | set(class_ids) | set(route_ids)
+    if context.approval_marker is ApprovalMarker.PLAN:
+        touched.update(
+            finding_id
+            for treatment in context.plan_treatments
+            for finding_id in treatment.finding_ids
+        )
     missing_dispositions = tuple(
         finding.finding_id
         for finding in context.previous_findings
@@ -2404,6 +2580,14 @@ def _validate_decision(
         if item.finding_class is FindingClass.BLOCKER
         and item.origin.reporter is context.reviewer
     )
+    if (
+        context.approval_marker is ApprovalMarker.PLAN
+        and context.plan_treatments
+    ):
+        # E3 routes this complete cohort into the approved PlanAssignment.
+        # These Findings remain open until their assigned Slice (or explicit
+        # No-Code disposition) records the authoritative closure.
+        own_open_blockers = ()
     if not response.approved:
         if not own_open_blockers:
             unoffered_open_remain = (
@@ -2538,6 +2722,21 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
             }
             for item in context.planned_slices
         ]
+        treatments: list[dict[str, Any]] = []
+        for treatment in context.plan_treatments:
+            item: dict[str, Any] = {
+                "signature": treatment.signature,
+                "finding_ids": list(treatment.finding_ids),
+                "treatment_kind": treatment.treatment_kind.value,
+            }
+            if treatment.treatment_kind is PlanTreatmentKind.IMPLEMENTATION:
+                item["closing_slice_ids"] = list(treatment.closing_slice_ids)
+            else:
+                assert treatment.no_code_reason is not None
+                item["no_code_reason"] = treatment.no_code_reason.value
+                item["evidence"] = treatment.evidence
+            treatments.append(item)
+        binding["plan_treatments"] = treatments
     return binding
 
 

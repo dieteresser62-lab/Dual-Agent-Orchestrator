@@ -37,6 +37,11 @@ from artifact_models import (
     FindingHandoffImportPayload,
     ImportedFindingTransition,
     FindingTransitionPayload,
+    FamilyBindingPayload,
+    PlanAssignmentPayload,
+    PlanTreatmentAssignment,
+    PlanTreatmentDecisionPayload,
+    PlanTreatmentProposalPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -48,6 +53,7 @@ from artifact_models import (
     ReviewStopRequestPayload,
     ReviewEvidencePayload,
     Role,
+    RemediationCohortCheckpointPayload,
     SideEffectPayload,
     SliceSpec,
     TaskPayload,
@@ -74,6 +80,17 @@ from contracts import (
 )
 from finding_order import replay_compatible_finding_ids, sorted_finding_ids
 from finding_signature import finding_record_signature
+from finding_planning import (
+    FindingSignatureGroup,
+    PlanTreatmentDecision,
+    PlanTreatmentDecisionKind,
+    PlanTreatmentKind,
+    PlanTreatmentProposal,
+    RemediationRoundEvaluation,
+    evaluate_remediation_round,
+    validate_plan_treatment_coverage,
+    validate_plan_treatment_decisions,
+)
 import native_finding_decisions
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
@@ -219,6 +236,23 @@ def agent_result_payload(
             )
             for item in result.slice_plan
         ),
+        plan_treatments=tuple(
+            PlanTreatmentProposalPayload(
+                signature=item.signature,
+                finding_ids=item.finding_ids,
+                treatment_kind=item.treatment_kind.value,
+                closing_slice_ids=tuple(
+                    str(value) for value in item.closing_slice_ids
+                ),
+                no_code_reason=(
+                    None
+                    if item.no_code_reason is None
+                    else item.no_code_reason.value
+                ),
+                evidence=item.evidence,
+            )
+            for item in result.plan_treatments
+        ),
     )
 
 
@@ -263,6 +297,14 @@ def review_payload(
                 result.stop_request.rationale,
                 result.stop_request.remediation_paths,
             )
+        ),
+        plan_treatment_decisions=tuple(
+            PlanTreatmentDecisionPayload(
+                item.signature,
+                item.decision.value,
+                item.rationale,
+            )
+            for item in result.plan_treatment_decisions
         ),
     )
 
@@ -603,6 +645,36 @@ def _finding_snapshot(
     return snapshot
 
 
+def _validate_remediation_cohort_handoff(
+    replay: ArtifactReplayResult,
+    checkpoint_record_id: str | None,
+    family_binding: FamilyBindingPayload,
+) -> None:
+    if checkpoint_record_id is None:
+        return
+    checkpoint = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == checkpoint_record_id
+        ),
+        None,
+    )
+    if checkpoint is None or not isinstance(
+        checkpoint.payload, RemediationCohortCheckpointPayload
+    ):
+        raise ArtifactBridgeError(
+            "BRANCH_DISCOVERY remediation handoff requires its cohort checkpoint"
+        )
+    if (
+        checkpoint.payload.family_id != family_binding.family_id
+        or checkpoint.payload.implementation_run_id != replay.expected_run_id
+    ):
+        raise ArtifactBridgeError(
+            "remediation cohort checkpoint differs from the source run family"
+        )
+
+
 def branch_discovery_handoff_export_payload(
     replay: ArtifactReplayResult,
     *,
@@ -615,6 +687,7 @@ def branch_discovery_handoff_export_payload(
     target_run_identity: str,
     target_execution_mode: str = "PLAN_ONLY",
     source_completion_record_id: str | None = None,
+    remediation_cohort_checkpoint_record_id: str | None = None,
 ) -> BranchDiscoveryHandoffExportPayload:
     """Build the one family handoff used on every E1/E9 edge."""
 
@@ -679,6 +752,7 @@ def branch_discovery_handoff_export_payload(
                 "branch discovery completion differs from its validation or HEAD binding"
             )
         source_completion_record_id = None
+        remediation_cohort_checkpoint_record_id = None
     else:
         completion = next(
             (
@@ -694,6 +768,11 @@ def branch_discovery_handoff_export_payload(
             raise ArtifactBridgeError(
                 "BRANCH_DISCOVERY family handoff requires a completed source run"
             )
+        _validate_remediation_cohort_handoff(
+            replay,
+            remediation_cohort_checkpoint_record_id,
+            family_binding,
+        )
         discovery_review_record_id = None
     transitions = flatten_finding_transition_history(replay.records)
     if not transitions and target_execution_mode != "BRANCH_DISCOVERY":
@@ -728,6 +807,9 @@ def branch_discovery_handoff_export_payload(
         authority=Role.ORCHESTRATOR,
         target_execution_mode=target_execution_mode,
         source_completion_record_id=source_completion_record_id,
+        remediation_cohort_checkpoint_record_id=(
+            remediation_cohort_checkpoint_record_id
+        ),
     )
 
 
@@ -849,6 +931,9 @@ def branch_discovery_handoff_import_payload(
         authority=Role.ORCHESTRATOR,
         target_execution_mode=export.target_execution_mode,
         source_completion_record_id=export.source_completion_record_id,
+        remediation_cohort_checkpoint_record_id=(
+            export.remediation_cohort_checkpoint_record_id
+        ),
     )
 
 
@@ -898,6 +983,296 @@ def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
     from finding_reducer import reduce_findings
 
     return not reduce_findings(replay).open_set.finding_ids
+
+
+def plan_assignment_payload(
+    *,
+    source_snapshot_record: ArtifactRecord,
+    plan_result_record: ArtifactRecord,
+    review_record: ArtifactRecord,
+    family_binding: FamilyBindingPayload,
+    remediation_round_number: int,
+) -> PlanAssignmentPayload:
+    """Build the sole E3 authority from a positive explicit plan review."""
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise ArtifactBridgeError(
+            "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    snapshot = source_snapshot_record.payload
+    plan_result = plan_result_record.payload
+    review = review_record.payload
+    if not isinstance(snapshot, BranchDiscoveryHandoffImportPayload):
+        raise ArtifactBridgeError(
+            "plan assignment requires a branch discovery Finding snapshot"
+        )
+    if snapshot.target_execution_mode != "PLAN_ONLY":
+        raise ArtifactBridgeError(
+            "plan assignment source snapshot must target PLAN_ONLY"
+        )
+    plan_run_id = snapshot.target_run_id
+    if (
+        source_snapshot_record.run_id != plan_run_id
+        or plan_result_record.run_id != plan_run_id
+        or review_record.run_id != plan_run_id
+    ):
+        raise ArtifactBridgeError(
+            "plan assignment records do not belong to the snapshot-bound plan run"
+        )
+    if not isinstance(plan_result, AgentResultPayload) or plan_result.outcome != "ready":
+        raise ArtifactBridgeError(
+            "plan assignment requires a ready native implementer plan result"
+        )
+    if not isinstance(review, ReviewPayload) or review.verdict != "approved":
+        raise ArtifactBridgeError(
+            "plan assignment requires a positive plan Review record"
+        )
+    if review.work_unit_id != plan_result.work_unit_id:
+        raise ArtifactBridgeError(
+            "plan assignment result and Review use different work units"
+        )
+    if not isinstance(family_binding, FamilyBindingPayload):
+        raise ArtifactBridgeError(
+            "plan assignment requires a typed family binding"
+        )
+    family_id = family_binding.family_id
+    cycle_number = family_binding.cycle_number
+    if family_id != snapshot.family_id or cycle_number != snapshot.cycle_number:
+        raise ArtifactBridgeError(
+            "plan assignment family binding differs from its source snapshot"
+        )
+    groups_by_signature: dict[str, list[str]] = {}
+    for item in snapshot.finding_snapshot:
+        if item.is_open:
+            groups_by_signature.setdefault(item.signature, []).append(item.finding_id)
+    groups = tuple(
+        FindingSignatureGroup(signature, sorted_finding_ids(finding_ids))
+        for signature, finding_ids in sorted(groups_by_signature.items())
+    )
+    try:
+        treatments = tuple(
+            PlanTreatmentProposal(
+                signature=item.signature,
+                finding_ids=item.finding_ids,
+                treatment_kind=PlanTreatmentKind(item.treatment_kind),
+                closing_slice_ids=tuple(
+                    int(value) for value in item.closing_slice_ids
+                ),
+                no_code_reason=(
+                    None
+                    if item.no_code_reason is None
+                    else native_finding_decisions.NativeRejectionReason(
+                        item.no_code_reason
+                    )
+                ),
+                evidence=item.evidence,
+            )
+            for item in plan_result.plan_treatments
+        )
+        planned_slices = tuple(
+            PlannedSlice(
+                int(item.slice_id),
+                item.summary,
+                item.paths,
+                item.acceptance_criteria,
+            )
+            for item in plan_result.slice_plan
+        )
+    except (TypeError, ValueError) as exc:
+        raise ArtifactBridgeError(
+            f"persisted implementer plan treatment is invalid: {exc}"
+        ) from exc
+    try:
+        implementation_scope = validate_plan_treatment_coverage(
+            groups, treatments, planned_slices
+        )
+        decisions = tuple(
+            PlanTreatmentDecision(
+                item.signature,
+                PlanTreatmentDecisionKind(item.decision),
+                item.rationale,
+            )
+            for item in review.plan_treatment_decisions
+        )
+        validate_plan_treatment_decisions(
+            treatments, decisions, plan_approved=True
+        )
+    except (TypeError, ValueError) as exc:
+        raise ArtifactBridgeError(f"plan assignment coverage is invalid: {exc}") from exc
+    review_fingerprint = review_record.fingerprint.sha256
+    assignments = tuple(
+        PlanTreatmentAssignment(
+            signature=item.signature,
+            finding_ids=item.finding_ids,
+            treatment_kind=item.treatment_kind.value,
+            closing_slice_ids=tuple(str(value) for value in item.closing_slice_ids),
+            no_code_reason=(
+                None if item.no_code_reason is None else item.no_code_reason.value
+            ),
+            evidence=item.evidence,
+            authoritative_fingerprint=(
+                review_fingerprint
+                if item.treatment_kind is PlanTreatmentKind.NO_CODE
+                else None
+            ),
+        )
+        for item in treatments
+    )
+    snapshot_document = [
+        {
+            "finding_id": item.finding_id,
+            "signature": item.signature,
+            "finding_status": item.finding_status,
+            "severity": item.severity.value,
+        }
+        for item in snapshot.finding_snapshot
+    ]
+    return PlanAssignmentPayload(
+        family_id=family_id,
+        cycle_number=cycle_number,
+        remediation_round_number=remediation_round_number,
+        source_snapshot_record_id=source_snapshot_record.record_id,
+        finding_snapshot_sha256=hashlib.sha256(
+            canonical_json(snapshot_document)
+        ).hexdigest(),
+        plan_result_record_id=plan_result_record.record_id,
+        review_record_id=review_record.record_id,
+        review_fingerprint=review_fingerprint,
+        treatments=assignments,
+        slices=tuple(
+            SliceSpec(
+                str(item.slice_id),
+                item.summary,
+                item.scope_paths,
+                item.acceptance_criteria,
+            )
+            for item in planned_slices
+        ),
+        implementation_scope=implementation_scope,
+        authority=Role.CLAUDE,  # allowlist:provider -- reviewer authority
+    )
+
+
+def remediation_cohort_checkpoint_payload(
+    *,
+    assignment_record: ArtifactRecord,
+    implementation_replay: ArtifactReplayResult,
+) -> RemediationCohortCheckpointPayload:
+    """Measure S_r at the pre-discovery boundary from authoritative records."""
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise ArtifactBridgeError(
+            "remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    assignment = assignment_record.payload
+    if not isinstance(assignment, PlanAssignmentPayload):
+        raise ArtifactBridgeError(
+            "remediation cohort checkpoint requires a PlanAssignment record"
+        )
+    profile = implementation_replay.run_profile
+    binding = None if profile is None else profile.family_binding
+    if (
+        binding is None
+        or binding.family_id != assignment.family_id
+        or binding.cycle_number != assignment.cycle_number
+    ):
+        raise ArtifactBridgeError(
+            "remediation cohort checkpoint family differs from implementation run"
+        )
+    if implementation_replay.head_record_id is None:
+        raise ArtifactBridgeError(
+            "remediation cohort checkpoint requires an implementation record head"
+        )
+    from finding_reducer import reduce_findings
+
+    finding_projection = reduce_findings(implementation_replay)
+    open_ids = frozenset(finding_projection.open_set.finding_ids)
+    known_ids = frozenset(finding_projection.ledger.finding_ids)
+    inherited = tuple(item.signature for item in assignment.treatments)
+    unresolved = tuple(
+        item.signature
+        for item in assignment.treatments
+        if item.treatment_kind == "implementation"
+        and any(
+            finding_id not in known_ids or finding_id in open_ids
+            for finding_id in item.finding_ids
+        )
+    )
+    return RemediationCohortCheckpointPayload(
+        family_id=assignment.family_id,
+        remediation_round_number=assignment.remediation_round_number,
+        plan_assignment_record_id=assignment_record.record_id,
+        implementation_run_id=implementation_replay.expected_run_id,
+        implementation_head_record_id=implementation_replay.head_record_id,
+        inherited_signatures=inherited,
+        unresolved_inherited_signatures=unresolved,
+        authority=Role.ORCHESTRATOR,
+    )
+
+
+def evaluate_recorded_remediation_round(
+    *,
+    assignment_record: ArtifactRecord,
+    checkpoint_record: ArtifactRecord,
+    discovery_import_record: ArtifactRecord,
+    discovery_record: ArtifactRecord,
+) -> RemediationRoundEvaluation:
+    """Join S_r and N_r by their distinct record types, never by counts."""
+
+    assignment = assignment_record.payload
+    checkpoint = checkpoint_record.payload
+    discovery_import = discovery_import_record.payload
+    discovery = discovery_record.payload
+    if not isinstance(assignment, PlanAssignmentPayload):
+        raise ArtifactBridgeError("recorded remediation round lacks PlanAssignment")
+    if not isinstance(checkpoint, RemediationCohortCheckpointPayload):
+        raise ArtifactBridgeError(
+            "recorded remediation round lacks its pre-discovery cohort checkpoint"
+        )
+    if not isinstance(discovery, BranchDiscoveryCompletedPayload):
+        raise ArtifactBridgeError(
+            "recorded remediation round lacks BRANCH_DISCOVERY_COMPLETED"
+        )
+    if not isinstance(discovery_import, BranchDiscoveryHandoffImportPayload):
+        raise ArtifactBridgeError(
+            "recorded remediation round lacks its BRANCH_DISCOVERY handoff import"
+        )
+    if (
+        checkpoint.plan_assignment_record_id != assignment_record.record_id
+        or checkpoint.family_id != assignment.family_id
+        or checkpoint.remediation_round_number
+        != assignment.remediation_round_number
+    ):
+        raise ArtifactBridgeError(
+            "recorded remediation round has inconsistent assignment and checkpoint"
+        )
+    if (
+        discovery_import.target_execution_mode != "BRANCH_DISCOVERY"
+        or discovery_import.remediation_cohort_checkpoint_record_id
+        != checkpoint_record.record_id
+        or discovery_import.source_run_id != checkpoint.implementation_run_id
+        or discovery_import.family_id != checkpoint.family_id
+        or discovery_import_record.run_id != discovery_record.run_id
+        or discovery_import.target_run_id != discovery_record.run_id
+        or discovery.validation_attestation_record_id
+        != discovery_import.validation_attestation_record_id
+        or discovery.reviewed_head_commit
+        != discovery_import.reviewed_head_commit
+    ):
+        raise ArtifactBridgeError(
+            "BRANCH_DISCOVERY result is not bound to the recorded remediation cohort"
+        )
+    return evaluate_remediation_round(
+        remediation_round_number=assignment.remediation_round_number,
+        inherited_signatures=checkpoint.inherited_signatures,
+        unresolved_inherited_signatures=(
+            checkpoint.unresolved_inherited_signatures
+        ),
+        new_findings=tuple(
+            (item.finding_id, item.summary, item.acceptance_test)
+            for item in discovery.new_findings
+        ),
+    )
 
 
 def attestation_payload(
@@ -1546,6 +1921,9 @@ __all__ = [
     "branch_discovery_completed_payload",
     "branch_discovery_completed_payload_matches_result",
     "derive_family_acceptance",
+    "evaluate_recorded_remediation_round",
+    "plan_assignment_payload",
+    "remediation_cohort_checkpoint_payload",
     "review_payload", "review_payload_matches_complete_result",
     "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",

@@ -154,6 +154,29 @@ BRIDGE_ERROR_MARKERS = (
     "family acceptance may be derived only from its own BRANCH_DISCOVERY run",
     "family acceptance requires one completed scan and one terminal workflow",
     "family acceptance completion order is invalid",
+    "BRANCH_DISCOVERY remediation handoff requires its cohort checkpoint",
+    "remediation cohort checkpoint differs from the source run family",
+    "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    "plan assignment requires a branch discovery Finding snapshot",
+    "plan assignment source snapshot must target PLAN_ONLY",
+    "plan assignment records do not belong to the snapshot-bound plan run",
+    "plan assignment requires a ready native implementer plan result",
+    "plan assignment requires a positive plan Review record",
+    "plan assignment result and Review use different work units",
+    "plan assignment requires a typed family binding",
+    "plan assignment family binding differs from its source snapshot",
+    "persisted implementer plan treatment is invalid: ",
+    "plan assignment coverage is invalid: ",
+    "remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    "remediation cohort checkpoint requires a PlanAssignment record",
+    "remediation cohort checkpoint family differs from implementation run",
+    "remediation cohort checkpoint requires an implementation record head",
+    "recorded remediation round lacks PlanAssignment",
+    "recorded remediation round lacks its pre-discovery cohort checkpoint",
+    "recorded remediation round lacks BRANCH_DISCOVERY_COMPLETED",
+    "recorded remediation round lacks its BRANCH_DISCOVERY handoff import",
+    "recorded remediation round has inconsistent assignment and checkpoint",
+    "BRANCH_DISCOVERY result is not bound to the recorded remediation cohort",
 )
 
 RECOVERABLE_FUNCTIONS: dict[str, set[str]] = {}
@@ -1015,7 +1038,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 71
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 94
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1104,9 +1127,10 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "findings",
             "anchors",
                 "red_state_followup_slice",
-                "delivery_kind",
-                "occurrences",
-                "scan_complete",
+                    "delivery_kind",
+                    "occurrences",
+                    "scan_complete",
+                    "plan_treatment_decisions",
         },
         ("src/artifact_models.py", "ReviewPayload"): {
             "reviewer",
@@ -1120,8 +1144,9 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "review_evidence",
             "red_state_followup_slice",
             "test_files",
-            "pre_mortem",
-            "stop_request",
+                "pre_mortem",
+                "stop_request",
+                "plan_treatment_decisions",
         },
         ("src/artifact_models.py", "ReviewEvidencePayload"): {
             "dimensions",

@@ -1643,6 +1643,35 @@ Kette über `resolve_resume_state()`; der einzige direkte
 Force-Replacement-Autorisierung, nicht einer Workflowentscheidung. Legacy-v3
 ohne strukturierte Kette wird mit `UNSUPPORTED-PROTOCOL` abgewiesen.
 
+### Additive Behebungsplanungsgrenzen
+
+Die dormante Behebungsplanung und ihr Kohortenabschluss ergänzen die statisch
+gebundene Bridge-Fehlerinventur um folgende fail-closed Grenzen:
+
+- `BRANCH_DISCOVERY remediation handoff requires its cohort checkpoint`
+- `remediation cohort checkpoint differs from the source run family`
+- `plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER`
+- `plan assignment requires a branch discovery Finding snapshot`
+- `plan assignment source snapshot must target PLAN_ONLY`
+- `plan assignment records do not belong to the snapshot-bound plan run`
+- `plan assignment requires a ready native implementer plan result`
+- `plan assignment requires a positive plan Review record`
+- `plan assignment result and Review use different work units`
+- `plan assignment requires a typed family binding`
+- `plan assignment family binding differs from its source snapshot`
+- `persisted implementer plan treatment is invalid: `
+- `plan assignment coverage is invalid: `
+- `remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER`
+- `remediation cohort checkpoint requires a PlanAssignment record`
+- `remediation cohort checkpoint family differs from implementation run`
+- `remediation cohort checkpoint requires an implementation record head`
+- `recorded remediation round lacks PlanAssignment`
+- `recorded remediation round lacks its pre-discovery cohort checkpoint`
+- `recorded remediation round lacks BRANCH_DISCOVERY_COMPLETED`
+- `recorded remediation round lacks its BRANCH_DISCOVERY handoff import`
+- `recorded remediation round has inconsistent assignment and checkpoint`
+- `BRANCH_DISCOVERY result is not bound to the recorded remediation cohort`
+
 ### Versionsentscheidung
 
 Der Cutover erhöht weder Protokoll- noch Recordschema-Version:

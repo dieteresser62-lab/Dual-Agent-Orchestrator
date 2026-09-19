@@ -20,10 +20,12 @@ from artifact_models import (
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     GatePayload,
+    PlanAssignmentPayload,
     PlanPayload,
     ReviewAnchorPayload,
     ReviewPayload,
     ReviewValidationBindingPayload,
+    RemediationCohortCheckpointPayload,
     Role,
     TaskPayload,
     ValidationAttestationPayload,
@@ -133,6 +135,8 @@ class ArtifactAuditProjection:
                 TaskPayload, PlanPayload, FindingTransitionPayload,
                 FindingHandoffExportPayload, FindingHandoffImportPayload,
                 BranchDiscoveryHandoffExportPayload,
+                PlanAssignmentPayload,
+                RemediationCohortCheckpointPayload,
                 BranchDiscoveryHandoffImportPayload,
             )):
                 selected.append(record)
@@ -680,6 +684,43 @@ def _render_binding_record(
     ))
 
 
+def _render_remediation_planning_record(
+    rendering: _ReplayRendering,
+    payload: PlanAssignmentPayload | RemediationCohortCheckpointPayload,
+    prefix: str,
+) -> None:
+    if isinstance(payload, PlanAssignmentPayload):
+        implementation_count = sum(
+            item.treatment_kind == "implementation" for item in payload.treatments
+        )
+        no_code_count = len(payload.treatments) - implementation_count
+        rendering.bindings_and_units.extend((
+            f"### Behebungsplanung · Runde {payload.remediation_round_number}",
+            "",
+            "| Seq/Record | Familie | Quellsnapshot | Plan result | Plan review | S_r | Code | No-Code | IMPLEMENT-Scope |",
+            "|---|---|---|---|---|---:|---:|---:|---|",
+            f"| {prefix} | `{_safe(payload.family_id)}` | "
+            f"`{payload.source_snapshot_record_id}` | `{payload.plan_result_record_id}` | "
+            f"`{payload.review_record_id}` | `{len(payload.treatments)}` | "
+            f"`{implementation_count}` | `{no_code_count}` | "
+            f"{_codes(payload.implementation_scope)} |",
+            "",
+        ))
+        return
+    rendering.bindings_and_units.extend((
+        f"### Kohortencheckpoint · Runde {payload.remediation_round_number}",
+        "",
+        "| Seq/Record | Familie | PlanAssignment | Implementierungslauf | S_r | S_r offen |",
+        "|---|---|---|---|---:|---:|",
+        f"| {prefix} | `{_safe(payload.family_id)}` | "
+        f"`{payload.plan_assignment_record_id}` | "
+        f"`{_safe(payload.implementation_run_id)}` | "
+        f"`{len(payload.inherited_signatures)}` | "
+        f"`{len(payload.unresolved_inherited_signatures)}` |",
+        "",
+    ))
+
+
 def _render_record(
     rendering: _ReplayRendering,
     sequence: int,
@@ -722,6 +763,11 @@ def _render_record(
         _render_work_unit_record(rendering, payload, prefix)
     elif isinstance(payload, BindingPayload):
         _render_binding_record(rendering, payload, prefix)
+    elif isinstance(
+        payload,
+        (PlanAssignmentPayload, RemediationCohortCheckpointPayload),
+    ):
+        _render_remediation_planning_record(rendering, payload, prefix)
 
 
 def _render_provider_attempts(rendering: _ReplayRendering) -> None:

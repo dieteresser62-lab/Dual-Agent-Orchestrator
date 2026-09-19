@@ -644,6 +644,7 @@ def _review_context_request_projection(
             "implementer_responsibility_proposals"
         ]
         review_contract["planned_slices"] = context_binding["planned_slices"]
+        review_contract["plan_treatments"] = context_binding["plan_treatments"]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -752,6 +753,83 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/planned_slice"},
     }
     contract["required"].append("planned_slices")
+    definitions["plan_treatment_proposal"] = {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "finding_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 128,
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                        },
+                    },
+                    "treatment_kind": {
+                        "type": "string",
+                        "const": "implementation",
+                    },
+                    "closing_slice_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "uniqueItems": True,
+                        "items": {"type": "integer", "minimum": 1},
+                    },
+                },
+                "required": [
+                    "signature",
+                    "finding_ids",
+                    "treatment_kind",
+                    "closing_slice_ids",
+                ],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "finding_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 128,
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                        },
+                    },
+                    "treatment_kind": {
+                        "type": "string",
+                        "const": "no_code",
+                    },
+                    "no_code_reason": {
+                        "type": "string",
+                        "enum": ["no_defect", "out_of_scope", "already_fixed"],
+                    },
+                    "evidence": {"$ref": "#/$defs/safe_text"},
+                },
+                "required": [
+                    "signature",
+                    "finding_ids",
+                    "treatment_kind",
+                    "no_code_reason",
+                    "evidence",
+                ],
+                "additionalProperties": False,
+            },
+        ]
+    }
+    contract["properties"]["plan_treatments"] = {
+        "type": "array",
+        "maxItems": 128,
+        "items": {"$ref": "#/$defs/plan_treatment_proposal"},
+    }
+    contract["required"].append("plan_treatments")
 
 
 def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:

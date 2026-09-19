@@ -34,7 +34,16 @@ from finding_responsibility import (
 )
 from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN
 import native_finding_decisions
-from native_finding_decisions import NativeResponsibilityProposal
+from native_finding_decisions import (
+    NativeRejectionReason,
+    NativeResponsibilityProposal,
+    PlanTreatmentKind,
+    PlanTreatmentProposal,
+)
+from finding_planning import (
+    canonical_open_signature_groups,
+    validate_plan_treatment_coverage,
+)
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -199,6 +208,7 @@ class NativePlanResult:
     ready: bool
     slice_plan: tuple[PlannedSlice, ...]
     dispositions: tuple[NativeFindingDisposition, ...] = ()
+    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +300,18 @@ def native_codex_provider_response_schema(
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
+    if native_finding_decisions.native_finding_decisions_enabled():
+        required.append("plan_treatments")
+        slice_responsibility = schema["$defs"]["finding_responsibility"][
+            "oneOf"
+        ][0]
+        acceptance_criterion = slice_responsibility["properties"][
+            "acceptance_criterion_id"
+        ]
+        slice_responsibility["properties"]["acceptance_criterion_id"] = {
+            "oneOf": [acceptance_criterion, {"type": "null"}]
+        }
+        slice_responsibility["required"].append("acceptance_criterion_id")
     open_ids = project_open_set(context.previous_findings).finding_ids
     disposition = schema["$defs"]["finding_disposition"]
     if open_ids:
@@ -435,8 +457,8 @@ def parse_native_codex_response(
         for item in document["slice_plan"]:
             diagnostic = planned_slice_path_diagnostic(tuple(item["scope_paths"]))
             if diagnostic is not None:
-                raise NativeCodexContractError(
-                    NativeCodexErrorCode.SLICE_PLAN_INVALID,
+                raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+                    NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
                     diagnostic.detail,
                     orchestrator_diagnostic=diagnostic,
                 )
@@ -462,11 +484,29 @@ def parse_native_codex_response(
                 NativeCodexErrorCode.SLICE_PLAN_INVALID,
                 "slice plan ids must be contiguous and 1-based",
             )
+        treatments = _parse_plan_treatments(document.get("plan_treatments", []))
+        if native_finding_decisions.native_finding_decisions_enabled():
+            try:
+                validate_plan_treatment_coverage(
+                    canonical_open_signature_groups(
+                        bound_context.context.previous_findings
+                    ),
+                    treatments,
+                    slices,
+                )
+            except ValueError as exc:
+                raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+                    NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+                    str(exc),
+                ) from exc
         return NativePlanResult(
-            document["request_id"],
-            document["ready"],
-            slices,
-            _parse_dispositions(document.get("finding_dispositions", [])),
+            request_id=document["request_id"],
+            ready=document["ready"],
+            slice_plan=slices,
+            dispositions=_parse_dispositions(
+                document.get("finding_dispositions", [])
+            ),
+            plan_treatments=treatments,
         )
     dispositions = _parse_dispositions(document["finding_dispositions"])
     if result_type in {"implementation_result", "correction_result"}:
@@ -537,6 +577,7 @@ def native_codex_response_to_contract_result(
         dispositions = response.dispositions
         test_files = ()
         slice_plan = response.slice_plan
+        plan_treatments = response.plan_treatments
         self_check = None
         if not contract.require_slice_plan or not slice_plan:
             raise NativeCodexContractError(
@@ -548,12 +589,14 @@ def native_codex_response_to_contract_result(
         test_files = response.test_files
         slice_plan = ()
         self_check = None
+        plan_treatments = ()
         _validate_test_files(response.ready, test_files, contract)
     else:
         dispositions = response.dispositions
         test_files = ()
         slice_plan = ()
         self_check = response.self_check
+        plan_treatments = ()
         _require_text(
             response.self_check,
             "self_check",
@@ -576,6 +619,7 @@ def native_codex_response_to_contract_result(
         findings=findings,
         slice_plan=slice_plan,
         self_check=self_check,
+        plan_treatments=plan_treatments,
     )
 
 
@@ -613,6 +657,39 @@ def _parse_dispositions(
             "finding dispositions must be sorted and unique",
         )
     return dispositions
+
+
+def _parse_plan_treatments(
+    items: list[Mapping[str, Any]],
+) -> tuple[PlanTreatmentProposal, ...]:
+    try:
+        treatments = tuple(
+            PlanTreatmentProposal(
+                signature=item["signature"],
+                finding_ids=tuple(item["finding_ids"]),
+                treatment_kind=PlanTreatmentKind(item["treatment_kind"]),
+                closing_slice_ids=tuple(item["closing_slice_ids"]),
+                no_code_reason=(
+                    None
+                    if item["no_code_reason"] is None
+                    else NativeRejectionReason(item["no_code_reason"])
+                ),
+                evidence=item["evidence"],
+            )
+            for item in items
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+            f"plan treatment is invalid: {exc}",
+        ) from exc
+    signatures = tuple(item.signature for item in treatments)
+    if signatures != tuple(sorted(set(signatures))):
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+            "plan treatments must be sorted and unique by signature",
+        )
+    return treatments
 
 
 def native_responsibility_proposals(
@@ -673,11 +750,72 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
         ]
     }
     disposition["required"].append("responsibility_proposal")
+    definitions["plan_treatment"] = {
+        "type": "object",
+        "properties": {
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "finding_ids": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "uniqueItems": True,
+                "items": {
+                    "type": "string",
+                    "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                },
+            },
+            "treatment_kind": {
+                "type": "string",
+                "enum": [item.value for item in PlanTreatmentKind],
+            },
+            "closing_slice_ids": {
+                "type": "array",
+                "maxItems": 1,
+                "uniqueItems": True,
+                "items": {"type": "integer", "minimum": 1},
+            },
+            "no_code_reason": {
+                "oneOf": [
+                    {
+                        "type": "string",
+                        "enum": [item.value for item in NativeRejectionReason],
+                    },
+                    {"type": "null"},
+                ]
+            },
+            "evidence": {
+                "oneOf": [
+                    {"$ref": "#/$defs/safe_text"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": [
+            "signature",
+            "finding_ids",
+            "treatment_kind",
+            "closing_slice_ids",
+            "no_code_reason",
+            "evidence",
+        ],
+        "additionalProperties": False,
+    }
+    plan_result = definitions["plan_result"]
+    plan_result["properties"]["plan_treatments"] = {
+        "type": "array",
+        "maxItems": 128,
+        "items": {"$ref": "#/$defs/plan_treatment"},
+    }
 
 
 def _reject_dormant_native_fields(document: Mapping[str, Any]) -> None:
     if native_finding_decisions.native_finding_decisions_enabled():
         return
+    if "plan_treatments" in document:
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
+            "plan_treatments is disabled until the joint 67/68 cutover",
+        )
     slice_plan = document.get("slice_plan")
     if isinstance(slice_plan, list) and any(
         isinstance(item, Mapping) and "acceptance_criteria" in item

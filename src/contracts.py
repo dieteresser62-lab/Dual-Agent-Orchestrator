@@ -15,6 +15,11 @@ from content_authority import (
     validation_output_digest,
 )
 from finding_order import sorted_finding_ids
+from native_finding_decisions import (
+    PlanTreatmentDecision,
+    PlanTreatmentProposal,
+    native_finding_decisions_enabled,
+)
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
@@ -425,6 +430,7 @@ class ContractResult:
     delivery_kind: str = "review"
     occurrences: tuple[FindingOccurrence, ...] = ()
     scan_complete: bool | None = None
+    plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
 
     def __post_init__(self) -> None:
         if self.delivery_kind not in {"review", "branch_discovery_completed"}:
@@ -456,6 +462,16 @@ class ContractResult:
                 raise ValueError("ordinary reviews cannot carry discovery occurrences")
             if not self.stopped and self.approval is None:
                 raise ValueError("a completed review requires an approval decision")
+        if any(
+            not isinstance(item, PlanTreatmentDecision)
+            for item in self.plan_treatment_decisions
+        ):
+            raise ValueError("plan treatment decisions must be typed")
+        if (
+            self.plan_treatment_decisions
+            and not native_finding_decisions_enabled()
+        ):
+            raise ValueError("plan treatment decisions require the joint 67/68 cutover")
         if (
             self.red_state_followup_slice is not None
             and not self.red_state_followup_slice.strip()
@@ -624,6 +640,16 @@ class CodexContractResult:
     findings: tuple[FindingRecord, ...]
     slice_plan: tuple[PlannedSlice, ...] = ()
     self_check: str | None = None
+    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
+
+    def __post_init__(self) -> None:
+        if any(
+            not isinstance(item, PlanTreatmentProposal)
+            for item in self.plan_treatments
+        ):
+            raise ValueError("plan treatments must be typed")
+        if self.plan_treatments and not native_finding_decisions_enabled():
+            raise ValueError("plan treatments require the joint 67/68 cutover")
 
 
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:

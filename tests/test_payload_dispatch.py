@@ -37,10 +37,12 @@ PRE_CUT_DOCUMENT = _load_json(PRE_CUT)
 CORPUS_DOCUMENT = _load_json(CORPUS)
 CORPUS_CASES = tuple(CORPUS_DOCUMENT["cases"])
 CORPUS_TYPES = tuple(case["record_type"] for case in CORPUS_CASES)
-E9_ADDITIVE_PAYLOAD_TYPES = {
+ADDITIVE_PAYLOAD_TYPES = {
     "branch_discovery_completed": "BranchDiscoveryCompletedPayload",
     "branch_discovery_handoff_export": "BranchDiscoveryHandoffExportPayload",
     "branch_discovery_handoff_import": "BranchDiscoveryHandoffImportPayload",
+    "plan_assignment": "PlanAssignmentPayload",
+    "remediation_cohort_checkpoint": "RemediationCohortCheckpointPayload",
 }
 
 
@@ -144,9 +146,9 @@ def _current_mapping() -> dict[str, str]:
 
 
 def _normalized_payload_fields(payload: object) -> object:
-    if isinstance(
-        payload, (artifact_models.PlanPayload, artifact_models.AgentResultPayload)
-    ):
+    if isinstance(payload, artifact_models.AgentResultPayload):
+        return artifact_models.artifact_payload_document(payload)
+    if isinstance(payload, artifact_models.PlanPayload):
         raw = asdict(payload)
         slices = raw[
             "slices"
@@ -199,6 +201,11 @@ def _normalized_payload_fields(payload: object) -> object:
     if isinstance(payload, artifact_models.GateDecisionPayload):
         if payload.invocation_id is None:
             raw.pop("invocation_id", None)
+    if (
+        isinstance(payload, artifact_models.ReviewPayload)
+        and not payload.plan_treatment_decisions
+    ):
+        raw.pop("plan_treatment_decisions", None)
     return artifact_models._json_value(raw)  # type: ignore[arg-type]
 
 
@@ -310,17 +317,17 @@ def test_corpus_and_mapping_cover_every_pre_cut_branch_exactly() -> None:
     assert {
         name: payload_class
         for name, payload_class in current.items()
-        if name not in E9_ADDITIVE_PAYLOAD_TYPES
+        if name not in ADDITIVE_PAYLOAD_TYPES
     } == pre_cut
     assert {
         name: payload_class
         for name, payload_class in current.items()
-        if name in E9_ADDITIVE_PAYLOAD_TYPES
-    } == E9_ADDITIVE_PAYLOAD_TYPES
+        if name in ADDITIVE_PAYLOAD_TYPES
+    } == ADDITIVE_PAYLOAD_TYPES
     assert tuple(
         item.value
         for item in artifact_models._PAYLOAD_READERS
-        if item.value not in E9_ADDITIVE_PAYLOAD_TYPES
+        if item.value not in ADDITIVE_PAYLOAD_TYPES
     ) == CORPUS_TYPES
     assert set(artifact_models._PAYLOAD_READERS) == set(RecordType)
 

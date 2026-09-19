@@ -3594,6 +3594,8 @@ def _fail(
 
 def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
+    if isinstance(payload, ReviewPayload) and not payload.plan_treatment_decisions:
+        raw.pop("plan_treatment_decisions", None)
     if isinstance(payload, (AgentResultPayload, PlanPayload, FindingTransitionPayload, RunProfilePayload)):
         return artifact_payload_document(payload)
     if isinstance(
