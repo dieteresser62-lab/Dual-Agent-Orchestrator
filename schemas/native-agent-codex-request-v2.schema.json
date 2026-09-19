@@ -116,6 +116,11 @@
             { "type": "null" }
           ]
         },
+        "plan_artifact_format_contract": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Complete work-plan format instructions derived from the parser that validates plan_artifact_path."
+        },
         "enforce_expected_test_files": { "type": "boolean" },
         "review_fingerprint": {
           "type": ["string", "null"],
@@ -132,6 +137,15 @@
         "test_changes_approved", "require_slice_plan", "plan_artifact_path",
         "enforce_expected_test_files", "review_fingerprint",
         "validation_attestation"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "plan_artifact_path": { "type": "string" } },
+            "required": ["plan_artifact_path"]
+          },
+          "then": { "required": ["plan_artifact_format_contract"] }
+        }
       ],
       "additionalProperties": false
     },

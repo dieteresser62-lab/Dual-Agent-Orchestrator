@@ -17,6 +17,7 @@ from contracts import (
     ReadinessMarker,
 )
 import native_codex_contract
+import plan_handoff
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexRequestKind,
@@ -29,6 +30,7 @@ from native_codex_request import (
     NativeCodexRequestSpec,
     build_native_codex_request,
     load_native_codex_request_schema,
+    validate_native_codex_request_document,
 )
 
 
@@ -86,11 +88,52 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     )
 
 
+def test_plan_artifact_format_contract_is_the_parser_derived_contract() -> None:
+    bundle = build_native_codex_request(_spec())
+
+    communicated = bundle.document["codex_contract"][
+        "plan_artifact_format_contract"
+    ]
+    parser_derived = plan_handoff.render_plan_artifact_format_contract()
+
+    assert communicated == parser_derived
+    assert "`### Slice N - title`" in communicated
+    assert "ids start at 1, remain contiguous" in communicated
+    assert "`**Exakter Änderungspfad**`" in communicated
+    assert "path as a bullet with the path enclosed in backticks" in communicated
+    assert "`**\u0041kzeptanzkriterien**`" in communicated
+    assert "`(?:\\d+|[A-Za-z])[.)]`" in communicated
+    assert "free-text paragraph without a list marker is invalid" in communicated
+
+    without_contract = copy.deepcopy(bundle.document)
+    without_contract["codex_contract"].pop("plan_artifact_format_contract")
+    with pytest.raises(NativeCodexRequestError, match="schema validation failed"):
+        validate_native_codex_request_document(without_contract)
+
+
+def test_non_artifact_request_does_not_communicate_plan_artifact_format() -> None:
+    spec = _spec()
+    context = replace(
+        spec.context,
+        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+        contract=replace(
+            spec.context.contract,
+            readiness_marker=ReadinessMarker.IMPLEMENTATION,
+            require_slice_plan=False,
+            plan_artifact_path=None,
+        ),
+    )
+
+    bundle = build_native_codex_request(replace(spec, context=context))
+
+    assert "plan_artifact_format_contract" not in bundle.document["codex_contract"]
+
+
 def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     bundle = build_native_codex_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "f9a0e1a702b23766cf7429735865f56a97fbb3034b3f7ef1d9d077ba4f84476f"
+        "0bc518ad2b4f36eeb76c6499dbe807ac543c42d71c839c922f0e5b2c739df997"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")

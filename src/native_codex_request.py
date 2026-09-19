@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Mapping
 
+import plan_handoff
 from contracts import ReadinessMarker, ValidationAttestation
 from finding_reducer import project_open_set
 from native_codex_contract import (
@@ -439,7 +440,7 @@ def _contract_document(context: NativeCodexContext) -> dict[str, Any]:
         ReadinessMarker.PLAN: "plan",
         ReadinessMarker.IMPLEMENTATION: "implementation",
     }[contract.readiness_marker]
-    return {
+    document = {
         "name": contract.name,
         "readiness_kind": readiness_kind,
         "slice_id": contract.slice_id,
@@ -455,6 +456,11 @@ def _contract_document(context: NativeCodexContext) -> dict[str, Any]:
             contract.validation_attestation
         ),
     }
+    if contract.plan_artifact_path is not None:
+        document["plan_artifact_format_contract"] = (
+            plan_handoff.render_plan_artifact_format_contract()
+        )
+    return document
 
 
 def _attestation_document(

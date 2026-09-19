@@ -6,6 +6,7 @@ from contracts import PlannedSlice
 from plan_handoff import (
     PlanHandoffError,
     extract_implementation_slices,
+    extract_slice_requirements,
     render_implementation_task,
 )
 
@@ -117,6 +118,54 @@ def test_handoff_rejects_slice_without_acceptance_criteria() -> None:
 """
 
     with pytest.raises(PlanHandoffError, match="acceptance-criteria"):
+        extract_implementation_slices(markdown, plan_stem="work-plan")
+
+
+def _acceptance_plan(records: str) -> str:
+    return (
+        "### Slice 1 - Equivalent list forms\n\n"
+        "**Exakter Änderungspfad**\n\n"
+        "- `src/core.py`\n\n"
+        "**\u0041kzeptanzkriterien**\n\n"
+        f"{records}\n"
+    )
+
+
+def test_ordered_acceptance_list_matches_equivalent_unordered_list() -> None:
+    unordered = _acceptance_plan(
+        "- Preserve the first behavior.\n- Preserve the second behavior."
+    )
+    ordered = _acceptance_plan(
+        "1. Preserve the first behavior.\n2. Preserve the second behavior."
+    )
+
+    assert extract_slice_requirements(ordered, 1) == extract_slice_requirements(
+        unordered, 1
+    )
+    assert extract_implementation_slices(ordered, plan_stem="work-plan") == (
+        extract_implementation_slices(unordered, plan_stem="work-plan")
+    )
+
+
+def test_mixed_acceptance_list_markers_are_equivalent_records() -> None:
+    mixed = _acceptance_plan(
+        "- Preserve the first behavior.\n2. Preserve the second behavior.\n"
+        "a) Preserve the third behavior."
+    )
+
+    _, criteria = extract_slice_requirements(mixed, 1)
+
+    assert criteria == (
+        "Preserve the first behavior.",
+        "Preserve the second behavior.",
+        "Preserve the third behavior.",
+    )
+
+
+def test_free_text_acceptance_paragraph_remains_invalid() -> None:
+    markdown = _acceptance_plan("This paragraph has no list marker.")
+
+    with pytest.raises(PlanHandoffError, match="must contain list records"):
         extract_implementation_slices(markdown, plan_stem="work-plan")
 
 

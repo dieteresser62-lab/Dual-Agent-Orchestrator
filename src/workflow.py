@@ -2354,12 +2354,9 @@ class WorkflowEngine:
                         "AUTOMATIC PLAN CONTRACT REPAIR\n"
                         f"Validator error: {detail}\n"
                         f"{repair_action}\n"
-                        "Keep the approved task scope unchanged, "
-                        "use contiguous `### Slice N - title` sections, and put the "
-                        "standalone heading `**Exakter Änderungspfad**` before bullet-listed "
-                        "exact paths in every future Slice. Write each exact repository-relative "
-                        "path as a bullet with the path enclosed in backticks, and include the "
-                        "standalone line `**Akzeptanzkriterien**` in every future Slice. Emit the "  # allowlist:german -- canonical plan contract
+                        "Keep the approved task scope unchanged and follow the complete "
+                        "parser-derived codex_contract.plan_artifact_format_contract "
+                        "included in this request. Emit the "
                         "normal PLAN_READY and "
                         "single PLAN_ONLY SLICE_PLAN records; do not request user input."
                     ),
