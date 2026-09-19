@@ -81,6 +81,8 @@ class RecordType(StrEnum):
     BRANCH_DISCOVERY_HANDOFF_IMPORT = "branch_discovery_handoff_import"
     PLAN_ASSIGNMENT = "plan_assignment"
     REMEDIATION_COHORT_CHECKPOINT = "remediation_cohort_checkpoint"
+    NO_IMPLEMENTATION_REQUIRED = "no_implementation_required"
+    CLOSED_FINDING_OCCURRENCE = "closed_finding_occurrence"
     VALIDATION_REQUEST = "validation_request"
     VALIDATION_CONTENT = "validation_content"
     VALIDATION_ATTESTATION = "validation_attestation"
@@ -624,6 +626,8 @@ class PlanTreatmentProposalPayload:
     closing_slice_ids: tuple[str, ...] = ()
     no_code_reason: str | None = None
     evidence: str | None = None
+    evidence_paths: tuple[str, ...] = ()
+    affected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_sha256(self.signature, "plan treatment proposal signature")
@@ -646,7 +650,12 @@ class PlanTreatmentProposalPayload:
                 raise ArtifactValidationError(
                     "implementation treatment requires exactly one closing Slice"
                 )
-            if self.no_code_reason is not None or self.evidence is not None:
+            if (
+                self.no_code_reason is not None
+                or self.evidence is not None
+                or self.evidence_paths
+                or self.affected_paths
+            ):
                 raise ArtifactValidationError(
                     "implementation treatment forbids No-Code disposition fields"
                 )
@@ -664,6 +673,13 @@ class PlanTreatmentProposalPayload:
         }:
             raise ArtifactValidationError("No-Code disposition reason is invalid")
         _require_text(self.evidence, "No-Code disposition evidence")
+        _require_paths(self.evidence_paths)
+        if self.no_code_reason == "already_fixed":
+            _require_paths(self.affected_paths)
+        elif self.affected_paths:
+            raise ArtifactValidationError(
+                "only an already-fixed disposition may name affected_paths"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -677,6 +693,7 @@ class AgentResultPayload:
     response_sha256: str
     slice_plan: tuple[SliceSpec, ...] = ()
     plan_treatments: tuple[PlanTreatmentProposalPayload, ...] = ()
+    plan_completion: str | None = None
     status: ClassVar[str] = "ready"
     record_type: ClassVar[RecordType] = RecordType.AGENT_RESULT
 
@@ -725,6 +742,40 @@ class AgentResultPayload:
             raise ArtifactValidationError(
                 "agent result plan treatments must be sorted and unique by signature"
             )
+        if self.plan_completion is not None:
+            if not native_finding_decisions.native_finding_decisions_enabled():
+                raise ArtifactValidationError(
+                    "agent result plan completion requires "
+                    "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+                )
+            try:
+                completion = native_finding_decisions.PlanCompletionKind(
+                    self.plan_completion
+                )
+            except ValueError as exc:
+                raise ArtifactValidationError(
+                    "agent result plan completion is invalid"
+                ) from exc
+            has_implementation = any(
+                item.treatment_kind == "implementation"
+                for item in self.plan_treatments
+            )
+            if (
+                completion
+                is native_finding_decisions.PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED
+                and (has_implementation or self.slice_plan)
+            ):
+                raise ArtifactValidationError(
+                    "NO_IMPLEMENTATION_REQUIRED forbids implementation work"
+                )
+            if (
+                completion
+                is native_finding_decisions.PlanCompletionKind.IMPLEMENTATION_REQUIRED
+                and (not has_implementation or not self.slice_plan)
+            ):
+                raise ArtifactValidationError(
+                    "IMPLEMENTATION_REQUIRED requires implementation work"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -878,6 +929,8 @@ class BranchDiscoveryFindingPayload:
     severity: FindingSeverity
     summary: str
     acceptance_test: str
+    predecessor_finding_ref: str | None = None
+    evidence_anchor_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "branch discovery finding_id")
@@ -889,16 +942,39 @@ class BranchDiscoveryFindingPayload:
         _require_text(
             self.acceptance_test, "branch discovery finding acceptance_test"
         )
+        if self.predecessor_finding_ref is not None:
+            _require_finding_id(
+                self.predecessor_finding_ref,
+                "branch discovery predecessor_finding_ref",
+            )
+            if self.predecessor_finding_ref == self.finding_id:
+                raise ArtifactValidationError(
+                    "branch discovery Finding cannot be its own predecessor"
+                )
+            _require_sha256(
+                self.evidence_anchor_sha256,
+                "branch discovery generation evidence anchor",
+            )
+        elif self.evidence_anchor_sha256 is not None:
+            raise ArtifactValidationError(
+                "branch discovery evidence anchor requires a predecessor"
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class BranchDiscoveryOccurrencePayload:
     finding_id: str
     rationale: str
+    evidence_anchor_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "branch discovery occurrence finding_id")
         _require_text(self.rationale, "branch discovery occurrence rationale")
+        if self.evidence_anchor_sha256 is not None:
+            _require_sha256(
+                self.evidence_anchor_sha256,
+                "branch discovery occurrence evidence anchor",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1049,6 +1125,8 @@ class FindingTransitionPayload:
     closure_kind: str | None = None
     rejection_reason: str | None = None
     closure_evidence: str | None = None
+    predecessor_finding_ref: str | None = None
+    evidence_anchor_sha256: str | None = None
     status: ClassVar[str] = "recorded"
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
@@ -1119,6 +1197,29 @@ class FindingTransitionPayload:
         ):
             raise ArtifactValidationError(
                 "a responsibility-bearing opening requires complete review context metadata"
+            )
+        generation_fields = (
+            self.predecessor_finding_ref,
+            self.evidence_anchor_sha256,
+        )
+        if any(item is not None for item in generation_fields):
+            if self.action != "opened" or any(
+                item is None for item in generation_fields
+            ):
+                raise ArtifactValidationError(
+                    "Finding generation metadata must be complete and limited to openings"
+                )
+            _require_finding_id(
+                self.predecessor_finding_ref or "",
+                "predecessor_finding_ref",
+            )
+            if self.predecessor_finding_ref == self.finding_id:
+                raise ArtifactValidationError(
+                    "Finding cannot be its own predecessor"
+                )
+            _require_sha256(
+                self.evidence_anchor_sha256,
+                "Finding generation evidence anchor",
             )
         if self.response_decision is not None:
             if self.action != "responded" or self.response_decision not in {
@@ -1355,6 +1456,7 @@ class PlanTreatmentAssignment:
     no_code_reason: str | None = None
     evidence: str | None = None
     authoritative_fingerprint: str | None = None
+    evidence_anchor: native_finding_decisions.NoCodeEvidenceAnchor | None = None
 
     def __post_init__(self) -> None:
         _require_sha256(self.signature, "plan treatment signature")
@@ -1381,6 +1483,7 @@ class PlanTreatmentAssignment:
                     self.no_code_reason,
                     self.evidence,
                     self.authoritative_fingerprint,
+                    self.evidence_anchor,
                 )
             ):
                 raise ArtifactValidationError(
@@ -1404,6 +1507,28 @@ class PlanTreatmentAssignment:
             self.authoritative_fingerprint,
             "No-Code disposition authoritative_fingerprint",
         )
+        if self.evidence_anchor is not None:
+            if not isinstance(
+                self.evidence_anchor,
+                native_finding_decisions.NoCodeEvidenceAnchor,
+            ):
+                raise ArtifactValidationError(
+                    "No-Code disposition evidence_anchor is invalid"
+                )
+            if (
+                self.evidence_anchor.rejection_reason.value
+                != self.no_code_reason
+            ):
+                raise ArtifactValidationError(
+                    "No-Code disposition evidence anchor reason differs"
+                )
+            if (
+                self.evidence_anchor.provenance_fingerprint
+                != self.authoritative_fingerprint
+            ):
+                raise ArtifactValidationError(
+                    "No-Code disposition evidence provenance differs from review"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1435,6 +1560,7 @@ class PlanAssignmentPayload:
     slices: tuple[SliceSpec, ...]
     implementation_scope: tuple[str, ...]
     authority: Role
+    plan_completion: str | None = None
     status: ClassVar[str] = "assigned"
     record_type: ClassVar[RecordType] = RecordType.PLAN_ASSIGNMENT
 
@@ -1523,6 +1649,35 @@ class PlanAssignmentPayload:
             raise ArtifactValidationError(
                 "plan assignment implementation_scope differs from the union of Slice paths"
             )
+        if self.plan_completion is not None:
+            try:
+                completion = native_finding_decisions.PlanCompletionKind(
+                    self.plan_completion
+                )
+            except ValueError as exc:
+                raise ArtifactValidationError(
+                    "plan assignment completion is invalid"
+                ) from exc
+            implementation = any(
+                item.treatment_kind == "implementation"
+                for item in self.treatments
+            )
+            if (
+                completion
+                is native_finding_decisions.PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED
+                and (implementation or self.slices or self.implementation_scope)
+            ):
+                raise ArtifactValidationError(
+                    "NO_IMPLEMENTATION_REQUIRED plan assignment contains implementation work"
+                )
+            if (
+                completion
+                is native_finding_decisions.PlanCompletionKind.IMPLEMENTATION_REQUIRED
+                and (not implementation or not self.slices)
+            ):
+                raise ArtifactValidationError(
+                    "IMPLEMENTATION_REQUIRED plan assignment lacks implementation work"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1591,6 +1746,119 @@ class RemediationCohortCheckpointPayload:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ClosedFindingDispositionSnapshot:
+    finding_id: str
+    signature: str
+    source_plan_assignment_record_id: str
+    evidence_anchor: native_finding_decisions.NoCodeEvidenceAnchor
+
+    def __post_init__(self) -> None:
+        _require_finding_id(self.finding_id, "closed disposition finding_id")
+        _require_sha256(self.signature, "closed disposition signature")
+        _require_record_id(
+            self.source_plan_assignment_record_id,
+            "closed disposition PlanAssignment record",
+        )
+        if not isinstance(
+            self.evidence_anchor,
+            native_finding_decisions.NoCodeEvidenceAnchor,
+        ):
+            raise ArtifactValidationError(
+                "closed disposition requires a typed evidence anchor"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class NoImplementationRequiredPayload:
+    family_id: str
+    cycle_number: int
+    remediation_round_number: int
+    plan_assignment_record_id: str
+    review_record_id: str
+    reviewed_plan_commit: str
+    closed_finding_ids: tuple[str, ...]
+    authority: Role
+    status: ClassVar[str] = "completed"
+    record_type: ClassVar[RecordType] = RecordType.NO_IMPLEMENTATION_REQUIRED
+
+    def __post_init__(self) -> None:
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            raise ArtifactValidationError(
+                "NO_IMPLEMENTATION_REQUIRED requires "
+                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        _require_identifier(self.family_id, "No-implementation family_id")
+        _require_positive(self.cycle_number, "No-implementation cycle_number")
+        _require_positive(
+            self.remediation_round_number,
+            "No-implementation remediation_round_number",
+        )
+        _require_record_id(
+            self.plan_assignment_record_id,
+            "No-implementation PlanAssignment record",
+        )
+        _require_record_id(
+            self.review_record_id,
+            "No-implementation review record",
+        )
+        _require_git_sha(self.reviewed_plan_commit, "reviewed_plan_commit")
+        _require_unique_finding_ids(
+            self.closed_finding_ids,
+            "No-implementation closed_finding_ids",
+            allow_empty=False,
+        )
+        if self.closed_finding_ids != sorted_finding_ids(
+            self.closed_finding_ids
+        ):
+            raise ArtifactValidationError(
+                "No-implementation closed Finding ids must be ordered"
+            )
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError(
+                "No-implementation completion authority must be orchestrator"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedFindingOccurrencePayload:
+    finding_id: str
+    signature: str
+    source_plan_assignment_record_id: str
+    discovery_completion_record_id: str
+    evidence_anchor_sha256: str
+    rationale: str
+    reviewer: Role
+    status: ClassVar[str] = "recorded"
+    record_type: ClassVar[RecordType] = RecordType.CLOSED_FINDING_OCCURRENCE
+
+    def __post_init__(self) -> None:
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            raise ArtifactValidationError(
+                "closed Finding occurrence requires "
+                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        _require_finding_id(self.finding_id, "closed occurrence finding_id")
+        _require_sha256(self.signature, "closed occurrence signature")
+        _require_record_id(
+            self.source_plan_assignment_record_id,
+            "closed occurrence PlanAssignment record",
+        )
+        _require_record_id(
+            self.discovery_completion_record_id,
+            "closed occurrence discovery completion record",
+        )
+        _require_sha256(
+            self.evidence_anchor_sha256,
+            "closed occurrence evidence anchor",
+        )
+        _require_text(self.rationale, "closed occurrence rationale")
+        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+            raise ArtifactValidationError(
+                "closed Finding occurrence reviewer must be claude"  # allowlist:provider -- diagnostic role
+            )
+
+
 def _validate_finding_snapshot(
     snapshot: Sequence[FindingSnapshotItem], *, allow_empty: bool = False
 ) -> None:
@@ -1624,6 +1892,7 @@ class BranchDiscoveryHandoffExportPayload:
     target_execution_mode: str = "PLAN_ONLY"
     source_completion_record_id: str | None = None
     remediation_cohort_checkpoint_record_id: str | None = None
+    closed_finding_dispositions: tuple[ClosedFindingDispositionSnapshot, ...] = ()
     status: ClassVar[str] = "exported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT
 
@@ -1701,6 +1970,9 @@ class BranchDiscoveryHandoffExportPayload:
             raise ArtifactValidationError(
                 "branch discovery handoff export authority must be orchestrator"
             )
+        _validate_closed_finding_dispositions(
+            self.closed_finding_dispositions
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1727,6 +1999,7 @@ class BranchDiscoveryHandoffImportPayload:
     target_execution_mode: str = "PLAN_ONLY"
     source_completion_record_id: str | None = None
     remediation_cohort_checkpoint_record_id: str | None = None
+    closed_finding_dispositions: tuple[ClosedFindingDispositionSnapshot, ...] = ()
     status: ClassVar[str] = "imported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT
 
@@ -1819,6 +2092,26 @@ class BranchDiscoveryHandoffImportPayload:
             raise ArtifactValidationError(
                 "branch discovery handoff import authority must be orchestrator"
             )
+        _validate_closed_finding_dispositions(
+            self.closed_finding_dispositions
+        )
+
+
+def _validate_closed_finding_dispositions(
+    dispositions: Sequence[ClosedFindingDispositionSnapshot],
+) -> None:
+    if any(
+        not isinstance(item, ClosedFindingDispositionSnapshot)
+        for item in dispositions
+    ):
+        raise ArtifactValidationError(
+            "closed finding dispositions must be typed"
+        )
+    ids = tuple(item.finding_id for item in dispositions)
+    if ids != tuple(sorted_finding_ids(ids)) or len(ids) != len(set(ids)):
+        raise ArtifactValidationError(
+            "closed finding dispositions must be sorted and unique"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2885,6 +3178,7 @@ ArtifactPayload: TypeAlias = (
     | FindingHandoffExportPayload | FindingHandoffImportPayload
     | BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload
     | PlanAssignmentPayload | RemediationCohortCheckpointPayload
+    | NoImplementationRequiredPayload | ClosedFindingOccurrencePayload
     | ValidationRequestPayload | ValidationContentPayload
     | ValidationAttestationPayload | ProviderContentPayload
     | ReviewPacketPayload | GatePayload
@@ -2919,10 +3213,14 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
                 if treatment.treatment_kind == "implementation":
                     item.pop("no_code_reason", None)
                     item.pop("evidence", None)
+                    item.pop("evidence_paths", None)
+                    item.pop("affected_paths", None)
                 else:
                     item.pop("closing_slice_ids", None)
                 treatments.append(item)
             raw["plan_treatments"] = treatments
+        if payload.plan_completion is None:
+            raw.pop("plan_completion", None)
     if isinstance(payload, ReviewPayload):
         if payload.review_evidence is None:
             raw.pop("review_evidence", None)
@@ -2935,6 +3233,22 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         and payload.scan_complete is None
     ):
         raw.pop("scan_complete", None)
+    if isinstance(payload, BranchDiscoveryCompletedPayload):
+        findings: list[dict[str, Any]] = []
+        for finding in payload.new_findings:
+            item = asdict(finding)
+            if finding.predecessor_finding_ref is None:
+                item.pop("predecessor_finding_ref", None)
+                item.pop("evidence_anchor_sha256", None)
+            findings.append(item)
+        raw["new_findings"] = findings
+        occurrences: list[dict[str, Any]] = []
+        for occurrence in payload.occurrences:
+            item = asdict(occurrence)
+            if occurrence.evidence_anchor_sha256 is None:
+                item.pop("evidence_anchor_sha256", None)
+            occurrences.append(item)
+        raw["occurrences"] = occurrences
     if isinstance(payload, FindingTransitionPayload):
         if payload.responsibility is None:
             raw.pop("responsibility", None)
@@ -2947,6 +3261,9 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         elif payload.closure_kind == "fixed":
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
+        if payload.predecessor_finding_ref is None:
+            raw.pop("predecessor_finding_ref", None)
+            raw.pop("evidence_anchor_sha256", None)
     if isinstance(
         payload,
         (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
@@ -2965,6 +3282,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("source_completion_record_id", None)
         if payload.remediation_cohort_checkpoint_record_id is None:
             raw.pop("remediation_cohort_checkpoint_record_id", None)
+        if not payload.closed_finding_dispositions:
+            raw.pop("closed_finding_dispositions", None)
     if isinstance(payload, PlanAssignmentPayload):
         raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
         treatments: list[dict[str, Any]] = []
@@ -2974,10 +3293,15 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
                 item.pop("no_code_reason", None)
                 item.pop("evidence", None)
                 item.pop("authoritative_fingerprint", None)
+                item.pop("evidence_anchor", None)
             else:
                 item.pop("closing_slice_ids", None)
+                if treatment.evidence_anchor is None:
+                    item.pop("evidence_anchor", None)
             treatments.append(item)
         raw["treatments"] = treatments
+        if payload.plan_completion is None:
+            raw.pop("plan_completion", None)
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None
@@ -3250,6 +3574,43 @@ def _plan_treatment_assignment_from_dict(
         no_code_reason=data.get("no_code_reason"),
         evidence=data.get("evidence"),
         authoritative_fingerprint=data.get("authoritative_fingerprint"),
+        evidence_anchor=(
+            None
+            if data.get("evidence_anchor") is None
+            else _no_code_evidence_anchor_from_dict(data["evidence_anchor"])
+        ),
+    )
+
+
+def _no_code_evidence_anchor_from_dict(
+    data: Mapping[str, Any],
+) -> native_finding_decisions.NoCodeEvidenceAnchor:
+    return native_finding_decisions.NoCodeEvidenceAnchor(
+        rejection_reason=native_finding_decisions.NativeRejectionReason(
+            data["rejection_reason"]
+        ),
+        provenance_fingerprint=data["provenance_fingerprint"],
+        evidence_paths=tuple(data["evidence_paths"]),
+        evidence_content_sha256=data["evidence_content_sha256"],
+        task_sha256=data.get("task_sha256"),
+        scope_sha256=data.get("scope_sha256"),
+        affected_paths=tuple(data.get("affected_paths", ())),
+        affected_content_sha256=data.get("affected_content_sha256"),
+    )
+
+
+def _closed_finding_disposition_from_dict(
+    data: Mapping[str, Any],
+) -> ClosedFindingDispositionSnapshot:
+    return ClosedFindingDispositionSnapshot(
+        finding_id=data["finding_id"],
+        signature=data["signature"],
+        source_plan_assignment_record_id=data[
+            "source_plan_assignment_record_id"
+        ],
+        evidence_anchor=_no_code_evidence_anchor_from_dict(
+            data["evidence_anchor"]
+        ),
     )
 
 
@@ -3341,9 +3702,12 @@ _PAYLOAD_READERS: dict[
                     tuple(item.get("closing_slice_ids", ())),
                     item.get("no_code_reason"),
                     item.get("evidence"),
+                    tuple(item.get("evidence_paths", ())),
+                    tuple(item.get("affected_paths", ())),
                 )
                 for item in data.get("plan_treatments", ())
             ),
+            data.get("plan_completion"),
         ),
     RecordType.DIAGNOSTIC: lambda data: DiagnosticPayload(
         Role(data["role"]), data["work_unit_id"], data["attempt"],
@@ -3395,12 +3759,16 @@ _PAYLOAD_READERS: dict[
                     FindingSeverity(item["severity"]),
                     item["summary"],
                     item["acceptance_test"],
+                    item.get("predecessor_finding_ref"),
+                    item.get("evidence_anchor_sha256"),
                 )
                 for item in data["new_findings"]
             ),
             occurrences=tuple(
                 BranchDiscoveryOccurrencePayload(
-                    item["finding_id"], item["rationale"]
+                    item["finding_id"],
+                    item["rationale"],
+                    item.get("evidence_anchor_sha256"),
                 )
                 for item in data["occurrences"]
             ),
@@ -3458,6 +3826,8 @@ _PAYLOAD_READERS: dict[
             closure_kind=data.get("closure_kind"),
             rejection_reason=data.get("rejection_reason"),
             closure_evidence=data.get("closure_evidence"),
+            predecessor_finding_ref=data.get("predecessor_finding_ref"),
+            evidence_anchor_sha256=data.get("evidence_anchor_sha256"),
         ),
     RecordType.FINDING_HANDOFF_EXPORT: lambda data: FindingHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],
@@ -3491,6 +3861,10 @@ _PAYLOAD_READERS: dict[
             data.get("target_execution_mode", "PLAN_ONLY"),
             data.get("source_completion_record_id"),
             data.get("remediation_cohort_checkpoint_record_id"),
+            tuple(
+                _closed_finding_disposition_from_dict(item)
+                for item in data.get("closed_finding_dispositions", ())
+            ),
         ),
     RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT: lambda data: BranchDiscoveryHandoffImportPayload(
             data["source_run_id"], data["source_head_record_id"],
@@ -3514,6 +3888,10 @@ _PAYLOAD_READERS: dict[
             data.get("target_execution_mode", "PLAN_ONLY"),
             data.get("source_completion_record_id"),
             data.get("remediation_cohort_checkpoint_record_id"),
+            tuple(
+                _closed_finding_disposition_from_dict(item)
+                for item in data.get("closed_finding_dispositions", ())
+            ),
         ),
     RecordType.PLAN_ASSIGNMENT: lambda data: PlanAssignmentPayload(
             data["family_id"], data["cycle_number"],
@@ -3524,6 +3902,7 @@ _PAYLOAD_READERS: dict[
             tuple(_plan_treatment_assignment_from_dict(item) for item in data["treatments"]),
             tuple(_slice_spec_from_dict(item) for item in data["slices"]),
             tuple(data["implementation_scope"]), Role(data["authority"]),
+            data.get("plan_completion"),
         ),
     RecordType.REMEDIATION_COHORT_CHECKPOINT: lambda data: RemediationCohortCheckpointPayload(
             data["family_id"], data["remediation_round_number"],
@@ -3532,6 +3911,20 @@ _PAYLOAD_READERS: dict[
             tuple(data["inherited_signatures"]),
             tuple(data["unresolved_inherited_signatures"]),
             Role(data["authority"]),
+        ),
+    RecordType.NO_IMPLEMENTATION_REQUIRED: lambda data: NoImplementationRequiredPayload(
+            data["family_id"], data["cycle_number"],
+            data["remediation_round_number"],
+            data["plan_assignment_record_id"], data["review_record_id"],
+            data["reviewed_plan_commit"], tuple(data["closed_finding_ids"]),
+            Role(data["authority"]),
+        ),
+    RecordType.CLOSED_FINDING_OCCURRENCE: lambda data: ClosedFindingOccurrencePayload(
+            data["finding_id"], data["signature"],
+            data["source_plan_assignment_record_id"],
+            data["discovery_completion_record_id"],
+            data["evidence_anchor_sha256"], data["rationale"],
+            Role(data["reviewer"]),
         ),
     RecordType.VALIDATION_REQUEST: lambda data: ValidationRequestPayload(
         tuple(

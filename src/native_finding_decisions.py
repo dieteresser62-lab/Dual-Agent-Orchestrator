@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import hashlib
+import json
+from pathlib import PurePosixPath
 import re
 
 from finding_order import sorted_finding_ids
@@ -36,6 +39,129 @@ class NativeRejectionReason(StrEnum):
 class PlanTreatmentDecisionKind(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+
+
+class PlanCompletionKind(StrEnum):
+    IMPLEMENTATION_REQUIRED = "IMPLEMENTATION_REQUIRED"
+    NO_IMPLEMENTATION_REQUIRED = "NO_IMPLEMENTATION_REQUIRED"
+
+
+@dataclass(frozen=True, slots=True)
+class NoCodeEvidenceAnchor:
+    """Content-stable authority for one reviewer-accepted No-Code decision.
+
+    ``provenance_fingerprint`` records where the decision was made, but is
+    intentionally excluded from ``stability_sha256``.  The remaining fields
+    decide whether a later observation is the same closed occurrence or a new
+    Finding generation.
+    """
+
+    rejection_reason: NativeRejectionReason
+    provenance_fingerprint: str
+    evidence_paths: tuple[str, ...]
+    evidence_content_sha256: str
+    task_sha256: str | None = None
+    scope_sha256: str | None = None
+    affected_paths: tuple[str, ...] = ()
+    affected_content_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rejection_reason, NativeRejectionReason):
+            raise ValueError("No-Code evidence anchor requires a typed reason")
+        _require_sha256(
+            self.provenance_fingerprint,
+            "No-Code evidence provenance fingerprint",
+        )
+        _require_paths(self.evidence_paths, "No-Code evidence paths")
+        _require_sha256(
+            self.evidence_content_sha256,
+            "No-Code evidence content digest",
+        )
+        if self.rejection_reason is NativeRejectionReason.OUT_OF_SCOPE:
+            _require_sha256(self.task_sha256, "out-of-scope task digest")
+            _require_sha256(self.scope_sha256, "out-of-scope scope digest")
+            if self.affected_paths or self.affected_content_sha256 is not None:
+                raise ValueError(
+                    "out-of-scope evidence anchor forbids affected-file fields"
+                )
+        elif self.rejection_reason is NativeRejectionReason.ALREADY_FIXED:
+            if self.task_sha256 is not None or self.scope_sha256 is not None:
+                raise ValueError(
+                    "already-fixed evidence anchor forbids task and scope digests"
+                )
+            _require_paths(self.affected_paths, "already-fixed affected paths")
+            _require_sha256(
+                self.affected_content_sha256,
+                "already-fixed affected content digest",
+            )
+        else:
+            if any(
+                value is not None
+                for value in (
+                    self.task_sha256,
+                    self.scope_sha256,
+                    self.affected_content_sha256,
+                )
+            ) or self.affected_paths:
+                raise ValueError(
+                    "no-defect evidence anchor forbids reason-specific digests"
+                )
+
+    @property
+    def stability_sha256(self) -> str:
+        document = {
+            "rejection_reason": self.rejection_reason.value,
+            "evidence_paths": list(self.evidence_paths),
+            "evidence_content_sha256": self.evidence_content_sha256,
+            "task_sha256": self.task_sha256,
+            "scope_sha256": self.scope_sha256,
+            "affected_paths": list(self.affected_paths),
+            "affected_content_sha256": self.affected_content_sha256,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                document,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedFindingReviewBinding:
+    finding_id: str
+    signature: str
+    source_plan_assignment_record_id: str
+    original_anchor: NoCodeEvidenceAnchor
+    current_anchor: NoCodeEvidenceAnchor
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"C-(0[1-9]|[1-9][0-9]*)", self.finding_id) is None:
+            raise ValueError("closed Finding binding requires a canonical Finding ID")
+        _require_sha256(self.signature, "closed Finding signature")
+        if re.fullmatch(
+            r"ar1-[0-9a-f]{64}", self.source_plan_assignment_record_id
+        ) is None:
+            raise ValueError(
+                "closed Finding binding requires its PlanAssignment record"
+            )
+        if not isinstance(self.original_anchor, NoCodeEvidenceAnchor) or not isinstance(
+            self.current_anchor, NoCodeEvidenceAnchor
+        ):
+            raise ValueError("closed Finding binding requires typed evidence anchors")
+        if (
+            self.original_anchor.rejection_reason
+            is not self.current_anchor.rejection_reason
+        ):
+            raise ValueError("closed Finding evidence reason changed")
+
+    @property
+    def anchor_unchanged(self) -> bool:
+        return (
+            self.original_anchor.stability_sha256
+            == self.current_anchor.stability_sha256
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +200,8 @@ class PlanTreatmentProposal:
     closing_slice_ids: tuple[int, ...] = ()
     no_code_reason: NativeRejectionReason | None = None
     evidence: str | None = None
+    evidence_paths: tuple[str, ...] = ()
+    affected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.signature, str) or re.fullmatch(
@@ -102,7 +230,12 @@ class PlanTreatmentProposal:
                 or closing_slice_id < 1
             ):
                 raise ValueError("closing Slice id must be a positive integer")
-            if self.no_code_reason is not None or self.evidence is not None:
+            if (
+                self.no_code_reason is not None
+                or self.evidence is not None
+                or self.evidence_paths
+                or self.affected_paths
+            ):
                 raise ValueError(
                     "implementation treatment forbids No-Code disposition fields"
                 )
@@ -113,6 +246,59 @@ class PlanTreatmentProposal:
             raise ValueError("No-Code disposition requires a typed reason")
         if not isinstance(self.evidence, str) or not self.evidence.strip():
             raise ValueError("No-Code disposition evidence must not be empty")
+        _require_paths(self.evidence_paths, "No-Code disposition evidence_paths")
+        if self.no_code_reason is NativeRejectionReason.ALREADY_FIXED:
+            _require_paths(
+                self.affected_paths,
+                "already-fixed disposition affected_paths",
+            )
+        elif self.affected_paths:
+            raise ValueError(
+                "only an already-fixed disposition may name affected_paths"
+            )
+
+
+def content_path_digest(
+    paths: tuple[str, ...], content_sha256_by_path: dict[str, str]
+) -> str:
+    """Digest exact path/content-digest pairs without observing Git identity."""
+
+    _require_paths(paths, "content digest paths")
+    if set(content_sha256_by_path) != set(paths):
+        raise ValueError("content digest inputs differ from their exact path set")
+    document = []
+    for path in paths:
+        digest = content_sha256_by_path[path]
+        _require_sha256(digest, f"content digest for {path}")
+        document.append({"path": path, "sha256": digest})
+    return hashlib.sha256(
+        json.dumps(
+            document,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _require_sha256(value: object, label: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+
+
+def _require_paths(values: tuple[str, ...], label: str) -> None:
+    if not values or values != tuple(sorted(set(values))):
+        raise ValueError(f"{label} must be non-empty, sorted, and unique")
+    for value in values:
+        path = PurePosixPath(value)
+        if (
+            not isinstance(value, str)
+            or not value
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.as_posix() != value
+        ):
+            raise ValueError(f"{label} contains a non-canonical repository path")
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,9 +342,13 @@ __all__ = [
     "NativeRejectionReason",
     "NativeResponsibilityProposal",
     "NativeResponsibilityRoute",
+    "ClosedFindingReviewBinding",
+    "NoCodeEvidenceAnchor",
+    "PlanCompletionKind",
     "PlanTreatmentDecision",
     "PlanTreatmentDecisionKind",
     "PlanTreatmentKind",
     "PlanTreatmentProposal",
+    "content_path_digest",
     "native_finding_decisions_enabled",
 ]

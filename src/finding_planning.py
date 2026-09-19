@@ -24,6 +24,7 @@ from finding_signature import (
 )
 from native_finding_decisions import (
     MAX_REMEDIATION_ROUNDS,
+    PlanCompletionKind,
     PlanTreatmentDecision,
     PlanTreatmentDecisionKind,
     PlanTreatmentKind,
@@ -182,6 +183,39 @@ def validate_plan_treatment_decisions(
             )
 
 
+def validate_plan_completion(
+    treatments: Sequence[PlanTreatmentProposal],
+    planned_slices: Sequence[PlannedSlice],
+    completion: PlanCompletionKind,
+) -> None:
+    """Bind E7's explicit completion to the exact treatment partition."""
+
+    if not isinstance(completion, PlanCompletionKind):
+        raise ValueError("plan completion must be typed")
+    implementation = tuple(
+        item
+        for item in treatments
+        if item.treatment_kind is PlanTreatmentKind.IMPLEMENTATION
+    )
+    slices = tuple(planned_slices)
+    if completion is PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED:
+        if implementation:
+            raise ValueError(
+                "NO_IMPLEMENTATION_REQUIRED forbids implementation treatments"
+            )
+        if slices:
+            raise ValueError(
+                "NO_IMPLEMENTATION_REQUIRED forbids implementation Slices"
+            )
+        return
+    if not implementation:
+        raise ValueError(
+            "IMPLEMENTATION_REQUIRED requires an implementation treatment"
+        )
+    if not slices:
+        raise ValueError("IMPLEMENTATION_REQUIRED requires at least one Slice")
+
+
 def evaluate_remediation_round(
     *,
     remediation_round_number: int,
@@ -318,4 +352,5 @@ __all__ = [
     "evaluate_remediation_round",
     "validate_plan_treatment_coverage",
     "validate_plan_treatment_decisions",
+    "validate_plan_completion",
 ]

@@ -645,6 +645,9 @@ def _review_context_request_projection(
         ]
         review_contract["planned_slices"] = context_binding["planned_slices"]
         review_contract["plan_treatments"] = context_binding["plan_treatments"]
+        review_contract["closed_finding_bindings"] = context_binding[
+            "closed_finding_bindings"
+        ]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -683,6 +686,88 @@ def _validate_plan_disposition_capacity(spec: NativeReviewRequestSpec) -> None:
             f"{disposition_count} status, reclassification, or routing decisions; "
             f"the bound maximum is {MAX_NATIVE_REVIEW_DISPOSITIONS}",
         )
+
+
+def _enable_closed_finding_binding_request_schema(
+    definitions: dict[str, Any],
+    contract: dict[str, Any],
+) -> None:
+    definitions["no_code_evidence_anchor"] = {
+        "type": "object",
+        "properties": {
+            "rejection_reason": {
+                "type": "string",
+                "enum": ["no_defect", "out_of_scope", "already_fixed"],
+            },
+            "provenance_fingerprint": {"$ref": "#/$defs/sha256"},
+            "evidence_paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1000,
+                "uniqueItems": True,
+                "items": {"$ref": "#/$defs/safe_path"},
+            },
+            "evidence_content_sha256": {"$ref": "#/$defs/sha256"},
+            "task_sha256": {
+                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "scope_sha256": {
+                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "affected_paths": {
+                "type": "array",
+                "maxItems": 1000,
+                "uniqueItems": True,
+                "items": {"$ref": "#/$defs/safe_path"},
+            },
+            "affected_content_sha256": {
+                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "stability_sha256": {"$ref": "#/$defs/sha256"},
+        },
+        "required": [
+            "rejection_reason",
+            "provenance_fingerprint",
+            "evidence_paths",
+            "evidence_content_sha256",
+            "task_sha256",
+            "scope_sha256",
+            "affected_paths",
+            "affected_content_sha256",
+            "stability_sha256",
+        ],
+        "additionalProperties": False,
+    }
+    definitions["closed_finding_binding"] = {
+        "type": "object",
+        "properties": {
+            "finding_id": {
+                "type": "string",
+                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+            },
+            "signature": {"$ref": "#/$defs/sha256"},
+            "source_plan_assignment_record_id": {
+                "type": "string",
+                "pattern": "^ar1-[0-9a-f]{64}$",
+            },
+            "original_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"},
+            "current_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"},
+        },
+        "required": [
+            "finding_id",
+            "signature",
+            "source_plan_assignment_record_id",
+            "original_anchor",
+            "current_anchor",
+        ],
+        "additionalProperties": False,
+    }
+    contract["properties"]["closed_finding_bindings"] = {
+        "type": "array",
+        "maxItems": 128,
+        "items": {"$ref": "#/$defs/closed_finding_binding"},
+    }
+    contract["required"].append("closed_finding_bindings")
 
 
 def _enable_native_review_request_finding_decision_schema(
@@ -812,6 +897,19 @@ def _enable_native_review_request_finding_decision_schema(
                         "enum": ["no_defect", "out_of_scope", "already_fixed"],
                     },
                     "evidence": {"$ref": "#/$defs/safe_text"},
+                    "evidence_paths": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 1000,
+                        "uniqueItems": True,
+                        "items": {"$ref": "#/$defs/safe_path"},
+                    },
+                    "affected_paths": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "uniqueItems": True,
+                        "items": {"$ref": "#/$defs/safe_path"},
+                    },
                 },
                 "required": [
                     "signature",
@@ -819,6 +917,8 @@ def _enable_native_review_request_finding_decision_schema(
                     "treatment_kind",
                     "no_code_reason",
                     "evidence",
+                    "evidence_paths",
+                    "affected_paths",
                 ],
                 "additionalProperties": False,
             },
@@ -830,6 +930,7 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/plan_treatment_proposal"},
     }
     contract["required"].append("plan_treatments")
+    _enable_closed_finding_binding_request_schema(definitions, contract)
 
 
 def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:

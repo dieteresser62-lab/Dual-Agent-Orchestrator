@@ -193,6 +193,8 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
                 "finding_id": "C-02",
                 "finding_class": "BLOCKER",
                 "summary": "A new defect remains on the reviewed branch HEAD.",
+                "predecessor_finding_ref": None,
+                "evidence_anchor_sha256": None,
                 "acceptance_test": {
                     "kind": "prose",
                     "text": "A later ordinary plan must address the defect.",
@@ -203,6 +205,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
             {
                 "finding_id": "C-01",
                 "rationale": "The known defect is still reproducible on this HEAD.",
+                "evidence_anchor_sha256": None,
             }
         ],
         "review_evidence": {

@@ -21,6 +21,7 @@ from contracts import (
     ReadinessMarker,
 )
 from finding_reducer import project_finding_response_delta
+from finding_signature import finding_record_signature
 from finding_responsibility import SliceResponsibility
 from native_codex_contract import (
     BoundNativeCodexContext,
@@ -970,7 +971,8 @@ def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
         "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
         True,
     )
-    bound = _bound(NativeCodexRequestKind.PLAN)
+    finding = _finding()
+    bound = _bound(NativeCodexRequestKind.PLAN, findings=(finding,))
     texts = ["An unrelated reviewer-owned condition.", "Replay remains stable."]
     document = {
         **_base(bound, "plan_result"),
@@ -984,6 +986,19 @@ def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
             }
         ],
         "finding_dispositions": [],
+        "plan_treatments": [
+            {
+                "signature": finding_record_signature(finding),
+                "finding_ids": ["C-01"],
+                "treatment_kind": "implementation",
+                "closing_slice_ids": [1],
+                "no_code_reason": None,
+                "evidence": None,
+                "evidence_paths": [],
+                "affected_paths": [],
+            }
+        ],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
 
     response = parse_native_codex_response(document, bound)

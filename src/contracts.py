@@ -16,6 +16,7 @@ from content_authority import (
 )
 from finding_order import sorted_finding_ids
 from native_finding_decisions import (
+    PlanCompletionKind,
     PlanTreatmentDecision,
     PlanTreatmentProposal,
     native_finding_decisions_enabled,
@@ -148,6 +149,8 @@ class FindingRecord:
     responses: tuple[FindingResponse, ...] = ()
     status_rationale: str | None = None
     class_history: tuple[FindingClass, ...] = ()
+    predecessor_finding_ref: str | None = None
+    evidence_anchor_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _validate_finding_id(self.finding_id, self.origin.reporter)
@@ -157,18 +160,43 @@ class FindingRecord:
             raise ValueError("finding acceptance test must not be empty")
         if self.status is FindingStatus.CLOSED and not (self.status_rationale or "").strip():
             raise ValueError("closed finding requires a status rationale")
+        if self.predecessor_finding_ref is not None:
+            if not SOURCE_FINDING_ID_PATTERN.fullmatch(
+                self.predecessor_finding_ref
+            ):
+                raise ValueError("predecessor finding reference is invalid")
+            if self.predecessor_finding_ref == self.finding_id:
+                raise ValueError("finding cannot be its own predecessor")
+            if not isinstance(self.evidence_anchor_sha256, str) or not SHA256_PATTERN.fullmatch(
+                self.evidence_anchor_sha256
+            ):
+                raise ValueError(
+                    "new Finding generation requires its evidence anchor digest"
+                )
+        elif self.evidence_anchor_sha256 is not None:
+            raise ValueError(
+                "evidence anchor digest requires a predecessor Finding reference"
+            )
 
 
 @dataclass(frozen=True)
 class FindingOccurrence:
     finding_id: str
     rationale: str
+    evidence_anchor_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not SOURCE_FINDING_ID_PATTERN.fullmatch(self.finding_id):
             raise ValueError(f"invalid occurrence finding id {self.finding_id}")
         if not self.rationale.strip():
             raise ValueError("finding occurrence requires a rationale")
+        if (
+            self.evidence_anchor_sha256 is not None
+            and not SHA256_PATTERN.fullmatch(self.evidence_anchor_sha256)
+        ):
+            raise ValueError(
+                "finding occurrence evidence anchor must be a SHA-256 digest"
+            )
 
 
 @dataclass(frozen=True)
@@ -641,6 +669,7 @@ class CodexContractResult:
     slice_plan: tuple[PlannedSlice, ...] = ()
     self_check: str | None = None
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
+    plan_completion: PlanCompletionKind | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -650,6 +679,12 @@ class CodexContractResult:
             raise ValueError("plan treatments must be typed")
         if self.plan_treatments and not native_finding_decisions_enabled():
             raise ValueError("plan treatments require the joint 67/68 cutover")
+        if self.plan_completion is not None and not isinstance(
+            self.plan_completion, PlanCompletionKind
+        ):
+            raise ValueError("plan completion must be typed")
+        if self.plan_completion is not None and not native_finding_decisions_enabled():
+            raise ValueError("plan completion requires the joint 67/68 cutover")
 
 
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:
@@ -683,6 +718,10 @@ def apply_reviewer_finding_update(
 ) -> FindingRecord:
     if reviewer is not finding.origin.reporter:
         raise ValueError("only the reporting reviewer may update or close a finding")
+    if finding.status is FindingStatus.CLOSED and status is FindingStatus.OPEN:
+        raise ValueError(
+            "closed findings cannot be reopened; create a new Finding generation"
+        )
     if not rationale.strip():
         raise ValueError("finding update requires a rationale")
     next_class = finding_class or finding.finding_class

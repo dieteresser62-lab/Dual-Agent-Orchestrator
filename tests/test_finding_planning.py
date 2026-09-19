@@ -237,6 +237,8 @@ def test_positive_plan_requires_each_explicit_claude_treatment_acceptance() -> N
         PlanTreatmentKind.NO_CODE,
         no_code_reason=NativeRejectionReason.ALREADY_FIXED,
         evidence="The bound HEAD contains the repair and its regression test.",
+        evidence_paths=("tests/test_fix.py",),
+        affected_paths=("src/fix.py",),
     )
 
     with pytest.raises(ValueError, match="omitted an explicit decision"):
@@ -650,11 +652,14 @@ def test_native_codex_plan_transports_complete_signature_treatments(
                 "signature": signature,
                 "finding_ids": ["C-01"],
                 "treatment_kind": "implementation",
-                "closing_slice_ids": [1],
-                "no_code_reason": None,
-                "evidence": None,
-            }
-        ],
+                    "closing_slice_ids": [1],
+                    "no_code_reason": None,
+                    "evidence": None,
+                    "evidence_paths": [],
+                    "affected_paths": [],
+                }
+            ],
+            "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
 
     validate_schema_document(
@@ -688,6 +693,7 @@ def test_native_plan_review_binds_and_requires_explicit_treatment_decisions(
         PlanTreatmentKind.NO_CODE,
         no_code_reason=NativeRejectionReason.NO_DEFECT,
         evidence="The fingerprint-bound contract defines this behavior.",
+        evidence_paths=("docs/internal/contract.md",),
     )
     context = NativeReviewContext(
         run_id="plan-run",
@@ -733,7 +739,18 @@ def test_native_plan_review_binds_and_requires_explicit_treatment_decisions(
         "reviewer": "claude",
         "decision": "approved",
         "new_findings": [],
-        "status_changes": [],
+        "status_changes": [
+            {
+                "finding_id": "C-01",
+                "status": "CLOSED",
+                "rationale": "The reviewer accepts the evidenced No-Code disposition.",
+                "closure": {
+                    "kind": "rejected",
+                    "rejection_reason": "no_defect",
+                    "evidence": "The fingerprint-bound contract defines this behavior.",
+                },
+            }
+        ],
         "reclassifications": [],
         "responsibility_routes": [],
         "anchors": [],
@@ -752,6 +769,8 @@ def test_native_plan_review_binds_and_requires_explicit_treatment_decisions(
             "treatment_kind": "no_code",
             "no_code_reason": "no_defect",
             "evidence": "The fingerprint-bound contract defines this behavior.",
+            "evidence_paths": ["docs/internal/contract.md"],
+            "affected_paths": [],
         }
     ]
     with pytest.raises(NativeReviewContractError, match="omitted an explicit decision"):

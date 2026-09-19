@@ -14,12 +14,14 @@ from artifact_models import (
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
     BindingPayload,
+    ClosedFindingOccurrencePayload,
     CorrectionWorkUnitPayload,
     DiagnosticPayload,
     FindingTransitionPayload,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     GatePayload,
+    NoImplementationRequiredPayload,
     PlanAssignmentPayload,
     PlanPayload,
     ReviewAnchorPayload,
@@ -137,6 +139,8 @@ class ArtifactAuditProjection:
                 BranchDiscoveryHandoffExportPayload,
                 PlanAssignmentPayload,
                 RemediationCohortCheckpointPayload,
+                NoImplementationRequiredPayload,
+                ClosedFindingOccurrencePayload,
                 BranchDiscoveryHandoffImportPayload,
             )):
                 selected.append(record)
@@ -686,7 +690,12 @@ def _render_binding_record(
 
 def _render_remediation_planning_record(
     rendering: _ReplayRendering,
-    payload: PlanAssignmentPayload | RemediationCohortCheckpointPayload,
+    payload: (
+        PlanAssignmentPayload
+        | RemediationCohortCheckpointPayload
+        | NoImplementationRequiredPayload
+        | ClosedFindingOccurrencePayload
+    ),
     prefix: str,
 ) -> None:
     if isinstance(payload, PlanAssignmentPayload):
@@ -704,6 +713,30 @@ def _render_remediation_planning_record(
             f"`{payload.review_record_id}` | `{len(payload.treatments)}` | "
             f"`{implementation_count}` | `{no_code_count}` | "
             f"{_codes(payload.implementation_scope)} |",
+            "",
+        ))
+        return
+    if isinstance(payload, NoImplementationRequiredPayload):
+        rendering.bindings_and_units.extend((
+            f"### Planabschluss ohne Implementierung · Runde {payload.remediation_round_number}",
+            "",
+            "| Seq/Record | Familie | PlanAssignment | Planreview | Plan-HEAD | Geschlossene Findings |",
+            "|---|---|---|---|---|---|",
+            f"| {prefix} | `{_safe(payload.family_id)}` | "
+            f"`{payload.plan_assignment_record_id}` | `{payload.review_record_id}` | "
+            f"`{payload.reviewed_plan_commit}` | {_codes(payload.closed_finding_ids)} |",
+            "",
+        ))
+        return
+    if isinstance(payload, ClosedFindingOccurrencePayload):
+        rendering.findings.extend((
+            f"### Geschlossenes Finding-Vorkommen · {_safe(payload.finding_id)}",
+            "",
+            "| Seq/Record | Finding | Signatur | Evidenzanker | Entdeckungsabschluss | Begründung |",
+            "|---|---|---|---|---|---|",
+            f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.signature}` | "
+            f"`{payload.evidence_anchor_sha256}` | "
+            f"`{payload.discovery_completion_record_id}` | {_safe(payload.rationale)} |",
             "",
         ))
         return
@@ -765,7 +798,12 @@ def _render_record(
         _render_binding_record(rendering, payload, prefix)
     elif isinstance(
         payload,
-        (PlanAssignmentPayload, RemediationCohortCheckpointPayload),
+        (
+            PlanAssignmentPayload,
+            RemediationCohortCheckpointPayload,
+            NoImplementationRequiredPayload,
+            ClosedFindingOccurrencePayload,
+        ),
     ):
         _render_remediation_planning_record(rendering, payload, prefix)
 

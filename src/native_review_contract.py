@@ -59,6 +59,7 @@ from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
 from native_provider_schema import defensive_provider_projection
 import native_finding_decisions
 from native_finding_decisions import (
+    ClosedFindingReviewBinding,
     NativeClosureKind,
     NativeFindingClosure,
     NativeRejectionReason,
@@ -323,7 +324,11 @@ def native_review_disposition_capacity(context: NativeReviewContext) -> int:
     """Count reviewer-owned open findings eligible for one disposition."""
 
     if context.approval_marker is ApprovalMarker.PLAN and context.plan_treatments:
-        return len(context.plan_treatments)
+        return len(context.plan_treatments) + sum(
+            len(item.finding_ids)
+            for item in context.plan_treatments
+            if item.treatment_kind is PlanTreatmentKind.NO_CODE
+        )
     return sum(
         item.origin.reporter is context.reviewer
         for item in project_open_set(context.previous_findings).findings
@@ -349,6 +354,8 @@ class NativeFinding:
     finding_class: FindingClass
     summary: str
     acceptance_test: NativeAcceptance
+    predecessor_finding_ref: str | None = None
+    evidence_anchor_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +400,7 @@ class NativeReviewResult:
 class NativeFindingOccurrence:
     finding_id: str
     rationale: str
+    evidence_anchor_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,6 +491,7 @@ class NativeReviewContext:
     implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
     planned_slices: tuple[PlannedSlice, ...] = ()
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
+    closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -674,6 +683,7 @@ class NativeReviewContext:
             )
         _validate_implementer_responsibility_proposals(self)
         _validate_plan_treatments(self)
+        _validate_closed_finding_bindings(self)
 
     @property
     def effective_known_open_findings(self) -> tuple[FindingRecord, ...]:
@@ -779,6 +789,44 @@ def _validate_plan_treatments(context: NativeReviewContext) -> None:
         )
 
 
+def _validate_closed_finding_bindings(context: NativeReviewContext) -> None:
+    bindings = context.closed_finding_bindings
+    if any(not isinstance(item, ClosedFindingReviewBinding) for item in bindings):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "closed Finding bindings must be typed",
+        )
+    if bindings and context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "closed Finding bindings are valid only for branch discovery",
+        )
+    if bindings and not native_finding_decisions.native_finding_decisions_enabled():
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "closed Finding bindings are disabled until the joint 67/68 cutover",
+        )
+    ids = tuple(item.finding_id for item in bindings)
+    if ids != sorted_finding_ids(ids):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "closed Finding bindings must be sorted and unique",
+        )
+    previous = {item.finding_id: item for item in context.previous_findings}
+    for binding in bindings:
+        finding = previous.get(binding.finding_id)
+        if finding is None or not is_closed_finding_status(finding.status):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "closed Finding binding does not reference a closed offered Finding",
+            )
+        if finding_record_signature(finding) != binding.signature:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "closed Finding binding signature differs from the Finding",
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class BoundNativeReviewContext:
     """A live-provider context bound to one complete canonical request.
@@ -841,6 +889,21 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
     """Add E6's delivery without changing the dormant reader schema on disk."""
 
     definitions = schema["$defs"]
+    definitions["finding"]["properties"]["predecessor_finding_ref"] = {
+        "oneOf": [
+            {
+                "type": "string",
+                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+            },
+            {"type": "null"},
+        ],
+    }
+    definitions["finding"]["properties"]["evidence_anchor_sha256"] = {
+        "oneOf": [
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            {"type": "null"},
+        ],
+    }
     definitions["branch_discovery_occurrence"] = {
         "type": "object",
         "properties": {
@@ -852,6 +915,12 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                 "type": "string",
                 "pattern": NONBLANK_TEXT_PATTERN,
                 "maxLength": 3000,
+            },
+            "evidence_anchor_sha256": {
+                "oneOf": [
+                    {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    {"type": "null"},
+                ],
             },
         },
         "required": ["finding_id", "rationale"],
@@ -935,12 +1004,65 @@ def _branch_discovery_provider_response_schema(
     finding["properties"]["summary"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
     )
+    finding["properties"]["predecessor_finding_ref"] = {
+        "oneOf": [
+            {
+                "type": "string",
+                "enum": [
+                    item.finding_id
+                    for item in context.closed_finding_bindings
+                    if not item.anchor_unchanged
+                ],
+            },
+            {"type": "null"},
+        ]
+    }
+    finding["properties"]["evidence_anchor_sha256"] = {
+        "oneOf": [
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            {"type": "null"},
+        ]
+    }
+    finding["required"].extend(
+        ["predecessor_finding_ref", "evidence_anchor_sha256"]
+    )
     definitions["bound_branch_discovery_finding"] = finding
-    known_ids = tuple(
+    open_ids = tuple(
         item.finding_id for item in context.effective_known_open_findings
     )
-    occurrence = _bound_review_definition(
-        definitions["branch_discovery_occurrence"], finding_ids=known_ids
+    stable_closed = tuple(
+        item for item in context.closed_finding_bindings if item.anchor_unchanged
+    )
+    known_ids = sorted_finding_ids(
+        (*open_ids, *(item.finding_id for item in stable_closed))
+    )
+    occurrence_options: list[dict[str, Any]] = []
+    stable_by_id = {item.finding_id: item for item in stable_closed}
+    for finding_id in known_ids:
+        option = json.loads(
+            json.dumps(definitions["branch_discovery_occurrence"])
+        )
+        option["properties"]["finding_id"] = {
+            "type": "string",
+            "const": finding_id,
+        }
+        binding = stable_by_id.get(finding_id)
+        option["properties"]["evidence_anchor_sha256"] = (
+            {
+                "type": "string",
+                "const": binding.current_anchor.stability_sha256,
+            }
+            if binding is not None
+            else {"type": "null"}
+        )
+        option["required"].append("evidence_anchor_sha256")
+        occurrence_options.append(option)
+    occurrence = (
+        {"oneOf": occurrence_options}
+        if occurrence_options
+        else _bound_review_definition(
+            definitions["branch_discovery_occurrence"], finding_ids=()
+        )
     )
     definitions["bound_branch_discovery_occurrence"] = occurrence
     completed = json.loads(
@@ -1530,7 +1652,11 @@ def _parse_native_review_response(
                 _parse_native_finding(item) for item in document["new_findings"]
             ),
             occurrences=tuple(
-                NativeFindingOccurrence(item["finding_id"], item["rationale"])
+                NativeFindingOccurrence(
+                    item["finding_id"],
+                    item["rationale"],
+                    item.get("evidence_anchor_sha256"),
+                )
                 for item in document["occurrences"]
             ),
             evidence=discovery_evidence,
@@ -1698,7 +1824,11 @@ def _native_response_to_contract_result(
             red_state_followup_slice=None,
             delivery_kind="branch_discovery_completed",
             occurrences=tuple(
-                FindingOccurrence(item.finding_id, item.rationale)
+                FindingOccurrence(
+                    item.finding_id,
+                    item.rationale,
+                    item.evidence_anchor_sha256,
+                )
                 for item in response.occurrences
             ),
             scan_complete=response.scan_complete,
@@ -1792,6 +1922,8 @@ def _parse_native_finding(item: Mapping[str, Any]) -> NativeFinding:
         finding_class=FindingClass(item["finding_class"]),
         summary=item["summary"],
         acceptance_test=parsed_acceptance,
+        predecessor_finding_ref=item.get("predecessor_finding_ref"),
+        evidence_anchor_sha256=item.get("evidence_anchor_sha256"),
     )
 
 
@@ -2038,6 +2170,31 @@ def _validate_plan_treatment_response_decisions(
             NativeReviewErrorCode.FINDING_CONTENT_INVALID,
             str(exc),
         ) from exc
+    if not response.approved or context.approval_marker is not ApprovalMarker.PLAN:
+        return
+    status_by_id = {item.finding_id: item for item in response.status_changes}
+    for treatment in context.plan_treatments:
+        for finding_id in treatment.finding_ids:
+            update = status_by_id.get(finding_id)
+            if treatment.treatment_kind is PlanTreatmentKind.IMPLEMENTATION:
+                if update is not None and is_closed_finding_status(update.status):
+                    raise NativeReviewContractError(
+                        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                        "implementation treatment cannot close its Finding in plan review",
+                    )
+                continue
+            if (
+                update is None
+                or not is_closed_finding_status(update.status)
+                or update.closure is None
+                or update.closure.kind is not NativeClosureKind.REJECTED
+                or update.closure.rejection_reason is not treatment.no_code_reason
+            ):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+                    "reviewer-accepted No-Code treatment requires a matching "
+                    f"typed closure for {finding_id}",
+                )
 
 
 def _validate_response_events(
@@ -2290,6 +2447,8 @@ def _validate_branch_discovery_completed(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
             "branch discovery occurrences must reference each finding at most once",
         )
+    _validate_closed_finding_rediscoveries(response, context)
+    previous = {item.finding_id: item for item in context.previous_findings}
     fake = NativeReviewResult(
         request_id=response.request_id,
         reviewer=response.reviewer,
@@ -2302,6 +2461,7 @@ def _validate_branch_discovery_completed(
                 rationale=item.rationale,
             )
             for item in response.occurrences
+            if not is_closed_finding_status(previous[item.finding_id].status)
         ),
         reclassifications=(),
         anchors=(),
@@ -2311,10 +2471,95 @@ def _validate_branch_discovery_completed(
     _validate_response_events(fake, context)
 
 
+def _validate_closed_finding_rediscoveries(
+    response: NativeBranchDiscoveryCompleted,
+    context: NativeReviewContext,
+) -> None:
+    previous = {item.finding_id: item for item in context.previous_findings}
+    bindings_by_id = {
+        item.finding_id: item for item in context.closed_finding_bindings
+    }
+    bindings_by_signature: dict[str, list[ClosedFindingReviewBinding]] = {}
+    for binding in context.closed_finding_bindings:
+        bindings_by_signature.setdefault(binding.signature, []).append(binding)
+    for occurrence in response.occurrences:
+        finding = previous.get(occurrence.finding_id)
+        if finding is None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+                "branch discovery occurrence references an unknown Finding",
+            )
+        if not is_closed_finding_status(finding.status):
+            if occurrence.evidence_anchor_sha256 is not None:
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                    "open Finding occurrence forbids a closed-disposition anchor",
+                )
+            continue
+        binding = bindings_by_id.get(occurrence.finding_id)
+        if binding is None or not binding.anchor_unchanged:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
+                "closed Finding occurrence requires an unchanged evidence anchor",
+            )
+        if (
+            occurrence.evidence_anchor_sha256
+            != binding.current_anchor.stability_sha256
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "closed Finding occurrence carries another evidence anchor",
+            )
+    for finding in response.new_findings:
+        acceptance = _native_finding_acceptance_text(finding)
+        signature = finding_signature(
+            acceptance,
+            mentioned_repository_paths(finding.summary, acceptance),
+        )
+        matching = bindings_by_signature.get(signature, [])
+        if not matching:
+            if (
+                finding.predecessor_finding_ref is not None
+                or finding.evidence_anchor_sha256 is not None
+            ):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+                    "new Finding names no matching closed predecessor",
+                )
+            continue
+        predecessor = next(
+            (
+                item
+                for item in matching
+                if item.finding_id == finding.predecessor_finding_ref
+            ),
+            None,
+        )
+        if predecessor is None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+                "rediscovered closed signature requires predecessor_finding_ref",
+            )
+        if predecessor.anchor_unchanged:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                "unchanged closed signature must be recorded as an occurrence",
+            )
+        if (
+            finding.evidence_anchor_sha256
+            != predecessor.current_anchor.stability_sha256
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "new Finding generation carries another evidence anchor",
+            )
+
+
 def _merge_branch_discovery_findings(
     response: NativeBranchDiscoveryCompleted,
     context: NativeReviewContext,
 ) -> tuple[FindingRecord, ...]:
+    previous = {item.finding_id: item for item in context.previous_findings}
     fake = NativeReviewResult(
         request_id=response.request_id,
         reviewer=response.reviewer,
@@ -2327,6 +2572,7 @@ def _merge_branch_discovery_findings(
                 rationale=item.rationale,
             )
             for item in response.occurrences
+            if not is_closed_finding_status(previous[item.finding_id].status)
         ),
         reclassifications=(),
         anchors=(),
@@ -2495,6 +2741,8 @@ def _merge_findings(
                         round_number=context.round_number,
                         reporter=context.reviewer,
                     ),
+                    predecessor_finding_ref=native.predecessor_finding_ref,
+                    evidence_anchor_sha256=native.evidence_anchor_sha256,
                 ),
             )
         except ValueError as exc:
@@ -2735,8 +2983,22 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
                 assert treatment.no_code_reason is not None
                 item["no_code_reason"] = treatment.no_code_reason.value
                 item["evidence"] = treatment.evidence
+                item["evidence_paths"] = list(treatment.evidence_paths)
+                item["affected_paths"] = list(treatment.affected_paths)
             treatments.append(item)
         binding["plan_treatments"] = treatments
+        binding["closed_finding_bindings"] = [
+            {
+                "finding_id": item.finding_id,
+                "signature": item.signature,
+                "source_plan_assignment_record_id": (
+                    item.source_plan_assignment_record_id
+                ),
+                "original_anchor": _no_code_anchor_binding(item.original_anchor),
+                "current_anchor": _no_code_anchor_binding(item.current_anchor),
+            }
+            for item in context.closed_finding_bindings
+        ]
     return binding
 
 
@@ -2756,7 +3018,7 @@ _context_binding = native_review_context_binding
 
 
 def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
-    return {
+    binding = {
         "finding_id": finding.finding_id,
         "finding_class": finding.finding_class.value,
         "status": finding.status.value,
@@ -2773,6 +3035,27 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
         ],
         "status_rationale": finding.status_rationale,
         "class_history": [item.value for item in finding.class_history],
+    }
+    if finding.predecessor_finding_ref is not None:
+        binding["predecessor_finding_ref"] = finding.predecessor_finding_ref
+    if finding.evidence_anchor_sha256 is not None:
+        binding["evidence_anchor_sha256"] = finding.evidence_anchor_sha256
+    return binding
+
+
+def _no_code_anchor_binding(
+    anchor: native_finding_decisions.NoCodeEvidenceAnchor,
+) -> dict[str, Any]:
+    return {
+        "rejection_reason": anchor.rejection_reason.value,
+        "provenance_fingerprint": anchor.provenance_fingerprint,
+        "evidence_paths": list(anchor.evidence_paths),
+        "evidence_content_sha256": anchor.evidence_content_sha256,
+        "task_sha256": anchor.task_sha256,
+        "scope_sha256": anchor.scope_sha256,
+        "affected_paths": list(anchor.affected_paths),
+        "affected_content_sha256": anchor.affected_content_sha256,
+        "stability_sha256": anchor.stability_sha256,
     }
 
 

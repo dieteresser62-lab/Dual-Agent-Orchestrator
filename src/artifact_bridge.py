@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import logging
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 from artifact_models import (
     AgentResultPayload,
@@ -25,6 +25,8 @@ from artifact_models import (
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
     BranchDiscoveryOccurrencePayload,
+    ClosedFindingDispositionSnapshot,
+    ClosedFindingOccurrencePayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -42,6 +44,7 @@ from artifact_models import (
     PlanTreatmentAssignment,
     PlanTreatmentDecisionPayload,
     PlanTreatmentProposalPayload,
+    NoImplementationRequiredPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -90,6 +93,7 @@ from finding_planning import (
     evaluate_remediation_round,
     validate_plan_treatment_coverage,
     validate_plan_treatment_decisions,
+    validate_plan_completion,
 )
 import native_finding_decisions
 from task_contract import TaskContract
@@ -104,6 +108,11 @@ from artifact_replay import (
 
 class ArtifactBridgeError(RuntimeError):
     """Raised when structured and state-v3 meanings are not identical."""
+
+
+def _finding_decision_bridge_error(detail: str) -> ArtifactBridgeError:
+    """Create an E7 contract error without expanding the public error taxonomy."""
+    return ArtifactBridgeError(detail)
 
 
 logger = logging.getLogger(__name__)
@@ -250,8 +259,15 @@ def agent_result_payload(
                     else item.no_code_reason.value
                 ),
                 evidence=item.evidence,
+                evidence_paths=item.evidence_paths,
+                affected_paths=item.affected_paths,
             )
             for item in result.plan_treatments
+        ),
+        plan_completion=(
+            None
+            if result.plan_completion is None
+            else result.plan_completion.value
         ),
     )
 
@@ -349,6 +365,8 @@ def branch_discovery_completed_payload(
             FindingSeverity(finding.finding_class.value),
             finding.summary,
             finding.acceptance_test,
+            finding.predecessor_finding_ref,
+            finding.evidence_anchor_sha256,
         )
         for finding in result.findings
         if finding.finding_id not in previous
@@ -357,6 +375,7 @@ def branch_discovery_completed_payload(
         BranchDiscoveryOccurrencePayload(
             occurrence.finding_id,
             occurrence.rationale,
+            occurrence.evidence_anchor_sha256,
         )
         for occurrence in result.occurrences
     )
@@ -506,6 +525,16 @@ def finding_payload(
         response_decision=(
             response_decision.value.lower() if response_decision is not None else None
         ),
+        predecessor_finding_ref=(
+            finding.predecessor_finding_ref
+            if structured and action == "opened"
+            else None
+        ),
+        evidence_anchor_sha256=(
+            finding.evidence_anchor_sha256
+            if structured and action == "opened"
+            else None
+        ),
     )
 
 
@@ -520,6 +549,13 @@ def finding_handoff_export_payload(
     """Build an export only from the ordered facts of an accepted replay."""
     if replay.head_record_id is None:
         raise ArtifactBridgeError("finding export requires a non-empty accepted replay")
+    if any(
+        isinstance(record.payload, NoImplementationRequiredPayload)
+        for record in replay.records
+    ):
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED forbids an IMPLEMENT handoff"
+        )
     review = next(
         (record for record in replay.records if record.record_id == approval_review_record_id),
         None,
@@ -675,6 +711,50 @@ def _validate_remediation_cohort_handoff(
         )
 
 
+def _validate_no_implementation_discovery_handoff(
+    replay: ArtifactReplayResult,
+    *,
+    target_execution_mode: str,
+    reviewed_head_commit: str,
+    remediation_cohort_checkpoint_record_id: str | None,
+) -> None:
+    no_implementation = next(
+        (
+            record.payload
+            for record in replay.records
+            if isinstance(record.payload, NoImplementationRequiredPayload)
+        ),
+        None,
+    )
+    source_identity = replay.run_identity
+    if (
+        target_execution_mode == "BRANCH_DISCOVERY"
+        and source_identity is not None
+        and source_identity.execution_mode == "PLAN_ONLY"
+        and no_implementation is None
+    ):
+        raise _finding_decision_bridge_error(
+            "PLAN_ONLY may hand off directly to BRANCH_DISCOVERY only after "
+            "NO_IMPLEMENTATION_REQUIRED"
+        )
+    if no_implementation is None:
+        return
+    if target_execution_mode != "BRANCH_DISCOVERY":
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED must hand off to a "
+            "BRANCH_DISCOVERY child run"
+        )
+    if reviewed_head_commit != no_implementation.reviewed_plan_commit:
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED discovery handoff must bind the "
+            "new reviewed plan HEAD"
+        )
+    if remediation_cohort_checkpoint_record_id is not None:
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED forbids an implementation cohort checkpoint"
+        )
+
+
 def branch_discovery_handoff_export_payload(
     replay: ArtifactReplayResult,
     *,
@@ -709,6 +789,14 @@ def branch_discovery_handoff_export_payload(
         raise ArtifactBridgeError(
             "branch discovery handoff target execution mode is invalid"
         )
+    _validate_no_implementation_discovery_handoff(
+        replay,
+        target_execution_mode=target_execution_mode,
+        reviewed_head_commit=reviewed_head_commit,
+        remediation_cohort_checkpoint_record_id=(
+            remediation_cohort_checkpoint_record_id
+        ),
+    )
     attestation = next(
         (
             record
@@ -810,6 +898,7 @@ def branch_discovery_handoff_export_payload(
         remediation_cohort_checkpoint_record_id=(
             remediation_cohort_checkpoint_record_id
         ),
+        closed_finding_dispositions=_closed_disposition_snapshots(replay),
     )
 
 
@@ -934,6 +1023,7 @@ def branch_discovery_handoff_import_payload(
         remediation_cohort_checkpoint_record_id=(
             export.remediation_cohort_checkpoint_record_id
         ),
+        closed_finding_dispositions=export.closed_finding_dispositions,
     )
 
 
@@ -985,6 +1075,56 @@ def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
     return not reduce_findings(replay).open_set.finding_ids
 
 
+def _plan_treatment_assignments(
+    treatments: tuple[PlanTreatmentProposal, ...],
+    *,
+    review_fingerprint: str,
+    evidence_anchors: Mapping[
+        str, native_finding_decisions.NoCodeEvidenceAnchor
+    ] | None,
+) -> tuple[PlanTreatmentAssignment, ...]:
+    anchors = {} if evidence_anchors is None else dict(evidence_anchors)
+    no_code_signatures = {
+        item.signature
+        for item in treatments
+        if item.treatment_kind is PlanTreatmentKind.NO_CODE
+    }
+    if set(anchors) - no_code_signatures:
+        raise _finding_decision_bridge_error(
+            "No-Code evidence anchors contain a foreign treatment signature"
+        )
+    for treatment in treatments:
+        anchor = anchors.get(treatment.signature)
+        if anchor is None:
+            continue
+        if (
+            anchor.evidence_paths != treatment.evidence_paths
+            or anchor.affected_paths != treatment.affected_paths
+        ):
+            raise _finding_decision_bridge_error(
+                "No-Code evidence anchor paths differ from the reviewed proposal"
+            )
+    return tuple(
+        PlanTreatmentAssignment(
+            signature=item.signature,
+            finding_ids=item.finding_ids,
+            treatment_kind=item.treatment_kind.value,
+            closing_slice_ids=tuple(str(value) for value in item.closing_slice_ids),
+            no_code_reason=(
+                None if item.no_code_reason is None else item.no_code_reason.value
+            ),
+            evidence=item.evidence,
+            authoritative_fingerprint=(
+                review_fingerprint
+                if item.treatment_kind is PlanTreatmentKind.NO_CODE
+                else None
+            ),
+            evidence_anchor=anchors.get(item.signature),
+        )
+        for item in treatments
+    )
+
+
 def plan_assignment_payload(
     *,
     source_snapshot_record: ArtifactRecord,
@@ -992,6 +1132,9 @@ def plan_assignment_payload(
     review_record: ArtifactRecord,
     family_binding: FamilyBindingPayload,
     remediation_round_number: int,
+    evidence_anchors: Mapping[
+        str, native_finding_decisions.NoCodeEvidenceAnchor
+    ] | None = None,
 ) -> PlanAssignmentPayload:
     """Build the sole E3 authority from a positive explicit plan review."""
 
@@ -1091,6 +1234,8 @@ def plan_assignment_payload(
                     )
                 ),
                 evidence=item.evidence,
+                evidence_paths=item.evidence_paths,
+                affected_paths=item.affected_paths,
             )
             for item in plan_result.plan_treatments
         )
@@ -1122,26 +1267,21 @@ def plan_assignment_payload(
         validate_plan_treatment_decisions(
             treatments, decisions, plan_approved=True
         )
+        if plan_result.plan_completion is not None:
+            validate_plan_completion(
+                treatments,
+                planned_slices,
+                native_finding_decisions.PlanCompletionKind(
+                    plan_result.plan_completion
+                ),
+            )
     except (TypeError, ValueError) as exc:
         raise ArtifactBridgeError(f"plan assignment coverage is invalid: {exc}") from exc
     review_fingerprint = review_record.fingerprint.sha256
-    assignments = tuple(
-        PlanTreatmentAssignment(
-            signature=item.signature,
-            finding_ids=item.finding_ids,
-            treatment_kind=item.treatment_kind.value,
-            closing_slice_ids=tuple(str(value) for value in item.closing_slice_ids),
-            no_code_reason=(
-                None if item.no_code_reason is None else item.no_code_reason.value
-            ),
-            evidence=item.evidence,
-            authoritative_fingerprint=(
-                review_fingerprint
-                if item.treatment_kind is PlanTreatmentKind.NO_CODE
-                else None
-            ),
-        )
-        for item in treatments
+    assignments = _plan_treatment_assignments(
+        treatments,
+        review_fingerprint=review_fingerprint,
+        evidence_anchors=evidence_anchors,
     )
     snapshot_document = [
         {
@@ -1175,7 +1315,226 @@ def plan_assignment_payload(
         ),
         implementation_scope=implementation_scope,
         authority=Role.CLAUDE,  # allowlist:provider -- reviewer authority
+        plan_completion=plan_result.plan_completion,
     )
+
+
+def no_implementation_required_payload(
+    replay: ArtifactReplayResult,
+    *,
+    plan_assignment_record_id: str,
+    reviewed_plan_commit: str,
+) -> NoImplementationRequiredPayload:
+    """Build E7's explicit completion only from a fully closed No-Code plan."""
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED requires "
+            "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    assignment_record = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == plan_assignment_record_id
+        ),
+        None,
+    )
+    assignment = None if assignment_record is None else assignment_record.payload
+    if not isinstance(assignment, PlanAssignmentPayload):
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED requires its PlanAssignment record"
+        )
+    if assignment.plan_completion != (
+        native_finding_decisions.PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED.value
+    ):
+        raise _finding_decision_bridge_error(
+            "plan assignment does not declare NO_IMPLEMENTATION_REQUIRED"
+        )
+    if (
+        assignment.slices
+        or assignment.implementation_scope
+        or any(
+            item.treatment_kind != "no_code"
+            for item in assignment.treatments
+        )
+    ):
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED contains implementation work"
+        )
+    if any(item.evidence_anchor is None for item in assignment.treatments):
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED lacks a stable No-Code evidence anchor"
+        )
+    plan = next(
+        (
+            record.payload
+            for record in replay.records
+            if isinstance(record.payload, PlanPayload)
+            and record.payload.approved_plan_commit == reviewed_plan_commit
+        ),
+        None,
+    )
+    if plan is None:
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED requires the reviewed plan commit"
+        )
+    review = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == assignment.review_record_id
+        ),
+        None,
+    )
+    if (
+        review is None
+        or not isinstance(review.payload, ReviewPayload)
+        or review.payload.verdict != "approved"
+    ):
+        raise _finding_decision_bridge_error(
+            "NO_IMPLEMENTATION_REQUIRED lacks reviewer authority"
+        )
+    expected_by_id = {
+        finding_id: treatment
+        for treatment in assignment.treatments
+        for finding_id in treatment.finding_ids
+    }
+    from finding_reducer import is_closed_finding_transition
+
+    heads: dict[str, ImportedFindingTransition] = {}
+    for transition in flatten_finding_transition_history(replay.records):
+        if transition.payload.action == "status_changed":
+            heads[transition.payload.finding_id] = transition
+    for finding_id, treatment in expected_by_id.items():
+        transition = heads.get(finding_id)
+        if (
+            transition is None
+            or not is_closed_finding_transition(transition)
+            or transition.payload.closure_kind != "rejected"
+            or transition.payload.rejection_reason != treatment.no_code_reason
+        ):
+            raise _finding_decision_bridge_error(
+                "NO_IMPLEMENTATION_REQUIRED requires every offered Finding "
+                f"to be reviewer-authoritatively closed: {finding_id}"
+            )
+    return NoImplementationRequiredPayload(
+        family_id=assignment.family_id,
+        cycle_number=assignment.cycle_number,
+        remediation_round_number=assignment.remediation_round_number,
+        plan_assignment_record_id=plan_assignment_record_id,
+        review_record_id=assignment.review_record_id,
+        reviewed_plan_commit=reviewed_plan_commit,
+        closed_finding_ids=sorted_finding_ids(expected_by_id),
+        authority=Role.ORCHESTRATOR,
+    )
+
+
+def _closed_disposition_snapshots(
+    replay: ArtifactReplayResult,
+) -> tuple[ClosedFindingDispositionSnapshot, ...]:
+    snapshots: dict[str, ClosedFindingDispositionSnapshot] = {}
+    for record in replay.records:
+        payload = record.payload
+        if isinstance(payload, BranchDiscoveryHandoffImportPayload):
+            for item in payload.closed_finding_dispositions:
+                snapshots[item.finding_id] = item
+        if not isinstance(payload, PlanAssignmentPayload):
+            continue
+        for treatment in payload.treatments:
+            if treatment.treatment_kind != "no_code":
+                continue
+            if treatment.evidence_anchor is None:
+                continue
+            for finding_id in treatment.finding_ids:
+                snapshots[finding_id] = ClosedFindingDispositionSnapshot(
+                    finding_id=finding_id,
+                    signature=treatment.signature,
+                    source_plan_assignment_record_id=record.record_id,
+                    evidence_anchor=treatment.evidence_anchor,
+                )
+    return tuple(
+        snapshots[finding_id]
+        for finding_id in sorted_finding_ids(snapshots)
+    )
+
+
+def closed_finding_review_bindings(
+    handoff_import: BranchDiscoveryHandoffImportPayload,
+    current_anchors: Mapping[
+        str, native_finding_decisions.NoCodeEvidenceAnchor
+    ],
+) -> tuple[native_finding_decisions.ClosedFindingReviewBinding, ...]:
+    """Bind current content measurements to imported closed dispositions."""
+
+    dispositions = {
+        item.finding_id: item
+        for item in handoff_import.closed_finding_dispositions
+    }
+    if set(current_anchors) != set(dispositions):
+        raise _finding_decision_bridge_error(
+            "current closed-Finding anchors differ from the imported disposition set"
+        )
+    return tuple(
+        native_finding_decisions.ClosedFindingReviewBinding(
+            finding_id=finding_id,
+            signature=dispositions[finding_id].signature,
+            source_plan_assignment_record_id=(
+                dispositions[finding_id].source_plan_assignment_record_id
+            ),
+            original_anchor=dispositions[finding_id].evidence_anchor,
+            current_anchor=current_anchors[finding_id],
+        )
+        for finding_id in sorted_finding_ids(dispositions)
+    )
+
+
+def closed_finding_occurrence_payloads(
+    *,
+    discovery_completion_record: ArtifactRecord,
+    handoff_import_record: ArtifactRecord,
+) -> tuple[ClosedFindingOccurrencePayload, ...]:
+    """Materialize each stable closed occurrence as its own typed record."""
+
+    completion = discovery_completion_record.payload
+    handoff = handoff_import_record.payload
+    if not isinstance(completion, BranchDiscoveryCompletedPayload):
+        raise _finding_decision_bridge_error(
+            "closed occurrence requires a BRANCH_DISCOVERY_COMPLETED record"
+        )
+    if not isinstance(handoff, BranchDiscoveryHandoffImportPayload):
+        raise _finding_decision_bridge_error(
+            "closed occurrence requires its branch discovery handoff import"
+        )
+    dispositions = {
+        item.finding_id: item for item in handoff.closed_finding_dispositions
+    }
+    payloads: list[ClosedFindingOccurrencePayload] = []
+    for occurrence in completion.occurrences:
+        disposition = dispositions.get(occurrence.finding_id)
+        if disposition is None:
+            continue
+        expected_anchor = disposition.evidence_anchor.stability_sha256
+        if occurrence.evidence_anchor_sha256 != expected_anchor:
+            raise _finding_decision_bridge_error(
+                "closed Finding occurrence evidence anchor changed"
+            )
+        payloads.append(
+            ClosedFindingOccurrencePayload(
+                finding_id=occurrence.finding_id,
+                signature=disposition.signature,
+                source_plan_assignment_record_id=(
+                    disposition.source_plan_assignment_record_id
+                ),
+                discovery_completion_record_id=(
+                    discovery_completion_record.record_id
+                ),
+                evidence_anchor_sha256=expected_anchor,
+                rationale=occurrence.rationale,
+                reviewer=completion.reviewer,
+            )
+        )
+    return tuple(payloads)
 
 
 def remediation_cohort_checkpoint_payload(
@@ -1947,9 +2306,12 @@ __all__ = [
     "branch_discovery_handoff_import_payload",
     "branch_discovery_completed_payload",
     "branch_discovery_completed_payload_matches_result",
+    "closed_finding_occurrence_payloads",
+    "closed_finding_review_bindings",
     "derive_family_acceptance",
     "evaluate_recorded_remediation_round",
     "plan_assignment_payload",
+    "no_implementation_required_payload",
     "remediation_cohort_checkpoint_payload",
     "review_payload", "review_payload_matches_complete_result",
     "review_payload_matches_result", "task_payload", "validation_request_payload",

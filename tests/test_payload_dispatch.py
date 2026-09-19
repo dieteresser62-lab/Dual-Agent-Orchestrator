@@ -43,6 +43,8 @@ ADDITIVE_PAYLOAD_TYPES = {
     "branch_discovery_handoff_import": "BranchDiscoveryHandoffImportPayload",
     "plan_assignment": "PlanAssignmentPayload",
     "remediation_cohort_checkpoint": "RemediationCohortCheckpointPayload",
+    "no_implementation_required": "NoImplementationRequiredPayload",
+    "closed_finding_occurrence": "ClosedFindingOccurrencePayload",
 }
 
 
@@ -170,6 +172,9 @@ def _normalized_payload_fields(payload: object) -> object:
         elif payload.closure_kind == "fixed":
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
+        if payload.predecessor_finding_ref is None:
+            raw.pop("predecessor_finding_ref", None)
+            raw.pop("evidence_anchor_sha256", None)
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.FindingHandoffImportPayload):
         raw = asdict(payload)
@@ -187,6 +192,9 @@ def _normalized_payload_fields(payload: object) -> object:
             elif transition_payload["closure_kind"] == "fixed":
                 transition_payload.pop("rejection_reason")
                 transition_payload.pop("closure_evidence")
+            if transition_payload["predecessor_finding_ref"] is None:
+                transition_payload.pop("predecessor_finding_ref")
+                transition_payload.pop("evidence_anchor_sha256")
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     raw = asdict(payload)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.RunProfilePayload):

@@ -685,18 +685,25 @@ def test_all_three_e1_edges_use_the_same_branch_discovery_handoff(
             REVIEWED_COMMIT if source_mode == "IMPLEMENT" else None
         ),
     )
-    payload = branch_discovery_handoff_export_payload(
-        before_export,
-        discovery_review_record_id=None,
-        validation_attestation_record_id=attestation.record_id,
-        reviewed_head_commit=REVIEWED_COMMIT,
-        family_binding=target_family,
-        target_task_path="inbox/doing/discovery.md",
-        target_task_bytes=b"ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n",
-        target_run_identity=f"discovery-{cycle_number}",
-        target_execution_mode="BRANCH_DISCOVERY",
-        source_completion_record_id=completion.record_id,
-    )
+    arguments = {
+        "discovery_review_record_id": None,
+        "validation_attestation_record_id": attestation.record_id,
+        "reviewed_head_commit": REVIEWED_COMMIT,
+        "family_binding": target_family,
+        "target_task_path": "inbox/doing/discovery.md",
+        "target_task_bytes": b"ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n",
+        "target_run_identity": f"discovery-{cycle_number}",
+        "target_execution_mode": "BRANCH_DISCOVERY",
+        "source_completion_record_id": completion.record_id,
+    }
+    if source_mode == "PLAN_ONLY":
+        with pytest.raises(
+            ArtifactBridgeError,
+            match="only after NO_IMPLEMENTATION_REQUIRED",
+        ):
+            branch_discovery_handoff_export_payload(before_export, **arguments)
+        return
+    payload = branch_discovery_handoff_export_payload(before_export, **arguments)
 
     assert isinstance(payload, BranchDiscoveryHandoffExportPayload)
     assert payload.target_execution_mode == "BRANCH_DISCOVERY"

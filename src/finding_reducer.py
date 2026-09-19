@@ -18,6 +18,7 @@ from artifact_models import (
     FindingHandoffImportPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    ImportedFindingTransition,
     PlanPayload,
     RunProfilePayload,
     TaskPayload,
@@ -41,6 +42,7 @@ from contracts import (
     apply_reviewer_finding_update,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
+from finding_signature import finding_record_signature
 from finding_responsibility import (
     BranchPlanningResponsibility,
     FindingResponsibility,
@@ -666,7 +668,9 @@ def project_latest_recorded_statuses(
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
 
-def is_closed_finding_transition(record: ArtifactRecord) -> bool:
+def is_closed_finding_transition(
+    record: ArtifactRecord | ImportedFindingTransition,
+) -> bool:
     """Keep the reviewer-owned closed-status predicate inside the reducer."""
 
     payload = record.payload
@@ -973,6 +977,10 @@ def merge_history_snapshots(
                     previous.origin != finding.origin
                     or previous.summary != finding.summary
                     or previous.acceptance_test != finding.acceptance_test
+                    or previous.predecessor_finding_ref
+                    != finding.predecessor_finding_ref
+                    or previous.evidence_anchor_sha256
+                    != finding.evidence_anchor_sha256
                 ):
                     raise ValueError(
                         f"finding identity changed during lifecycle: {finding.finding_id}"
@@ -1077,6 +1085,8 @@ def _reduce_lineages(
                         payload.origin_round_number,
                         AgentRole(payload.reporter.value),
                     ),
+                    predecessor_finding_ref=payload.predecessor_finding_ref,
+                    evidence_anchor_sha256=payload.evidence_anchor_sha256,
                 )
             except ValueError as exc:
                 _fail(
@@ -1090,6 +1100,32 @@ def _reduce_lineages(
                 and not event.imported
             ):
                 _validate_opening_responsibility(event, records)
+            if payload.predecessor_finding_ref is not None:
+                predecessor_key = active_keys.get(
+                    payload.predecessor_finding_ref
+                )
+                predecessor = (
+                    None
+                    if predecessor_key is None
+                    else findings[predecessor_key]
+                )
+                if (
+                    predecessor is None
+                    or predecessor.status is not FindingStatus.CLOSED
+                ):
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                        "new Finding generation references no closed predecessor",
+                        record,
+                    )
+                if finding_record_signature(predecessor) != finding_record_signature(
+                    opening
+                ):
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "new Finding generation signature differs from its predecessor",
+                        record,
+                    )
             if lineage_key in findings or payload.finding_id in active_keys:
                 head = head_openings[payload.finding_id]
                 if diagnostics is not None:
