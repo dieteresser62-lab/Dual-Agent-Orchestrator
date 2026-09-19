@@ -46,7 +46,11 @@ from orchestrator_diagnostics import (
 import native_finding_decisions
 
 SCHEMA_VERSION = "2"
-STATE_PROJECTION_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
+STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-joint-67-68-v1"
+)
+PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
+LEGACY_CHAIN_VERIFIER = "scripts/verify_legacy_chain.py"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
@@ -193,13 +197,6 @@ class RunIdentityPayload:
             "BRANCH_DISCOVERY",
         }:
             raise ArtifactValidationError("execution_mode is invalid")
-        if (
-            self.execution_mode == "BRANCH_DISCOVERY"
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise ArtifactValidationError(
-                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         if self.audit_report_path is not None:
             _require_path(self.audit_report_path)
 
@@ -303,7 +300,8 @@ class RunProfilePayload:
         )
         if self.reducer_version != STATE_PROJECTION_REDUCER_VERSION:
             raise ArtifactValidationError(
-                "run profile reducer_version is unsupported"
+                "run profile reducer_version is unsupported for resume; "
+                f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
             )
         if self.family_binding is not None and not isinstance(
             self.family_binding, FamilyBindingPayload
@@ -319,9 +317,7 @@ _WORKFLOW_STEPS = {
     "claude_slice_review",  # allowlist:provider -- persisted protocol vocabulary
     "codex_correction",  # allowlist:provider -- persisted protocol vocabulary
     "slice_commit",
-    "codex_final_review",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_final_correction",  # allowlist:provider -- persisted protocol vocabulary
-    "claude_final_review",  # allowlist:provider -- persisted protocol vocabulary
+    "claude_branch_discovery",  # allowlist:provider -- persisted protocol vocabulary
     "completed",
 }
 _SLICE_STATUSES = {
@@ -729,25 +725,12 @@ class AgentResultPayload:
             raise ArtifactValidationError(
                 "agent result plan treatments must be typed"
             )
-        if (
-            self.plan_treatments
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise ArtifactValidationError(
-                "agent result plan treatments require "
-                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         signatures = tuple(item.signature for item in self.plan_treatments)
         if signatures != tuple(sorted(set(signatures))):
             raise ArtifactValidationError(
                 "agent result plan treatments must be sorted and unique by signature"
             )
         if self.plan_completion is not None:
-            if not native_finding_decisions.native_finding_decisions_enabled():
-                raise ArtifactValidationError(
-                    "agent result plan completion requires "
-                    "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-                )
             try:
                 completion = native_finding_decisions.PlanCompletionKind(
                     self.plan_completion
@@ -771,10 +754,10 @@ class AgentResultPayload:
             if (
                 completion
                 is native_finding_decisions.PlanCompletionKind.IMPLEMENTATION_REQUIRED
-                and (not has_implementation or not self.slice_plan)
+                and not self.slice_plan
             ):
                 raise ArtifactValidationError(
-                    "IMPLEMENTATION_REQUIRED requires implementation work"
+                    "IMPLEMENTATION_REQUIRED requires at least one Slice"
                 )
 
 
@@ -897,14 +880,6 @@ class ReviewPayload:
             raise ArtifactValidationError(
                 "plan treatment decisions must be typed"
             )
-        if (
-            self.plan_treatment_decisions
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise ArtifactValidationError(
-                "plan treatment decisions require "
-                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         decision_signatures = tuple(
             item.signature for item in self.plan_treatment_decisions
         )
@@ -997,10 +972,6 @@ class BranchDiscoveryCompletedPayload:
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_COMPLETED
 
     def __post_init__(self) -> None:
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            raise ArtifactValidationError(
-                "BRANCH_DISCOVERY_COMPLETED requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
             raise ArtifactValidationError(
                 "branch discovery completion reviewer must be claude"  # allowlist:provider -- diagnostic role
@@ -1565,10 +1536,6 @@ class PlanAssignmentPayload:
     record_type: ClassVar[RecordType] = RecordType.PLAN_ASSIGNMENT
 
     def __post_init__(self) -> None:
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            raise ArtifactValidationError(
-                "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         _require_identifier(self.family_id, "plan assignment family_id")
         _require_positive(self.cycle_number, "plan assignment cycle_number")
         _require_positive(
@@ -1696,11 +1663,6 @@ class RemediationCohortCheckpointPayload:
     record_type: ClassVar[RecordType] = RecordType.REMEDIATION_COHORT_CHECKPOINT
 
     def __post_init__(self) -> None:
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            raise ArtifactValidationError(
-                "remediation cohort checkpoint requires "
-                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         _require_identifier(self.family_id, "remediation cohort family_id")
         _require_positive(
             self.remediation_round_number,
@@ -1783,11 +1745,6 @@ class NoImplementationRequiredPayload:
     record_type: ClassVar[RecordType] = RecordType.NO_IMPLEMENTATION_REQUIRED
 
     def __post_init__(self) -> None:
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            raise ArtifactValidationError(
-                "NO_IMPLEMENTATION_REQUIRED requires "
-                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         _require_identifier(self.family_id, "No-implementation family_id")
         _require_positive(self.cycle_number, "No-implementation cycle_number")
         _require_positive(
@@ -1833,11 +1790,6 @@ class ClosedFindingOccurrencePayload:
     record_type: ClassVar[RecordType] = RecordType.CLOSED_FINDING_OCCURRENCE
 
     def __post_init__(self) -> None:
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            raise ArtifactValidationError(
-                "closed Finding occurrence requires "
-                "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         _require_finding_id(self.finding_id, "closed occurrence finding_id")
         _require_sha256(self.signature, "closed occurrence signature")
         _require_record_id(

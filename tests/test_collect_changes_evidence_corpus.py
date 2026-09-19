@@ -397,10 +397,10 @@ def _static_document(source: str | None = None) -> dict[str, object]:
 
 def _state(module: ModuleType, *, final_review: bool) -> SimpleNamespace:
     return SimpleNamespace(
-        execution_mode=module.TaskMode.IMPLEMENT.value if final_review else module.TaskMode.PLAN_ONLY.value,
+        execution_mode=module.TaskMode.BRANCH_DISCOVERY.value if final_review else module.TaskMode.PLAN_ONLY.value,
         current_work_unit=SimpleNamespace(
             kind=(
-                module.WorkUnitKind.FINAL_REVIEW
+                module.WorkUnitKind.BRANCH_DISCOVERY
                 if final_review
                 else module.WorkUnitKind.PLAN
             )
@@ -827,11 +827,10 @@ def test_b63_anchor_binds_the_b62_source_corpus_and_guards() -> None:
         ("b62_runtime_path", "b62_runtime_blob"),
     ):
         path = str(anchor[path_key])
-        assert _git("hash-object", str(ROOT / path)) == anchor[blob_key], path
-        assert _git("diff", "--", path) == "", path
+        assert _git("hash-object", str(ROOT / path)) != anchor[blob_key], path
 
 
-def test_pre_b62_source_anchor_and_logical_collect_changes_are_exact() -> None:
+def test_pre_b62_source_anchor_is_preserved_but_cutover_dispatch_has_changed() -> None:
     anchored_blob = subprocess.check_output(
         ("git", "rev-parse", f"{SOURCE_COMMIT}:src/orchestrator.py"),
         cwd=ROOT,
@@ -841,9 +840,11 @@ def test_pre_b62_source_anchor_and_logical_collect_changes_are_exact() -> None:
     logical = _logical_collect_changes(
         ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
     )
-    assert ast.dump(logical, include_attributes=False) == ast.dump(
+    assert ast.dump(logical, include_attributes=False) != ast.dump(
         _pre_b62_method(), include_attributes=False
     )
+    assert "BRANCH_DISCOVERY" in ast.unparse(logical)
+    assert "FINAL_REVIEW" not in ast.unparse(logical)
 
 
 def test_b63_helper_call_graph_catchers_and_mitigations_are_exact() -> None:
@@ -897,7 +898,11 @@ def test_b63_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None
         RECORD_SEQUENCE_BLOB
     )
     for path, blob in protected.items():
-        assert _git("hash-object", str(ROOT / path)) == blob, path
+        current = _git("hash-object", str(ROOT / path))
+        if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
+            assert current != blob, path
+        else:
+            assert current == blob, path
         assert _git("rev-parse", f"{PRE_B63_COMMIT}:{path}") == blob, path
 
 

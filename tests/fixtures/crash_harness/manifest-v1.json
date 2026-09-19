@@ -1,6 +1,6 @@
 {
   "schema_version": "provider-free-crash-harness-v1",
-  "scenario_version": "s5-v1",
+  "scenario_version": "joint-67-68-v1",
   "effect_classes": [
     "git_commit",
     "provider_start",
@@ -17,9 +17,21 @@
     "internal": ["before_intent", "after_intent", "before_result", "after_result"],
     "ledger": ["before_intent", "after_intent", "before_result", "after_result"]
   },
+  "runtime_boundaries": {
+    "slice_commit": "git_commit",
+    "slice_provider": "provider_start",
+    "implementation_handoff": "file_write",
+    "queue_finalization": "queue_move",
+    "slice_validation": "internal",
+    "baseline_initialization": "ledger",
+    "branch_discovery_provider": "provider_start",
+    "branch_discovery_validation": "internal",
+    "family_handoff": "file_write"
+  },
   "journeys": [
-    "plan-implement-finalreview",
-    "multi-slice-correction-observation-resume"
+    "plan-implement-branch-discovery",
+    "multi-slice-correction-observation-resume",
+    "branch-discovery-remediation-handoff"
   ],
   "retry_kinds": [
     "quota",

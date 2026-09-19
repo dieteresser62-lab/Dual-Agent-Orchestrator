@@ -208,10 +208,6 @@ def validate_plan_completion(
                 "NO_IMPLEMENTATION_REQUIRED forbids implementation Slices"
             )
         return
-    if not implementation:
-        raise ValueError(
-            "IMPLEMENTATION_REQUIRED requires an implementation treatment"
-        )
     if not slices:
         raise ValueError("IMPLEMENTATION_REQUIRED requires at least one Slice")
 

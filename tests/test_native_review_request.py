@@ -160,16 +160,16 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
     )
 
 
-def test_dormant_review_request_bytes_match_the_pre_contract_baseline() -> None:
+def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "8eefd769f80f52ca88183d64e7d17e877279a95f012ea1ef51024c641ffec502"
+        "adf64c57ba063b0f678bf593f07d0285c8fd5003f7422c53910744f96e7be694"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "70187e6ab499518eb8f29b8f11af6b4befff7c83043829eefb8a68c228e85e70"
+        "0bb0de0a0032ded2bf86bb33dcbdb3f29d3a1db2c3302524dde742734dba13dc"
     )
 
 
@@ -280,7 +280,7 @@ def test_branch_discovery_request_binds_default_and_hard_capacity(
     )
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="claude_branch_discovery",
         approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
         anchor_origin=None,
     )
@@ -325,7 +325,7 @@ def test_branch_discovery_request_rejects_capacity_outside_one_to_512(
     with pytest.raises(NativeReviewContractError, match="from 1 to 512"):
         replace(
             _context(),
-            operation="claude_final_review",
+            operation="claude_branch_discovery",
             approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
             anchor_origin=None,
             max_new_findings=capacity,
@@ -342,7 +342,7 @@ def test_branch_discovery_contract_has_no_pagination_or_cursor_fields(
     )
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="claude_branch_discovery",
         approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
         anchor_origin=None,
     )
@@ -414,6 +414,8 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, resume",
@@ -437,16 +439,17 @@ def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> 
         round_number=2,
         allow_new_observations=False,
     )
-    final = replace(
+    branch_discovery = replace(
         context,
-        operation="ignored-final-name",
-        approval_marker=ApprovalMarker.FINAL,
+        operation="claude_branch_discovery",
+        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        anchor_origin=None,
     )
 
     first = native_review_provider_response_schema(context)
     assert native_review_provider_response_schema(same_policy) == first
     assert native_review_provider_response_schema(convergence) != first
-    assert native_review_provider_response_schema(final) != first
+    assert native_review_provider_response_schema(branch_discovery) != first
 
 
 def test_writer_projection_defensively_copies_the_same_reader_instance() -> None:
@@ -476,12 +479,22 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observati
         parse_native_contract_result(approved, initial)
     assert missing_blocker.value.code is NativeReviewErrorCode.APPROVAL_INVALID
     approved["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "not fixed"}
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "not fixed",
+            "closure": None,
+        }
     ]
     with pytest.raises(SchemaMismatch):
         validate_schema_document({"result": approved}, schema)
     approved["status_changes"] = [
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "fixed"}
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "fixed",
+            "closure": {"kind": "fixed"},
+        }
     ]
     validate_schema_document({"result": approved}, schema)
 
@@ -521,7 +534,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observati
     validate_schema_document({"result": denied}, convergence_schema)
 
 
-def test_initial_slice_approval_can_record_an_open_observation() -> None:
+def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> None:
     schema = native_review_provider_response_schema(_context())
     approved = _writer_response()
     approved["new_findings"] = [
@@ -552,6 +565,7 @@ def test_initial_slice_approval_can_reclassify_blocker_and_omit_observation() ->
             "finding_id": "C-02",
             "status": "OPEN",
             "rationale": "Cross-cutting follow-up remains explicit.",
+            "closure": None,
         }
     ]
     approved["reclassifications"] = [
@@ -687,25 +701,6 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
             convergence_bundle.provider_response_schema,
         )
 
-    final_context = replace(
-        context,
-        operation="claude_final_review",
-        approval_marker=ApprovalMarker.FINAL,
-    )
-    final_bundle = build_native_review_request(
-        replace(
-            _spec(),
-            review_kind=NativeReviewKind.FINAL,
-            context=final_context,
-        )
-    )
-    final_candidate = json.loads(json.dumps(denied))
-    final_candidate["request_id"] = final_bundle.bound_context.request_id
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(
-            {"result": final_candidate}, final_bundle.provider_response_schema
-        )
-
     no_prior_bundle = build_native_review_request(_spec())
     observation_only = _writer_response(decision="denied")
     observation_only["request_id"] = no_prior_bundle.bound_context.request_id
@@ -781,7 +776,7 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
         )
 
 
-def test_plan_slice_convergence_and_final_requests_bind_distinct_writer_digests() -> None:
+def test_plan_slice_convergence_and_discovery_requests_bind_distinct_writer_digests() -> None:
     base = _spec()
     contexts = (
         replace(
@@ -802,11 +797,12 @@ def test_plan_slice_convergence_and_final_requests_bind_distinct_writer_digests(
         ),
         replace(
             base,
-            review_kind=NativeReviewKind.FINAL,
+            review_kind=NativeReviewKind.BRANCH_DISCOVERY,
             context=replace(
                 base.context,
-                operation="claude_final_review",
-                approval_marker=ApprovalMarker.FINAL,
+                operation="claude_branch_discovery",
+                approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+                anchor_origin=None,
             ),
         ),
     )
@@ -820,29 +816,9 @@ def test_plan_slice_convergence_and_final_requests_bind_distinct_writer_digests(
     assert len(request_ids) == 4
 
 
-def test_final_request_with_unoffered_remainder_forbids_approval_branch() -> None:
-    offered = (_prior_finding("C-01"), _prior_finding("C-02"))
-    context = replace(
-        _context(),
-        operation="claude_final_review",
-        approval_marker=ApprovalMarker.FINAL,
-        previous_findings=offered,
-        final_review_pending_count=3,
-    )
-    bundle = build_native_review_request(
-        replace(_spec(), review_kind=NativeReviewKind.FINAL, context=context)
-    )
-    result_refs = bundle.provider_response_schema["properties"]["result"]["oneOf"]
-
-    assert result_refs == [
-        {"$ref": "#/$defs/bound_final_denied"},
-        {"$ref": "#/$defs/bound_final_stop"},
-    ]
-    assert bundle.document["review_contract"]["disposition_budget"] == {
-        "maximum_items": 2,
-        "eligible_finding_ids": ["C-01", "C-02"],
-        "pending_finding_count": 3,
-    }
+def test_legacy_final_review_request_kind_is_removed() -> None:
+    assert not hasattr(NativeReviewKind, "FINAL")
+    assert not hasattr(ApprovalMarker, "FINAL")
 
 
 def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
@@ -906,8 +882,18 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
 
     duplicate_events = _writer_response()
     duplicate_events["status_changes"] = [
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "fixed"},
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "fixed"},
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "fixed",
+            "closure": {"kind": "fixed"},
+        },
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "fixed",
+            "closure": {"kind": "fixed"},
+        },
     ]
     contexts_and_responses.append((duplicate_context, duplicate_events))
 
@@ -940,7 +926,12 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
 
     no_remaining_blocker = _writer_response(decision="denied")
     no_remaining_blocker["status_changes"] = [
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "fixed"}
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "fixed",
+            "closure": {"kind": "fixed"},
+        }
     ]
     contexts_and_responses.append((blocker_context, no_remaining_blocker))
 
@@ -1015,6 +1006,8 @@ def _response(request_id: str) -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, failure paths, resume",

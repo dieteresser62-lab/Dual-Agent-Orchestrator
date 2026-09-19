@@ -49,7 +49,6 @@ B48_HELPERS = frozenset(
         "_prepare_plan_implementation_handoff",
         "_start_first_slice",
         "_start_pending_slice",
-        "_start_final_review",
     }
 )
 TASK_TEXT = "\n".join(
@@ -93,7 +92,6 @@ class BuiltTransitionCorpus:
 
 
 SCENARIOS: tuple[dict[str, Any], ...] = (
-    {"scenario_id": "recovered-final-history", "state": "final", "actions": ("incomplete",), "recover_history": True},
     {"scenario_id": "waiting-quota", "state": "quota"},
     {"scenario_id": "resume-quota", "state": "quota", "resume": True, "actions": ("incomplete",)},
     {"scenario_id": "gate-reframed", "state": "gate", "reframe": True, "actions": ("incomplete",)},
@@ -104,8 +102,6 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {"scenario_id": "slice-head-drift", "state": "slice_unbound", "repository_head": "c" * 40},
     {"scenario_id": "slice-boundary", "state": "slice_unbound", "actions": ("incomplete",)},
     {"scenario_id": "slice-round", "state": "slice_bound", "actions": ("incomplete",)},
-    {"scenario_id": "correction-round", "state": "correction", "actions": ("incomplete",)},
-    {"scenario_id": "final-review-entry", "state": "completed_slice", "actions": ("complete-current",)},
     {"scenario_id": "plan-to-first-slice", "state": "plan", "actions": ("complete-plan", "incomplete")},
     {"scenario_id": "pending-slice", "state": "pending_slice", "actions": ("incomplete",)},
     {"scenario_id": "plan-only-handoff", "state": "plan_only", "actions": ("complete-plan-only",)},
@@ -113,7 +109,6 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {"scenario_id": "plan-only-bind-error", "state": "completed_plan_only", "bind_error": True},
     {"scenario_id": "plan-only-handoff-error", "state": "completed_plan_only", "handoff_error": True},
     {"scenario_id": "completed-plan-without-slices", "state": "completed_plan"},
-    {"scenario_id": "transition-bound-overflow", "state": "completed_slice", "overflow": True},
 )
 
 
@@ -823,9 +818,9 @@ def test_pre_b48_transition_anchor_is_bound_to_git_and_logical_loop() -> None:
     assert anchored_blob == baseline["source_blob"]
     facts = _static_facts(SOURCE_TREE)
     assert _canonical_sha256(facts) == baseline["facts_sha256"]
-    assert len(facts["decisions"]) == 26
+    assert len(facts["decisions"]) == 24
     assert len(facts["catchers"]) == 2
-    assert len(facts["checkpoints"]) == 12
+    assert len(facts["checkpoints"]) == 10
 
 
 def test_provider_free_transition_corpus_matches_pre_cut_baseline(
@@ -853,21 +848,13 @@ def test_transition_corpus_builds_once_and_covers_required_boundaries(
         for item in production_transition_corpus.document["scenarios"]
     }
     assert set(scenarios) == {spec["scenario_id"] for spec in SCENARIOS}
-    assert len({item["outcome"]["site"] for item in scenarios.values()}) == 12
-    overflow_rounds = _expanded_sequence(
-        scenarios["transition-bound-overflow"]["rounds"]
-    )
-    assert len(overflow_rounds) == 100
+    assert len({item["outcome"]["site"] for item in scenarios.values()}) == 10
     waiting_rounds = _expanded_sequence(scenarios["waiting-quota"]["rounds"])
     assert "status=waiting_for_quota" in waiting_rounds[0]
     plan_rounds = _expanded_sequence(scenarios["plan-to-first-slice"]["rounds"])
     assert ["kind=plan" in item for item in plan_rounds] == [True, False]
     assert ["kind=slice" in item for item in plan_rounds] == [False, True]
-    correction_rounds = _expanded_sequence(scenarios["correction-round"]["rounds"])
-    assert "kind=correction" in correction_rounds[0]
-    final_rounds = _expanded_sequence(scenarios["final-review-entry"]["rounds"])
-    assert ["kind=slice" in item for item in final_rounds] == [True, False]
-    assert ["kind=final_review" in item for item in final_rounds] == [False, True]
+    assert not ({"correction-round", "final-review-entry"} & set(scenarios))
 
 
 def test_checkpoint_shift_by_one_instruction_turns_anchor_red() -> None:

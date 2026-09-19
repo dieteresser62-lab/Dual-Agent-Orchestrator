@@ -657,22 +657,10 @@ class WorkflowPersistence:
         if (
             state.current_step is WorkflowStep.COMPLETED
             and all(item.commit_ref is not None for item in state.slices)
-            and (
-                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-                or (
-                    state.execution_mode == TaskMode.PLAN_ONLY.value
-                    and state.current_work_unit.kind is WorkUnitKind.PLAN
-                )
-            )
         ):
             chain = bridge.store.current_chain()
             branch_discovery = (
                 state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
-            )
-            rejected = (
-                not branch_discovery
-                and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-                and bool(state.current_work_unit.open_findings)
             )
             final_binding = (
                 next(
@@ -696,33 +684,19 @@ class WorkflowPersistence:
                     None,
                 )
             )
-            if final_binding is None and not rejected:
+            if final_binding is None:
                 raise WorkflowExecutionError(
                     "structured completion requires its authoritative final binding"
                 )
             bridge.append(
                 WorkflowCompletionPayload(
-                    outcome="failed" if rejected else "completed",
-                    final_binding_id=(
-                        None if rejected else final_binding.record_id
-                    ),
+                    outcome="completed",
+                    final_binding_id=final_binding.record_id,
                 ),
                 logical_id="workflow-completion",
-                idempotency_key=(
-                    "workflow-completion:failed"
-                    if rejected
-                    else "workflow-completion:completed"
-                ),
-                fingerprint_sha256=(
-                    contract_fingerprint
-                    if rejected
-                    else final_binding.fingerprint.sha256
-                ),
-                fingerprint_kind=(
-                    FingerprintKind.CONTRACT
-                    if rejected
-                    else FingerprintKind.IMPLEMENTATION
-                ),
+                idempotency_key="workflow-completion:completed",
+                fingerprint_sha256=final_binding.fingerprint.sha256,
+                fingerprint_kind=FingerprintKind.IMPLEMENTATION,
             )
 
     def _persist_native_agent_request_bundle(self, invocation: object) -> None:
@@ -935,12 +909,7 @@ class WorkflowPersistence:
             operation=state.current_step.value,
             request_id=output.request_id,
             canonical=output.canonical_json,
-            content_kind=(
-                "final_report"
-                if state.current_step is WorkflowStep.CODEX_FINAL_REVIEW
-                and output.result.ready is True
-                else "agent_result"
-            ),
+            content_kind="agent_result",
             fingerprint=fingerprint,
             fingerprint_kind=fingerprint_kind,
         )
@@ -1065,8 +1034,8 @@ class WorkflowPersistence:
             )
         unit = state.current_work_unit
         review_type = (
-            "final review"
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- canonical state-v3 step
+            "branch discovery"
+            if state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
             else "slice review"
         )
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"
@@ -1096,16 +1065,7 @@ class WorkflowPersistence:
                 allow_incomplete_review_tail=True,
             )
         )
-        if unit.kind is WorkUnitKind.CORRECTION:
-            attribution = reduced.correction_for(unit.work_unit_id)
-            if attribution is None:
-                raise WorkflowExecutionError(
-                    "native review persistence lacks its correction finding scope"
-                )
-            request_scope_findings = reduced.request_subset(
-                finding_ids=attribution.finding_ids).findings
-        else:
-            request_scope_findings = reduced.ledger.findings
+        request_scope_findings = reduced.ledger.findings
         try:
             merge_review_request_result(
                 request_scope_findings,

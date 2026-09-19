@@ -36,12 +36,19 @@ from side_effects import (
     SideEffectSpec,
     reconcile_git_commit,
 )
+from slice_exit import evaluate_slice_exit
 from workflow import (
     WorkflowCommitApprovalRequired,
     WorkflowCommitRequest,
     WorkflowExecutionError,
 )
-from workflow_state import GateDecisionRecord, GateReason, SliceRecord, WorkflowState
+from workflow_state import (
+    GateDecisionRecord,
+    GateReason,
+    SliceRecord,
+    WorkflowState,
+    WorkUnitKind,
+)
 
 
 class RootProvider(Protocol):
@@ -396,6 +403,28 @@ class WorkflowGitCommit:
             raise WorkflowExecutionError(
                 "structured commit binding was not established before the Git transaction"
             )
+        slice_exit = None
+        if state.current_work_unit.kind is WorkUnitKind.SLICE:
+            if artifact_bridge is None:
+                raise WorkflowExecutionError(
+                    "Slice commit requires the authoritative record chain for E4"
+                )
+            slice_exit = evaluate_slice_exit(
+                artifact_bridge.store.current_chain(),
+                run_id=state.run_id,
+                slice_id=request.slice_id,
+                approved_plan_commit=state.approved_plan_commit,
+            )
+            if not slice_exit.commit_eligible:
+                reasons = "; ".join(
+                    reason
+                    for condition in slice_exit.conditions
+                    for reason in condition.reasons
+                )
+                raise WorkflowExecutionError(
+                    "Slice commit rejected by the record-derived E4 exit condition"
+                    + (f": {reasons}" if reasons else "")
+                )
 
         def perform_commit():  # type: ignore[no-untyped-def]
             committed = commit_slice(
@@ -416,6 +445,7 @@ class WorkflowGitCommit:
                     approved_external_paths=(
                         unexpected_paths if exact_scope_approval else ()
                     ),
+                    slice_exit=slice_exit,
                 ),
                 title=summary,
             )

@@ -438,7 +438,6 @@ def _contract_document(context: NativeCodexContext) -> dict[str, Any]:
     readiness_kind = {
         ReadinessMarker.PLAN: "plan",
         ReadinessMarker.IMPLEMENTATION: "implementation",
-        ReadinessMarker.FINAL_REPORT: "final_report",
     }[contract.readiness_marker]
     return {
         "name": contract.name,

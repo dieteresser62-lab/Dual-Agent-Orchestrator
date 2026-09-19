@@ -57,7 +57,6 @@ from contracts import (
 from final_review_preflight import FINAL_REVIEW_OPERATIONS
 from finding_order import sorted_finding_ids
 from finding_reducer import (
-    project_final_review_dispositions,
     project_open_set,
     reduce_findings,
 )
@@ -579,15 +578,6 @@ class WorkflowRecovery:
             for finding_id in offered_ids
         )
         finding_ledger = tuple(request_ledger.findings_by_id.values())
-        final_pending_count = (
-            len(
-                project_final_review_dispositions(
-                    request_ledger.replay, int(context.work_unit_id)
-                ).pending.findings
-            )
-            if context.approval_marker is ApprovalMarker.FINAL
-            else None
-        )
         return replace(
             context,
             previous_findings=previous_findings,
@@ -595,7 +585,7 @@ class WorkflowRecovery:
             authoritative_finding_ids=sorted_finding_ids(
                 item.finding_id for item in finding_ledger
             ),
-            final_review_pending_count=final_pending_count,
+            final_review_pending_count=None,
         )
 
     @staticmethod
@@ -1643,9 +1633,7 @@ class WorkflowRecovery:
             ApprovalMarker.PLAN
             if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
             else ApprovalMarker.BRANCH_DISCOVERY
-            if getattr(state, "execution_mode", None) == "BRANCH_DISCOVERY"
-            else ApprovalMarker.FINAL
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            if state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
             else ApprovalMarker.SLICE
         )
         payload = record.payload
@@ -1666,17 +1654,7 @@ class WorkflowRecovery:
             for item in finding_ledger
             if offered_ids.get(item.finding_id, False)
         )
-        final_review_pending_count = (
-            len(
-                project_final_review_dispositions(
-                    request_replay, unit.work_unit_id
-                ).pending.findings
-            )
-            if approval_marker is ApprovalMarker.FINAL and request_replay is not None
-            else len(project_open_set(finding_ledger).findings)
-            if approval_marker is ApprovalMarker.FINAL
-            else None
-        )
+        final_review_pending_count = None
         return NativeReviewContext(
             run_id=state.run_id,
             work_unit_id=str(unit.work_unit_id),
@@ -1685,8 +1663,8 @@ class WorkflowRecovery:
             reviewer=AgentRole.CLAUDE,
             approval_marker=approval_marker,
             slice_id=(
-                "FINAL"
-                if approval_marker is ApprovalMarker.FINAL
+                "DISCOVERY"
+                if approval_marker is ApprovalMarker.BRANCH_DISCOVERY
                 else f"{unit.slice_id:02d}"
             ),
             round_number=round_number,
@@ -1700,7 +1678,10 @@ class WorkflowRecovery:
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
             test_changes_approved=context.test_changes_approved,
-            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+            allow_new_observations=(
+                unit.kind is not WorkUnitKind.SLICE
+                or unit.codex_return_count == 0
+            ),
             validation_command_prefixes=(
                 context.validation_matrix.finding_command_prefixes
             ),
@@ -1751,7 +1732,7 @@ class WorkflowRecovery:
             not in {
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
             }
             or self._dependencies.active_state().run_id != state.run_id
             or self._dependencies.active_state().current_work_unit_id != unit.work_unit_id

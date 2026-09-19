@@ -367,26 +367,18 @@ def test_bridge_accepts_scope_extension_within_the_same_round(tmp_path: Path) ->
     ).head_record_id == extended.record_id
 
 
-def test_bridge_rejects_scope_change_in_a_new_round_before_publication(
+def test_bridge_rejects_legacy_correction_work_unit_under_cutover_reducer(
     tmp_path: Path,
 ) -> None:
     bridge = _bound_bridge(tmp_path, "run-cross-round-scope-change")
-    bridge.append(
-        CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("C-01",)),
-        logical_id="work-unit-3",
-        idempotency_key="correction-work-unit:3:round:1",
-        fingerprint_sha256=DIGEST,
-    )
     before = bridge.store.load_chain()
     record_names = tuple(path.name for path in bridge.store.records_dir.glob("*.json"))
 
-    with pytest.raises(ArtifactReplayError, match="within the same round"):
+    with pytest.raises(ArtifactReplayError, match="legacy correction_work_unit"):
         bridge.append(
-            CorrectionWorkUnitPayload(
-                "3", 2, ("src/a.py", "tests/a.py"), ("C-01",)
-            ),
+            CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("C-01",)),
             logical_id="work-unit-3",
-            idempotency_key="correction-work-unit:3:round:2",
+            idempotency_key="correction-work-unit:3:round:1",
             fingerprint_sha256=DIGEST,
         )
 

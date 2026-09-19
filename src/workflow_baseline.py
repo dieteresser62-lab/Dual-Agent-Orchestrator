@@ -27,7 +27,6 @@ from artifact_resume import (
 from artifact_models import (
     ArtifactRecord,
     BranchDiscoveryHandoffImportPayload,
-    CorrectionWorkUnitPayload,
     FingerprintKind,
     FindingHandoffImportPayload,
     GateTransitionPayload,
@@ -60,11 +59,6 @@ from final_review_preflight import (
     run_final_review_preflight,
     transition_fingerprint,
 )
-from finding_cleanup import (
-    finding_cleanup_scope_paths,
-    is_finding_cleanup_work_unit,
-)
-from finding_reducer import first_correction_work_unit_payload, reduce_findings
 from orchestrator_version import orchestrator_code_version
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
@@ -321,33 +315,23 @@ def _append_baseline_contract_expectations(
             if current.work_unit_id == first_implementation_unit_id
             else None
         )
-        work_unit_payload = (
-            CorrectionWorkUnitPayload(
-                slice_id=str(current.slice_id),
-                round_number=current.round_number,
-                paths=state.current_slice.scope_paths,
-                finding_ids=current.open_findings,
-            )
-            if current.kind is WorkUnitKind.CORRECTION
-            else WorkUnitPayload(
-                slice_id=str(current.slice_id),
-                round_number=current.round_number,
-                paths=state.current_slice.scope_paths,
-                open_finding_ids=(
-                    sorted_finding_ids(current.open_findings)
-                    if bound_import is not None
-                    else ()
-                ),
-                finding_import_record_id=(
-                    bound_import.record_id if bound_import is not None else None
-                ),
-            )
+        work_unit_payload = WorkUnitPayload(
+            slice_id=str(current.slice_id),
+            round_number=current.round_number,
+            paths=state.current_slice.scope_paths,
+            open_finding_ids=(
+                sorted_finding_ids(current.open_findings)
+                if bound_import is not None
+                else ()
+            ),
+            finding_import_record_id=(
+                bound_import.record_id if bound_import is not None else None
+            ),
         )
         logical_id = f"work-unit-{current.work_unit_id}"
         expect(
             work_unit_payload,
             logical_id,
-            f"{'correction-' if current.kind is WorkUnitKind.CORRECTION else ''}"
             f"work-unit:{current.work_unit_id}:round:{current.round_number}",
         )
 
@@ -660,30 +644,6 @@ class WorkflowBaseline:
             chain = bridge.store.current_chain()
             logical_id = f"work-unit-{unit.work_unit_id}"
             work_unit_paths = state.current_slice.scope_paths
-            if is_finding_cleanup_work_unit(state, unit):
-                cleanup_boundary = first_correction_work_unit_payload(
-                    chain, unit.work_unit_id
-                )
-                if cleanup_boundary is not None:
-                    work_unit_paths = cleanup_boundary.paths
-                else:
-                    cleanup_findings = reduce_findings(
-                        replay_artifacts(
-                            chain,
-                            state.run_id,
-                            allow_empty=True,
-                            allow_incomplete_review_tail=True,
-                        )
-                    ).ledger.findings
-                    work_unit_paths = finding_cleanup_scope_paths(
-                        cleanup_findings,
-                        unit.open_findings,
-                        repository_root=bridge.store.repository_root,
-                    )
-                if not work_unit_paths:
-                    raise WorkflowExecutionError(
-                        "finding cleanup has no finding-derived repository scope"
-                    )
             finding_import = next(
                 (
                     record
@@ -702,30 +662,20 @@ class WorkflowBaseline:
                 if unit.work_unit_id == first_implementation_unit_id
                 else None
             )
-            work_unit_payload = (
-                CorrectionWorkUnitPayload(
-                    slice_id=str(unit.slice_id),
-                    round_number=unit.round_number,
-                    paths=work_unit_paths,
-                    finding_ids=unit.open_findings,
-                )
-                if unit.kind is WorkUnitKind.CORRECTION
-                else WorkUnitPayload(
-                    slice_id=str(unit.slice_id),
-                    round_number=unit.round_number,
-                    paths=work_unit_paths,
-                    open_finding_ids=(
-                        sorted_finding_ids(unit.open_findings)
-                        if bound_import is not None
-                        else ()
-                    ),
-                    finding_import_record_id=(
-                        bound_import.record_id if bound_import is not None else None
-                    ),
-                )
+            work_unit_payload = WorkUnitPayload(
+                slice_id=str(unit.slice_id),
+                round_number=unit.round_number,
+                paths=work_unit_paths,
+                open_finding_ids=(
+                    sorted_finding_ids(unit.open_findings)
+                    if bound_import is not None
+                    else ()
+                ),
+                finding_import_record_id=(
+                    bound_import.record_id if bound_import is not None else None
+                ),
             )
             base_idempotency_key = (
-                f"{'correction-' if unit.kind is WorkUnitKind.CORRECTION else ''}"
                 f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
             )
             prior = next(
@@ -881,7 +831,6 @@ class WorkflowBaseline:
             measurement.operation not in FINAL_REVIEW_OPERATIONS
             or not measurement.allowed
             or bridge is None
-            or is_finding_cleanup_work_unit(state)
         ):
             return measurement_record
         assert measurement_record is not None

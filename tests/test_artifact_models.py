@@ -95,7 +95,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1",
         "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))

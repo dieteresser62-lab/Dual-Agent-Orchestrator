@@ -231,8 +231,11 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
                 "slice_id": 1,
                 "summary": "Implement native Codex.",
                 "scope_paths": ["src/native_codex_contract.py"],
+                "acceptance_criteria": ["The native Codex contract is implemented."],
             }
         ],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     canonical = json.dumps(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -292,8 +295,11 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
                 "slice_id": 1,
                 "summary": "Unsorted domain-invalid slice paths.",
                 "scope_paths": ["src/z.py", "src/a.py"],
+                "acceptance_criteria": ["Paths are canonical and sorted."],
             }
         ],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     canonical = json.dumps(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -416,8 +422,11 @@ def test_native_codex_runtime_forwards_canary_execution_root(
                 "slice_id": 1,
                 "summary": "Exercise the isolated runtime.",
                 "scope_paths": ["src/native_codex_contract.py"],
+                "acceptance_criteria": ["The isolated runtime is exercised."],
             }
         ],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     captured: dict[str, object] = {}
 
@@ -473,9 +482,12 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                     "slice_id": 1,
                     "summary": "Implement it.",
                     "scope_paths": ["src/native_codex_contract.py"],
+                    "acceptance_criteria": ["The native contract is implemented."],
                 }
             ],
             "finding_dispositions": [],
+            "plan_treatments": [],
+            "plan_completion": "IMPLEMENTATION_REQUIRED",
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -577,9 +589,12 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
                 "slice_id": 1,
                 "summary": "Implement it.",
                 "scope_paths": ["src/native_codex_contract.py"],
+                "acceptance_criteria": ["The native contract is implemented."],
             }
         ],
         "finding_dispositions": [],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     from native_codex_contract import parse_bound_native_codex_contract_result
 
@@ -641,6 +656,8 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness and resume",

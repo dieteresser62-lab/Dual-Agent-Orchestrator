@@ -118,7 +118,6 @@ BRIDGE_ERROR_MARKERS = (
     "finding export differs from target import type",
     "branch discovery target task is outside the repository",
     "branch discovery handoff requires a non-empty finding snapshot",
-    "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "branch discovery handoff export requires a non-empty accepted replay",
     "branch discovery handoff export requires a family binding",
     "branch discovery handoff target execution mode is invalid",
@@ -150,13 +149,11 @@ BRIDGE_ERROR_MARKERS = (
     "branch discovery completion cannot carry approved, denied, or stop",
     "branch discovery completion requires evidence and pre_mortem",
     "branch discovery occurrence references an unknown prior finding",
-    "family acceptance requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "family acceptance may be derived only from its own BRANCH_DISCOVERY run",
     "family acceptance requires one completed scan and one terminal workflow",
     "family acceptance completion order is invalid",
     "BRANCH_DISCOVERY remediation handoff requires its cohort checkpoint",
     "remediation cohort checkpoint differs from the source run family",
-    "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "plan assignment requires a branch discovery Finding snapshot",
     "plan assignment source snapshot must target PLAN_ONLY",
     "plan assignment records do not belong to the snapshot-bound plan run",
@@ -169,7 +166,6 @@ BRIDGE_ERROR_MARKERS = (
     "plan assignment open finding has foreign or future BRANCH_PLANNING responsibility: ",
     "persisted implementer plan treatment is invalid: ",
     "plan assignment coverage is invalid: ",
-    "remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "remediation cohort checkpoint requires a PlanAssignment record",
     "remediation cohort checkpoint family differs from implementation run",
     "remediation cohort checkpoint requires an implementation record head",
@@ -249,8 +245,6 @@ PREFLIGHT_DENIAL_CODES = {
     "UNAUTHORIZED-PATH",
     "ATTESTATION-MISSING",
     "ATTESTATION-FAILED",
-    "SLICE-BINDING-MISSING",
-    "CODEX-FINAL-RESULT-MISSING",
 }
 
 ADDITIONAL_BOUNDARY_MARKERS = {
@@ -674,7 +668,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:ArtifactBridge.start_provider_attempt": 17,
     "src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt": 10,
     "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
-    "src/final_review_preflight.py:run_final_review_preflight": 22,
+    "src/final_review_preflight.py:run_final_review_preflight": 14,
     "src/final_review_preflight.py:_approved_external_paths": 15,
     "src/workflow_audit_projection.py:_persisted_histories": 6,
     "src/workflow_audit_projection.py:_attach_record_events": 13,
@@ -690,15 +684,15 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:_create_production_state": 0,
     "src/workflow_production.py:_recover_final_review_history": 2,
     "src/workflow_production.py:run_production_workflow": 4,
-    "src/workflow_production.py:_run_production_transition_loop": 23,
-    "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
-    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 27,
+    "src/workflow_production.py:_run_production_transition_loop": 21,
+    "src/workflow_baseline.py:matches_baseline_initialization_prefix": 22,
+    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 24,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 5,
     "src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
     "src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file": 3,
     "src/workflow_recovery.py:WorkflowRecovery._reconcile_pending_side_effects": 34,
-    "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 9,
+    "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 7,
     "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 4,
     "src/workflow_persistence.py:WorkflowPersistence._persist_native_agent_request_bundle": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file": 3,
@@ -707,8 +701,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 39,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer": 30,
-    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 36,
-    "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 11,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 33,
+    "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 9,
     "src/workflow_audit.py:WorkflowAudit.project_audit": 23,
@@ -716,7 +710,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context": 9,
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation": 17,
     "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": 11,
-    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": 8,
+    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": 10,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
     "src/inbox_watcher.py:load_rejection_marker": 9,
     "src/inbox_watcher.py:load_watch_identity": 4,
@@ -748,7 +742,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/inbox_watcher.py:_log_archive_retry": 0,
     "src/inbox_watcher.py:_log_watch_task_completion": 1,
     "src/inbox_watcher.py:watch_inbox": 25,
-    "src/workflow.py:WorkflowHistory.from_dict": 7,
+    "src/workflow.py:WorkflowHistory.from_dict": 6,
     "src/git_service.py:commit_managed_audit_report": 5,
     "src/git_service.py:preview_commit_tree": 9,
     "src/git_service.py:inspect_commit_tree": 1,
@@ -767,15 +761,15 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_resume.py:require_workflow_event_prefix": "daa17cb027ef984f4264dda460c5987b76cf311ba22290e2a1857e4158f90537",
     "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
     "src/artifact_resume.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
-    "src/final_review_preflight.py:run_final_review_preflight": "2447d579ce26a21d4a4655b8afe826b0d69e77261bb473aa7151f26c57597523",
-    "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
+    "src/final_review_preflight.py:run_final_review_preflight": "3210bc1214206467e0c28f7c7650a625c1bae06d08ae65aaa3aeda8fc4274775",
+    "src/final_review_preflight.py:_approved_external_paths": "3044e90229861522d4a84b72083cf55e262b5cdca8f6b1620fce8cd3031ba200",
     "src/workflow_audit_projection.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
-    "src/workflow_audit_projection.py:_attach_record_events": "cf8f419efeb90e9231c017a7df0779fd0bad7ccf501f7c2df503f5d1598d74d0",
+    "src/workflow_audit_projection.py:_attach_record_events": "92515ba921f04792a4e8a91c9a6015ab922cd738d33c051e2ab83ad7124076a6",
     "src/workflow_audit.py:WorkflowAudit.finalize_audit": "60ecf8b15bc913fec75e34aa8006d0e65110218afea19ac34956d01e93c8b593",
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context": "4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c",
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation": "b8623a4c7006d06638f9f703c489494c770ba9ec4f75ad76fc56672538b81bb5",
     "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": "7c7ab0e20733005877e51a1a4f86e847456fc6fe5e230c0b57f601bbb036f833",
-    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": "c591b7e4901da89f1d2d0d5af987f4714060ea44b52cba6845020c794eebb3fb",
+    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": "530fcd5f1229e0e46d35d8e0ca8a665898468ffb2c555e42bdfcf9a2f4a28b59",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
 
@@ -1040,7 +1034,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 96
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 92
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1082,7 +1076,7 @@ def test_watch_cache_divergence_inventory_is_source_bound() -> None:
 
 def test_preflight_denial_inventory_is_source_and_document_bound() -> None:
     codes, call_count = _preflight_denial_codes()
-    assert call_count == 15
+    assert call_count == 13
     assert codes == PREFLIGHT_DENIAL_CODES
     document = MATRIX_PATH.read_text(encoding="utf-8")
     for code in codes:

@@ -19,6 +19,7 @@ from contracts import (
 )
 from finding_reducer import project_open_set
 from repo_changes import RepositoryChanges, collect_repository_changes
+from slice_exit import SliceExitEvaluation
 
 
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -109,6 +110,7 @@ class CommitAuthorization:
     review_work_unit_id: str | None = None
     approved_head_commit: str | None = None
     approved_external_paths: tuple[str, ...] = ()
+    slice_exit: SliceExitEvaluation | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -142,6 +144,21 @@ class CommitAuthorization:
             raise GitTransactionError(
                 "approved HEAD commit must be a lowercase SHA-1 commit id"
             )
+        if self.slice_exit is not None:
+            if self.slice_exit.slice_id != str(self.slice_id):
+                raise GitTransactionError(
+                    "slice-exit authorization belongs to a different Slice"
+                )
+            if not self.slice_exit.commit_eligible:
+                detail = "; ".join(
+                    reason
+                    for condition in self.slice_exit.conditions
+                    for reason in condition.reasons
+                )
+                raise GitTransactionError(
+                    "slice commit violates the record-derived E4 exit condition"
+                    + (f": {detail}" if detail else "")
+                )
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,6 @@ import native_finding_decisions
 from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent
 from artifact_models import InvocationFailurePayload, provider_text_evidence
-from finding_cleanup import is_finding_cleanup_work_unit
 from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from agent_runtime import (
     AgentInvocationError,
@@ -70,7 +69,7 @@ from native_review_contract import (
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
-from orchestrator import run_v3_final_review, run_v3_work_unit
+from orchestrator import run_v3_work_unit
 from review_packets import ReviewPacket
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
@@ -81,7 +80,6 @@ from workflow import (
     WorkflowChanges,
     WorkflowCommitRequest,
     WorkflowCommitApprovalRequired,
-    WorkflowCorrectionBoundary,
     WorkflowContext,
     WorkflowContractError,
     WorkflowEngine,
@@ -435,7 +433,6 @@ class FakeDriver:
     reviewer_outputs: list[str]
     codex_failures: list[AgentInvocationError | None] = field(default_factory=list)
     reviewer_failures: list[AgentInvocationError | None] = field(default_factory=list)
-    correction_boundaries: list[WorkflowCorrectionBoundary] = field(default_factory=list)
     commit_refs: list[str] = field(default_factory=list)
     commit_failure: WorkflowCommitApprovalRequired | None = None
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -486,22 +483,6 @@ class FakeDriver:
             raise WorkflowExecutionError(self.authoritative_finding_error)
         return mirror_findings
 
-    def authoritative_final_review_findings(
-        self,
-        _state: WorkflowState,
-        mirror_findings: tuple[FindingRecord, ...],
-    ) -> tuple[FindingRecord, ...]:
-        return project_open_set(mirror_findings).findings
-
-    def authoritative_cleanup_scope_paths(
-        self, state: WorkflowState
-    ) -> tuple[str, ...]:
-        if not is_finding_cleanup_work_unit(state):
-            raise WorkflowExecutionError("cleanup scope requested for a regular unit")
-        if self.snapshots:
-            return self.snapshots[min(self.snapshot_index + 1, len(self.snapshots) - 1)].paths
-        return state.current_slice.scope_paths
-
     def evaluate_slice_finding_convergence(
         self,
         state: WorkflowState,
@@ -530,10 +511,6 @@ class FakeDriver:
         )
 
     def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
-        if invocation.step is WorkflowStep.CODEX_FINAL_REVIEW:
-            self._assert_checkpointed_attestation(
-                self.snapshots[max(self.snapshot_index, 0)].fingerprint
-            )
         self.codex_calls.append(invocation)
         self.snapshot_index += 1
         if self.codex_failures:
@@ -708,9 +685,6 @@ class FakeDriver:
             ("recover-native-reviewer-before-policy", (state, context, history))
         )
         return None
-
-    def prepare_correction(self) -> WorkflowCorrectionBoundary:
-        return self.correction_boundaries.pop(0)
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         self.commit_calls.append(request)
@@ -1051,8 +1025,8 @@ def _denied_review_result(
     )
 
 
-def test_cutover_off_keeps_b112_and_does_not_consult_convergence_measure() -> None:
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
+def test_cutover_always_uses_the_slice_convergence_measure() -> None:
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
     existing = FindingRecord(
         "C-01",
         FindingClass.BLOCKER,
@@ -1090,9 +1064,9 @@ def test_cutover_off_keeps_b112_and_does_not_consult_convergence_measure() -> No
         finding_ledger=(existing,),
     )
 
-    assert driver.convergence_calls == []
-    assert next_state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert next_state.current_step is WorkflowStep.CODEX_CORRECTION
+    assert driver.convergence_calls == [(state.current_work_unit_id, 2)]
+    assert next_state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert next_state.current_step is WorkflowStep.COMPLETED
 
 
 def test_cutover_convergence_stall_ends_gate_free_without_slice_commit(
@@ -1173,45 +1147,17 @@ def _negative_convergence() -> SliceConvergenceEvaluation:
     )
 
 
-def test_retired_iteration_gate_terminates_from_persisted_no_progress() -> None:
-    findings = tuple(
-        FindingRecord(
-            finding_id=f"C-{number:02d}",
-            finding_class=FindingClass.BLOCKER,
-            status=FindingStatus.OPEN,
-            summary=f"Remaining blocker {number}",
-            acceptance_test=f"Close blocker {number}.",
-            origin=FindingOrigin("01", number, AgentRole.CLAUDE),
-        )
-        for number in (1, 2)
+def _discovery_convergence() -> SliceConvergenceEvaluation:
+    return SliceConvergenceEvaluation(
+        phase=SliceReviewPhase.DISCOVERY,
+        cohort_finding_ids=("C-01",),
+        newly_opened_finding_ids=("C-01",),
+        closed_local_finding_ids=(),
+        forwarded_local_finding_ids=(),
+        attested_remediation_finding_ids=(),
+        progress_made=True,
+        reason="the discovery round opened reviewer-owned findings",
     )
-    previous = _denied_review_result(findings)
-    current = _denied_review_result(
-        tuple(
-            replace(item, status_rationale="Still open after another review.")
-            for item in findings
-        )
-    )
-    state = _legacy_iteration_gate_state(tuple(item.finding_id for item in findings))
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        findings=current.findings,
-        events=(
-            ReviewAuditEvent(1, state.current_slice_id, 3, previous),
-            ReviewAuditEvent(2, state.current_slice_id, 4, current),
-        ),
-        latest_claude_review=current,
-    )
-
-    resolved = resolve_retired_iteration_limit(state, history)
-    result = WorkflowRunResult(resolved, history)
-
-    assert resolved.current_work_unit.status is WorkUnitStatus.COMPLETED
-    assert resolved.current_work_unit.gate.status is GateStatus.CLEAR
-    assert result.workflow_rejected
-    assert result.rejection_code == "CORRECTION-REVIEW-DENIED"
-    assert result.rejection_detail is not None
-    assert "C-01, C-02" in result.rejection_detail
 
 
 def test_retired_iteration_gate_continues_from_persisted_progress() -> None:
@@ -2732,6 +2678,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         codex_outputs=[],
         reviewer_outputs=[],
         deltas={(changes.fingerprint, changes.fingerprint): changes.full_diff},
+        convergence_evaluations=[_discovery_convergence()],
     )
     state, history = WorkflowEngine(driver)._run_review(
         state,
@@ -2945,164 +2892,6 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
     ]
 
 
-def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_parsers(
-    monkeypatch,
-) -> None:
-    changes = _changes("f", "src/early.py", TEST_FILE, full_diff="CORRECTED BRANCH")
-    finding = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="The final branch required a commit-bound correction.",
-        acceptance_test="The repeated final review closes the corrected fingerprint.",
-        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
-        responses=(
-            FindingResponse(
-                FindingResponseDecision.ACCEPTED,
-                "The correction work unit is committed and ready for final review.",
-            ),
-        ),
-    )
-
-    @dataclass
-    class RestartedNativeFinalDriver(FakeDriver):
-        persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
-        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
-
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
-            self.codex_calls.append(invocation)
-            assert invocation.step is WorkflowStep.CODEX_FINAL_REVIEW
-            assert invocation.prompt == ""
-            assert invocation.native_request is not None
-            bound = invocation.native_request.bound_context
-            assert bound.context.current_fingerprint == changes.fingerprint
-            assert bound.context.previous_findings == (finding,)
-            reported = replace(
-                finding,
-                responses=(
-                    *finding.responses,
-                    FindingResponse(
-                        FindingResponseDecision.ACCEPTED,
-                        "The corrected branch passes the complete final self-check.",
-                    ),
-                ),
-            )
-            return NativeAgentCodexOutput(
-                result=CodexContractResult(
-                    ready=True,
-                    stopped=False,
-                    stop_request=None,
-                    validation=None,
-                    test_files=(),
-                    findings=(reported,),
-                    self_check="Rechecked the complete corrected branch and its bindings.",
-                ),
-                canonical_json=json.dumps(
-                    {
-                        "request_id": bound.request_id,
-                        "result_type": "final_report_result",
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                request_id=bound.request_id,
-                response_sha256="a" * 64,
-            )
-
-        def invoke_reviewer(
-            self, invocation: ReviewerInvocation
-        ) -> NativeAgentReviewOutput:
-            self.reviewer_calls.append(invocation)
-            assert invocation.step is WorkflowStep.CLAUDE_FINAL_REVIEW
-            assert invocation.prompt == ""
-            assert invocation.native_request is not None
-            bound = invocation.native_request.bound_context
-            assert bound.context.diff_fingerprint == changes.fingerprint
-            assert any(
-                item["evidence_id"] == "codex-final-report"
-                for item in invocation.native_request.document["evidence_manifest"]
-            )
-            final_finding = bound.context.previous_findings[0]
-            assert len(final_finding.responses) == 2
-            closed = replace(
-                final_finding,
-                status=FindingStatus.CLOSED,
-                status_rationale="The repeated final review verifies the correction.",
-            )
-            attestation = bound.context.validation_attestation
-            assert attestation is not None
-            return NativeAgentReviewOutput(
-                result=ContractResult(
-                    reviewer=AgentRole.CLAUDE,
-                    approval=True,
-                    stopped=False,
-                    stop_request=None,
-                    validation=attestation,
-                    test_files=bound.context.test_files,
-                    pre_mortem="A later final restart could bind the stale branch fingerprint.",
-                    evidence=ReviewEvidence(
-                        "native final restart and correction binding",
-                        "stale final-report reuse",
-                        "the corrected fingerprint is not bound end to end",
-                    ),
-                    findings=(closed,),
-                    anchors=(),
-                ),
-                canonical_json=json.dumps(
-                    {"request_id": bound.request_id, "decision": "approved"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                request_id=bound.request_id,
-            )
-
-        def persist_native_review_contract(
-            self,
-            output: NativeAgentReviewOutput,
-            _fingerprint: str,
-            _round_number: int,
-            _previous_findings: tuple[FindingRecord, ...],
-        ) -> None:
-            self.persisted_reviews.append(output)
-
-        def persist_native_codex_contract(
-            self,
-            output: NativeAgentCodexOutput,
-            _previous_findings: tuple[FindingRecord, ...],
-        ) -> None:
-            self.persisted_codex.append(output)
-
-    state = replace(
-        _completed_single_slice_state().start_final_review_work_unit(),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
-    driver = RestartedNativeFinalDriver(
-        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
-    )
-    state, history = WorkflowEngine(driver)._run_final_codex_report(
-        state, _context(), history
-    )
-    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-    state, history = WorkflowEngine(driver)._run_review(
-        state, _context(), history, AgentRole.CLAUDE
-    )
-
-    assert state.current_step is WorkflowStep.COMPLETED
-    assert history.findings[0].status is FindingStatus.CLOSED
-    assert len(driver.persisted_codex) == 1
-    assert len(driver.persisted_reviews) == 1
-    assert [item[0] for item in driver.authoritative_finding_calls] == [
-        WorkflowStep.CODEX_FINAL_REVIEW.value,
-        WorkflowStep.CLAUDE_FINAL_REVIEW.value,
-    ]
-
-
 @dataclass
 class BatchedFinalReviewDriver(FakeDriver):
     batch_size: int = 25
@@ -3238,249 +3027,6 @@ def _batched_final_review_case(
     return WorkflowEngine(driver, sleep_fn=lambda _seconds: None).run_current_work_unit(
         state, _context() if context is None else context, history
     ), driver
-
-
-def test_final_review_disposes_seventy_five_findings_over_bound_rounds() -> None:
-    result, driver = _batched_final_review_case(75, batch_size=25)
-
-    assert result.workflow_completed
-    assert len(driver.requested_ids) == 3
-    assert tuple(len(item) for item in driver.requested_ids) == (32, 32, 25)
-    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3]
-    assert driver.requested_ids[1] == tuple(
-        f"C-{number:02d}" for number in range(26, 58)
-    )
-    first_request = driver.reviewer_calls[0].native_request
-    assert first_request is not None
-    assert first_request.document["review_contract"]["disposition_budget"] == {
-        "maximum_items": 32,
-        "eligible_finding_ids": [
-            f"C-{number:02d}" for number in range(1, 33)
-        ],
-        "pending_finding_count": 75,
-    }
-    assert any(
-        "at most 32 total" in criterion
-        and "C-01, C-02" in criterion
-        for criterion in first_request.document["acceptance_criteria"]
-    )
-    assert project_open_set(result.history.findings).finding_ids == ()
-
-
-def test_final_review_with_few_findings_completes_in_one_round() -> None:
-    result, driver = _batched_final_review_case(3, batch_size=25)
-
-    assert result.workflow_completed
-    assert driver.requested_ids == [("C-01", "C-02", "C-03")]
-
-
-def test_final_review_continues_beyond_the_retired_four_round_limit() -> None:
-    result, driver = _batched_final_review_case(5, batch_size=1)
-
-    assert result.workflow_completed
-    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3, 4, 5]
-    assert driver.requested_ids == [
-        tuple(f"C-{number:02d}" for number in range(start, 6))
-        for start in range(1, 6)
-    ]
-
-
-def test_final_review_round_four_follows_three_disposition_rounds() -> None:
-    result, driver = _batched_final_review_case(70, batch_size=10)
-
-    assert result.workflow_completed
-    assert [item.round_number for item in driver.reviewer_calls[:4]] == [1, 2, 3, 4]
-    fourth_request = driver.reviewer_calls[3].native_request
-    assert fourth_request is not None
-    assert fourth_request.document["review_contract"]["disposition_budget"] == {
-        "maximum_items": 32,
-        "eligible_finding_ids": [
-            f"C-{number:02d}" for number in range(31, 63)
-        ],
-        "pending_finding_count": 40,
-    }
-
-
-def test_over_budget_final_result_is_rejected_and_retried_with_smaller_offer() -> None:
-    now = [datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)]
-    failure = _native_review_limit_failure(
-        33,
-        32,
-        "final-review-over-budget",
-        received_at=now[0],
-    )
-    result, driver = _batched_final_review_case(
-        32,
-        batch_size=16,
-        reviewer_failures=[failure, None],
-    )
-
-    assert result.workflow_completed
-    assert tuple(len(item) for item in driver.requested_ids) == (32, 16, 16)
-    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3]
-    assert len(driver.failure_payloads) == 1
-    rejected = driver.failure_payloads[0]
-    assert rejected.diagnostic_code == "NATIVE-REVIEW-FORM"
-    assert rejected.automatic_resume is True
-    assert rejected.retry_delay_seconds > 0
-    assert rejected.idempotency_key.endswith(":disposition-limit")
-    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
-
-
-def test_disposition_limit_retry_does_not_depend_on_transient_retry_policy() -> None:
-    failure = _native_review_limit_failure(
-        33,
-        32,
-        "final-review-over-budget-policy-disabled",
-        received_at=datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc),
-    )
-    result, driver = _batched_final_review_case(
-        32,
-        batch_size=16,
-        reviewer_failures=[failure, None],
-        context=replace(
-            _context(),
-            transient_retry_policy=TransientRetryPolicy(automatic=False),
-        ),
-    )
-
-    assert result.workflow_completed
-    assert tuple(len(item) for item in driver.requested_ids) == (32, 16, 16)
-    assert driver.failure_payloads[0].automatic_resume is True
-    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
-
-
-def test_disposition_batches_preserve_previously_reclassified_blockers() -> None:
-    blocker_ids = ("C-85", "C-88", "C-102", "C-106")
-    findings = tuple(
-        FindingRecord(
-            finding_id=finding_id,
-            finding_class=FindingClass.BLOCKER,
-            status=FindingStatus.OPEN,
-            summary=f"Preserved final-review blocker {finding_id}.",
-            acceptance_test="The blocker remains in the correction handoff.",
-            origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
-        )
-        for finding_id in (*blocker_ids, "C-107")
-    )
-    state = replace(
-        _completed_single_slice_state().start_final_review_work_unit(),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
-        ),
-    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        findings=findings,
-        codex_final_report='{"result_type":"final_report_result"}',
-    )
-    changes = _changes("f", "src/early.py", TEST_FILE)
-    driver = BatchedFinalReviewDriver(
-        snapshots=[changes],
-        codex_outputs=[],
-        reviewer_outputs=[],
-        batch_size=1,
-        approve_complete=False,
-        pending_ids=("C-107",),
-        correction_boundaries=[
-            WorkflowCorrectionBoundary(
-                start_commit="b" * 40,
-                scope_paths=("src/early.py", TEST_FILE),
-                start_fingerprint="0" * 64,
-            )
-        ],
-    )
-
-    next_state, _ = WorkflowEngine(driver)._run_review(
-        state, _context(), history, AgentRole.CLAUDE
-    )
-
-    request = driver.reviewer_calls[0].native_request
-    assert request is not None
-    assert request.document["review_contract"]["disposition_budget"] == {
-        "maximum_items": 1,
-        "eligible_finding_ids": ["C-107"],
-        "pending_finding_count": 1,
-    }
-    assert next_state.current_work_unit.kind is WorkUnitKind.CORRECTION
-    assert next_state.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
-    assert next_state.current_work_unit.open_findings == blocker_ids
-
-
-def test_round_four_uses_authoritative_pending_total_after_prior_dispositions() -> None:
-    dispositioned_ids = frozenset(("C-85", "C-88", "C-102", "C-106"))
-    closed_before_final_review = frozenset((2, 4, 9, 14, 16, 18, 23, 30, 50))
-    findings = tuple(
-        FindingRecord(
-            finding_id=f"C-{number:02d}",
-            finding_class=(
-                FindingClass.BLOCKER
-                if f"C-{number:02d}" in dispositioned_ids
-                else FindingClass.OBSERVATION
-            ),
-            status=FindingStatus.OPEN,
-            summary=f"Final-review finding {number}.",
-            acceptance_test=f"Disposition {number} is recorded.",
-            origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-        )
-        for number in range(1, 109)
-        if number not in closed_before_final_review
-    )
-    pending_ids = tuple(
-        item.finding_id
-        for item in findings
-        if item.finding_id not in dispositioned_ids
-    )
-    state = replace(
-        _completed_single_slice_state().start_final_review_work_unit(),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
-        ),
-    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
-    state = replace(
-        state,
-        work_units=tuple(
-            replace(item, round_number=4)
-            if item.work_unit_id == state.current_work_unit_id
-            else item
-            for item in state.work_units
-        ),
-    )
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        codex_final_report='{"result_type":"final_report_result"}',
-    )
-    driver = BatchedFinalReviewDriver(
-        snapshots=[_changes("f", "src/early.py", TEST_FILE)],
-        codex_outputs=[],
-        reviewer_outputs=[],
-        batch_size=0,
-        approve_complete=False,
-        pending_ids=pending_ids,
-        authoritative_findings=findings,
-    )
-
-    next_state, next_history = WorkflowEngine(driver)._run_review(
-        state, _context(), history, AgentRole.CLAUDE
-    )
-
-    assert [item.round_number for item in driver.reviewer_calls] == [4]
-    request = driver.reviewer_calls[0].native_request
-    assert request is not None
-    budget = request.document["review_contract"]["disposition_budget"]
-    assert budget["maximum_items"] == 32
-    assert len(budget["eligible_finding_ids"]) == 32
-    assert budget["pending_finding_count"] == 95
-    assert next_state.current_step is WorkflowStep.COMPLETED
-    assert dispositioned_ids.issubset(
-        project_open_set(next_history.findings).finding_ids
-    )
 
 
 @pytest.mark.parametrize("review_type", ("slice review", "final review"))
@@ -3739,106 +3285,6 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
     )
 
 
-def test_final_review_rounds_end_immediately_when_dispositions_make_no_progress() -> None:
-    result, driver = _batched_final_review_case(
-        5, batch_size=0, approve_complete=False
-    )
-
-    assert len(driver.requested_ids) == 1
-    assert [item.round_number for item in driver.reviewer_calls] == [1]
-    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
-    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
-    assert result.state.current_step is WorkflowStep.COMPLETED
-    assert result.workflow_rejected
-    assert result.exit_code == 5
-    assert result.rejection_detail is not None
-    assert "C-01, C-02, C-03, C-04, C-05" in result.rejection_detail
-    assert all(
-        item.finding_class is FindingClass.BLOCKER
-        for item in project_open_set(result.history.findings).findings
-    )
-    watch_result = WatchTaskResult.from_workflow(result)
-    assert watch_result.disposition is WatchTaskDisposition.REJECTED
-    assert watch_result.exit_code == 5
-    assert watch_result.status == "rejected"
-    assert watch_result.resume_available is False
-    assert watch_result.failure_detail == result.rejection_detail
-
-
-def test_combined_native_post_correction_final_transition_carries_complete_ledger(
-    monkeypatch,
-) -> None:
-    corrected = FindingRecord(
-        finding_id="C-02",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="The correction addresses the final-review blocker.",
-        acceptance_test="The next final review receives the complete ledger.",
-        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
-    )
-    historical = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.CLOSED,
-        summary="A prior finding remains part of the branch-wide ledger.",
-        acceptance_test="The completed finding is carried into final review.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-        status_rationale="Verified before the correction work unit.",
-    )
-
-    @dataclass
-    class CarryingDriver(FakeDriver):
-        def carry_forward_native_findings(
-            self,
-            _state: WorkflowState,
-            current_findings: tuple[FindingRecord, ...],
-        ) -> tuple[FindingRecord, ...]:
-            assert current_findings == (corrected,)
-            return (historical, corrected)
-
-    state = (
-        _completed_single_slice_state()
-        .start_final_review_work_unit()
-        .complete_current_work_unit()
-        .start_correction_work_unit(
-            start_commit="b" * 40,
-            scope_paths=("src/early.py", TEST_FILE),
-            start_fingerprint="c" * 64,
-            finding_ids=("C-02",),
-        )
-        .complete_current_slice(commit_ref="d" * 40)
-    )
-    state = replace(
-        state,
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    history = WorkflowHistory(state.current_work_unit_id, findings=(corrected,))
-    driver = CarryingDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
-    engine = WorkflowEngine(driver)
-    captured: list[tuple[WorkflowState, WorkflowHistory]] = []
-
-    def capture(
-        current_state: WorkflowState,
-        _context: WorkflowContext,
-        current_history: WorkflowHistory | None = None,
-    ) -> WorkflowRunResult:
-        assert current_history is not None
-        captured.append((current_state, current_history))
-        return WorkflowRunResult(current_state, current_history)
-
-    monkeypatch.setattr(engine, "run_current_work_unit", capture)
-    result = engine.run_final_review(state, _context(), history)
-
-    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-    assert result.history.findings == (historical, corrected)
-    assert driver.checkpoint_histories[-1].findings == (historical, corrected)
-
-
 def test_native_codex_correction_binds_record_authority_before_recovery() -> None:
     finding = FindingRecord(
         finding_id="C-01",
@@ -3943,186 +3389,6 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
     assert driver.persisted == [recovered_output]
 
 
-def test_native_codex_final_report_bypasses_legacy_marker_parser(
-    monkeypatch,
-) -> None:
-    @dataclass
-    class NativeFinalDriver(FakeDriver):
-        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
-
-        def invoke_codex(
-            self, invocation: CodexInvocation
-        ) -> NativeAgentCodexOutput:
-            self.codex_calls.append(invocation)
-            assert invocation.prompt == ""
-            assert invocation.native_request is not None
-            bound = invocation.native_request.bound_context
-            result = CodexContractResult(
-                ready=True,
-                stopped=False,
-                stop_request=None,
-                validation=None,
-                test_files=(),
-                findings=(),
-                self_check="Checked contracts, recovery, and branch boundaries.",
-            )
-            return NativeAgentCodexOutput(
-                result=result,
-                canonical_json=json.dumps(
-                    {
-                        "request_id": bound.request_id,
-                        "result_type": "final_report_result",
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                request_id=bound.request_id,
-                response_sha256="d" * 64,
-            )
-
-        def persist_native_codex_contract(
-            self,
-            output: NativeAgentCodexOutput,
-            previous_findings: tuple[FindingRecord, ...],
-        ) -> None:
-            assert previous_findings == ()
-            self.persisted.append(output)
-
-    changes = _changes("e", "src/early.py", TEST_FILE)
-    state = replace(
-        _completed_single_slice_state().start_final_review_work_unit(),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    driver = NativeFinalDriver(
-        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
-    )
-    advanced, history = WorkflowEngine(driver)._run_final_codex_report(
-        state, _context(), WorkflowHistory(state.current_work_unit_id)
-    )
-
-    assert advanced.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-    assert history.codex_final_report is not None
-    assert len(driver.persisted) == 1
-    invocation = driver.codex_calls[0]
-    assert invocation.native_request is not None
-    assert invocation.native_request.document["request_type"] == "final_report"
-
-
-def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
-    plan_state = replace(
-        init_workflow_state(
-            run_id="native-plan",
-            task_file="/repo/task.md",
-            branch="feature/workflow",
-            branch_base=START_COMMIT,
-            first_slice_start_commit=START_COMMIT,
-            slice_count=1,
-            task_digest="a" * 64,
-            task_scope_patterns=("docs/internal/plan.md",),
-            target_branch="feature/workflow",
-        ),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    plan_contract = CodexStepContract(
-        "native-plan",
-        ReadinessMarker.PLAN,
-        "01",
-        1,
-        require_slice_plan=True,
-        plan_artifact_path="docs/internal/plan.md",
-    )
-    plan_bundle = workflow_requests.native_codex_request(
-        execution_error=WorkflowExecutionError,
-        state=plan_state,
-        context=_context(),
-        history=WorkflowHistory(plan_state.current_work_unit_id),
-        contract=plan_contract,
-        request_kind=NativeCodexRequestKind.PLAN,
-    )
-
-    final_state = replace(
-        _completed_single_slice_state().start_final_review_work_unit(),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    final_contract = CodexStepContract(
-        "native-final",
-        ReadinessMarker.FINAL_REPORT,
-        "FINAL",
-        1,
-        review_fingerprint="f" * 64,
-    )
-    final_bundle = workflow_requests.native_codex_request(
-        execution_error=WorkflowExecutionError,
-        state=final_state,
-        context=_context(),
-        history=WorkflowHistory(final_state.current_work_unit_id),
-        contract=final_contract,
-        request_kind=NativeCodexRequestKind.FINAL_REPORT,
-    )
-
-    assert plan_bundle.document["request_type"] == "plan"
-    assert plan_bundle.document["current_fingerprint"] == "a" * 64
-    assert plan_bundle.document["authorized_paths"] == ["docs/internal/plan.md"]
-    transported_plan_request = json.loads(plan_bundle.canonical_json)
-    assert transported_plan_request["assignment"] == _context().assignment
-    assert final_bundle.document["request_type"] == "final_report"
-    assert final_bundle.document["current_fingerprint"] == "f" * 64
-    assert final_bundle.document["authorized_paths"] == sorted(
-        final_state.slices[0].scope_paths
-    )
-
-
-def test_native_final_review_rejects_missing_codex_report_before_request() -> None:
-    changes = _changes("c", "src/early.py", TEST_FILE)
-    state = replace(
-        _slice_state().with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
-        ),
-    )
-    contract = StepContract(
-        "native-final-review",
-        AgentRole.CLAUDE,
-        ApprovalMarker.FINAL,
-        "FINAL",
-        1,
-        changes.fingerprint,
-        _attestation(changes),
-    )
-
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="requires a persisted Codex final report",
-    ):
-        workflow_requests.native_review_request(
-            execution_error=WorkflowExecutionError,
-            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
-            state=state,
-            context=_context(),
-            history=WorkflowHistory(state.current_work_unit_id),
-            contract=contract,
-            changes=changes,
-            evidence_kind=EvidenceKind.FULL_BRANCH,
-            review_diff=changes.full_diff,
-            review_packet=None,
-            expected_test_files=(TEST_FILE,),
-        )
-
-
 @pytest.mark.parametrize(
     ("step", "marker", "expected_kind", "evidence_kind"),
     (
@@ -4139,14 +3405,14 @@ def test_native_final_review_rejects_missing_codex_report_before_request() -> No
             EvidenceKind.FULL_SLICE,
         ),
         (
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            ApprovalMarker.FINAL,
-            "final",
+            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
+            ApprovalMarker.BRANCH_DISCOVERY,
+            "branch_discovery",
             EvidenceKind.FULL_BRANCH,
         ),
     ),
 )
-def test_native_request_builder_covers_plan_slice_and_final_reviews(
+def test_native_request_builder_covers_plan_slice_and_branch_discovery_reviews(
     step: WorkflowStep,
     marker: ApprovalMarker,
     expected_kind: str,
@@ -4162,13 +3428,11 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id)
-    if marker is ApprovalMarker.FINAL:
-        history = replace(history, codex_final_report=_final_report())
     contract = StepContract(
         f"native-{expected_kind}-review",
         AgentRole.CLAUDE,
         marker,
-        "FINAL" if marker is ApprovalMarker.FINAL else "01",
+        "DISCOVERY" if marker is ApprovalMarker.BRANCH_DISCOVERY else "01",
         1,
         changes.fingerprint,
         _attestation(changes),
@@ -4193,9 +3457,7 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
     evidence_ids = {
         item["evidence_id"] for item in bundle.document["evidence_manifest"]
     }
-    assert ("codex-final-report" in evidence_ids) is (
-        marker is ApprovalMarker.FINAL
-    )
+    assert "codex-final-report" not in evidence_ids
 
 
 def test_native_request_reuses_restored_legacy_review_packet_without_semantic_digest() -> None:
@@ -4516,6 +3778,7 @@ def test_new_validation_requirement_without_new_fingerprint_does_not_rerun() -> 
         codex_outputs=[_codex_ready(), _codex_ready("C-01")],
         reviewer_outputs=[denial],
         deltas={(unchanged.fingerprint, unchanged.fingerprint): "no content change"},
+        convergence_evaluations=[_discovery_convergence()],
     )
 
     with pytest.raises(WorkflowExecutionError, match="requirements changed"):
@@ -6124,13 +5387,7 @@ def test_discovery_output_limit_is_a_dedicated_branch_discovery_stop(
         "DISCOVERY_OUTPUT_LIMIT | the request-bound discovery capacity was reached"
     )
 
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        False,
-    )
-    with pytest.raises(WorkflowExecutionError, match="unknown rule"):
-        WorkflowEngine._halt_for_stop_request(state, _context(), stop_request)
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
 
 
 def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:
@@ -6216,286 +5473,6 @@ def test_changed_test_fingerprint_expires_previous_gate_approval() -> None:
     assert driver.reviewer_calls == []
 
 
-def test_final_review_resumes_redundant_gate_from_exact_prior_test_approval() -> None:
-    branch = _changes("7", "src/early.py", TEST_FILE, full_diff="COMPLETE BRANCH")
-    evidence = GateTestChangeEvidence((TEST_FILE,), "9" * 64)
-    state = init_workflow_state(
-        run_id="run-final-test-inheritance",
-        task_file="/repo/task.md",
-        branch="feature/workflow",
-        branch_base=START_COMMIT,
-        first_slice_start_commit=START_COMMIT,
-        slice_count=1,
-        timestamp="2026-08-12T10:00:00+00:00",
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit=START_COMMIT,
-        scope_paths=("src/early.py", TEST_FILE),
-        start_fingerprint="0" * 64,
-    ).await_user_gate(
-        reason=GateReason.TEST_CHANGE,
-        detail="test approval required",
-        fingerprint=evidence.fingerprint,
-        paths=evidence.paths,
-    ).record_user_gate_decision(
-        approved=True,
-        fingerprint=evidence.fingerprint,
-        paths=evidence.paths,
-        rationale="exact Slice test diff reviewed",
-    ).record_active_test_approval(
-        evidence.fingerprint,
-        evidence.paths,
-    ).complete_current_slice(
-        commit_ref="b" * 40,
-    ).start_final_review_work_unit().await_user_gate(
-        reason=GateReason.TEST_CHANGE,
-        detail="test changes require explicit approval before review",
-        fingerprint=evidence.fingerprint,
-        paths=evidence.paths,
-    )
-    driver = FakeDriver(
-        snapshots=[branch],
-        codex_outputs=[_final_report()],
-        reviewer_outputs=[
-            _final_approval(AgentRole.CLAUDE),
-        ],
-        test_evidence_by_fingerprint={branch.fingerprint: evidence},
-    )
-    context = replace(
-        _context(),
-        test_changes_approved=False,
-        dynamic_test_scope=True,
-    )
-
-    result = run_v3_final_review(
-        WorkflowEngine(driver),
-        state,
-        context,
-        WorkflowHistory(state.current_work_unit_id),
-    )
-
-    assert result.completed
-    assert result.state.current_work_unit.gate.reason is GateReason.NONE
-    assert result.state.current_work_unit.active_test_fingerprint == evidence.fingerprint
-    assert result.state.current_work_unit.active_test_paths == evidence.paths
-    inherited = result.state.current_work_unit.gate_decisions
-    assert len(inherited) == 1
-    assert inherited[0].rationale == "exact Slice test diff reviewed"
-    assert len(driver.codex_calls) == 1
-    assert len(driver.reviewer_calls) == 1
-
-
-def test_codex_final_report_not_ready_is_resumable_without_review() -> None:
-    branch = _changes(
-        "7",
-        "src/early.py",
-        full_diff="COMPLETE BRANCH",
-        start_commit=START_COMMIT,
-    )
-    driver = FakeDriver(
-        snapshots=[branch],
-        codex_outputs=["FINAL_REPORT_READY: NO\nSTATUS: DONE"],
-        reviewer_outputs=[],
-    )
-
-    result = run_v3_final_review(
-        WorkflowEngine(driver), _completed_single_slice_state(), _context()
-    )
-
-    assert result.exit_code == 4
-    assert result.state.current_step is WorkflowStep.CODEX_FINAL_REVIEW
-    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
-    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert result.state.current_work_unit.gate.detail is not None
-    assert result.state.current_work_unit.gate.detail.startswith(
-        "CODEX-FINAL-REPORT-NOT-READY |"
-    )
-    assert driver.reviewer_calls == []
-
-
-def test_workflow_history_roundtrips_final_report_and_loads_legacy_shape() -> None:
-    history = WorkflowHistory(
-        7,
-        codex_final_report="Branch risk found.\nFINAL_REPORT_READY: YES\nSTATUS: DONE",
-    )
-
-    restored = WorkflowHistory.from_dict(history.to_dict())
-    legacy = history.to_dict()
-    legacy.pop("codex_final_report")
-
-    assert restored == history
-    assert WorkflowHistory.from_dict(legacy).codex_final_report is None
-
-
-def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> None:
-    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
-    branch = _changes(
-        "7",
-        "src/early.py",
-        TEST_FILE,
-        full_diff="COMPLETE BRANCH",
-        start_commit=START_COMMIT,
-    )
-    driver = FakeDriver(
-        snapshots=[branch],
-        codex_outputs=[_final_report()],
-        reviewer_outputs=[_final_approval(AgentRole.CLAUDE)],
-        reviewer_failures=[
-            _invocation_failure(
-                AgentRole.CLAUDE,
-                AgentFailureKind.QUOTA,
-                "final-claude-quota",
-                received_at=received,
-                reset_after_seconds=2,
-            ),
-            None,
-        ],
-    )
-    clock = {"now": received}
-    sleeps: list[float] = []
-    heartbeats: list[str] = []
-
-    def sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        clock["now"] += timedelta(seconds=seconds)
-
-    result = WorkflowEngine(
-        driver,
-        now_fn=lambda: clock["now"],
-        sleep_fn=sleep,
-        heartbeat_fn=heartbeats.append,
-    ).run_final_review(
-        replace(
-            _completed_single_slice_state(),
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-        ),
-        replace(
-            _context(),
-            quota_wait_policy=QuotaWaitPolicy(
-                automatic=True,
-                safety_margin_seconds=1,
-                maximum_wait_seconds=10,
-                maximum_auto_resumes=1,
-                heartbeat_interval_seconds=1,
-            ),
-        ),
-    )
-    watch_result = WatchTaskResult.from_workflow(result)
-
-    assert result.completed
-    assert watch_result.disposition is WatchTaskDisposition.COMPLETED
-    assert watch_result.exit_code == 0
-    assert [call.step for call in driver.reviewer_calls] == [
-        WorkflowStep.CLAUDE_FINAL_REVIEW,
-        WorkflowStep.CLAUDE_FINAL_REVIEW,
-    ]
-    assert sleeps == [1, 1, 1]
-    assert heartbeats
-    assert any("work_unit=3" in item for item in heartbeats)
-
-
-def test_large_correction_preserves_finding_binding_and_review_resume_idempotency() -> None:
-    first_branch = _changes(
-        "7",
-        "src/early.py",
-        TEST_FILE,
-        full_diff="ORIGINAL BRANCH",
-        start_commit=START_COMMIT,
-    )
-    productive_paths = tuple(f"src/fix_{index}.py" for index in range(15))
-    correction = _changes(
-        "8",
-        *productive_paths,
-        TEST_FILE,
-        full_diff="LARGE CORRECTION",
-        start_commit="b" * 40,
-    )
-    broad_scope = tuple(sorted((*productive_paths, TEST_FILE)))
-    interrupted_driver = FakeDriver(
-        snapshots=[first_branch, correction],
-        codex_outputs=[
-            _final_report(),
-            _codex_ready("C-01", slice_id="02"),
-        ],
-        reviewer_outputs=[_final_denial(AgentRole.CLAUDE, "C-01")],
-        reviewer_failures=[None, RuntimeError("correction review interrupted")],
-        correction_boundaries=[
-            WorkflowCorrectionBoundary(
-                start_commit="b" * 40,
-                scope_paths=broad_scope,
-                start_fingerprint="0" * 64,
-            )
-        ],
-    )
-
-    with pytest.raises(RuntimeError, match="correction review interrupted"):
-        WorkflowEngine(interrupted_driver).run_final_review(
-            _completed_single_slice_state(), _context()
-        )
-
-    assert interrupted_driver.validation_calls == [
-        first_branch.fingerprint,
-        correction.fingerprint,
-    ]
-    assert [call.step for call in interrupted_driver.reviewer_calls] == [
-        WorkflowStep.CLAUDE_FINAL_REVIEW,
-        WorkflowStep.CLAUDE_SLICE_REVIEW,
-    ]
-    correction_review = interrupted_driver.reviewer_calls[1]
-    assert correction_review.fingerprint == correction.fingerprint
-    assert tuple(item.finding_id for item in correction_review.previous_findings) == (
-        "C-01",
-    )
-
-    persisted = interrupted_driver.checkpoints[-1]
-    persisted_history = interrupted_driver.checkpoint_histories[-1]
-    assert persisted.current_work_unit.kind is WorkUnitKind.CORRECTION
-    assert persisted.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    corrected_branch = _changes(
-        "9",
-        "src/early.py",
-        *productive_paths,
-        TEST_FILE,
-        full_diff="CORRECTED BRANCH",
-        start_commit=START_COMMIT,
-    )
-    resumed_driver = FakeDriver(
-        snapshots=[correction, corrected_branch],
-        codex_outputs=[_final_report()],
-        reviewer_outputs=[
-            _review_approval(
-                AgentRole.CLAUDE,
-                finding_status=(
-                    "FINDING_STATUS: C-01 | CLOSED | large correction verified"
-                ),
-                slice_id="02",
-            ),
-            _final_approval(AgentRole.CLAUDE),
-        ],
-        snapshot_index=0,
-    )
-
-    resumed = WorkflowEngine(resumed_driver).run_current_work_unit(
-        persisted,
-        _context(),
-        persisted_history,
-    )
-
-    assert resumed.completed
-    assert [call.step for call in resumed_driver.codex_calls] == [
-        WorkflowStep.CODEX_FINAL_REVIEW
-    ]
-    assert resumed_driver.validation_calls == [corrected_branch.fingerprint]
-    assert [call.step for call in resumed_driver.reviewer_calls] == [
-        WorkflowStep.CLAUDE_SLICE_REVIEW,
-        WorkflowStep.CLAUDE_FINAL_REVIEW,
-    ]
-    assert resumed.history.findings[0].status is FindingStatus.CLOSED
-
-
 def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider() -> None:
     fingerprint = "f" * 64
     state = replace(
@@ -6574,6 +5551,18 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
             "STATUS: DONE"
         ],
         reviewer_outputs=[],
+        convergence_evaluations=[
+            SliceConvergenceEvaluation(
+                phase=SliceReviewPhase.DISCOVERY,
+                cohort_finding_ids=("C-01",),
+                newly_opened_finding_ids=("C-01",),
+                closed_local_finding_ids=(),
+                forwarded_local_finding_ids=(),
+                attested_remediation_finding_ids=(),
+                progress_made=True,
+                reason="the discovery round opened reviewer-owned findings",
+            )
+        ],
     )
     outcome = WorkflowEngine(driver).run_current_work_unit(
         state,
@@ -6590,127 +5579,3 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
     )
     assert len(reviews) == 1
     assert reviews[0].round_number == 1
-
-
-def test_recovered_final_review_uses_request_time_batch_after_dispositions_persist() -> None:
-    fingerprint = "f" * 64
-    state = replace(
-        _completed_single_slice_state()
-        .start_final_review_work_unit()
-        .with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW),
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
-        ),
-    )
-    first = FindingRecord(
-        "C-01",
-        FindingClass.BLOCKER,
-        FindingStatus.OPEN,
-        "First historical final-review item.",
-        "Close the first item.",
-        FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
-    )
-    second = replace(first, finding_id="C-02", summary="Second historical item.")
-    offered = (first, second)
-    returned = tuple(
-        replace(
-            finding,
-            status=FindingStatus.CLOSED,
-            status_rationale="The final review verified the correction.",
-        )
-        for finding in offered
-    )
-    state = _with_open_findings(state, ("C-01", "C-02"))
-    attestation = _attestation(_changes("f", "src/early.py", TEST_FILE))
-    native_context = NativeReviewContext(
-        run_id=state.run_id,
-        work_unit_id=str(state.current_work_unit_id),
-        operation=WorkflowStep.CLAUDE_FINAL_REVIEW.value,
-        diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.FINAL,
-        slice_id="FINAL",
-        round_number=1,
-        previous_findings=offered,
-        known_open_findings=offered,
-        authoritative_finding_ids=("C-01", "C-02"),
-        validation_attestation=attestation,
-        test_files=(TEST_FILE,),
-        test_changes_approved=True,
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
-        final_review_pending_count=2,
-    )
-    result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
-        approval=True,
-        stopped=False,
-        stop_request=None,
-        validation=attestation,
-        test_files=(TEST_FILE,),
-        pre_mortem="A persisted disposition could be compared with a later batch.",
-        evidence=ReviewEvidence(
-            "request-time final-review batch",
-            "a recovery merge uses today's pending set",
-            "the provider is invoked again",
-        ),
-        findings=returned,
-        anchors=(),
-    )
-    replay = PersistedNativeReviewerReplay(
-        output=NativeAgentReviewOutput(
-            result=result,
-            canonical_json='{"decision":"approved"}',
-            request_id="native-review-request-" + "b" * 64,
-            context=native_context,
-            recovered_finding_comparison=RecoveredFindingComparison(
-                request_findings=offered,
-                offered_findings=offered,
-                request_position="request-ledger measurement=ar1-request",
-                recovery_position="recovery-ledger head=ar1-current",
-            ),
-        ),
-        fingerprint=fingerprint,
-        round_number=1,
-    )
-
-    @dataclass
-    class RecoveringFinalDriver(FakeDriver):
-        def carry_forward_native_findings(
-            self,
-            _state: WorkflowState,
-            _current_findings: tuple[FindingRecord, ...],
-        ) -> tuple[FindingRecord, ...]:
-            return returned
-
-        def recover_pending_native_reviewer_before_policy(
-            self,
-            _state: WorkflowState,
-            _context: WorkflowContext,
-            _history: WorkflowHistory,
-        ) -> PersistedNativeReviewerReplay:
-            return replay
-
-        def invoke_reviewer(self, _invocation: ReviewerInvocation):  # type: ignore[no-untyped-def]
-            raise AssertionError("record-ahead final review must suppress the provider")
-
-    driver = RecoveringFinalDriver(
-        snapshots=[],
-        codex_outputs=[],
-        reviewer_outputs=[],
-    )
-    outcome = WorkflowEngine(driver).run_current_work_unit(
-        state,
-        _context(),
-        WorkflowHistory(
-            state.current_work_unit_id,
-            findings=returned,
-            attestations=(attestation,),
-        ),
-    )
-
-    assert outcome.completed
-    assert outcome.history.findings == returned
-    assert not driver.reviewer_calls

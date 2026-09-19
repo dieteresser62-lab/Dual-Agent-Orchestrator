@@ -4,47 +4,32 @@
     {
       "provider": "claude",
       "form": "convergence",
-      "sha256": "b6f397e50b3e6b218b7d64a7e739381dae49b187d7891211abbb7a1d8b62c532"
-    },
-    {
-      "provider": "claude",
-      "form": "final",
-      "sha256": "160420f85834f9150ffb86d1b463ae38cc8a728abb08052ddbc965d75d9c0f2c"
-    },
-    {
-      "provider": "claude",
-      "form": "final_observation",
-      "sha256": "160420f85834f9150ffb86d1b463ae38cc8a728abb08052ddbc965d75d9c0f2c"
+      "sha256": "8bdc904e237925c2d6d1cc45cba54db1fc1b39d8584c1b5dd8c80369cd219232"
     },
     {
       "provider": "claude",
       "form": "initial_slice",
-      "sha256": "70187e6ab499518eb8f29b8f11af6b4befff7c83043829eefb8a68c228e85e70"
+      "sha256": "0bb0de0a0032ded2bf86bb33dcbdb3f29d3a1db2c3302524dde742734dba13dc"
     },
     {
       "provider": "claude",
       "form": "plan",
-      "sha256": "98889eaf289b9bb83ad5de466aafeebbee9f96c5070d0e8fe0e0118d74347858"
+      "sha256": "e60ae985f5520f2f4d59f0c3b3dd99eb6fa6bb51138f2070f254e049d10ed323"
     },
     {
       "provider": "codex",
       "form": "correction",
-      "sha256": "be09484bde6fc4e23b9f7d7bc332a165f1bba75a075cfcb8d5d3e23ca1f31e9a"
-    },
-    {
-      "provider": "codex",
-      "form": "final_report",
-      "sha256": "b416d1aa6d69bc69d0c2abc5615b125ba965ac0dac03004e8b2478c7661c6a94"
+      "sha256": "fbdb782e52db598fa559d1868e755d17643ab034f92fb43fec2dd15e7c1c993d"
     },
     {
       "provider": "codex",
       "form": "implementation",
-      "sha256": "56e8cd6176ef032b9727c92ca132eedeb50ed484c7c9f0a5a17a863f29dc0928"
+      "sha256": "e2b4703f4510193a4ae427b0bcc2891b65ab69327604ea1e8985881f686ffd11"
     },
     {
       "provider": "codex",
       "form": "plan",
-      "sha256": "c1d331b06bbd3b048359ecb0426f7db9146c7c52fe1facafa983df2e11491a3e"
+      "sha256": "b99a380665c48a925df7fc4174684b4ceaaebfc0a868da88872ea57b50a75cd1"
     }
   ]
 }

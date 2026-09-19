@@ -12,7 +12,6 @@ from typing import Any, Callable
 
 from audit_trail import ValidationAuditEvent
 from contracts import ValidationAttestation
-from finding_cleanup import is_finding_cleanup_work_unit
 from gates import matches_path_patterns
 from validation_matrix import (
     ValidationMatrixError,
@@ -35,7 +34,7 @@ def validate_change_boundary(
 ) -> tuple[str, ...]:
     """Return out-of-scope paths without introducing a stateful boundary."""
     expected_start = state.current_slice.start_commit or state.branch_base
-    if kind is WorkUnitKind.FINAL_REVIEW:
+    if kind is WorkUnitKind.BRANCH_DISCOVERY:
         if changes.start_commit != state.branch_review_base_commit:
             raise execution_error(
                 "branch final review must use the persisted branch base"
@@ -48,17 +47,6 @@ def validate_change_boundary(
                 if path not in family_binding.family_authorized_change_set
             )
         return ()
-    if is_finding_cleanup_work_unit(state):
-        if changes.start_commit != state.branch_base:
-            raise execution_error(
-                "finding cleanup review must use the persisted branch base"
-            )
-        scope = () if context is None else context.current_scope_paths
-        if not scope:
-            raise execution_error(
-                "finding cleanup review requires a finding-derived path boundary"
-            )
-        return tuple(path for path in changes.paths if path not in scope)
     if changes.start_commit != expected_start:
         raise execution_error("change evidence uses a foreign slice start commit")
     if kind is WorkUnitKind.PLAN:

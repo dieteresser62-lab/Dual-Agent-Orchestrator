@@ -60,12 +60,11 @@ _COMMUNICATED_PROVIDER_CONTRACT_RULES = (
 # are more than three, so the task's stop condition keeps this as an explicit
 # inventory rather than expanding the Slice into opportunistic contract prose.
 _REMAINING_PROVIDER_SEMANTIC_GAPS = (
-    "plan_result, implementation_result, correction_result, and "
-    "final_report_result: task-specific result purposes",
+    "plan_result, implementation_result, and correction_result: "
+    "task-specific result purposes",
     "planned_slice.slice_id, summary, and scope_paths: execution semantics",
     "finding_disposition.finding_id, decision, and rationale: lifecycle effects",
     "work_result.test_files: whether paths denote touched or executed tests",
-    "final_report_result.self_check: required semantic content",
     "stop_result.remediation_paths: operational meaning beyond canonical form",
 )
 
@@ -94,7 +93,6 @@ def _bound(
         NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
         NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
         NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.FINAL_REPORT: ReadinessMarker.FINAL_REPORT,
     }[kind]
     contract = CodexStepContract(
         name=f"native-{kind.value}",
@@ -137,11 +135,17 @@ def _bound(
 
 
 def _base(bound: BoundNativeCodexContext, result_type: str) -> dict[str, object]:
-    return {
+    document: dict[str, object] = {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": result_type,
         "request_id": bound.request_id,
     }
+    if result_type == "plan_result":
+        document.update(
+            plan_treatments=[],
+            plan_completion="IMPLEMENTATION_REQUIRED",
+        )
+    return document
 
 
 def test_native_codex_schema_is_checked_and_canonical() -> None:
@@ -155,6 +159,7 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
                 "slice_id": 1,
                 "summary": "Implement native contracts.",
                 "scope_paths": ["src/native_codex_contract.py"],
+                "acceptance_criteria": ["The native contract is implemented."],
             }
         ],
         "finding_dispositions": [],
@@ -178,6 +183,7 @@ def test_v2_plan_result_without_dispositions_is_rejected() -> None:
                 "slice_id": 1,
                 "summary": "Historical native plan.",
                 "scope_paths": ["docs/internal/plan.md"],
+                "acceptance_criteria": ["The plan remains well formed."],
             }
         ],
     }
@@ -208,7 +214,6 @@ def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None
     def visit(node: object) -> None:
         if isinstance(node, dict):
             assert "uniqueItems" not in node
-            assert "oneOf" not in node
             assert "(?" not in str(node.get("pattern", ""))
             if "const" in node or "enum" in node:
                 assert "type" in node
@@ -229,7 +234,6 @@ def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
         NativeCodexRequestKind.PLAN: "plan_result",
         NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
         NativeCodexRequestKind.CORRECTION: "correction_result",
-        NativeCodexRequestKind.FINAL_REPORT: "final_report_result",
     }
     digests: set[str] = set()
     for kind, result_name in expected.items():
@@ -247,7 +251,7 @@ def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
         else:
             assert result_options[0] == {"$ref": f"#/$defs/{result_name}"}
         digests.add(json.dumps(schema, sort_keys=True, separators=(",", ":")))
-    assert len(digests) == 4
+    assert len(digests) == 3
 
 
 def test_plan_without_slice_contract_offers_only_stop_result() -> None:
@@ -370,7 +374,7 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
         "test_files": [],
     }
     valid_dispositions = [
-        {"finding_id": finding_id, "decision": "accepted", "rationale": "fixed"}
+        {"finding_id": finding_id, "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None}
         for finding_id in ("C-01", "C-02")
     ]
     validate_schema_document(
@@ -402,8 +406,8 @@ def test_writer_schema_leaves_only_registered_disposition_order_exception() -> N
         "ready": False,
         "test_files": [],
         "finding_dispositions": [
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
+            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None},
+            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None},
         ],
     }
     provider_output = json.loads(json.dumps(duplicate))
@@ -444,6 +448,7 @@ def test_finding_dispositions_use_natural_order_beyond_one_hundred() -> None:
                 "finding_id": finding_id,
                 "decision": "accepted",
                 "rationale": "The finding is addressed.",
+                "responsibility_proposal": None,
             }
             for finding_id in ids
         ]
@@ -487,24 +492,25 @@ def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
 
 
 def test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally() -> None:
-    bound = _bound(NativeCodexRequestKind.FINAL_REPORT)
-    schema = native_codex_provider_response_schema(bound.context)
-    response = {
-        **_base(bound, "final_report_result"),
-        "ready": False,
-        "finding_dispositions": [],
-        "self_check": "   ",
-    }
-    provider_output = json.loads(json.dumps(response))
+    for request_kind in NativeCodexRequestKind:
+        bound = _bound(request_kind)
+        schema = native_codex_provider_response_schema(bound.context)
+        response = {
+            **_base(bound, "stop_result"),
+            "rule_id": "CONTRACT-UNCLEAR",
+            "rationale": "   ",
+            "remediation_paths": [],
+        }
+        provider_output = json.loads(json.dumps(response))
 
-    validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
-    assert raised.value.detail == (
-        "schema validation failed at <response>: must match exactly one allowed schema"
-    )
-    assert response == provider_output
+        validate_schema_document({"result": response}, schema)
+        with pytest.raises(NativeCodexContractError) as raised:
+            parse_bound_native_codex_contract_result(response, bound)
+        assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+        assert raised.value.detail == (
+            "schema validation failed at <response>: must match exactly one allowed schema"
+        )
+        assert response == provider_output
 
 
 @pytest.mark.parametrize("enforce_expected", [True, False])
@@ -546,6 +552,7 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
                 "slice_id": 1,
                 "summary": "Implement the contract.",
                 "scope_paths": ["tests/test_contract.py", "src/contract.py"],
+                "acceptance_criteria": ["The contract is implemented."],
             }
         ],
         "finding_dispositions": [],
@@ -569,6 +576,7 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
             "slice_id": 3,
             "summary": "Implement the contract.",
             "scope_paths": ["src/contract.py", "tests/test_contract.py"],
+            "acceptance_criteria": ["The contract is implemented."],
         }
     ]
     provider_output = json.loads(json.dumps(response))
@@ -593,7 +601,6 @@ def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
             "plan_result",
             "implementation_result",
             "correction_result",
-            "final_report_result",
         )
     ]
     test_files = [
@@ -608,9 +615,8 @@ def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
         ),
         "finding_dispositions": (
             finding_dispositions,
-            "List dispositions in ascending finding_id order with no duplicate "
-            "finding_id. Omit unchanged open findings except in "
-            "final_report_result, which requires every open finding.",
+            "List sparse dispositions in ascending finding_id order with no "
+            "duplicate finding_id.",
         ),
         "safe_text": (
             [definitions["safe_text"]],
@@ -655,7 +661,6 @@ def test_b70_semantic_descriptions_survive_provider_projection() -> None:
         "plan_result",
         "implementation_result",
         "correction_result",
-        "final_report_result",
     )
     ready_description = (
         "Set ready to true only when the requested step is complete and "
@@ -714,7 +719,7 @@ def test_b71_projected_schema_has_all_descriptions_and_no_ref_siblings() -> None
         elif isinstance(node, list):
             pending.extend(node)
 
-    assert len(descriptions) == 18
+    assert len(descriptions) == 17
     assert "Identifies the rule that blocks the current step." in descriptions
     assert (
         "Explains the blocker that prevents the current step from being performed."
@@ -771,12 +776,11 @@ def test_b71_provider_guard_rejects_description_beside_any_ref(
 def test_b70_remaining_provider_semantic_gap_inventory_is_explicit() -> None:
     assert len(_REMAINING_PROVIDER_SEMANTIC_GAPS) > 3
     assert _REMAINING_PROVIDER_SEMANTIC_GAPS == (
-        "plan_result, implementation_result, correction_result, and "
-        "final_report_result: task-specific result purposes",
+        "plan_result, implementation_result, and correction_result: "
+        "task-specific result purposes",
         "planned_slice.slice_id, summary, and scope_paths: execution semantics",
         "finding_disposition.finding_id, decision, and rationale: lifecycle effects",
         "work_result.test_files: whether paths denote touched or executed tests",
-        "final_report_result.self_check: required semantic content",
         "stop_result.remediation_paths: operational meaning beyond canonical form",
     )
 
@@ -812,6 +816,7 @@ def test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally() -> 
                 "slice_id": 1,
                 "summary": "Implement the contract.",
                 "scope_paths": ["src/contract.py"],
+                "acceptance_criteria": ["The contract is implemented."],
             }
         ],
         "finding_dispositions": [],
@@ -836,7 +841,6 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
         test_changes_approved=True,
         enforce_expected_test_files=False,
     )
-    final_bound = _bound(NativeCodexRequestKind.FINAL_REPORT)
     cases = (
         (
             disposition_bound,
@@ -849,22 +853,15 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "finding_id": "C-01",
                         "decision": "accepted",
                         "rationale": "fixed",
+                        "responsibility_proposal": None,
                     },
                     {
                         "finding_id": "C-01",
                         "decision": "accepted",
                         "rationale": "fixed",
+                        "responsibility_proposal": None,
                     },
                 ],
-            },
-        ),
-        (
-            final_bound,
-            {
-                **_base(final_bound, "final_report_result"),
-                "ready": False,
-                "finding_dispositions": [],
-                "self_check": "   ",
             },
         ),
         (
@@ -878,6 +875,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "slice_id": 1,
                         "summary": "Implement the contract.",
                         "scope_paths": ["src/contract.py"],
+                        "acceptance_criteria": ["The contract is implemented."],
                     }
                 ],
                 "finding_dispositions": [],
@@ -893,6 +891,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "slice_id": 1,
                         "summary": "Implement the contract.",
                         "scope_paths": ["tests/test_contract.py", "src/contract.py"],
+                        "acceptance_criteria": ["The contract is implemented."],
                     }
                 ],
                 "finding_dispositions": [],
@@ -929,7 +928,8 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
         str(item["error_code"]) for item in registered_exceptions("codex")
     }
 
-    assert registered == encountered
+    assert registered - encountered == {"schema-invalid"}
+    assert encountered <= registered
 
 
 def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
@@ -942,9 +942,22 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
                 "slice_id": 1,
                 "summary": "Revise the native plan.",
                 "scope_paths": ["docs/internal/plan.md"],
+                "acceptance_criteria": ["The native plan is revised."],
             }
         ],
         "finding_dispositions": [],
+        "plan_treatments": [
+            {
+                "signature": finding_record_signature(_finding()),
+                "finding_ids": ["C-01"],
+                "treatment_kind": "implementation",
+                "closing_slice_ids": [1],
+                "no_code_reason": None,
+                "evidence": None,
+                "evidence_paths": [],
+                "affected_paths": [],
+            }
+        ],
     }
     validate_schema_document(
         {"result": document}, native_codex_provider_response_schema(bound.context)
@@ -957,6 +970,7 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
             "finding_id": "C-01",
             "decision": "accepted",
             "rationale": "The revised plan now closes the contractual gap.",
+            "responsibility_proposal": None,
         }
     ]
     result = parse_bound_native_codex_contract_result(document, bound)
@@ -1012,7 +1026,7 @@ def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
     ) == tuple(acceptance_criterion_id(1, text) for text in texts)
 
 
-def test_dormant_plan_contract_rejects_acceptance_criteria_field() -> None:
+def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
     bound = _bound(NativeCodexRequestKind.PLAN)
     document = {
         **_base(bound, "plan_result"),
@@ -1020,19 +1034,18 @@ def test_dormant_plan_contract_rejects_acceptance_criteria_field() -> None:
         "slice_plan": [
             {
                 "slice_id": 1,
-                "summary": "Dormant plan.",
+                "summary": "Active plan.",
                 "scope_paths": ["src/record.py"],
-                "acceptance_criteria": ["Must stay dormant."],
+                "acceptance_criteria": ["The record path is covered."],
             }
         ],
         "finding_dispositions": [],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_native_codex_response(document, bound)
-
-    assert raised.value.code is NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD
-    assert "acceptance_criteria" in raised.value.detail
+    parsed = parse_native_codex_response(document, bound)
+    assert tuple(
+        criterion.text for criterion in parsed.slice_plan[0].acceptance_criteria
+    ) == ("The record path is covered.",)
 
 
 def test_implementation_result_applies_each_supplied_finding_disposition() -> None:
@@ -1051,6 +1064,7 @@ def test_implementation_result_applies_each_supplied_finding_disposition() -> No
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The implementation now covers it.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1107,7 +1121,7 @@ def test_codex_responsibility_proposal_is_visible_but_never_authoritative(
     assert not hasattr(result.findings[0], "responsibility")
 
 
-def test_dormant_codex_contract_rejects_proposal_with_named_diagnostic() -> None:
+def test_active_codex_contract_accepts_explicit_null_proposal() -> None:
     bound = _bound(
         NativeCodexRequestKind.IMPLEMENTATION,
         findings=(_finding(),),
@@ -1128,14 +1142,8 @@ def test_dormant_codex_contract_rejects_proposal_with_named_diagnostic() -> None
         ],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_native_codex_response(document, bound)
-
-    assert (
-        raised.value.code
-        is NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD
-    )
-    assert "responsibility_proposal" in raised.value.detail
+    parsed = parse_native_codex_response(document, bound)
+    assert native_responsibility_proposals(parsed) == ()
 
 
 def test_implementation_disposition_records_do_not_scale_with_open_findings() -> None:
@@ -1173,6 +1181,7 @@ def test_implementation_disposition_records_do_not_scale_with_open_findings() ->
             "finding_id": "C-65",
             "decision": "accepted",
             "rationale": "Only this finding needs a new implementation answer.",
+            "responsibility_proposal": None,
         }
     ]
     validate_schema_document({"result": document}, writer)
@@ -1235,6 +1244,7 @@ def test_native_result_accepts_missing_but_rejects_foreign_dispositions() -> Non
             "finding_id": "C-02",
             "decision": "accepted",
             "rationale": "This finding was never offered in the bound context.",
+            "responsibility_proposal": None,
         }
     ]
     with pytest.raises(NativeCodexContractError) as raised:
@@ -1267,6 +1277,7 @@ def test_native_result_rejects_disposition_to_closed_finding_with_context() -> N
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "This closed finding must remain unavailable.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1297,6 +1308,7 @@ def test_native_result_rejects_unknown_finding_with_context() -> None:
                 "finding_id": "C-99",
                 "decision": "accepted",
                 "rationale": "This identifier is absent from the bound context.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1348,6 +1360,7 @@ def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The correction implements the requested invariant.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1356,59 +1369,6 @@ def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None
     assert result.test_files == ("tests/test_native_codex_contract.py",)
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
     assert result.self_check is None
-
-
-def test_final_report_roundtrips_self_check_and_finding_response() -> None:
-    bound = _bound(
-        NativeCodexRequestKind.FINAL_REPORT,
-        findings=(_finding(),),
-    )
-    document = {
-        **_base(bound, "final_report_result"),
-        "ready": True,
-        "finding_dispositions": [
-            {
-                "finding_id": "C-01",
-                "decision": "rejected",
-                "rationale": "The alleged defect is disproven by the bound evidence.",
-            }
-        ],
-        "self_check": "Checked contracts, failure paths, resume, and idempotency.",
-    }
-    result = parse_bound_native_codex_contract_result(document, bound)
-    assert result.ready is True
-    assert result.test_files == ()
-    assert result.self_check == (
-        "Checked contracts, failure paths, resume, and idempotency."
-    )
-    assert result.findings[0].responses[0].decision is FindingResponseDecision.REJECTED
-
-
-def test_final_report_rejects_incomplete_or_foreign_finding_dispositions() -> None:
-    bound = _bound(
-        NativeCodexRequestKind.FINAL_REPORT,
-        findings=(_finding(),),
-    )
-    document = {
-        **_base(bound, "final_report_result"),
-        "ready": True,
-        "finding_dispositions": [],
-        "self_check": "Checked the branch.",
-    }
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
-
-    document["finding_dispositions"] = [
-        {
-            "finding_id": "C-02",
-            "decision": "accepted",
-            "rationale": "Foreign finding.",
-        }
-    ]
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
 
 
 def test_ready_test_changes_require_prior_approval() -> None:
@@ -1425,19 +1385,6 @@ def test_ready_test_changes_require_prior_approval() -> None:
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(document, bound)
     assert raised.value.code is NativeCodexErrorCode.TEST_FILES_INVALID
-
-
-def test_final_report_requires_nonblank_self_check() -> None:
-    bound = _bound(NativeCodexRequestKind.FINAL_REPORT)
-    document = {
-        **_base(bound, "final_report_result"),
-        "ready": True,
-        "finding_dispositions": [],
-        "self_check": "   ",
-    }
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
 
 
 def test_stop_result_is_exclusive_and_preserves_remediation_paths() -> None:

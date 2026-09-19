@@ -737,29 +737,8 @@ def test_family_acceptance_is_local_to_terminal_discovery_and_open_set(
         derive_family_acceptance(non_discovery)
 
 
-def test_joint_switch_is_dormant_and_legacy_export_shape_stays_exact(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        False,
-    )
-    with pytest.raises(
-        ArtifactBridgeError,
-        match="JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-    ):
-        branch_discovery_handoff_export_payload(  # type: ignore[arg-type]
-            None,
-            discovery_review_record_id="ar1-" + "0" * 64,
-            validation_attestation_record_id="ar1-" + "1" * 64,
-            reviewed_head_commit=REVIEWED_COMMIT,
-            family_binding=_family(1),
-            target_task_path="inbox/doing/target.md",
-            target_task_bytes=b"task",
-            target_run_identity="target-run",
-        )
-
+def test_joint_switch_is_active_and_export_digest_binds_transitive_provenance() -> None:
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
     records: list[ArtifactRecord] = []
     run_id = "legacy-plan-run"
     _append(
@@ -800,7 +779,14 @@ def test_joint_switch_is_dormant_and_legacy_export_shape_stays_exact(
         "approval_review_record_id": review.record_id,
         "finding_transition_record_ids": [finding.record_id],
         "finding_transitions_sha256": finding_transition_sequence_sha256(
-            (ImportedFindingTransition(finding.record_id, finding.payload),)
+            (
+                ImportedFindingTransition(
+                    finding.record_id,
+                    finding.payload,
+                    run_id,
+                    finding.record_id,
+                ),
+            )
         ),
         "target_task_path": "inbox/doing/implementation.md",
         "target_task_sha256": hashlib.sha256(b"legacy target").hexdigest(),

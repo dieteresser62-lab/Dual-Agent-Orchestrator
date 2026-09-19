@@ -284,114 +284,50 @@
         },
         {
           "ordinal": 2,
-          "expression": "is_cleanup_review",
+          "expression": "halted",
           "read_names": [
-            "is_cleanup_review"
+            "halted"
           ]
         },
         {
           "ordinal": 3,
-          "expression": "is_cleanup_review",
+          "expression": "halted",
           "read_names": [
-            "is_cleanup_review"
+            "halted"
           ]
         },
         {
           "ordinal": 4,
-          "expression": "halted",
-          "read_names": [
-            "halted"
-          ]
-        },
-        {
-          "ordinal": 5,
-          "expression": "is_cleanup_review",
-          "read_names": [
-            "is_cleanup_review"
-          ]
-        },
-        {
-          "ordinal": 6,
-          "expression": "halted",
-          "read_names": [
-            "halted"
-          ]
-        },
-        {
-          "ordinal": 7,
-          "expression": "is_cleanup_review",
-          "read_names": [
-            "is_cleanup_review"
-          ]
-        },
-        {
-          "ordinal": 8,
-          "expression": "not attestation.complete and is_cleanup_review",
-          "read_names": [
-            "attestation",
-            "is_cleanup_review"
-          ]
-        },
-        {
-          "ordinal": 9,
           "expression": "not attestation.complete",
           "read_names": [
             "attestation"
           ]
         },
         {
-          "ordinal": 10,
-          "expression": "is_final_review and (not is_branch_discovery)",
-          "read_names": [
-            "is_branch_discovery",
-            "is_final_review"
-          ]
-        },
-        {
-          "ordinal": 11,
-          "expression": "review_round > workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT and pending_findings",
-          "read_names": [
-            "pending_findings",
-            "review_round",
-            "workflow_requests"
-          ]
-        },
-        {
-          "ordinal": 12,
-          "expression": "is_final_review and is_finding_cleanup_work_unit(state, unit)",
-          "read_names": [
-            "is_final_review",
-            "is_finding_cleanup_work_unit",
-            "state",
-            "unit"
-          ]
-        },
-        {
-          "ordinal": 13,
+          "ordinal": 5,
           "expression": "is_final_review",
           "read_names": [
             "is_final_review"
           ]
         },
         {
-          "ordinal": 14,
-          "expression": "context.approved_plan_text is not None and (unit.kind is WorkUnitKind.CORRECTION or project_implementer_return_policy(unit)[0] > 0)",
+          "ordinal": 6,
+          "expression": "context.approved_plan_text is not None and project_implementer_return_policy(unit)[0] > 0",
           "read_names": [
-            "WorkUnitKind",
             "context",
             "project_implementer_return_policy",
             "unit"
           ]
         },
         {
-          "ordinal": 15,
+          "ordinal": 7,
           "expression": "correction_start is None",
           "read_names": [
             "correction_start"
           ]
         },
         {
-          "ordinal": 16,
+          "ordinal": 8,
           "expression": "reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None",
           "read_names": [
             "AgentRole",
@@ -400,7 +336,7 @@
           ]
         },
         {
-          "ordinal": 17,
+          "ordinal": 9,
           "expression": "not is_plan_review and (not is_final_review) and (context.approved_plan_text is not None)",
           "read_names": [
             "context",
@@ -409,14 +345,14 @@
           ]
         },
         {
-          "ordinal": 18,
+          "ordinal": 10,
           "expression": "start_fingerprint is None",
           "read_names": [
             "start_fingerprint"
           ]
         },
         {
-          "ordinal": 19,
+          "ordinal": 11,
           "expression": "native_output is not None and (not isinstance(native_output, NativeAgentReviewOutput))",
           "read_names": [
             "NativeAgentReviewOutput",
@@ -425,7 +361,7 @@
           ]
         },
         {
-          "ordinal": 20,
+          "ordinal": 12,
           "expression": "native_output is None and native_request is not None",
           "read_names": [
             "native_output",
@@ -433,21 +369,21 @@
           ]
         },
         {
-          "ordinal": 21,
+          "ordinal": 13,
           "expression": "output is None",
           "read_names": [
             "output"
           ]
         },
         {
-          "ordinal": 22,
+          "ordinal": 14,
           "expression": "output is None",
           "read_names": [
             "output"
           ]
         },
         {
-          "ordinal": 23,
+          "ordinal": 15,
           "expression": "not isinstance(output, NativeAgentReviewOutput)",
           "read_names": [
             "NativeAgentReviewOutput",
@@ -456,14 +392,7 @@
           ]
         },
         {
-          "ordinal": 24,
-          "expression": "is_branch_discovery",
-          "read_names": [
-            "is_branch_discovery"
-          ]
-        },
-        {
-          "ordinal": 25,
+          "ordinal": 16,
           "expression": "request_findings != history.findings",
           "read_names": [
             "history",
@@ -511,7 +440,7 @@
       "returns": [
         {
           "ordinal": 1,
-          "expression": "self._complete_cleanup_review(state, history)"
+          "expression": "(state, history)"
         },
         {
           "ordinal": 2,
@@ -527,30 +456,10 @@
         },
         {
           "ordinal": 5,
-          "expression": "self._complete_cleanup_review(state, history)"
+          "expression": "(state, history)"
         },
         {
           "ordinal": 6,
-          "expression": "(state, history)"
-        },
-        {
-          "ordinal": 7,
-          "expression": "self._complete_cleanup_review(state, history)"
-        },
-        {
-          "ordinal": 8,
-          "expression": "(state, history)"
-        },
-        {
-          "ordinal": 9,
-          "expression": "(state, history)"
-        },
-        {
-          "ordinal": 10,
-          "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=False, is_final_review=True, finding_ledger=finding_ledger)"
-        },
-        {
-          "ordinal": 11,
           "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=is_plan_review, is_final_review=is_final_review, finding_ledger=finding_ledger, user_gate_paths=changes.user_gate_paths, final_review_requested_ids=requested_ids if is_final_review else None, final_review_new_finding_ids=new_ids, final_review_progress_ids=progress_ids)"
         }
       ],
@@ -573,55 +482,44 @@
           "ordinal": 1,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[8].handlers[0].body[2]",
-          "after_condition_count": 2,
+          "statement_path": "body[7].handlers[0].body[1]",
+          "after_condition_count": 1,
           "enclosing_condition_ordinals": []
         },
         {
           "ordinal": 2,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[13].body[0]",
-          "after_condition_count": 6,
+          "statement_path": "body[11].body[0]",
+          "after_condition_count": 3,
           "enclosing_condition_ordinals": [
-            6
+            3
           ]
         },
         {
           "ordinal": 3,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[15].handlers[0].body[2]",
-          "after_condition_count": 7,
+          "statement_path": "body[13].handlers[0].body[1]",
+          "after_condition_count": 3,
           "enclosing_condition_ordinals": []
         },
         {
           "ordinal": 4,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[16]",
-          "after_condition_count": 7,
+          "statement_path": "body[14]",
+          "after_condition_count": 3,
           "enclosing_condition_ordinals": []
         },
         {
           "ordinal": 5,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[23].body[5].body[1]",
-          "after_condition_count": 11,
+          "statement_path": "body[23].body[6]",
+          "after_condition_count": 10,
           "enclosing_condition_ordinals": [
-            10,
-            11
-          ]
-        },
-        {
-          "ordinal": 6,
-          "state_expression": "state",
-          "history_expression": "history",
-          "statement_path": "body[27].body[6]",
-          "after_condition_count": 18,
-          "enclosing_condition_ordinals": [
-            17
+            9
           ]
         }
       ]

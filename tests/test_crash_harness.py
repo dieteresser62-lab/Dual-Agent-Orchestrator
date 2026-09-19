@@ -30,6 +30,7 @@ from crash_harness import (
     HARNESS_SCHEMA_VERSION,
     LEDGER_ORDER,
     RESULT_SCHEMA_VERSION,
+    RUNTIME_BOUNDARY_EFFECTS,
     CrashHarnessError,
     CrashHarnessManifest,
     _tracked_implementation_sources,
@@ -245,7 +246,7 @@ def test_implementation_sources_include_untracked_and_exclude_ignored_or_unmatch
 def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> None:
     manifest = CrashHarnessManifest.load(MANIFEST)
 
-    assert manifest.scenario_version == "s5-v1"
+    assert manifest.scenario_version == "joint-67-68-v1"
     assert manifest.effect_classes == LEDGER_ORDER
     assert set(manifest.effect_classes) == set(SIDE_EFFECT_CLASSES)
     assert manifest.boundary_matrix == {
@@ -260,6 +261,7 @@ def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> N
         )
         for effect_class in LEDGER_ORDER
     }
+    assert manifest.runtime_boundaries == RUNTIME_BOUNDARY_EFFECTS
     schema = json.loads(
         (ROOT / "schemas/orchestrator-artifact-v2.schema.json").read_text(
             encoding="utf-8"
@@ -293,7 +295,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     result = json.loads(payload)
 
     assert result["schema_version"] == RESULT_SCHEMA_VERSION
-    assert result["scenario_version"] == "s5-v1"
+    assert result["scenario_version"] == "joint-67-68-v1"
     assert result["repository_commit"] == "f" * 40
     assert result["mode"] == "provider-free"
     assert result["baseline_resolution"] == {
@@ -322,18 +324,21 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     singles = [row for row in matrix if row["requested_crashes"] == 1]
     repeated = [row for row in matrix if row["requested_crashes"] == 2]
     assert len(singles) == sum(
-        len(phases) for phases in CrashHarnessManifest.load(MANIFEST).boundary_matrix.values()
+        len(CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class])
+        for effect_class in CrashHarnessManifest.load(MANIFEST).runtime_boundaries.values()
     )
-    assert len(repeated) == 4
+    assert len(singles) == 48
+    assert len(repeated) == 6
+    assert len(matrix) == 54
     assert {
-        (row["effect_class"], row["phase"])
+        (row["runtime_boundary"], row["effect_class"], row["phase"])
         for row in singles
     } == {
-        (effect_class, phase)
-        for effect_class, phases in CrashHarnessManifest.load(
+        (runtime_boundary, effect_class, phase)
+        for runtime_boundary, effect_class in CrashHarnessManifest.load(
             MANIFEST
-        ).boundary_matrix.items()
-        for phase in phases
+        ).runtime_boundaries.items()
+        for phase in CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class]
     }
     converged = [row for row in matrix if row["end_state"] == "converged"]
     stopped = [row for row in matrix if row["end_state"] == "stop_condition"]
@@ -364,7 +369,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert result["unknown_reconciliation"]["outcome"] == "unknown"
     assert result["unknown_reconciliation"]["rejected"] is True
     assert result["unknown_reconciliation"]["physical_execution_count"] == 0
-    assert set(result["record_semantic_heads"]) == set(LEDGER_ORDER)
+    assert set(result["record_semantic_heads"]) == set(RUNTIME_BOUNDARY_EFFECTS)
     assert all(
         item["all_injected_crashes_observed"]
         for item in result["workflow_boundary_evidence"].values()
@@ -373,24 +378,17 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         item["all_cases_converged"]
         for item in result["workflow_boundary_evidence"].values()
     )
+    assert set(result["workflow_boundary_evidence"]) == set(
+        RUNTIME_BOUNDARY_EFFECTS
+    )
     assert result["stop_conditions"] == []
     assert result["record_ahead_evidence"] == {
-        "file_write": {
+        runtime_boundary: {
             "physical_execution_count": 1,
             "result_completion_count": 1,
-        },
-        "git_commit": {
-            "physical_execution_count": 1,
-            "result_completion_count": 1,
-        },
-        "provider_start": {
-            "physical_execution_count": 1,
-            "result_completion_count": 1,
-        },
-        "queue_move": {
-            "physical_execution_count": 1,
-            "result_completion_count": 1,
-        },
+        }
+        for runtime_boundary, effect_class in RUNTIME_BOUNDARY_EFFECTS.items()
+        if effect_class not in {"internal", "ledger"}
     }
     retries = result["retry_continuations"]
     assert [item["failure_kind"] for item in retries] == [
@@ -402,8 +400,9 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert all(item["evidence_count"] == 1 for item in retries)
     journeys = {item["scenario_id"]: item for item in result["journeys"]}
     assert set(journeys) == {
-        "plan-implement-finalreview",
+        "plan-implement-branch-discovery",
         "multi-slice-correction-observation-resume",
+        "branch-discovery-remediation-handoff",
     }
     assert all(item["end_state"] == "completed" for item in journeys.values())
     assert all(
@@ -413,9 +412,12 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         for item in journeys.values()
     )
     assert all("manual_state_interventions" not in item for item in journeys.values())
-    assert journeys["plan-implement-finalreview"]["plan_only_execution_mode"] == "PLAN_ONLY"
-    assert journeys["plan-implement-finalreview"]["implement_execution_mode"] == "IMPLEMENT"
-    assert journeys["plan-implement-finalreview"]["handoff_idempotent"] is True
+    assert journeys["plan-implement-branch-discovery"]["plan_only_execution_mode"] == "PLAN_ONLY"
+    assert journeys["plan-implement-branch-discovery"]["implement_execution_mode"] == "IMPLEMENT"
+    assert journeys["plan-implement-branch-discovery"][
+        "branch_discovery_execution_mode"
+    ] == "BRANCH_DISCOVERY"
+    assert journeys["plan-implement-branch-discovery"]["handoff_idempotent"] is True
     assert journeys["multi-slice-correction-observation-resume"]["resume_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "independent_execution"
@@ -424,6 +426,15 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
     ] == ["C-01:CLOSED", "C-02:CLOSED"]
+    assert journeys["branch-discovery-remediation-handoff"][
+        "target_execution_mode"
+    ] == "PLAN_ONLY"
+    assert journeys["branch-discovery-remediation-handoff"][
+        "finding_statuses"
+    ] == ["C-01:closed", "C-02:closed", "C-03:open"]
+    assert journeys["branch-discovery-remediation-handoff"][
+        "transitive_finding_count"
+    ] > 0
 
 
 def test_baseline_prefix_completion_rejects_any_later_physical_effect(
@@ -707,7 +718,16 @@ def test_provider_split_path_executes_every_declared_runtime_boundary(tmp_path: 
         and row["requested_crashes"] == 1
     ]
 
+    assert {row["runtime_boundary"] for row in rows} == {
+        "slice_provider",
+        "branch_discovery_provider",
+    }
     assert {row["phase"] for row in rows} == set(BOUNDARY_ORDER)
+    assert all(
+        {row["phase"] for row in rows if row["runtime_boundary"] == boundary}
+        == set(BOUNDARY_ORDER)
+        for boundary in {"slice_provider", "branch_discovery_provider"}
+    )
     assert all(row["observed_crashes"] == 1 for row in rows)
     assert all(row["physical_execution_count"] == 1 for row in rows)
 

@@ -13,7 +13,7 @@ from typing import Callable, Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
 from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
-from artifact_models import canonical_json
+from artifact_models import LEGACY_CHAIN_VERIFIER, canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
 from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError
 
@@ -597,7 +597,10 @@ def _unwrap_projection_cache(raw: dict) -> dict:
     if raw.get("cache_format") != STATE_PROJECTION_CACHE_FORMAT:
         raise StateSchemaError("workflow state projection cache format is unsupported")
     if raw.get("reducer_version") != STATE_PROJECTION_REDUCER_VERSION:
-        raise StateSchemaError("workflow state projection cache reducer is unsupported")
+        raise StateSchemaError(
+            "workflow state projection cache reducer is unsupported for resume; "
+            f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
+        )
     if not isinstance(raw.get("record_head_id"), str) or not raw["record_head_id"]:
         raise StateSchemaError("workflow state projection cache has no record head")
     state_document = raw.get("state")

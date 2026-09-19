@@ -317,11 +317,16 @@ def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
         "request_id": bundle.bound_context.request_id,
         "ready": True,
         "finding_dispositions": [],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
         "slice_plan": [
             {
                 "slice_id": 1,
                 "summary": "Implement the provider-free follow-up.",
                 "scope_paths": ["docs/internal/work-plan.md"],
+                "acceptance_criteria": [
+                    "The provider-free follow-up remains reproducible."
+                ],
             }
         ],
     }
@@ -350,6 +355,7 @@ def _native_review_approval(
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "record order, contracts, failure paths, and resume",

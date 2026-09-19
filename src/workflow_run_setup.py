@@ -118,7 +118,7 @@ def _context(
     approved_plan_text: str | None = None
     if (
         state.work_plan_path is not None
-        and state.current_work_unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+        and state.current_work_unit.kind is WorkUnitKind.SLICE
     ):
         repository_root = Path.cwd().resolve()
         plan_path = (repository_root / state.work_plan_path).resolve()
@@ -151,10 +151,6 @@ def _context(
     )
     if planned is not None:
         slice_summary = planned.summary
-    elif state.current_work_unit.kind is WorkUnitKind.CORRECTION:
-        # The technical SliceBoundary is not a Slice from the approved plan.
-        # Its request-local goal and criteria come from the bound findings.
-        slice_summary = ""
     elif (
         state.execution_mode == TaskMode.PLAN_ONLY.value
         and state.current_work_unit.kind is WorkUnitKind.PLAN
@@ -319,13 +315,6 @@ def _fresh_state(
                 "branch discovery handoff family binding differs from requested binding"
             )
         family_binding = discovered_binding
-    if (
-        family_binding is not None
-        and not native_finding_decisions.native_finding_decisions_enabled()
-    ):
-        raise StateSchemaError(
-            "family binding requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     if family_binding is not None:
         branch_base = family_binding.family_base_commit
     elif branch_base_override is not None:
@@ -387,10 +376,6 @@ def _branch_discovery_family_binding(
 ) -> FamilyBindingPayload:
     """Resolve E9's target family facts before writing the local RunProfile."""
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise StateSchemaError(
-            "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     source_run_id = task_contract.finding_handoff_source_run_id
     export_record_id = task_contract.finding_handoff_export_record_id
     assert source_run_id is not None and export_record_id is not None
@@ -676,7 +661,6 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
             "attestations",
             "last_claude_fingerprint",  # allowlist:provider -- canonical history field
             "latest_claude_review",  # allowlist:provider -- canonical history field
-            "codex_final_report",  # allowlist:provider -- canonical history field
             "active_review_packet",
         )
     ):

@@ -393,7 +393,7 @@ def test_fresh_approved_plan_run_keeps_current_head_as_all_branch_bases_without_
     assert state.current_slice.start_commit == head
 
 
-def test_fresh_state_rejects_family_binding_while_joint_cutover_is_off(
+def test_fresh_state_family_binding_is_not_controlled_by_retired_cutover_flag(
     tmp_path: Path, monkeypatch
 ) -> None:
     head = "a" * 40
@@ -426,17 +426,16 @@ def test_fresh_state_rejects_family_binding_while_joint_cutover_is_off(
         False,
     )
 
-    with pytest.raises(
-        workflow_run_setup.StateSchemaError,
-        match="JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-    ):
-        workflow_run_setup._fresh_state(
-            task_file=tmp_path / "task.md",
-            run_id="family-dormant",
-            repository_root=tmp_path,
-            task_contract=contract,
-            family_binding=binding,
-        )
+    state = workflow_run_setup._fresh_state(
+        task_file=tmp_path / "task.md",
+        run_id="family-dormant",
+        repository_root=tmp_path,
+        task_contract=contract,
+        family_binding=binding,
+    )
+
+    assert state.family_binding == binding
+    assert state.branch_base == binding.family_base_commit
 
 
 def test_fresh_family_run_uses_family_base_but_slice_keeps_current_head(

@@ -667,7 +667,7 @@ def test_commit_stages_only_exact_slice_paths_and_records_result(tmp_path: Path)
     assert _git(repository, "show", "-s", "--format=%s", "HEAD") == result.message
 
 
-def test_disabled_cutover_leaves_commit_behavior_unchanged_for_exit_violation(
+def test_active_cutover_rejects_commit_for_exit_violation(
     tmp_path: Path,
 ) -> None:
     repository, head = _new_repository(tmp_path)
@@ -733,16 +733,11 @@ def test_disabled_cutover_leaves_commit_behavior_unchanged_for_exit_violation(
         approved_plan_commit=plan_commit,
     )
     assert exit_result.status is SliceExitStatus.VIOLATED
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
+    with pytest.raises(GitTransactionError, match="E4 exit condition"):
+        replace(authorization, slice_exit=exit_result)
 
-    result = commit_slice(
-        repository_root=repository,
-        boundary=boundary,
-        authorization=authorization,
-        title="dormant exit check",
-    )
-
-    assert result.commit_hash == _git(repository, "rev-parse", "HEAD")
+    assert _git(repository, "rev-parse", "HEAD") == head
 
 
 def test_commit_handles_exact_rename_scope_without_including_predecessor_commit(

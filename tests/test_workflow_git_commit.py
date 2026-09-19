@@ -63,6 +63,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "git_service",
     "repo_changes",
     "side_effects",
+    "slice_exit",
     "workflow",
     "workflow_state",
 }

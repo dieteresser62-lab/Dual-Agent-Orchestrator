@@ -14,7 +14,6 @@ WORKFLOW_PATH = SRC / "workflow.py"
 EXPECTED_INTERNAL_IMPORTS = {
     "audit_trail",
     "contracts",
-    "finding_cleanup",
     "gates",
     "validation_matrix",
     "workflow_state",
@@ -162,7 +161,6 @@ def test_engine_facades_delegate_without_owning_leaf_decisions() -> None:
             "_build_review_dispatch_packet",
             "_dispatch_native_review",
             "_run_review",
-            "_run_final_codex_report",
         )
     }
     assert all("WorkflowValidationEvidenceDependencies" not in source for source in run_control.values())

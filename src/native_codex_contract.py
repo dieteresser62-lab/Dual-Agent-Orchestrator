@@ -105,7 +105,6 @@ class NativeCodexRequestKind(StrEnum):
     PLAN = "plan"
     IMPLEMENTATION = "implementation"
     CORRECTION = "correction"
-    FINAL_REPORT = "final_report"
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +162,6 @@ class NativeCodexContext:
             NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
             NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
             NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
-            NativeCodexRequestKind.FINAL_REPORT: ReadinessMarker.FINAL_REPORT,
         }[self.request_kind]
         if self.contract.readiness_marker is not expected_readiness:
             raise NativeCodexContractError(
@@ -224,14 +222,6 @@ class NativeWorkResult:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeFinalReportResult:
-    request_id: str
-    ready: bool
-    dispositions: tuple[NativeFindingDisposition, ...]
-    self_check: str
-
-
-@dataclass(frozen=True, slots=True)
 class NativeCodexStopResult:
     request_id: str
     rule_id: str
@@ -242,7 +232,6 @@ class NativeCodexStopResult:
 NativeCodexResponse: TypeAlias = (
     NativePlanResult
     | NativeWorkResult
-    | NativeFinalReportResult
     | NativeCodexStopResult
 )
 
@@ -254,8 +243,7 @@ def load_native_codex_schema() -> dict[str, Any]:
             NativeCodexErrorCode.SCHEMA_INVALID,
             "bundled native Codex schema must be an object",
         )
-    if native_finding_decisions.native_finding_decisions_enabled():
-        _enable_native_finding_decision_schema(schema)
+    _enable_native_finding_decision_schema(schema)
     try:
         check_schema(schema, location="<native-codex-result-schema>")
     except SchemaDefinitionError as exc:
@@ -303,18 +291,17 @@ def native_codex_provider_response_schema(
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
-    if native_finding_decisions.native_finding_decisions_enabled():
-        required.append("plan_treatments")
-        slice_responsibility = schema["$defs"]["finding_responsibility"][
-            "oneOf"
-        ][0]
-        acceptance_criterion = slice_responsibility["properties"][
-            "acceptance_criterion_id"
-        ]
-        slice_responsibility["properties"]["acceptance_criterion_id"] = {
-            "oneOf": [acceptance_criterion, {"type": "null"}]
-        }
-        slice_responsibility["required"].append("acceptance_criterion_id")
+    required.append("plan_treatments")
+    slice_responsibility = schema["$defs"]["finding_responsibility"][
+        "oneOf"
+    ][0]
+    acceptance_criterion = slice_responsibility["properties"][
+        "acceptance_criterion_id"
+    ]
+    slice_responsibility["properties"]["acceptance_criterion_id"] = {
+        "oneOf": [acceptance_criterion, {"type": "null"}]
+    }
+    slice_responsibility["required"].append("acceptance_criterion_id")
     open_ids = project_open_set(context.previous_findings).finding_ids
     disposition = schema["$defs"]["finding_disposition"]
     if open_ids:
@@ -326,12 +313,9 @@ def native_codex_provider_response_schema(
         "plan_result",
         "implementation_result",
         "correction_result",
-        "final_report_result",
     ):
         items = schema["$defs"][result_name]["properties"]["finding_dispositions"]
-        items["minItems"] = (
-            len(open_ids) if result_name == "final_report_result" else 0
-        )
+        items["minItems"] = 0
         items["maxItems"] = len(open_ids)
 
     contract = context.contract
@@ -339,7 +323,6 @@ def native_codex_provider_response_schema(
         NativeCodexRequestKind.PLAN: "plan_result",
         NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
         NativeCodexRequestKind.CORRECTION: "correction_result",
-        NativeCodexRequestKind.FINAL_REPORT: "final_report_result",
     }[context.request_kind]
     if context.request_kind is NativeCodexRequestKind.PLAN and not contract.require_slice_plan:
         result_refs = [{"$ref": "#/$defs/stop_result"}]
@@ -405,7 +388,6 @@ def native_codex_provider_response_schema(
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:
-    _reject_dormant_native_fields(document)
     try:
         validate_schema_document(document, load_native_codex_schema())
     except SchemaMismatch as exc:
@@ -449,7 +431,6 @@ def parse_native_codex_response(
         NativeCodexRequestKind.PLAN: "plan_result",
         NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
         NativeCodexRequestKind.CORRECTION: "correction_result",
-        NativeCodexRequestKind.FINAL_REPORT: "final_report_result",
     }[bound_context.context.request_kind]
     if result_type != expected_type:
         raise NativeCodexContractError(
@@ -488,24 +469,21 @@ def parse_native_codex_response(
                 "slice plan ids must be contiguous and 1-based",
             )
         treatments = _parse_plan_treatments(document.get("plan_treatments", []))
-        if native_finding_decisions.native_finding_decisions_enabled():
-            try:
-                validate_plan_treatment_coverage(
-                    canonical_open_signature_groups(
-                        bound_context.context.previous_findings
-                    ),
-                    treatments,
-                    slices,
-                )
-                completion = PlanCompletionKind(document["plan_completion"])
-                validate_plan_completion(treatments, slices, completion)
-            except ValueError as exc:
-                raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-                    NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
-                    str(exc),
-                ) from exc
-        else:
-            completion = None
+        try:
+            validate_plan_treatment_coverage(
+                canonical_open_signature_groups(
+                    bound_context.context.previous_findings
+                ),
+                treatments,
+                slices,
+            )
+            completion = PlanCompletionKind(document["plan_completion"])
+            validate_plan_completion(treatments, slices, completion)
+        except ValueError as exc:
+            raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+                NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+                str(exc),
+            ) from exc
         return NativePlanResult(
             request_id=document["request_id"],
             ready=document["ready"],
@@ -536,11 +514,9 @@ def parse_native_codex_response(
             test_files=test_files,
             dispositions=dispositions,
         )
-    return NativeFinalReportResult(
-        request_id=document["request_id"],
-        ready=document["ready"],
-        dispositions=dispositions,
-        self_check=document["self_check"],
+    raise NativeCodexContractError(
+        NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+        f"unsupported Codex result type {result_type!r}",
     )
 
 
@@ -589,8 +565,7 @@ def native_codex_response_to_contract_result(
         plan_completion = response.plan_completion
         self_check = None
         no_implementation_required = (
-            native_finding_decisions.native_finding_decisions_enabled()
-            and plan_completion is PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED
+            plan_completion is PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED
         )
         if not contract.require_slice_plan or (
             not slice_plan and not no_implementation_required
@@ -608,24 +583,16 @@ def native_codex_response_to_contract_result(
         plan_completion = None
         _validate_test_files(response.ready, test_files, contract)
     else:
-        dispositions = response.dispositions
-        test_files = ()
-        slice_plan = ()
-        self_check = response.self_check
-        plan_treatments = ()
-        plan_completion = None
-        _require_text(
-            response.self_check,
-            "self_check",
-            12000,
-            NativeCodexErrorCode.RESULT_CONTENT_INVALID,
+        raise NativeCodexContractError(
+            NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+            "unsupported Codex response variant",
         )
     findings = _apply_dispositions(
         prior,
         dispositions,
         work_unit_id=context.work_unit_id,
         round_number=context.contract.round_number,
-        require_complete=isinstance(response, NativeFinalReportResult),
+        require_complete=False,
     )
     return CodexContractResult(
         ready=response.ready,
@@ -846,36 +813,6 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
     }
     plan_result["properties"]["slice_plan"]["minItems"] = 0
     plan_result["required"].append("plan_completion")
-
-
-def _reject_dormant_native_fields(document: Mapping[str, Any]) -> None:
-    if native_finding_decisions.native_finding_decisions_enabled():
-        return
-    if "plan_treatments" in document or "plan_completion" in document:
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
-            "plan_treatments is disabled until the joint 67/68 cutover",
-        )
-    slice_plan = document.get("slice_plan")
-    if isinstance(slice_plan, list) and any(
-        isinstance(item, Mapping) and "acceptance_criteria" in item
-        for item in slice_plan
-    ):
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
-            "acceptance_criteria is disabled until the joint 67/68 cutover",
-        )
-    dispositions = document.get("finding_dispositions")
-    if not isinstance(dispositions, list):
-        return
-    if any(
-        isinstance(item, Mapping) and "responsibility_proposal" in item
-        for item in dispositions
-    ):
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
-            "responsibility_proposal is disabled until the joint 67/68 cutover",
-        )
 
 
 def _apply_dispositions(

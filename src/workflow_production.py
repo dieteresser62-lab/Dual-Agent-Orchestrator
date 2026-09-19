@@ -12,8 +12,6 @@ from artifact_bridge import ArtifactBridgeError
 from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
 from artifact_replay import ArtifactReplayError
 from artifact_store import ArtifactStore
-from audit_trail import ValidationAuditEvent
-from finding_cleanup import FindingCleanupPlan, is_finding_cleanup_work_unit
 from git_service import inspect_repository, prepare_new_watch_task_branch
 from inbox_watcher import watch_run_has_records
 from plan_handoff import PlanHandoffError, write_implementation_handoff
@@ -90,8 +88,6 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
         self, handoff_path: Path, approved_plan_commit: str
     ) -> None: ...
 
-    def prepare_finding_cleanup(self) -> FindingCleanupPlan | None: ...
-
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
     ) -> None: ...
@@ -104,7 +100,6 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "finalize_audit",
         "persist_implementation_handoff",
         "prepare_finding_handoff",
-        "prepare_finding_cleanup",
     }
 )
 
@@ -345,10 +340,7 @@ def _recover_final_review_history(
     structured_replay = None
     read_blob = None
     if (
-        (
-            current.kind is WorkUnitKind.FINAL_REVIEW
-            or is_finding_cleanup_work_unit(state, current)
-        )
+        current.kind is WorkUnitKind.BRANCH_DISCOVERY
         and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
     ):
         resolution = resolve_resume_state(root, state)
@@ -431,67 +423,6 @@ def _start_pending_slice(
     history = WorkflowHistory(
         state.current_work_unit_id,
         findings=carried_findings,
-    )
-    return state, history
-
-
-def _start_final_review(
-    state: WorkflowState,
-    history: WorkflowHistory,
-    driver: ProductionWorkflowLoopDriver,
-) -> tuple[WorkflowState, WorkflowHistory]:
-    carried_findings = driver.carry_forward_native_findings(
-        state, history.findings
-    )
-    state = state.start_final_review_work_unit()
-    carried_attestations = history.attestations[-1:]
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        findings=carried_findings,
-        events=(
-            (
-                ValidationAuditEvent(
-                    event_id=1,
-                    slice_id=state.current_slice_id,
-                    attestation=carried_attestations[0],
-                ),
-            )
-            if carried_attestations
-            else ()
-        ),
-        attestations=carried_attestations,
-    )
-    return state, history
-
-
-def _start_finding_cleanup(
-    state: WorkflowState,
-    history: WorkflowHistory,
-    plan: FindingCleanupPlan,
-    driver: ProductionWorkflowLoopDriver,
-) -> tuple[WorkflowState, WorkflowHistory]:
-    carried_findings = driver.carry_forward_native_findings(
-        state, history.findings
-    )
-    state = state.start_finding_cleanup_work_unit(
-        finding_ids=plan.finding_ids
-    )
-    carried_attestations = history.attestations[-1:]
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        findings=carried_findings,
-        attestations=carried_attestations,
-        events=(
-            (
-                ValidationAuditEvent(
-                    event_id=1,
-                    slice_id=state.current_slice_id,
-                    attestation=carried_attestations[0],
-                ),
-            )
-            if carried_attestations
-            else ()
-        ),
     )
     return state, history
 
@@ -788,7 +719,7 @@ def _run_production_transition_loop(
             history = result.history
             current = state.current_work_unit
 
-        if current.kind is WorkUnitKind.FINAL_REVIEW:
+        if current.kind is WorkUnitKind.BRANCH_DISCOVERY:
             audit_commit = driver.finalize_audit(state)
             return WorkflowRunResult(state, history, audit_commit)
 
@@ -836,16 +767,6 @@ def _run_production_transition_loop(
             state = driver.active_state or state
             continue
 
-        if current.kind is WorkUnitKind.SLICE:
-            cleanup_plan = driver.prepare_finding_cleanup()
-            if cleanup_plan is not None:
-                state, history = _start_finding_cleanup(
-                    state, history, cleanup_plan, driver
-                )
-                driver.checkpoint(state, history)
-                state = driver.active_state or state
-                continue
-
         pending = next(
             (item for item in state.slices if item.status is SliceStatus.PENDING), None
         )
@@ -857,8 +778,6 @@ def _run_production_transition_loop(
             state = driver.active_state or state
             continue
 
-        state, history = _start_final_review(state, history, driver)
-        driver.checkpoint(state, history)
-        state = driver.active_state or state
+        return WorkflowRunResult(state, history, state.current_slice.commit_ref)
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")

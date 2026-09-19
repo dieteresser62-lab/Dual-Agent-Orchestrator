@@ -28,7 +28,6 @@ from native_codex_request import (
 )
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
-    MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     NativeReviewErrorCode,
     native_review_retry_guidance,
@@ -60,13 +59,10 @@ from workflow_state import (
 )
 
 
-FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
-FINAL_REVIEW_ROUND_SAFETY_LIMIT = 256
 FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS = 1_000_000
 _NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER = {
     ApprovalMarker.PLAN: NativeReviewKind.PLAN,
     ApprovalMarker.SLICE: NativeReviewKind.SLICE,
-    ApprovalMarker.FINAL: NativeReviewKind.FINAL,
     ApprovalMarker.BRANCH_DISCOVERY: NativeReviewKind.BRANCH_DISCOVERY,
 }
 FINDING_SIGNATURE_REVIEW_CRITERION = (
@@ -97,11 +93,7 @@ def native_codex_request(
     correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeCodexRequestBundle:
     """Build one Codex request exclusively from orchestrator-owned values."""
-    if request_kind is NativeCodexRequestKind.FINAL_REPORT:
-        current_fingerprint = contract.review_fingerprint
-        base_commit = state.branch_review_base_commit
-        authorized_paths = state.branch_review_authorized_change_set
-    elif state.current_work_unit.kind is WorkUnitKind.PLAN:
+    if state.current_work_unit.kind is WorkUnitKind.PLAN:
         current_fingerprint = state.task_digest
         base_commit = state.branch_base
         authorized_paths = state.task_scope_patterns
@@ -297,32 +289,12 @@ def _native_review_acceptance_criteria(
         if correction_goal is not None
         else ((context.slice_summary.strip(),) if context.slice_summary.strip() else ())
     )
-    final_criterion = (
-        "This is final-review disposition delivery round "
-        f"{contract.round_number}. The bound disposition_budget permits "
-        f"at most {len(history.findings)} total status changes or "
-        "reclassifications and permits only these identifiers: "
-        + (", ".join(item.finding_id for item in history.findings) or "(none)")
-        + ". review_contract.previous_findings contains exactly that eligible "
-        "subset. A non-empty partial disposition is a valid denied intermediate "
-        "delivery and the remaining identifiers are offered in a later round. "
-        "Return approved only when the request states that no undispositioned "
-        "findings remain outside this offer and every offered identifier is "
-        "dispositioned. A denied round with no status change and no "
-        "reclassification ends the delivery sequence with the still-open "
-        "findings as the verdict."
-        if review_kind is NativeReviewKind.FINAL
-        else None
-    )
     correction_criterion = (
         "This review is part of an implementer correction sequence. A denied "
         "round continues only when it closes a finding, reclassifies one, or "
         "opens a new finding. A denied round with none of those record-derived "
         "transitions is the terminal review verdict for every still-open finding."
-        if (
-            state.current_work_unit.kind is WorkUnitKind.CORRECTION
-            or project_implementer_return_policy(state.current_work_unit)[0] > 0
-        )
+        if project_implementer_return_policy(state.current_work_unit)[0] > 0
         else None
     )
     discovery_capacity_criterion = (
@@ -342,7 +314,6 @@ def _native_review_acceptance_criteria(
             for criterion in (
                 *unit_criteria,
                 artifact_criterion,
-                final_criterion,
                 correction_criterion,
                 discovery_capacity_criterion,
                 FINDING_SIGNATURE_REVIEW_CRITERION,
@@ -365,10 +336,9 @@ def _review_request_finding_inputs(
 ) -> tuple[tuple[FindingRecord, ...], str | None, tuple[str, ...]]:
     """Select review Findings from the caller's record-backed correction view."""
 
-    correction_sequence = (
-        state.current_work_unit.kind is WorkUnitKind.CORRECTION
-        or project_implementer_return_policy(state.current_work_unit)[0] > 0
-    )
+    correction_sequence = project_implementer_return_policy(
+        state.current_work_unit
+    )[0] > 0
     if correction_findings is None:
         if correction_sequence:
             raise execution_error(
@@ -443,8 +413,7 @@ def native_review_request(
         )
     )
     if (
-        state.current_work_unit.kind is not WorkUnitKind.CORRECTION
-        and review_kind is not NativeReviewKind.FINAL
+        review_kind is not NativeReviewKind.BRANCH_DISCOVERY
         and not context.slice_summary.strip()
     ):
         raise execution_error(
@@ -482,11 +451,7 @@ def native_review_request(
         validation_command_prefixes=context.validation_matrix.finding_command_prefixes,
         red_state_followup_slice=contract.red_state_followup_slice,
         plan_artifact_path=plan_artifact_path,
-        final_review_pending_count=(
-            final_review_pending_count
-            if review_kind is NativeReviewKind.FINAL
-            else None
-        ),
+        final_review_pending_count=None,
         planned_slices=state.planned_slices,
     )
     workflow_context = (
@@ -557,22 +522,6 @@ def native_review_request(
         evidence.append(
             NativeReviewEvidenceInput(
                 "review-diff", review_evidence_kind, review_evidence_content
-            )
-        )
-    if (
-        evidence_kind is full_branch_evidence_kind
-        and review_kind is not NativeReviewKind.BRANCH_DISCOVERY
-    ):
-        if history.codex_final_report is None:
-            raise execution_error(
-                "native Claude final review requires a persisted Codex final "
-                "report before request construction"
-            )
-        evidence.append(
-            NativeReviewEvidenceInput(
-                "codex-final-report",
-                "codex_final_report",
-                history.codex_final_report,
             )
         )
     acceptance_criteria = _native_review_acceptance_criteria(

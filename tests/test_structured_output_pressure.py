@@ -33,7 +33,7 @@ MANIFEST_PATH = (
     ROOT / "tests/fixtures/structured_output_pressure/manifest-v1.json"
 )
 FINGERPRINT = "a" * 64
-WRITER_FORMS = ("plan", "initial_slice", "convergence", "final")
+WRITER_FORMS = ("plan", "initial_slice", "convergence", "branch_discovery")
 
 
 def _manifest() -> dict[str, object]:
@@ -82,7 +82,7 @@ def _context(form: str) -> NativeReviewContext:
         "plan": ApprovalMarker.PLAN,
         "initial_slice": ApprovalMarker.SLICE,
         "convergence": ApprovalMarker.SLICE,
-        "final": ApprovalMarker.FINAL,
+        "branch_discovery": ApprovalMarker.BRANCH_DISCOVERY,
     }[form]
     return NativeReviewContext(
         run_id="structured-output-pressure",
@@ -90,12 +90,16 @@ def _context(form: str) -> NativeReviewContext:
         operation={
             ApprovalMarker.PLAN: "claude_plan_review",
             ApprovalMarker.SLICE: "claude_slice_review",
-            ApprovalMarker.FINAL: "claude_final_review",
+            ApprovalMarker.BRANCH_DISCOVERY: "claude_branch_discovery",
         }[marker],
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.CLAUDE,
         approval_marker=marker,
-        slice_id="01" if marker is not ApprovalMarker.FINAL else "final",
+        slice_id=(
+            "discovery"
+            if marker is ApprovalMarker.BRANCH_DISCOVERY
+            else "01"
+        ),
         round_number=2 if form == "convergence" else 1,
         previous_findings=(_finding(),) if form == "convergence" else (),
         validation_attestation=_attestation(),
@@ -141,7 +145,7 @@ def _context_variants() -> dict[str, NativeReviewContext]:
     bases = {
         "plan": _context("plan"),
         "slice": _context("initial_slice"),
-        "final": _context("final"),
+        "branch_discovery": _context("branch_discovery"),
     }
     ledgers = {
         "empty": (),
@@ -155,9 +159,6 @@ def _context_variants() -> dict[str, NativeReviewContext]:
             round_number=round_number,
             allow_new_observations=allow,
             previous_findings=ledger,
-            final_review_pending_count=(
-                len(ledger) if marker == "final" else base.final_review_pending_count
-            ),
         )
         for marker, base in bases.items()
         for round_number in (1, 2)
@@ -181,7 +182,8 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
         for finding in context.previous_findings
     )
     observations_allowed = (
-        marker is not ApprovalMarker.FINAL and context.allow_new_observations
+        marker is not ApprovalMarker.BRANCH_DISCOVERY
+        and context.allow_new_observations
     )
     slice_initial = (
         marker is ApprovalMarker.SLICE
@@ -189,6 +191,8 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
         and context.allow_new_observations
     )
     scopes = {"all"}
+    if marker is not ApprovalMarker.BRANCH_DISCOVERY:
+        scopes.add("standard")
     if marker is ApprovalMarker.PLAN:
         scopes.add("plan")
         if own_open:
@@ -200,9 +204,11 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
                 "slice_initial_open" if slice_initial else "slice_convergence_open"
             )
     else:
-        scopes.add("final")
+        scopes.add("branch_discovery")
         if own_open:
-            scopes.add("final_open")
+            scopes.add("branch_discovery_open")
+        else:
+            scopes.add("branch_discovery_empty")
     if observations_allowed and own_open:
         scopes.add("observations_allowed_open")
     return scopes
@@ -369,7 +375,12 @@ def test_all_request_specific_claude_writer_forms_have_deterministic_metrics() -
         metrics[form] = _schema_metrics(first)
 
     assert len(digests) == 4
-    assert set(metrics) == {"plan", "initial_slice", "convergence", "final"}
+    assert set(metrics) == {
+        "plan",
+        "initial_slice",
+        "convergence",
+        "branch_discovery",
+    }
     for byte_count, depth, composition_count, definition_count in metrics.values():
         assert byte_count > 7_000
         assert depth >= 10

@@ -128,7 +128,7 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-v1"},
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-v1"},
         "family_binding": {"$ref": "#/$defs/family_binding"}
       }
     },

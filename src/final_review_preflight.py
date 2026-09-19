@@ -1,4 +1,4 @@
-"""Agent-free, transition-specific checks immediately before final-review providers."""
+"""Agent-free checks immediately before the branch-discovery reviewer."""
 
 from __future__ import annotations
 
@@ -37,9 +37,7 @@ from workflow_state import (
 )
 
 
-FINAL_REVIEW_OPERATIONS = frozenset(
-    {"codex_final_review", "claude_final_review"}
-)
+FINAL_REVIEW_OPERATIONS = frozenset({"claude_branch_discovery"})
 _TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
     RecordType.FINAL_REVIEW_PREFLIGHT,
@@ -144,8 +142,17 @@ def run_final_review_preflight(
     if operation not in FINAL_REVIEW_OPERATIONS:
         return _deny("technical", "OPERATION-NOT-FINAL", (), (), "run this preflight only for a final-review operation")
     expected_step = WorkflowStep(operation)
-    if state.current_step is not expected_step or state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
-        return _deny("technical", "STATE-TRANSITION-MISMATCH", (), (), "restore the state-v3 final-review cursor")
+    if (
+        state.current_step is not expected_step
+        or state.current_work_unit.kind is not WorkUnitKind.BRANCH_DISCOVERY
+    ):
+        return _deny(
+            "technical",
+            "STATE-TRANSITION-MISMATCH",
+            (),
+            (),
+            "restore the state-v3 branch-discovery cursor",
+        )
     if payload.work_unit_id != str(state.current_work_unit_id) or measurement_record.run_id != state.run_id:
         return _deny("technical", "MEASUREMENT-RUN-MISMATCH", (measurement_record.record_id,), (), "recreate the measurement for the active work unit")
     if not payload.allowed:
@@ -226,20 +233,6 @@ def run_final_review_preflight(
     if any(result.outcome != "pass" or result.exit_code != 0 for result in attestation.payload.results):
         return _deny("correction_required", "ATTESTATION-FAILED", (attestation.record_id,), (), "repair the validation failure and attest the current fingerprint")
 
-    if operation == "codex_final_review":
-        incomplete = tuple(str(item.slice_id) for item in state.slices if item.commit_ref is None)
-        if incomplete:
-            return _deny("correction_required", "SLICE-BINDING-MISSING", (), (), "commit and bind every approved implementation Slice")
-    elif operation == "claude_final_review":
-        if state.execution_mode == "BRANCH_DISCOVERY":
-            return FinalReviewPreflightResult("passed")
-        codex = [
-            item for item in records if isinstance(item.payload, AgentResultPayload)
-            and item.payload.role is Role.CODEX and item.payload.work_unit_id == payload.work_unit_id
-            and item.fingerprint == measurement_record.fingerprint
-        ]
-        if not codex or codex[-1].payload.outcome != "ready":
-            return _deny("technical", "CODEX-FINAL-RESULT-MISSING", (), (), "persist the ready Codex final report for this fingerprint")
     return FinalReviewPreflightResult("passed")
 
 
@@ -275,7 +268,7 @@ def _approved_external_paths(
     authorized: set[str] = set()
     for unit in state.work_units:
         if (
-            unit.kind not in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+            unit.kind is not WorkUnitKind.SLICE
             or unit.status is not WorkUnitStatus.COMPLETED
         ):
             continue
@@ -295,7 +288,7 @@ def _approved_external_paths(
             if (decision.fingerprint, slice_record.commit_ref) not in commit_bindings:
                 continue
             authorized.update(decision.paths)
-    if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+    if state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
         for decision in state.current_work_unit.gate_decisions:
             gate_kind = _EXTERNAL_PATH_GATE_KINDS.get(decision.reason)
             if (

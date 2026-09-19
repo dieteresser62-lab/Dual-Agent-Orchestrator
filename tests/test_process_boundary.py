@@ -1084,6 +1084,10 @@ def test_process_boundary_corpus_builds_once_per_session_and_is_fast(
 
 def test_b60_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None:
     for path, blob in B60_PRE_CUT_DOCUMENT["protected_blobs"].items():
+        # The joint 67/68 cutover intentionally changes the native-provider
+        # projection baseline; it is no longer a pre-cut protected artifact.
+        if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
+            continue
         assert _git("hash-object", str(ROOT / path)) == blob, path
         assert (
             _git("rev-parse", f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{path}") == blob

@@ -1,4 +1,4 @@
-"""Dormant native-agent decision types for the joint 67/68 cutover."""
+"""Native-agent finding decisions installed by the joint 67/68 cutover."""
 
 from __future__ import annotations
 
@@ -13,16 +13,10 @@ from finding_order import sorted_finding_ids
 from finding_responsibility import FindingResponsibility
 
 
-# This is intentionally the only switch for offering and accepting the native
-# finding-decision additions.  The joint cutover changes this one value.
-JOINT_67_68_NATIVE_CONTRACT_CUTOVER = False
+# Historical marker for the single joint 67/68 cutover.  Production no longer
+# branches on this value: the old producer contract is unsupported.
+JOINT_67_68_NATIVE_CONTRACT_CUTOVER = True
 MAX_REMEDIATION_ROUNDS = 64
-
-
-def native_finding_decisions_enabled() -> bool:
-    if not isinstance(JOINT_67_68_NATIVE_CONTRACT_CUTOVER, bool):
-        raise RuntimeError("joint 67/68 native contract cutover must be boolean")
-    return JOINT_67_68_NATIVE_CONTRACT_CUTOVER
 
 
 class NativeClosureKind(StrEnum):
@@ -350,5 +344,4 @@ __all__ = [
     "PlanTreatmentKind",
     "PlanTreatmentProposal",
     "content_path_digest",
-    "native_finding_decisions_enabled",
 ]

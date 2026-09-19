@@ -86,16 +86,16 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     )
 
 
-def test_dormant_codex_request_bytes_match_the_pre_contract_baseline() -> None:
+def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     bundle = build_native_codex_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "8c6f0b9afb2d7b0ed3fb073ba6e4f574e04d94bb1acf23cf3113bbd00d8923d7"
+        "874c79309935fb7355a355fa9ca9216a4f21cd8fb4af45b0ec15c54aab25f94a"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "c1d331b06bbd3b048359ecb0426f7db9146c7c52fe1facafa983df2e11491a3e"
+        "b99a380665c48a925df7fc4174684b4ceaaebfc0a868da88872ea57b50a75cd1"
     )
 
 
@@ -130,7 +130,6 @@ def test_b69_request_anchor_change_is_description_digest_only(
         "plan_result",
         "implementation_result",
         "correction_result",
-        "final_report_result",
     ):
         definitions[result_name]["properties"]["finding_dispositions"].pop(
             "description"
@@ -175,7 +174,6 @@ def test_b70_request_anchor_change_is_description_digest_only(
         "plan_result",
         "implementation_result",
         "correction_result",
-        "final_report_result",
     ):
         definitions[result_name]["properties"]["ready"].pop("description")
     stop = definitions["stop_result"]
@@ -259,10 +257,8 @@ def test_plan_request_explains_when_to_return_stop_result() -> None:
     definitions = bundle.provider_response_schema["$defs"]
 
     assert definitions["stop_result"]["description"] == (
-        "Return stop_result instead of plan_result, implementation_result, "
-        "correction_result, or final_report_result with ready false when the "
-        "current step cannot be performed; rule_id and rationale document the "
-        "blocker."
+        "Return stop_result instead of a task result when the current step "
+        "cannot be performed; rule_id and rationale document the blocker."
     )
     assert "return stop_result instead" in definitions["plan_result"]["properties"][
         "ready"
@@ -275,7 +271,6 @@ def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
         NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
         NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
         NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.FINAL_REPORT: ReadinessMarker.FINAL_REPORT,
     }
     digests: set[str] = set()
     for kind in NativeCodexRequestKind:
@@ -307,7 +302,7 @@ def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
             replace(base, context=context)
         )
         digests.add(bundle.document["response_contract"]["schema_sha256"])
-    assert len(digests) == 4
+    assert len(digests) == 3
 
 
 def test_bundle_rejects_schema_bytes_not_derived_from_bound_context() -> None:

@@ -522,8 +522,11 @@ def _native_plan_output(
                 "slice_id": 1,
                 "summary": summary,
                 "scope_paths": list(scope_paths),
+                "acceptance_criteria": [summary],
             }
         ],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     canonical = canonical_native_codex_json(document)
     return NativeAgentCodexOutput(
@@ -566,6 +569,8 @@ def _native_review_approval(
         ),
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "plan correctness and handoff contract",
@@ -593,7 +598,16 @@ def _native_implementation_output(
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
-        "finding_dispositions": [],
+        "finding_dispositions": [
+            {
+                "finding_id": finding.finding_id,
+                "decision": "accepted",
+                "rationale": "The implementation resolves the offered finding.",
+                "responsibility_proposal": None,
+            }
+            for finding in bundle.bound_context.context.previous_findings
+            if finding.status is FindingStatus.OPEN
+        ],
         "test_files": [],
     }
     canonical = canonical_native_codex_json(document)
@@ -640,6 +654,37 @@ def _repository(tmp_path: Path, branch: str) -> Path:
     _git(repository, "commit", "-m", "seed")
     _git(repository, "switch", "-c", branch)
     return repository
+
+
+def _branch_discovery_test_state(state: WorkflowState) -> WorkflowState:
+    """Re-express branch-wide evidence tests as the required linked run."""
+
+    discovery = init_workflow_state(
+        run_id=state.run_id,
+        task_file=state.task_file,
+        branch=state.branch,
+        branch_base=state.branch_base,
+        first_slice_start_commit=state.branch_base,
+        slice_count=1,
+        task_digest=state.task_digest,
+        execution_mode="BRANCH_DISCOVERY",
+        task_scope_patterns=state.task_scope_patterns,
+        audit_report_path=state.audit_report_path,
+        target_branch=state.target_branch,
+        protocol_binding=state.protocol_binding,
+        family_binding=state.family_binding,
+    )
+    return replace(
+        discovery,
+        slices=(
+            replace(
+                discovery.slices[0],
+                scope_paths=state.current_slice.scope_paths,
+                scope_change_groups=state.current_slice.scope_change_groups,
+                start_fingerprint=state.current_slice.start_fingerprint,
+            ),
+        ),
+    )
 
 
 def _args(repository: Path, task: Path):
@@ -1342,7 +1387,7 @@ def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
     assert state.protocol_binding.codex_result_transport == "native-codex-v2"
 
 
-def test_final_review_structured_records_use_branch_wide_fingerprint(
+def test_branch_discovery_structured_records_use_branch_wide_fingerprint(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1363,20 +1408,10 @@ def test_final_review_structured_records_use_branch_wide_fingerprint(
         branch_base=branch_base,
         first_slice_start_commit=branch_base,
         slice_count=1,
-    ).bind_slice_plan(
-        (PlannedSlice(1, "implementation", ("current.txt",)),),
-        first_start_commit=slice_start,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit=slice_start,
-        scope_paths=("current.txt",),
-        start_fingerprint="1" * 64,
-    ).complete_current_slice(
-        commit_ref=slice_commit,
-    ).start_final_review_work_unit()
+        execution_mode="BRANCH_DISCOVERY",
+        task_scope_patterns=("current.txt",),
+        target_branch="feature/final-fingerprint",
+    )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
@@ -1854,7 +1889,7 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
     adapter.cleanup()
 
 
-def test_final_review_recovers_latest_prior_attestation_after_transition_checkpoint() -> None:
+def test_branch_discovery_reuses_carried_attestation_in_its_audit_history() -> None:
     attestation = ValidationAttestation(
         "validation-a",
         "a" * 64,
@@ -1863,104 +1898,32 @@ def test_final_review_recovers_latest_prior_attestation_after_transition_checkpo
         "b" * 64,
         "passed",
     )
-    prior = WorkflowHistory(2, attestations=(attestation,))
-    final_state = init_workflow_state(
+    discovery_state = init_workflow_state(
         run_id="final-attestation-recovery",
         task_file="task.md",
         branch="feature/final-attestation",
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
+        execution_mode="BRANCH_DISCOVERY",
         timestamp="2026-08-21T12:00:00+00:00",
-    ).bind_slice_plan(
-        (PlannedSlice(1, "implementation", ("src/core.py",)),),
-        first_start_commit="a" * 40,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit="a" * 40,
-        scope_paths=("src/core.py",),
-        start_fingerprint="0" * 64,
-    ).complete_current_slice(
-        commit_ref="b" * 40,
-    ).start_final_review_work_unit()
-    final_history = WorkflowHistory(final_state.current_work_unit_id)
-    runtime = {
-        "current": final_history.to_dict(),
-        "archive": [prior.to_dict()],
-    }
-    final_state = replace(final_state, runtime_history=runtime)
-
-    recovered = orchestrator._recover_final_review_attestation(
-        final_state,
-        final_history,
+    )
+    discovery_history = WorkflowHistory(
+        discovery_state.current_work_unit_id,
+        attestations=(attestation,),
     )
 
-    assert recovered.attestations == prior.attestations
+    recovered = orchestrator._recover_final_review_attestation(
+        discovery_state,
+        discovery_history,
+    )
+
+    assert recovered.attestations == discovery_history.attestations
+    assert len(recovered.events) == 1
+    assert recovered.events[0].attestation == attestation
     assert len(recovered.events) == 1
     assert isinstance(recovered.events[0], ValidationAuditEvent)
     assert recovered.events[0].attestation == attestation
-
-
-def test_final_review_attestation_recovery_receives_record_authority(
-    monkeypatch,
-) -> None:
-    attestation = ValidationAttestation(
-        "validation-record-authority",
-        "a" * 64,
-        ("pytest",),
-        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "ok"),),
-        "b" * 64,
-        "passed",
-    )
-    state = init_workflow_state(
-        run_id="final-record-authority",
-        task_file="task.md",
-        branch="feature/final-record-authority",
-        branch_base="a" * 40,
-        first_slice_start_commit="a" * 40,
-        slice_count=1,
-    ).bind_slice_plan(
-        (PlannedSlice(1, "implementation", ("src/core.py",)),),
-        first_start_commit="a" * 40,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit="a" * 40,
-        scope_paths=("src/core.py",),
-        start_fingerprint="0" * 64,
-    ).complete_current_slice(
-        commit_ref="b" * 40,
-    ).start_final_review_work_unit()
-    current = WorkflowHistory(state.current_work_unit_id)
-    replay = SimpleNamespace(records=())
-    read_blob = lambda _ref: b""  # noqa: E731 - identity is asserted below
-    seen = {}
-
-    def projected_histories(_state, structured_replay=None, blob_reader=None):
-        seen["replay"] = structured_replay
-        seen["read_blob"] = blob_reader
-        return {1: WorkflowHistory(1, attestations=(attestation,))}
-
-    monkeypatch.setattr(
-        workflow_audit_projection,
-        "_persisted_histories",
-        projected_histories,
-    )
-
-    recovered = orchestrator._recover_final_review_attestation(
-        state,
-        current,
-        replay,
-        read_blob,
-    )
-
-    assert seen == {"replay": replay, "read_blob": read_blob}
-    assert recovered.attestations == (attestation,)
 
 
 def test_history_payload_does_not_archive_record_reference_projection() -> None:
@@ -1994,7 +1957,7 @@ def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
     old_history = WorkflowHistory(1).to_dict()
     latest_history = WorkflowHistory(
         1,
-        codex_final_report="latest persisted review evidence",
+        last_claude_fingerprint="f" * 64,
     ).to_dict()
     persisted = replace(
         base,
@@ -2061,9 +2024,7 @@ def test_final_review_compacts_generated_audit_without_weakening_fingerprint(
     ordinary = driver.collect_changes(head)
     assert audit_sentinel in ordinary.full_diff
 
-    driver.active_state = state.complete_current_slice(
-        commit_ref="b" * 40
-    ).start_final_review_work_unit()
+    driver.active_state = _branch_discovery_test_state(state)
     compacted = driver.collect_changes(head)
 
     assert compacted.fingerprint == ordinary.fingerprint
@@ -2138,9 +2099,7 @@ def test_final_review_evidence_never_silently_truncates_diff_content(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.active_state = state.complete_current_slice(
-        commit_ref="b" * 40
-    ).start_final_review_work_unit()
+    driver.active_state = _branch_discovery_test_state(state)
 
     changes = driver.collect_changes(head)
 
@@ -2184,7 +2143,7 @@ def _final_review_evidence_driver(
     )
     (repository / source_path).write_text("VALUE = 1\n", encoding="utf-8")
     _git(repository, "add", audit_path, source_path)
-    state = init_workflow_state(
+    state = _branch_discovery_test_state(init_workflow_state(
         run_id=run_id,
         task_file=str(tmp_path / "task.md"),
         branch="feature/final-review-cache",
@@ -2197,7 +2156,7 @@ def _final_review_evidence_driver(
         start_commit=head,
         scope_paths=(audit_path, source_path),
         start_fingerprint="a" * 64,
-    ).complete_current_slice(commit_ref="b" * 40).start_final_review_work_unit()
+    ))
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
@@ -2298,7 +2257,7 @@ def test_final_review_semantically_empty_diff_retains_metadata_fallback(
     (repository / semantic_path).write_text(
         _managed_final_review_audit("second projected value"), encoding="utf-8"
     )
-    state = init_workflow_state(
+    state = _branch_discovery_test_state(init_workflow_state(
         run_id="final-review-empty-diff",
         task_file=str(tmp_path / "task.md"),
         branch="feature/final-review-cache",
@@ -2310,7 +2269,7 @@ def test_final_review_semantically_empty_diff_retains_metadata_fallback(
         start_commit=head,
         scope_paths=(semantic_path,),
         start_fingerprint="a" * 64,
-    ).complete_current_slice(commit_ref="b" * 40).start_final_review_work_unit()
+    ))
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
@@ -3215,6 +3174,8 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         ],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "persistence and recovery",
@@ -4302,6 +4263,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The recovery path now completes durable responses.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -4550,304 +4512,6 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     )
 
 
-def test_combined_native_finding_authority_ignores_projection_drift(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/combined-native-authority")
-    task = repository / "task.md"
-    _write_task(task, "feature/combined-native-authority", "src/runtime.py")
-    head = _git(repository, "rev-parse", "HEAD")
-    slice_state = (
-        init_workflow_state(
-            run_id="combined-native-authority",
-            task_file=str(task),
-            branch="feature/combined-native-authority",
-            branch_base=head,
-            first_slice_start_commit=head,
-            slice_count=1,
-            task_digest=hashlib.sha256(
-                task.read_text(encoding="utf-8").encode("utf-8")
-            ).hexdigest(),
-            task_scope_patterns=("src/runtime.py",),
-            target_branch="feature/combined-native-authority",
-            protocol_binding=ProtocolBinding(
-                ProtocolMode.STRUCTURED_V2,
-                "2",
-                claude_review_transport="native-claude-review-v2",
-                codex_result_transport="native-codex-v2",
-            ),
-        )
-        .complete_current_work_unit()
-        .start_work_unit(
-            slice_id=1,
-            kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
-        )
-        .bind_current_slice_git_boundary(
-            start_commit=head,
-            scope_paths=("src/runtime.py",),
-            start_fingerprint="c" * 64,
-        )
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    reviewed = _append_test_commit_authority(
-        driver, slice_state, commit_ref=head
-    )
-    final_state = reviewed.complete_current_slice(
-        commit_ref=head
-    ).start_final_review_work_unit()
-    driver.bind_work_unit(final_state)
-    historical_finding = FindingRecord(
-        finding_id="C-99",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.CLOSED,
-        summary="An unrelated finding from the final review.",
-        acceptance_test="Correction authority must ignore this finding.",
-        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
-        status_rationale="The unrelated observation was already resolved.",
-    )
-    opened_historical = replace(
-        historical_finding,
-        status=FindingStatus.OPEN,
-        status_rationale=None,
-    )
-    bridge = driver._artifact_bridge
-    assert bridge is not None
-    bridge.append(
-        orchestrator.finding_payload(
-            opened_historical,
-            work_unit_id=final_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-99",
-        idempotency_key="finding:C-99:opened:work_unit:3:1:claude",
-        fingerprint_sha256="b" * 64,
-    )
-    bridge.append(
-        orchestrator.finding_payload(
-            historical_finding,
-            actor=AgentRole.CLAUDE,
-            action="status_changed",
-            rationale=historical_finding.status_rationale,
-            work_unit_id=final_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-99",
-        idempotency_key="finding:C-99:status_changed:work_unit:3:1:claude",
-        fingerprint_sha256="b" * 64,
-    )
-    finding = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="The request must use replayed findings.",
-        acceptance_test="Mirror-only changes stop before provider invocation.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    bridge.append(
-        orchestrator.finding_payload(
-            finding,
-            work_unit_id=final_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened:1:claude",
-        fingerprint_sha256="c" * 64,
-    )
-    second_finding = FindingRecord(
-        finding_id="C-02",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="The projection order must not define mirror equality.",
-        acceptance_test="Equivalent finding sets compare canonically by finding ID.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    bridge.append(
-        orchestrator.finding_payload(
-            second_finding,
-            work_unit_id=final_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-02",
-        idempotency_key="finding:C-02:opened:1:claude",
-        fingerprint_sha256="c" * 64,
-    )
-    closed_second = replace(
-        second_finding,
-        status=FindingStatus.CLOSED,
-        status_rationale="Verified in the authoritative record chain.",
-    )
-    final_history = WorkflowHistory(
-        final_state.current_work_unit_id,
-        findings=(finding, second_finding, historical_finding),
-    )
-    final_state = replace(
-        final_state,
-        runtime_history={"current": final_history.to_dict(), "archive": []},
-    )
-    driver.bind_work_unit(final_state)
-    correction_state = final_state.complete_current_work_unit().start_correction_work_unit(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="d" * 64,
-        finding_ids=("C-01", "C-02"),
-    )
-    driver.bind_work_unit(correction_state)
-    bridge.append(
-        orchestrator.finding_payload(
-            closed_second,
-            actor=AgentRole.CLAUDE,
-            action="status_changed",
-            rationale=closed_second.status_rationale,
-            work_unit_id=correction_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-02",
-        idempotency_key="finding:C-02:status_changed:1:claude",
-        fingerprint_sha256="c" * 64,
-    )
-
-    # Correction authority follows the selected finding lineages across the
-    # final-review boundary, excludes unrelated findings, and canonicalizes by ID.
-    assert driver.authoritative_native_findings(
-        correction_state, (closed_second, finding)
-    ) == (finding, closed_second)
-    # Closed findings outside the correction record's affected IDs must not
-    # enter the Codex correction request.
-    assert driver.authoritative_native_findings(
-        correction_state, (historical_finding, closed_second, finding)
-    ) == (finding, closed_second)
-    later_blocker = FindingRecord(
-        finding_id="C-03",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="A later correction review found another actionable defect.",
-        acceptance_test="Later correction rounds carry newly opened blockers.",
-        origin=FindingOrigin("FINAL", 2, AgentRole.CLAUDE),
-    )
-    bridge.append(
-        orchestrator.finding_payload(
-            later_blocker,
-            work_unit_id=correction_state.current_work_unit_id,
-        ),
-        logical_id="finding-C-03",
-        idempotency_key="finding:C-03:opened:work_unit:4:2:claude",
-        fingerprint_sha256="d" * 64,
-    )
-    round_two = correction_state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01", "C-03"),
-        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
-        progress_made=True,
-    )
-    driver.bind_work_unit(round_two)
-    assert driver.authoritative_native_findings(
-        round_two, (later_blocker, closed_second, finding)
-    ) == (finding, closed_second, later_blocker)
-    correction_records = tuple(
-        record
-        for record in bridge.store.load_chain()
-        if isinstance(record.payload, CorrectionWorkUnitPayload)
-        and record.logical_id == f"work-unit-{round_two.current_work_unit_id}"
-    )
-    assert tuple(record.payload.round_number for record in correction_records) == (1, 2)
-    assert tuple(record.payload.finding_ids for record in correction_records) == (
-        ("C-01", "C-02"),
-        ("C-01", "C-03"),
-    )
-    assert driver.carry_forward_native_findings(
-        round_two, (later_blocker, closed_second, finding)
-    ) == (finding, closed_second, later_blocker, historical_finding)
-    missing_record_finding = replace(
-        later_blocker,
-        finding_id="C-04",
-        summary="This mirror finding has no authoritative record.",
-    )
-    assert driver.carry_forward_native_findings(
-        round_two,
-        (later_blocker, closed_second, finding, missing_record_finding),
-    ) == (finding, closed_second, later_blocker, historical_finding)
-    assert driver.authoritative_native_findings(
-        correction_state,
-        (
-            replace(closed_second, summary="Tampered closed mirror summary."),
-            replace(finding, summary="Tampered state-only summary."),
-        ),
-    ) == (finding, closed_second, later_blocker)
-
-    # The runtime mirror may be empty after a work-unit transition.  The
-    # provider request is nevertheless complete because its correction input
-    # is the request subset replayed above from the accepted record chain.
-    record_findings = driver.authoritative_native_findings(round_two, ())
-    correction_contract = CodexStepContract(
-        "record-backed-correction",
-        ReadinessMarker.IMPLEMENTATION,
-        f"{round_two.current_slice_id:02d}",
-        round_two.current_work_unit.round_number,
-        require_test_files_record=True,
-        test_changes_approved=True,
-    )
-    correction_bundle = workflow_requests.native_codex_request(
-        state=round_two,
-        context=WorkflowContext(
-            "Correct the replayed findings.",
-            "Use the accepted record chain.",
-            "",
-            current_branch=round_two.branch,
-        ),
-        history=WorkflowHistory(round_two.current_work_unit_id),
-        contract=correction_contract,
-        request_kind=NativeCodexRequestKind.CORRECTION,
-        execution_error=WorkflowExecutionError,
-        correction_delta="record-backed correction delta",
-        correction_fingerprint="d" * 64,
-        correction_findings=record_findings,
-    )
-    assert tuple(
-        item.finding_id
-        for item in correction_bundle.bound_context.context.previous_findings
-    ) == ("C-01", "C-03")
-    assert correction_bundle.document["assignment"] == (
-        "Correct only the affected findings and current delta in the bound "
-        "correction execution package."
-    )
-
-    missing_unit = replace(
-        round_two.current_work_unit,
-        open_findings=("C-04",),
-    )
-    missing_state = replace(
-        round_two,
-        work_units=tuple(
-            missing_unit
-            if item.work_unit_id == missing_unit.work_unit_id
-            else item
-            for item in round_two.work_units
-        ),
-    )
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="exact affected open finding set",
-    ):
-        workflow_requests.native_codex_request(
-            state=missing_state,
-            context=WorkflowContext(
-                "Correct the replayed findings.",
-                "Use the accepted record chain.",
-                "",
-                current_branch=missing_state.branch,
-            ),
-            history=WorkflowHistory(missing_state.current_work_unit_id),
-            contract=correction_contract,
-            request_kind=NativeCodexRequestKind.CORRECTION,
-            execution_error=WorkflowExecutionError,
-            correction_delta="record-backed correction delta",
-            correction_fingerprint="d" * 64,
-            correction_findings=record_findings,
-        )
-
-
 @pytest.mark.parametrize(
     ("request_kind", "step", "readiness", "result_type"),
     (
@@ -4858,12 +4522,6 @@ def test_combined_native_finding_authority_ignores_projection_drift(
             "plan_result",
         ),
         (
-            NativeCodexRequestKind.FINAL_REPORT,
-            WorkflowStep.CODEX_FINAL_REVIEW,
-            ReadinessMarker.FINAL_REPORT,
-            "final_report_result",
-        ),
-        (
             NativeCodexRequestKind.CORRECTION,
             WorkflowStep.CODEX_CORRECTION,
             ReadinessMarker.IMPLEMENTATION,
@@ -4871,7 +4529,7 @@ def test_combined_native_finding_authority_ignores_projection_drift(
         ),
     ),
 )
-def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
+def test_native_codex_plan_and_correction_recovery_are_raw_and_record_ahead_safe(
     tmp_path: Path,
     request_kind: NativeCodexRequestKind,
     step: WorkflowStep,
@@ -4920,24 +4578,6 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
             .with_current_step(WorkflowStep.CODEX_CORRECTION)
         )
         current_fingerprint = "c" * 64
-    elif request_kind is NativeCodexRequestKind.FINAL_REPORT:
-        commit_authority_state = (
-            state.complete_current_work_unit()
-            .start_work_unit(
-                slice_id=1,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-            )
-            .bind_current_slice_git_boundary(
-                start_commit=head,
-                scope_paths=("src/runtime.py",),
-                start_fingerprint="c" * 64,
-            )
-        )
-        state = commit_authority_state.complete_current_slice(
-            commit_ref=head
-        ).start_final_review_work_unit()
-        current_fingerprint = "f" * 64
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
@@ -4953,12 +4593,10 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
     contract = CodexStepContract(
         f"native-codex-{request_kind.value}-recovery",
         readiness,
-        "FINAL" if request_kind is NativeCodexRequestKind.FINAL_REPORT else "01",
+        "01",
         1,
         review_fingerprint=(
-            current_fingerprint
-            if request_kind is NativeCodexRequestKind.FINAL_REPORT
-            else None
+            None
         ),
         require_test_files_record=(
             request_kind is NativeCodexRequestKind.CORRECTION
@@ -5005,11 +4643,11 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
                 "slice_id": 1,
                 "summary": "Implement the bound plan.",
                 "scope_paths": ["src/runtime.py"],
+                "acceptance_criteria": ["Implement the bound plan."],
             }
         ]
-    elif request_kind is NativeCodexRequestKind.FINAL_REPORT:
-        document["finding_dispositions"] = []
-        document["self_check"] = "Checked branch contracts and recovery."
+        document["plan_treatments"] = []
+        document["plan_completion"] = "IMPLEMENTATION_REQUIRED"
     else:
         document["test_files"] = []
         document["finding_dispositions"] = []
@@ -5039,11 +4677,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         operation=step.value,
         request_id=output.request_id,
         canonical=output.canonical_json,
-        content_kind=(
-            "final_report"
-            if step is WorkflowStep.CODEX_FINAL_REVIEW
-            else "agent_result"
-        ),
+        content_kind="agent_result",
         fingerprint=current_fingerprint,
         fingerprint_kind=(
             FingerprintKind.CONTRACT
@@ -5072,71 +4706,6 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
     )
     assert len(results) == 1
     assert results[0].payload.request_id == bundle.bound_context.request_id
-    if request_kind is NativeCodexRequestKind.FINAL_REPORT:
-        resumed_state = state.with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
-        driver.checkpoint(
-            resumed_state, WorkflowHistory(resumed_state.current_work_unit_id)
-        )
-        resumed_state = driver.active_state or resumed_state
-        resumed_history = orchestrator._history(resumed_state, repository)
-        assert resumed_history.codex_final_report == output.canonical_json
-        assert resumed_history.attestations
-
-        review_changes = WorkflowChanges(
-            start_commit=head,
-            fingerprint=current_fingerprint,
-            paths=("src/runtime.py",),
-            full_diff="final review evidence",
-        )
-        review_attestation = ValidationAttestation(
-            attestation_id="validation-resumed-final-review",
-            diff_fingerprint=current_fingerprint,
-            expected_commands=("python3 -m pytest tests/ -v",),
-            records=(
-                ValidationRecord(
-                    ValidationStatus.PASS,
-                    "python3 -m pytest tests/ -v",
-                    0,
-                ),
-            ),
-            output_digest="9" * 64,
-            summary="Provider-free resumed final-review request passed.",
-        )
-        review_contract = StepContract(
-            "resumed-final-review",
-            AgentRole.CLAUDE,
-            ApprovalMarker.FINAL,
-            "FINAL",
-            1,
-            current_fingerprint,
-            review_attestation,
-        )
-        review_bundle = workflow_requests.native_review_request(
-            state=resumed_state,
-            context=WorkflowContext(
-                "Review the resumed branch.",
-                "Use only record-backed evidence.",
-                "Complete the final review.",
-                current_branch=branch,
-                test_changes_approved=True,
-            ),
-            history=resumed_history,
-            contract=review_contract,
-            changes=review_changes,
-            evidence_kind=EvidenceKind.FULL_BRANCH,
-            review_diff=review_changes.full_diff,
-            review_packet=None,
-            expected_test_files=(),
-            execution_error=WorkflowExecutionError,
-            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
-            final_review_pending_count=0,
-        )
-        assert any(
-            item["evidence_id"] == "codex-final-report"
-            for item in review_bundle.document["evidence_manifest"]
-        )
-
-
 def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     tmp_path: Path,
 ) -> None:
@@ -5190,422 +4759,6 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     assert tuple(item.revision for item in work_units) == (1, 2)
     assert tuple(item.payload.round_number for item in work_units) == (1, 2)
     assert len({item.idempotency_key for item in work_units}) == 2
-
-
-def test_real_cleanup_round_two_keeps_first_record_scope_and_replays(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/cleanup-round-transition")
-    (repository / "src").mkdir(exist_ok=True)
-    (repository / "src" / "closed.py").write_text("closed\n", encoding="utf-8")
-    (repository / "src" / "open.py").write_text("open\n", encoding="utf-8")
-    _git(repository, "add", "src/closed.py", "src/open.py")
-    _git(repository, "commit", "-m", "add cleanup scope fixtures")
-    task = repository / "task.md"
-    _write_task(
-        task,
-        "feature/cleanup-round-transition",
-        "src/closed.py",
-        "src/open.py",
-    )
-    head = _git(repository, "rev-parse", "HEAD")
-    state = init_workflow_state(
-        run_id="cleanup-round-transition",
-        task_file=str(task),
-        branch="feature/cleanup-round-transition",
-        branch_base=head,
-        first_slice_start_commit=head,
-        slice_count=1,
-        task_digest="a" * 64,
-        task_scope_patterns=("src/closed.py", "src/open.py"),
-        target_branch="feature/cleanup-round-transition",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/closed.py", "src/open.py"),
-        start_fingerprint="b" * 64,
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    findings = (
-        FindingRecord(
-            "C-01",
-            FindingClass.BLOCKER,
-            FindingStatus.OPEN,
-            "Cleanup must retain `src/closed.py` after disposition.",
-            "Replay round two with `src/closed.py` still authorized.",
-            FindingOrigin("1", 1, AgentRole.CLAUDE),
-        ),
-        FindingRecord(
-            "C-02",
-            FindingClass.BLOCKER,
-            FindingStatus.OPEN,
-            "Cleanup must continue to inspect `src/open.py`.",
-            "Replay round two with `src/open.py` authorized.",
-            FindingOrigin("1", 1, AgentRole.CLAUDE),
-        ),
-    )
-    reviewed = _append_test_commit_authority(
-        driver, state, commit_ref=head, findings=findings
-    )
-    cleanup = reviewed.complete_current_slice(
-        commit_ref=head
-    ).start_finding_cleanup_work_unit(finding_ids=("C-01", "C-02"))
-    driver.bind_work_unit(cleanup)
-    bridge = driver._artifact_bridge
-    assert bridge is not None
-    closed = replace(
-        findings[0],
-        status=FindingStatus.CLOSED,
-        status_rationale="The first cleanup review closed this finding.",
-    )
-    bridge.append(
-        finding_payload(
-            closed,
-            actor=AgentRole.CLAUDE,
-            action="status_changed",
-            work_unit_id=cleanup.current_work_unit_id,
-        ),
-        logical_id="finding-C-01",
-        idempotency_key="test-cleanup:C-01:closed",
-        fingerprint_sha256="c" * 64,
-    )
-    cleanup_history = WorkflowHistory(
-        cleanup.current_work_unit_id,
-        findings=(closed, findings[1]),
-    )
-    round_two = WorkflowEngine._record_final_review_delivery_round(
-        cleanup,
-        cleanup_history,
-        advance=True,
-    )
-
-    driver.bind_work_unit(round_two)
-    request_context = WorkflowEngine(driver)._bind_context_to_current_unit(
-        round_two,
-        WorkflowContext("assignment", "plan", "cleanup"),
-        cleanup_history,
-    )
-
-    chain = ArtifactStore(repository, state.run_id).load_chain()
-    replay_artifacts(chain, state.run_id)
-    cleanup_records = tuple(
-        record
-        for record in chain
-        if isinstance(record.payload, CorrectionWorkUnitPayload)
-        and record.logical_id == f"work-unit-{cleanup.current_work_unit_id}"
-    )
-    assert tuple(record.payload.round_number for record in cleanup_records) == (1, 2)
-    assert tuple(record.payload.finding_ids for record in cleanup_records) == (
-        ("C-01", "C-02"),
-        ("C-02",),
-    )
-    assert tuple(record.payload.paths for record in cleanup_records) == (
-        ("src/closed.py", "src/open.py"),
-        ("src/closed.py", "src/open.py"),
-    )
-    assert request_context.current_scope_paths == (
-        "src/closed.py",
-        "src/open.py",
-    )
-
-
-def test_cleanup_is_dormant_but_logs_record_balance_when_runtime_history_is_empty(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    repository = _repository(tmp_path, "feature/record-backed-cleanup-selection")
-    finding_paths = tuple(f"src/finding-{index:02d}.py" for index in range(1, 19))
-    for path in finding_paths:
-        target = repository / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("finding\n", encoding="utf-8")
-    _git(repository, "add", *finding_paths)
-    _git(repository, "commit", "-m", "add finding cleanup fixtures")
-    task = repository / "task.md"
-    _write_task(task, "feature/record-backed-cleanup-selection", *finding_paths)
-    head = _git(repository, "rev-parse", "HEAD")
-    state = (
-        init_workflow_state(
-            run_id="record-backed-cleanup-selection",
-            task_file=str(task),
-            branch="feature/record-backed-cleanup-selection",
-            branch_base=head,
-            first_slice_start_commit=head,
-            slice_count=1,
-            task_digest=hashlib.sha256(
-                task.read_text(encoding="utf-8").encode("utf-8")
-            ).hexdigest(),
-            task_scope_patterns=finding_paths,
-            target_branch="feature/record-backed-cleanup-selection",
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-        )
-        .complete_current_work_unit()
-        .start_work_unit(
-            slice_id=1,
-            kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
-        )
-        .bind_current_slice_git_boundary(
-            start_commit=head,
-            scope_paths=finding_paths,
-            start_fingerprint="b" * 64,
-        )
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    findings = tuple(
-        FindingRecord(
-            f"C-{index:02d}",
-            FindingClass.OBSERVATION,
-            FindingStatus.OPEN,
-            f"Cleanup finding names `{path}`.",
-            f"Review `{path}` in the cleanup round.",
-            FindingOrigin("1", 1, AgentRole.CLAUDE),
-        )
-        for index, path in enumerate(finding_paths, start=1)
-    )
-    reviewed = _append_test_commit_authority(
-        driver, state, commit_ref=head, findings=findings
-    )
-    driver.bind_work_unit(reviewed.complete_current_slice(commit_ref=head))
-
-    with caplog.at_level("INFO", logger="orchestrator"):
-        plan = driver.prepare_finding_cleanup()
-
-    assert plan is None
-    assert (
-        "Finding balance through Slice 01: opened=18 closed=0 net=+18; "
-        "positive-streak=1; cleanup=not-scheduled"
-    ) in caplog.text
-
-
-def test_cleanup_review_builds_exact_record_backed_followup_correction(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/cleanup-followup-correction")
-    finding_ids = (
-        "C-01", "C-02", "C-04", "C-05", "C-06", "C-07", "C-08", "C-09",
-        "C-10", "C-11", "C-12", "C-13", "C-15", "C-16", "C-17", "C-18",
-        "C-19", "C-20",
-    )
-    paths = tuple(
-        f"src/finding-{finding_id.removeprefix('C-')}.py"
-        for finding_id in finding_ids
-    )
-    for path in paths:
-        target = repository / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("finding\n", encoding="utf-8")
-    _git(repository, "add", *paths)
-    _git(repository, "commit", "-m", "add cleanup follow-up fixtures")
-    task = repository / "task.md"
-    _write_task(task, "feature/cleanup-followup-correction", *paths)
-    head = _git(repository, "rev-parse", "HEAD")
-    state = (
-        init_workflow_state(
-            run_id="cleanup-followup-correction",
-            task_file=str(task),
-            branch="feature/cleanup-followup-correction",
-            branch_base=head,
-            first_slice_start_commit=head,
-            slice_count=1,
-            task_digest=hashlib.sha256(
-                task.read_text(encoding="utf-8").encode("utf-8")
-            ).hexdigest(),
-            task_scope_patterns=paths,
-            target_branch="feature/cleanup-followup-correction",
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-        )
-        .bind_slice_plan(
-            (PlannedSlice(1, "Implement the planned Slice.", paths),),
-            first_start_commit=head,
-        )
-        .complete_current_work_unit()
-        .start_work_unit(
-            slice_id=1,
-            kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
-        )
-        .bind_current_slice_git_boundary(
-            start_commit=head,
-            scope_paths=paths,
-            start_fingerprint="b" * 64,
-        )
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    observations = tuple(
-        FindingRecord(
-            finding_id,
-            FindingClass.OBSERVATION,
-            FindingStatus.OPEN,
-            f"Cleanup must inspect `{path}`.",
-            f"Reclassify `{path}` only if it remains actionable.",
-            FindingOrigin("1", 1, AgentRole.CLAUDE),
-        )
-        for finding_id, path in zip(finding_ids, paths, strict=True)
-    )
-    reviewed = _append_test_commit_authority(
-        driver, state, commit_ref=head, findings=observations
-    )
-    cleanup = reviewed.complete_current_slice(
-        commit_ref=head
-    ).start_finding_cleanup_work_unit(finding_ids=finding_ids)
-    driver.bind_work_unit(cleanup)
-    assert tuple(
-        item.finding_id
-        for item in driver.authoritative_final_review_findings(cleanup, ())
-    ) == finding_ids
-    reviewed_findings = tuple(
-        replace(
-            finding,
-            finding_class=(
-                FindingClass.BLOCKER
-                if finding.finding_id in {"C-05", "C-13"}
-                else finding.finding_class
-            ),
-            status_rationale=(
-                "The cleanup reviewer confirmed an actionable defect."
-                if finding.finding_id in {"C-05", "C-13"}
-                else finding.status_rationale
-            ),
-            class_history=(
-                (FindingClass.OBSERVATION,)
-                if finding.finding_id in {"C-05", "C-13"}
-                else finding.class_history
-            ),
-        )
-        for finding in observations
-    )
-    driver._persist_review_finding_transitions(
-        ContractResult(
-            reviewer=AgentRole.CLAUDE,
-            approval=False,
-            stopped=False,
-            stop_request=None,
-            validation=None,
-            test_files=(),
-            pre_mortem=None,
-            evidence=None,
-            findings=reviewed_findings,
-            anchors=(),
-        ),
-        fingerprint="c" * 64,
-        round_number=1,
-        previous_findings=observations,
-        structured=True,
-    )
-    cleanup_replay = replay_artifacts(
-        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
-    )
-    reduction = reduce_findings(cleanup_replay)
-    assert len(reduction.ledger.findings) == 18
-    assert len(reduction.open_set.findings) == 18
-    record_target = driver.authoritative_final_review_findings(cleanup, ())
-    assert tuple(item.finding_id for item in record_target) == ("C-05", "C-13")
-
-    followup = WorkflowEngine._record_final_review_delivery_round(
-        cleanup,
-        WorkflowHistory(
-            cleanup.current_work_unit_id,
-            findings=reduction.ledger.findings,
-        ),
-        advance=True,
-        open_findings=tuple(item.finding_id for item in record_target),
-    )
-    assert followup.current_work_unit.open_findings == ("C-05", "C-13")
-    driver.bind_work_unit(followup)
-    record_target = driver.authoritative_final_review_findings(followup, ())
-    assert tuple(item.finding_id for item in record_target) == ("C-05", "C-13")
-    review_changes = WorkflowChanges(
-        start_commit=head,
-        fingerprint="d" * 64,
-        paths=paths,
-        full_diff="record-backed cleanup follow-up",
-    )
-    command = "python3 -m pytest tests/ -v -m not crash_harness"
-    review_attestation = ValidationAttestation(
-        attestation_id="validation-cleanup-followup",
-        diff_fingerprint=review_changes.fingerprint,
-        expected_commands=(command,),
-        records=(ValidationRecord(ValidationStatus.PASS, command, 0),),
-        output_digest="e" * 64,
-        summary="Cleanup follow-up request fixture passed.",
-    )
-    review_bundle = workflow_requests.native_review_request(
-        state=followup,
-        context=WorkflowContext(
-            "Review the cleanup blockers.",
-            "Use the accepted record chain.",
-            "",
-            current_branch=followup.branch,
-        ),
-        history=replace(
-            WorkflowHistory(followup.current_work_unit_id),
-            codex_final_report='{"result_type":"final_report_result"}',
-        ),
-        contract=StepContract(
-            "record-backed-cleanup-followup",
-            AgentRole.CLAUDE,
-            ApprovalMarker.FINAL,
-            "FINAL",
-            2,
-            review_changes.fingerprint,
-            review_attestation,
-            existing_finding_ids=("C-05", "C-13"),
-            allow_new_observations=False,
-        ),
-        changes=review_changes,
-        evidence_kind=EvidenceKind.FULL_BRANCH,
-        review_diff=review_changes.full_diff,
-        review_packet=None,
-        expected_test_files=(),
-        execution_error=WorkflowExecutionError,
-        full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
-        final_review_pending_count=2,
-        correction_findings=record_target,
-    )
-    assert tuple(
-        item.finding_id
-        for item in review_bundle.bound_context.context.previous_findings
-    ) == ("C-05", "C-13")
-    assert review_bundle.document["acceptance_criteria"][:2] == [
-        "C-05: Reclassify `src/finding-05.py` only if it remains actionable.",
-        "C-13: Reclassify `src/finding-13.py` only if it remains actionable.",
-    ]
-    final_replay = replay_artifacts(
-        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
-    )
-    correction = reduce_findings(final_replay).correction_for(
-        followup.current_work_unit_id
-    )
-    assert correction is not None
-    assert correction.round_number == 2
-    assert correction.finding_ids == finding_ids
-    assert reduce_findings(final_replay).request_subset(
-        finding_ids=tuple(item.finding_id for item in record_target),
-        open_only=True,
-    ).finding_ids == ("C-05", "C-13")
 
 
 def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
@@ -5683,64 +4836,6 @@ def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
     assert len(plan_records) == 1
     assert plan_records[0].payload.approved_plan_commit == approved_plan_commit
     assert plan_records[0].idempotency_key == f"approved-plan:{approved_plan_commit}"
-
-
-def test_correction_work_unit_persists_correction_work_unit_payload_with_finding_ids(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-correction")
-    task = repository / "task.md"
-    _write_task(task, "feature/structured-correction", "src/runtime.py")
-    head = _git(repository, "rev-parse", "HEAD")
-    slice_state = init_workflow_state(
-        run_id="structured-correction",
-        task_file=str(task),
-        branch="feature/structured-correction",
-        branch_base=head,
-        first_slice_start_commit=head,
-        slice_count=1,
-        task_digest="a" * 64,
-        task_scope_patterns=("src/runtime.py",),
-        target_branch="feature/structured-correction",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="b" * 64,
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-
-    reviewed = _append_test_commit_authority(
-        driver, slice_state, commit_ref=head
-    )
-    state = reviewed.complete_current_slice(
-        commit_ref=head,
-    ).start_final_review_work_unit().complete_current_work_unit().start_correction_work_unit(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="c" * 64,
-        finding_ids=("C-14", "C-15"),
-    )
-    driver.bind_work_unit(state)
-
-    correction_records = tuple(
-        record
-        for record in ArtifactStore(repository, state.run_id).load_chain()
-        if isinstance(record.payload, CorrectionWorkUnitPayload)
-    )
-    assert len(correction_records) == 1
-    assert correction_records[0].payload.finding_ids == ("C-14", "C-15")
-    assert correction_records[0].payload.paths == ("src/runtime.py",)
 
 
 def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audits(
@@ -5827,59 +4922,6 @@ def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
 
     with pytest.raises(WorkflowExecutionError, match="audit dual-write mismatch"):
         driver.checkpoint(mismatched, WorkflowHistory(1))
-
-
-def test_checkpoint_archives_latest_driver_history_across_work_unit_transition(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/runtime-history-checkpoint")
-    task = repository / "inbox" / "runtime-history-checkpoint.md"
-    task.parent.mkdir()
-    _write_task(task, "feature/runtime-history-checkpoint", "src/runtime.py")
-    head = _git(repository, "rev-parse", "HEAD")
-    base = init_workflow_state(
-        run_id="runtime-history-checkpoint-transition",
-        task_file=str(task),
-        branch="feature/runtime-history-checkpoint",
-        branch_base=head,
-        first_slice_start_commit=head,
-        slice_count=1,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="a" * 64,
-    )
-    completed = base.complete_current_slice(commit_ref="b" * 40)
-    latest_history = WorkflowHistory(
-        1,
-        codex_final_report="latest approving review evidence",
-    ).to_dict()
-    old_history = WorkflowHistory(
-        1,
-        codex_final_report="stale denying review evidence",
-    ).to_dict()
-    persisted = replace(
-        completed,
-        runtime_history={"archive": [], "current": latest_history},
-    )
-    stale_transition = replace(
-        completed,
-        runtime_history={"archive": [], "current": old_history},
-    ).start_final_review_work_unit()
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    driver.active_state = persisted
-
-    driver.checkpoint(stale_transition, WorkflowHistory(2))
-
-    saved = json.loads(driver.state_file.read_text(encoding="utf-8"))
-    assert saved["runtime_history"]["archive"] == [latest_history]
-    assert saved["runtime_history"]["current"]["work_unit_id"] == 2
 
 
 def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
@@ -6078,50 +5120,7 @@ def test_legacy_approved_inbox_plan_cannot_retrofit_after_slice_boundary() -> No
         orchestrator._attach_managed_audit_paths(state)
 
 
-def test_final_correction_rejects_audit_only_persisted_scope(tmp_path: Path) -> None:
-    repository = _repository(tmp_path, "feature/audit-only-correction")
-    task = repository / "inbox" / "audit-only.md"
-    task.parent.mkdir()
-    _write_task(task, "feature/audit-only-correction", "src/rounding.py")
-    audit_path = "docs/internal/audit-only-review-12345678.md"
-    state = orchestrator.init_workflow_state(
-        run_id="audit-only-correction",
-        task_file=str(task),
-        branch="feature/audit-only-correction",
-        branch_base=_git(repository, "rev-parse", "HEAD"),
-        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
-        slice_count=1,
-        audit_report_path=audit_path,
-    ).bind_slice_plan(
-        (
-            PlannedSlice(
-                1,
-                "managed records only",
-                (
-                    audit_path,
-                    "docs/internal/slice-audit-only-01-managed-records-only.md",
-                ),
-            ),
-        ),
-        first_start_commit=_git(repository, "rev-parse", "HEAD"),
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    driver.active_state = state
-
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="final correction has no persisted remediation scope",
-    ):
-        driver.prepare_correction()
-
-
-def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> None:
+def test_runtime_inherits_exact_prior_test_gate_at_linked_family_boundary() -> None:
     test_path = "tests/rounding.test.mjs"
     fingerprint = "c" * 64
     state = orchestrator.init_workflow_state(
@@ -6152,9 +5151,11 @@ def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> 
     ).record_active_test_approval(
         fingerprint,
         (test_path,),
-    ).complete_current_slice(
-        commit_ref="d" * 40,
-    ).start_final_review_work_unit().await_user_gate(
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.BRANCH_DISCOVERY,
+        step=WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
+    ).await_user_gate(
         reason=GateReason.TEST_CHANGE,
         detail="test changes require explicit approval before review",
         fingerprint=fingerprint,

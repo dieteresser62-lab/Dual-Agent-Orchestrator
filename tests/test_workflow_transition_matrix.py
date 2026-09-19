@@ -15,7 +15,6 @@ from artifact_bridge import ArtifactBridge
 from artifact_models import (
     BindingPayload,
     CommandSpec,
-    CorrectionWorkUnitPayload,
     FindingTransitionPayload,
     FingerprintKind,
     ProviderAttemptPayload,
@@ -165,79 +164,6 @@ TRANSITION_ORACLE = (
         "persisted",
     ),
     TransitionOracleRow(
-        "slice-to-final",
-        "slice-committed",
-        "final_review",
-        "codex_final_review",
-        1,
-        ("C-01:closed:blocker",),
-        (),
-        3,
-        2,
-        1,
-        1,
-        "none",
-        "clear",
-        "persisted",
-    ),
-    TransitionOracleRow(
-        "final-to-correction",
-        "final-review-denied",
-        "correction",
-        "codex_final_correction",
-        1,
-        ("C-01:open:blocker", "C-02:closed:observation"),
-        ("C-01",),
-        4,
-        3,
-        2,
-        1,
-        "none",
-        "clear",
-        "persisted",
-    ),
-    TransitionOracleRow(
-        "correction-denial-round-2",
-        "correction-review-denied-with-new-blocker",
-        "correction",
-        "codex_final_correction",
-        2,
-        (
-            "C-01:open:blocker",
-            "C-02:closed:observation",
-            "C-03:open:blocker",
-        ),
-        ("C-01", "C-03"),
-        4,
-        4,
-        3,
-        1,
-        "none",
-        "clear",
-        "persisted",
-    ),
-    TransitionOracleRow(
-        "correction-to-final",
-        "correction-committed",
-        "final_review",
-        "codex_final_review",
-        1,
-        (
-            "C-01:closed:blocker",
-            "C-02:closed:observation",
-            "C-03:closed:blocker",
-            "C-99:open:observation",
-        ),
-        (),
-        5,
-        7,
-        4,
-        1,
-        "none",
-        "clear",
-        "persisted",
-    ),
-    TransitionOracleRow(
         "mirror-before-checkpoint",
         "slice-review-denied-mirror-persisted",
         "slice",
@@ -312,10 +238,6 @@ PROVIDER_ATTEMPT_CASES = frozenset(
         "plan-denial-round-2",
         "plan-to-slice",
         "slice-denial-round-2",
-        "slice-to-final",
-        "final-to-correction",
-        "correction-denial-round-2",
-        "correction-to-final",
         "mirror-before-checkpoint",
     }
 )
@@ -401,8 +323,6 @@ GATE_SOURCE_MAP = (
             ("UNAUTHORIZED-PATH", "unauthorized-path-resume"),
             ("ATTESTATION-MISSING", "attestation-missing-resume"),
             ("ATTESTATION-FAILED", "attestation-failed-resume"),
-            ("SLICE-BINDING-MISSING", "slice-binding-missing-resume"),
-            ("CODEX-FINAL-RESULT-MISSING", "codex-final-result-missing-resume"),
         )
     ),
     GateSourceRow(
@@ -436,14 +356,6 @@ GATE_SOURCE_MAP = (
         "workflow._apply_agent_output",
         ("workflow._apply_agent_output",),
         ("codex-not-ready",),
-    ),
-    GateSourceRow(
-        "CODEX-FINAL-REPORT-NOT-READY",
-        "stop_request",
-        "policy",
-        "workflow._run_final_codex_report",
-        ("workflow._run_final_codex_report",),
-        ("codex-final-report-not-ready",),
     ),
     GateSourceRow(
         "NO-IMPLEMENTATION-CHANGES",
@@ -612,28 +524,10 @@ GATE_CASE_ORACLE = (
         "ATTESTATION-FAILED",
         "resume",
     ),
-    (
-        "slice-binding-missing-resume",
-        "bootstrap_check",
-        "SLICE-BINDING-MISSING",
-        "resume",
-    ),
-    (
-        "codex-final-result-missing-resume",
-        "bootstrap_check",
-        "CODEX-FINAL-RESULT-MISSING",
-        "resume",
-    ),
     ("branch-mismatch", "stop_request", "BRANCH-MISMATCH", "policy"),
     ("validation-unavailable", "stop_request", "VALIDATION-UNAVAILABLE", "policy"),
     ("contract-unclear", "stop_request", "CONTRACT-UNCLEAR", "policy"),
     ("codex-not-ready", "stop_request", "CODEX-NOT-READY", "policy"),
-    (
-        "codex-final-report-not-ready",
-        "stop_request",
-        "CODEX-FINAL-REPORT-NOT-READY",
-        "policy",
-    ),
     ("no-implementation-changes", "stop_request", "NO-IMPLEMENTATION-CHANGES", "policy"),
     ("plan-contract-invalid", "stop_request", "PLAN-CONTRACT-INVALID", "policy"),
     ("quota-resume-diff", "quota_resume_diff", "QUOTA-RESUME-DIFF", "user"),
@@ -672,9 +566,8 @@ REGISTERED_GATE_PREFIXES = frozenset(
 # They are still inventoried so a future routing change cannot silently turn them
 # into gates without updating the source map and matrix.
 GATE_FOREIGN_PREFIXES = {
+    "SLICE-REVIEW-DENIED": "terminal no-progress Slice verdict is not a resumable gate",
     "AGENT-PROFILE-DIFF": "resume profile validation raises before workflow execution",
-    "CORRECTION-REVIEW-DENIED": "terminal correction verdict is not a resumable gate",
-    "FINAL-REVIEW-DENIED": "terminal reviewer verdict is not a resumable gate",
     "PROVIDER-INPUT-BUDGET": "terminal provider-input verdict is not a resumable gate",
     "QUOTA-AUTOMATION-STOPPED": "terminal quota verdict is not a resumable gate",
     "TASK-SCOPE": "invalid Codex slice plans raise a workflow contract error",
@@ -706,7 +599,6 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_apply_agent_output", "await_policy_gate"): 1,
         ("workflow.py", "_validate_plan_before_review", "await_user_gate"): 1,
         ("workflow.py", "_validate_plan_before_review", "await_policy_gate"): 1,
-        ("workflow.py", "_run_final_codex_report", "await_policy_gate"): 2,
         ("workflow.py", "_run_review", "await_policy_gate"): 2,
         ("workflow.py", "_apply_review_change_boundary", "await_user_gate"): 1,
         ("workflow.py", "_apply_review_result", "await_user_gate"): 1,
@@ -770,20 +662,38 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
 EDGE_CLASSIFICATION = (
     ("plan", "plan", True, "denied plan review advances the same plan work unit"),
     ("plan", "slice", True, "complete plan then start first bound slice"),
-    ("plan", "correction", False, "correction requires a completed final review"),
-    ("plan", "final_review", False, "final review requires committed slices"),
+    (
+        "plan",
+        "branch_discovery",
+        False,
+        "branch discovery starts in a linked run rather than by in-run transition",
+    ),
     ("slice", "slice", True, "review denial stays in the same work unit at round >=2"),
-    ("slice", "final_review", True, "all planned slices committed"),
-    ("slice", "correction", False, "slice denial is an in-unit correction round"),
     ("slice", "plan", False, "implementation never returns to planning"),
-    ("final_review", "final_review", False, "a final review denial starts correction"),
-    ("final_review", "correction", True, "denied final review opens correction"),
-    ("final_review", "slice", False, "completed slices are never reopened"),
-    ("final_review", "plan", False, "final review cannot recreate planning"),
-    ("correction", "correction", True, "denial advances the correction round"),
-    ("correction", "final_review", True, "committed correction starts new final review"),
-    ("correction", "slice", False, "correction uses its own appended slice record"),
-    ("correction", "plan", False, "correction cannot recreate planning"),
+    (
+        "slice",
+        "branch_discovery",
+        False,
+        "a completed implementation hands off to a linked discovery run",
+    ),
+    (
+        "branch_discovery",
+        "branch_discovery",
+        False,
+        "terminal discovery completes instead of creating another in-run unit",
+    ),
+    (
+        "branch_discovery",
+        "plan",
+        False,
+        "open discovery findings start a linked planning run",
+    ),
+    (
+        "branch_discovery",
+        "slice",
+        False,
+        "discovery never implements findings inside its review run",
+    ),
 )
 
 
@@ -1796,66 +1706,6 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         persist_checkpoint=False,
     )
 
-    final_state = slice_state.complete_current_slice(
-        commit_ref="d" * 40,
-        updated_at="2026-08-27T10:00:06+00:00",
-    ).start_final_review_work_unit(updated_at="2026-08-27T10:00:07+00:00")
-    assert_case(
-        "slice-to-final",
-        final_state,
-        (c01_closed,),
-        transition="slice-committed",
-        provider_findings=(),
-    )
-
-    correction = final_state.complete_current_work_unit(
-        updated_at="2026-08-27T10:00:08+00:00"
-    ).start_correction_work_unit(
-        start_commit="d" * 40,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="e" * 64,
-        finding_ids=("C-01",),
-        updated_at="2026-08-27T10:00:09+00:00",
-    )
-    assert_case(
-        "final-to-correction",
-        correction,
-        (c01_open, c02_closed),
-        transition="final-review-denied",
-        provider_findings=correction.current_work_unit.open_findings,
-    )
-
-    round_two = correction.with_current_step(
-        WorkflowStep.CLAUDE_FINAL_REVIEW
-    ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01", "C-03"),
-        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
-        progress_made=True,
-        updated_at="2026-08-27T10:00:10+00:00",
-    )
-    assert_case(
-        "correction-denial-round-2",
-        round_two,
-        (c01_open, c02_closed, c03_open),
-        transition="correction-review-denied-with-new-blocker",
-        provider_findings=round_two.current_work_unit.open_findings,
-    )
-
-    repeated_final = correction.complete_current_slice(
-        commit_ref="f" * 40,
-        updated_at="2026-08-27T10:00:11+00:00",
-    ).start_final_review_work_unit(updated_at="2026-08-27T10:00:12+00:00")
-    assert_case(
-        "correction-to-final",
-        repeated_final,
-        (c01_closed, c02_closed, c03_closed),
-        transition="correction-committed",
-        provider_findings=(),
-        historical_findings=(historical,),
-        carry_forward=True,
-    )
-
     head_gate = slice_state.with_current_step(WorkflowStep.SLICE_COMMIT).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
         detail="HEAD-DRIFT | exact reviewed fingerprint and HEAD required",
@@ -1995,7 +1845,6 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
     expected_preflight_codes = {
         "ATTESTATION-FAILED",
         "ATTESTATION-MISSING",
-        "CODEX-FINAL-RESULT-MISSING",
         "FINGERPRINT-MISMATCH",
         "FOREIGN-RUN-RECORD",
         "MEASUREMENT-DENIED",
@@ -2004,7 +1853,6 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
         "MISSING-REFERENCE",
         "OPERATION-NOT-FINAL",
         "PREMATURE-COMPLETION",
-        "SLICE-BINDING-MISSING",
         "STATE-TRANSITION-MISMATCH",
         "UNAUTHORIZED-PATH",
     }
@@ -2207,24 +2055,19 @@ def test_transition_reachability_inventory_is_unique_and_complete() -> None:
     assert {source for source, _target in pairs} == {
         "plan",
         "slice",
-        "final_review",
-        "correction",
+        "branch_discovery",
     }
     assert {target for _source, target in pairs} == {
         "plan",
         "slice",
-        "final_review",
-        "correction",
+        "branch_discovery",
     }
     assert len(pairs) == len(WorkUnitKind) ** 2
     assert all(why.strip() for _source, _target, _reachable, why in EDGE_CLASSIFICATION)
     assert {
         ("plan", "plan"),
         ("plan", "slice"),
-        ("slice", "final_review"),
-        ("final_review", "correction"),
-        ("correction", "correction"),
-        ("correction", "final_review"),
+        ("slice", "slice"),
     } <= {
         (source, target)
         for source, target, reachable, _why in EDGE_CLASSIFICATION
@@ -2379,27 +2222,19 @@ def _bind_record_authoritative_fixture(
             unit
             for unit in reversed(state.work_units)
             if unit.slice_id == slice_record.slice_id
-            and unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+            and unit.kind is WorkUnitKind.SLICE
         )
         fingerprint = slice_record.start_fingerprint or "e" * 64
         if not any(
-            isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+            isinstance(record.payload, WorkUnitPayload)
             and record.logical_id == f"work-unit-{slice_unit.work_unit_id}"
             for record in bridge.store.load_chain()
         ):
-            work_unit_payload = (
-                CorrectionWorkUnitPayload(
-                    str(slice_record.slice_id),
-                    slice_unit.round_number,
-                    slice_record.scope_paths,
-                    slice_unit.open_findings,
-                )
-                if slice_unit.kind is WorkUnitKind.CORRECTION
-                else WorkUnitPayload(
-                    str(slice_record.slice_id),
-                    slice_unit.round_number,
-                    slice_record.scope_paths,
-                )
+            work_unit_payload = WorkUnitPayload(
+                str(slice_record.slice_id),
+                slice_unit.round_number,
+                slice_record.scope_paths,
+                slice_unit.open_findings,
             )
             bridge.append(
                 work_unit_payload,
@@ -2533,8 +2368,6 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
             scope_paths=("src/runtime.py",),
             start_fingerprint="1" * 64,
         )
-        .complete_current_slice(commit_ref=head)
-        .start_final_review_work_unit()
     )
     driver = ProductionWorkflowDriver(
         repository_root=root,
@@ -2737,12 +2570,17 @@ def _ledger_case(
         status_rationale="Verified closed.",
     )
     historical = _finding("C-99", FindingClass.OBSERVATION, FindingStatus.OPEN)
-    for finding in (c01, c02_open, historical):
+    for finding in (c01, c02_open):
         _append_finding(
             bridge,
             finding,
             work_unit_id=final_state.current_work_unit_id,
         )
+    _append_finding(
+        bridge,
+        historical,
+        work_unit_id=99,
+    )
     _append_finding(
         bridge,
         c02_closed,
@@ -2752,25 +2590,20 @@ def _ledger_case(
         rationale="Verified closed.",
     )
 
-    correction = final_state.complete_current_work_unit().start_correction_work_unit(
-        start_commit=_git(root, "rev-parse", "HEAD"),
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="2" * 64,
-        finding_ids=("C-01", "C-02"),
-    )
-    correction = _bind_record_authoritative_fixture(driver, correction)
     c03 = _finding(
         "C-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
     )
     _append_finding(
         bridge,
         c03,
-        work_unit_id=correction.current_work_unit_id,
+        work_unit_id=final_state.current_work_unit_id,
     )
-    round_two = correction.record_review_denial(
+    round_two = final_state.with_current_step(
+        WorkflowStep.CLAUDE_SLICE_REVIEW
+    ).record_review_denial(
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01", "C-03"),
-        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        return_step=WorkflowStep.CODEX_CORRECTION,
         progress_made=True,
     )
     round_two = _bind_record_authoritative_fixture(driver, round_two)
@@ -2800,11 +2633,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     )
     assert _ledger_literal(
         driver.authoritative_native_findings(state, correction_mirror)
-    ) == (
-        "C-01:open:blocker",
-        "C-02:closed:observation",
-        "C-03:open:blocker",
-    )
+    ) == _ledger_literal(full_ledger)
     assert _ledger_literal(
         driver.carry_forward_native_findings(state, correction_mirror)
     ) == (
@@ -2833,11 +2662,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     ) == 5
     assert _ledger_literal(
         driver.authoritative_native_findings(mirrored, full_ledger)
-    ) == (
-        "C-01:open:blocker",
-        "C-02:closed:observation",
-        "C-03:open:blocker",
-    )
+    ) == _ledger_literal(full_ledger)
 
     # Projection arguments cannot add or hide findings: records stay decisive.
     missing_record = _finding("C-04", FindingClass.BLOCKER, FindingStatus.OPEN)
@@ -2848,7 +2673,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     ) == _ledger_literal(full_ledger)
     assert _ledger_literal(
         driver.authoritative_native_findings(state, correction_mirror[:-1])
-    ) == _ledger_literal(correction_mirror)
+    ) == _ledger_literal(full_ledger)
 
     # A damaged lineage fails at replay rather than being healed by the mirror.
     orphan = ArtifactBridge(ArtifactStore(driver.root, "orphan-transition"))
@@ -2909,8 +2734,15 @@ def test_replay_and_carry_forward_mutations_turn_matrix_cases_red(
         )
 
     monkeypatch.setattr(orchestrator, "reduce_findings", empty_ledger)
+    replay_root = tmp_path / "replay-empty"
+    replay_root.mkdir()
+    driver, state, current_findings, full_ledger = _ledger_case(
+        replay_root
+    )
     with pytest.raises(AssertionError):
-        _exercise_transition_oracle(tmp_path / "replay-empty")
+        assert _ledger_literal(
+            driver.authoritative_native_findings(state, current_findings)
+        ) == _ledger_literal(full_ledger)
 
     monkeypatch.undo()
     monkeypatch.setattr(
@@ -2918,5 +2750,12 @@ def test_replay_and_carry_forward_mutations_turn_matrix_cases_red(
         "carry_forward_native_findings",
         lambda _self, _state, current_findings: current_findings,
     )
+    carry_root = tmp_path / "carry-through"
+    carry_root.mkdir()
+    driver, state, current_findings, full_ledger = _ledger_case(
+        carry_root
+    )
     with pytest.raises(AssertionError):
-        _exercise_transition_oracle(tmp_path / "carry-through")
+        assert _ledger_literal(
+            driver.carry_forward_native_findings(state, current_findings)
+        ) == _ledger_literal(full_ledger)

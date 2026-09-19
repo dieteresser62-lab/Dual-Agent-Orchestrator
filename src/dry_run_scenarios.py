@@ -17,7 +17,7 @@ from agent_runtime import (
     TransientRetryPolicy,
     classify_agent_failure,
 )
-from artifact_models import InvocationFailurePayload
+from artifact_models import FamilyBindingPayload, InvocationFailurePayload
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import (
     AgentRole,
@@ -31,13 +31,7 @@ from contracts import (
 )
 from content_authority import ValidationCapture, validation_output_digest
 from finding_order import finding_id_sort_key
-from finding_cleanup import (
-    FINDING_CLEANUP_BACKTEST_THRESHOLD,
-    is_finding_cleanup_work_unit,
-    plan_finding_cleanup,
-)
-from finding_convergence import SliceConvergenceEvaluation
-from finding_reducer import project_open_set
+from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
 from validation_matrix import (
@@ -52,7 +46,6 @@ from workflow import (
     ValidationExecutionError,
     WorkflowChanges,
     WorkflowCommitRequest,
-    WorkflowCorrectionBoundary,
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
@@ -426,6 +419,8 @@ class ScriptedInitialState:
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
     planned_slices: tuple[PlannedSlice, ...] = ()
+    family_binding: FamilyBindingPayload | None = None
+    first_slice_start_commit: str | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> ScriptedInitialState:
@@ -443,12 +438,18 @@ class ScriptedInitialState:
             kind = WorkUnitKind(str(raw.get("kind", WorkUnitKind.SLICE.value)))
         except ValueError as exc:
             raise DryRunScenarioError("scenario.initial.kind is unknown") from exc
-        if kind not in {WorkUnitKind.PLAN, WorkUnitKind.SLICE}:
-            raise DryRunScenarioError("scenario.initial.kind must be plan or slice")
+        if kind not in {
+            WorkUnitKind.PLAN,
+            WorkUnitKind.SLICE,
+            WorkUnitKind.BRANCH_DISCOVERY,
+        }:
+            raise DryRunScenarioError(
+                "scenario.initial.kind must be plan, slice, or branch discovery"
+            )
         execution_mode = _string(
             raw.get("execution_mode", "IMPLEMENT"), "scenario.initial.execution_mode"
         )
-        if execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+        if execution_mode not in {"IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"}:
             raise DryRunScenarioError("scenario.initial.execution_mode is unknown")
         work_plan_raw = raw.get("work_plan_path")
         approved_commit_raw = raw.get("approved_plan_commit")
@@ -925,9 +926,6 @@ class ScriptedWorkflowDriver:
     _commit_index: int = 0
     _active_identity: tuple[int, int] | None = None
     _change_positions: dict[tuple[int, int], int] = field(default_factory=dict)
-    _final_review_entry_ids: dict[int, tuple[str, ...]] = field(default_factory=dict)
-    _final_review_dispositioned_ids: dict[int, set[str]] = field(default_factory=dict)
-    _cleanup_scope_by_unit: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         self.active_state = state
@@ -943,50 +941,6 @@ class ScriptedWorkflowDriver:
         _ = state
         return self.durable_findings or findings
 
-    def authoritative_final_review_findings(
-        self, state: WorkflowState, findings: tuple[FindingRecord, ...]
-    ) -> tuple[FindingRecord, ...]:
-        """Emulate the record-derived final-review delivery projection."""
-
-        unit_id = state.current_work_unit_id
-        ledger = self.durable_findings or findings
-        initial_ids = self._final_review_entry_ids.setdefault(
-            unit_id,
-            (
-                state.current_work_unit.open_findings
-                if is_finding_cleanup_work_unit(state)
-                else project_open_set(ledger).finding_ids
-            ),
-        )
-        dispositioned = self._final_review_dispositioned_ids.setdefault(
-            unit_id, set()
-        )
-        pending = frozenset(initial_ids) - dispositioned
-        return tuple(item for item in ledger if item.finding_id in pending)
-
-    def authoritative_cleanup_scope_paths(
-        self, state: WorkflowState
-    ) -> tuple[str, ...]:
-        """Use the scenario's immutable cleanup change boundary as authority."""
-
-        if not is_finding_cleanup_work_unit(state):
-            raise DryRunScenarioError("cleanup scope requested for a regular work unit")
-        authorized = self._cleanup_scope_by_unit.get(state.current_work_unit_id)
-        if authorized is not None:
-            return authorized
-        match = next(
-            (
-                item
-                for item in self.scenario.changes
-                if item.work_unit_id == state.current_work_unit_id
-                and item.round_number == state.current_work_unit.round_number
-            ),
-            None,
-        )
-        if match is None:
-            raise DryRunScenarioError("scripted cleanup has no authorized change boundary")
-        return match.paths
-
     def evaluate_slice_finding_convergence(
         self,
         state: WorkflowState,
@@ -999,8 +953,36 @@ class ScriptedWorkflowDriver:
             ("slice-convergence", (state.current_work_unit_id, round_number))
         )
         if not self.convergence_evaluations:
-            raise DryRunScenarioError(
-                "scripted Slice convergence has no record-derived evaluation"
+            if self.scenario.name not in {
+                "progressive-correction",
+                "stalled-correction",
+                "s5-long-run-v1",
+                "s5-long-run-independent-v1",
+            }:
+                raise DryRunScenarioError(
+                    "scripted Slice convergence has no record-derived evaluation"
+                )
+            phase = (
+                SliceReviewPhase.DISCOVERY
+                if round_number == 1
+                else SliceReviewPhase.CONVERGENCE
+            )
+            progress = not (
+                self.scenario.name == "stalled-correction" and round_number > 1
+            )
+            return SliceConvergenceEvaluation(
+                phase=phase,
+                cohort_finding_ids=(),
+                newly_opened_finding_ids=("C-01",) if round_number == 1 else (),
+                closed_local_finding_ids=("C-01",) if progress and round_number > 1 else (),
+                forwarded_local_finding_ids=(),
+                attested_remediation_finding_ids=(),
+                progress_made=progress,
+                reason=(
+                    "the scripted record chain contains a convergence transition"
+                    if progress
+                    else "the scripted record chain contains no convergence transition"
+                ),
             )
         return self.convergence_evaluations.pop(0)
 
@@ -1036,23 +1018,6 @@ class ScriptedWorkflowDriver:
         """Mirror the complete reviewer result as the scripted durable ledger."""
         _ = (fingerprint, round_number)
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
-        previous_by_id = {item.finding_id: item for item in previous_findings}
-        if (
-            self.active_state is not None
-            and (
-                self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-                or is_finding_cleanup_work_unit(self.active_state)
-            )
-        ):
-            dispositioned = self._final_review_dispositioned_ids.setdefault(
-                self.active_state.current_work_unit_id, set()
-            )
-            dispositioned.update(
-                item.finding_id
-                for item in output.result.findings
-                if item.finding_id in previous_by_id
-                and item != previous_by_id[item.finding_id]
-            )
         ledger.update({item.finding_id: item for item in output.result.findings})
         self.durable_findings = tuple(
             ledger[key] for key in sorted(ledger, key=finding_id_sort_key)
@@ -1225,16 +1190,6 @@ class ScriptedWorkflowDriver:
             raise DryRunScenarioError(
                 "scripted correction delta lacks its fingerprint-bound change"
             )
-        if (
-            self.active_state is not None
-            and self.active_state.current_work_unit.kind is WorkUnitKind.CORRECTION
-            and self.active_state.current_work_unit.round_number == 1
-            and self.active_state.current_slice.start_fingerprint
-            != previous_fingerprint
-        ):
-            raise DryRunScenarioError(
-                "scripted correction delta differs from its persisted start fingerprint"
-            )
         return match.full_diff
 
     def detect_test_changes(
@@ -1353,48 +1308,6 @@ class ScriptedWorkflowDriver:
             )
         )
         return None
-
-    def prepare_correction(self) -> WorkflowCorrectionBoundary:
-        if not project_open_set(self.durable_findings).findings:
-            raise DryRunScenarioError(
-                "scripted final-review correction requires an open finding"
-            )
-        if self._active_identity is None:
-            raise DryRunScenarioError(
-                "scripted final-review correction has no active work unit"
-            )
-        correction_id = self._active_identity[0] + 1
-        match = next(
-            (
-                item
-                for item in self.scenario.changes
-                if item.work_unit_id == correction_id and item.round_number == 1
-            ),
-            None,
-        )
-        if match is None:
-            raise DryRunScenarioError(
-                f"missing scripted correction boundary for work unit {correction_id}"
-            )
-        self.calls.append(f"prepare-correction:{correction_id}")
-        source = next(
-            (
-                item
-                for item in reversed(self.scenario.changes)
-                if (item.work_unit_id, item.round_number) == self._active_identity
-            ),
-            None,
-        )
-        if source is None:
-            raise DryRunScenarioError(
-                "scripted correction boundary lacks its denied final-review fingerprint"
-            )
-        return WorkflowCorrectionBoundary(
-            start_commit=match.start_commit,
-            scope_paths=match.paths,
-            start_fingerprint=source.fingerprint,
-            scope_change_groups=tuple((path,) for path in match.paths),
-        )
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         if self._commit_index >= len(self.scenario.commits):
@@ -1638,15 +1551,23 @@ def build_scenario_state(
     if not scenario.changes:
         raise DryRunScenarioError("scenario requires at least one scripted change set")
     first = scenario.changes[0]
+    first_slice_start_commit = (
+        scenario.initial.first_slice_start_commit or first.start_commit
+    )
     task_digest = hashlib.sha256(
         task_file.read_text(encoding="utf-8").encode("utf-8")
     ).hexdigest()
+    branch_base = (
+        scenario.initial.family_binding.family_base_commit
+        if scenario.initial.family_binding is not None
+        else first.start_commit
+    )
     state = init_workflow_state(
         run_id=f"dry-{scenario.name}",
         task_file=str(task_file.resolve()),
         branch=scenario.initial.branch,
-        branch_base=first.start_commit,
-        first_slice_start_commit=first.start_commit,
+        branch_base=branch_base,
+        first_slice_start_commit=first_slice_start_commit,
         slice_count=scenario.initial.slice_count,
         task_digest=task_digest,
         execution_mode=scenario.initial.execution_mode,
@@ -1655,15 +1576,19 @@ def build_scenario_state(
         approved_plan_commit=scenario.initial.approved_plan_commit,
         target_branch=scenario.initial.branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        family_binding=scenario.initial.family_binding,
         timestamp=scenario.clock_start.isoformat(),
     )
     if scenario.initial.planned_slices:
         state = state.bind_slice_plan(
             scenario.initial.planned_slices,
-            first_start_commit=first.start_commit,
+            first_start_commit=first_slice_start_commit,
             updated_at=scenario.clock_start.isoformat(),
         )
-    if scenario.initial.kind is WorkUnitKind.PLAN:
+    if scenario.initial.kind in {
+        WorkUnitKind.PLAN,
+        WorkUnitKind.BRANCH_DISCOVERY,
+    }:
         return state
     state = state.complete_current_work_unit(updated_at=scenario.clock_start.isoformat())
     state = state.start_work_unit(
@@ -1919,56 +1844,14 @@ def _run_scripted_workflow(
             session.driver.checkpoint(current, history)
             current = session.driver.active_state or current
 
-    def run_cleanup_after_slice(report: ScriptedRunReport) -> ScriptedRunReport:
-        current = report.result.state
-        if current.current_work_unit.kind is not WorkUnitKind.SLICE:
-            return report
-        findings = session.driver.carry_forward_native_findings(
-            current, report.result.history.findings
-        )
-        addressed_ids = tuple(
-            finding_id
-            for unit in current.work_units
-            if is_finding_cleanup_work_unit(current, unit)
-            for finding_id in unit.open_findings
-        )
-        cleanup = plan_finding_cleanup(
-            findings,
-            repository_root=task_file.parent,
-            previously_addressed_ids=addressed_ids,
-            threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
-        )
-        if cleanup is None:
-            return report
-        cleanup_state = current.start_finding_cleanup_work_unit(
-            finding_ids=cleanup.finding_ids
-        )
-        session.driver._cleanup_scope_by_unit[
-            cleanup_state.current_work_unit_id
-        ] = cleanup.scope_paths
-        carried_attestations = report.result.history.attestations[-1:]
-        cleanup_history = WorkflowHistory(
-            cleanup_state.current_work_unit_id,
-            findings=findings,
-            attestations=carried_attestations,
-        )
-        session.driver.bind_work_unit(cleanup_state)
-        session.driver.checkpoint(cleanup_state, cleanup_history)
-        return run_unit(cleanup_state, cleanup_history)
-
     first = run_unit(state)
     if not first.result.completed:
         return first
     state = first.result.state
-    if state.execution_mode == "PLAN_ONLY":
+    if state.execution_mode in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
         return first
     planned_slices = state.planned_slices
     completed_slice = first if state.current_work_unit.kind is WorkUnitKind.SLICE else None
-    if completed_slice is not None:
-        completed_slice = run_cleanup_after_slice(completed_slice)
-        if not completed_slice.result.completed:
-            return completed_slice
-        state = completed_slice.result.state
     completed_ids = {
         item.slice_id for item in state.slices if item.commit_ref is not None
     }
@@ -1994,16 +1877,10 @@ def _run_scripted_workflow(
         completed_slice = run_unit(state)
         if not completed_slice.result.completed:
             return completed_slice
-        completed_slice = run_cleanup_after_slice(completed_slice)
-        if not completed_slice.result.completed:
-            return completed_slice
         state = completed_slice.result.state
     if completed_slice is None:
         raise DryRunScenarioError("scripted workflow has no completed Slice")
-    final_result = session.engine.run_final_review(
-        state, context, completed_slice.result.history
-    )
-    return session.report(final_result)
+    return completed_slice
 
 
 def _scripted_unified_diff(paths: tuple[str, ...], change: str) -> str:
@@ -2064,11 +1941,16 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "result_type": "plan_result",
                     "ready": True,
                     "finding_dispositions": [],
+                    "plan_treatments": [],
+                    "plan_completion": "IMPLEMENTATION_REQUIRED",
                     "slice_plan": [
                         {
                             "slice_id": 1,
                             "summary": "Create the executable S5 work-plan artifact.",
                             "scope_paths": ["docs/internal/s5-work-plan.md"],
+                            "acceptance_criteria": [
+                                "The executable S5 work-plan artifact is committed."
+                            ],
                         }
                     ],
                 },
@@ -2087,6 +1969,8 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "new_findings": [],
                     "status_changes": [],
                     "reclassifications": [],
+                    "responsibility_routes": [],
+                    "plan_treatment_decisions": [],
                     "anchors": [],
                     "review_evidence": {
                         "dimensions": "plan contract, scope, failure paths, handoff",
@@ -2114,9 +1998,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
     """Return S5's IMPLEMENT correction, observation and resume journey."""
 
     base, commit_one, commit_two = "b" * 40, "c" * 40, "d" * 40
-    slice_one_fp, slice_two_fp, correction_fp, final_fp = (
-        value * 64 for value in "2345"
-    )
+    slice_one_fp, slice_two_fp, correction_fp = (value * 64 for value in "234")
 
     def codex(  # allowlist:provider -- scripted native result factory
         result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
@@ -2131,6 +2013,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                     "finding_id": finding_id,
                     "decision": "accepted",
                     "rationale": f"The provider-free correction addresses {finding_id}.",
+                    "responsibility_proposal": None,
                 }
                 for finding_id in dispositions
             ],
@@ -2172,10 +2055,13 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                     "finding_id": finding_id,
                     "status": "CLOSED",
                     "rationale": f"The long-run evidence closes {finding_id}.",
+                    "closure": {"kind": "fixed"},
                 }
                 for finding_id in closed
             ],
             "reclassifications": [],
+            "responsibility_routes": [],
+            "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "correctness, contracts, failure paths, security, resume",
@@ -2239,17 +2125,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
                 review(approved=True, closed=("C-02",)),
             ),
-            ScriptedAgentEvent(
-                AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,  # allowlist:provider
-                codex(  # allowlist:provider
-                    "final_report_result",
-                    self_check="The resumed long-run retained and closed every finding.",
-                ),
-            ),
-            ScriptedAgentEvent(
-                AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
-                review(approved=True),
-            ),
         ),
         changes=(
             _scripted_change(
@@ -2269,9 +2144,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             _scripted_change(
                 3, 3, commit_one, correction_fp, ("src/second.py",), "correction"
             ),
-            _scripted_change(
-                4, 1, base, final_fp, ("src/first.py", "src/second.py"), "final"
-            ),
         ),
         validations=tuple(
             ScriptedValidation(fingerprint)
@@ -2279,7 +2151,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 slice_one_fp,
                 slice_two_fp,
                 correction_fp,
-                final_fp,
             )
         ),
         commits=(
@@ -2306,20 +2177,103 @@ def build_s5_long_run_scenario() -> DryRunScenario:
     )
 
 
+def build_joint_branch_discovery_scenario(
+    family_binding: FamilyBindingPayload,
+) -> DryRunScenario:
+    """Return the linked standalone branch-discovery run after IMPLEMENT."""
+
+    reviewed_head = family_binding.current_implementation_commit
+    if reviewed_head is None:
+        raise DryRunScenarioError(
+            "branch discovery scenario requires the implementation HEAD"
+        )
+    fingerprint = "6" * 64
+    return DryRunScenario(
+        name="joint-branch-discovery-v1",
+        initial=ScriptedInitialState(
+            kind=WorkUnitKind.BRANCH_DISCOVERY,
+            branch="feature/dry-run",
+            slice_count=1,
+            scope_paths=("src/first.py", "src/second.py"),
+            execution_mode="BRANCH_DISCOVERY",
+            family_binding=family_binding,
+            first_slice_start_commit=reviewed_head,
+        ),
+        agent_events=(
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE,  # allowlist:provider
+                1,
+                1,
+                WorkflowStep.CLAUDE_BRANCH_DISCOVERY,  # allowlist:provider
+                {
+                    "schema_version": "native-agent-review-result-v2",
+                    "result_type": "branch_discovery_completed",
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "reviewer": "claude",  # allowlist:provider
+                    "scan_complete": True,
+                    "new_findings": [
+                        {
+                            "finding_id": "C-03",
+                            "finding_class": "OBSERVATION",
+                            "summary": (
+                                "The linked discovery run found a remediation item."
+                            ),
+                            "predecessor_finding_ref": None,
+                            "evidence_anchor_sha256": None,
+                            "acceptance_test": {
+                                "kind": "prose",
+                                "text": (
+                                    "A linked PLAN_ONLY run receives the complete "
+                                    "finding history."
+                                ),
+                            },
+                        }
+                    ],
+                    "occurrences": [],
+                    "review_evidence": {
+                        "dimensions": (
+                            "correctness, contracts, failure paths, security, resume"
+                        ),
+                        "largest_residual_risk": (
+                            "the remediation handoff loses imported finding history"
+                        ),
+                        "break_condition": (
+                            "the linked PLAN_ONLY import omits C-03"
+                        ),
+                    },
+                    "pre_mortem": (
+                        "A crash after discovery could publish an unbound family task."
+                    ),
+                },
+            ),
+        ),
+        changes=(
+            _scripted_change(
+                1,
+                1,
+                family_binding.family_base_commit,
+                fingerprint,
+                ("src/first.py", "src/second.py"),
+                "branch discovery",
+            ),
+        ),
+        validations=(ScriptedValidation(fingerprint),),
+        clock_start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+
 def build_progressive_correction_scenario(
     *, stalled: bool = False
 ) -> DryRunScenario:
-    """Exercise correction convergence beyond four returns or at a fixed point."""
+    """Exercise same-Slice convergence beyond four returns or at a fixed point."""
 
-    base, slice_commit, correction_commit = "a" * 40, "b" * 40, "c" * 40
+    base, slice_commit = "a" * 40, "b" * 40
     scope = ("src/runtime.py",)
     implementer_role = AgentRole.CODEX  # allowlist:provider -- scripted role boundary
     reviewer_role = AgentRole.CLAUDE  # allowlist:provider -- scripted role boundary
     implementation_step = WorkflowStep.CODEX_IMPLEMENTATION  # allowlist:provider -- scripted step boundary
     slice_review_step = WorkflowStep.CLAUDE_SLICE_REVIEW  # allowlist:provider -- scripted step boundary
-    report_step = WorkflowStep.CODEX_FINAL_REVIEW  # allowlist:provider -- scripted step boundary
-    correction_step = WorkflowStep.CODEX_FINAL_CORRECTION  # allowlist:provider -- scripted step boundary
-    final_review_step = WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- scripted step boundary
+    correction_step = WorkflowStep.CODEX_CORRECTION  # allowlist:provider -- scripted step boundary
 
     def implementer_result(
         result_type: str, findings: tuple[str, ...] = ()
@@ -2334,14 +2288,11 @@ def build_progressive_correction_scenario(
                     "finding_id": finding_id,
                     "decision": "accepted",
                     "rationale": f"The scripted correction addresses {finding_id}.",
+                    "responsibility_proposal": None,
                 }
                 for finding_id in findings
             ],
-            **(
-                {"self_check": "The scripted final review is internally consistent."}
-                if result_type == "final_report_result"
-                else {"test_files": []}
-            ),
+            "test_files": [],
         }
 
     def review(
@@ -2373,10 +2324,13 @@ def build_progressive_correction_scenario(
                     "finding_id": finding_id,
                     "status": "CLOSED",
                     "rationale": f"The scripted correction closes {finding_id}.",
+                    "closure": {"kind": "fixed"},
                 }
                 for finding_id in closed
             ],
             "reclassifications": [],
+            "responsibility_routes": [],
+            "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "progress, terminal verdict, persistence, resume",
@@ -2393,18 +2347,10 @@ def build_progressive_correction_scenario(
         ),
         ScriptedAgentEvent(
             reviewer_role, 2, 1, slice_review_step,
-            review(approved=True),
-        ),
-        ScriptedAgentEvent(
-            implementer_role, 3, 1, report_step,
-            implementer_result("final_report_result"),
-        ),
-        ScriptedAgentEvent(
-            reviewer_role, 3, 1, final_review_step,
             review(approved=False, opened=("C-01",)),
         ),
         ScriptedAgentEvent(
-            implementer_role, 4, 1, correction_step,
+            implementer_role, 2, 2, correction_step,
             implementer_result("correction_result", ("C-01",)),
         ),
     ]
@@ -2413,7 +2359,7 @@ def build_progressive_correction_scenario(
         if stalled:
             events.append(
                 ScriptedAgentEvent(
-                    reviewer_role, 4, round_number,
+                    reviewer_role, 2, round_number + 1,
                     slice_review_step,
                     review(approved=False),
                 )
@@ -2425,7 +2371,7 @@ def build_progressive_correction_scenario(
             events.extend(
                 (
                     ScriptedAgentEvent(
-                        reviewer_role, 4, round_number,
+                        reviewer_role, 2, round_number + 1,
                         slice_review_step,
                         review(
                             approved=False,
@@ -2434,7 +2380,7 @@ def build_progressive_correction_scenario(
                         ),
                     ),
                     ScriptedAgentEvent(
-                        implementer_role, 4, round_number + 1,
+                        implementer_role, 2, round_number + 2,
                         correction_step,
                         implementer_result("correction_result", (next_id,)),
                     ),
@@ -2443,44 +2389,25 @@ def build_progressive_correction_scenario(
         else:
             events.append(
                 ScriptedAgentEvent(
-                    reviewer_role, 4, round_number,
+                    reviewer_role, 2, round_number + 1,
                     slice_review_step,
                     review(approved=True, closed=(current_id,)),
                 )
             )
-    if not stalled:
-        events.extend(
-            (
-                ScriptedAgentEvent(
-                    implementer_role, 5, 1, report_step,
-                    implementer_result("final_report_result"),
-                ),
-                ScriptedAgentEvent(
-                    reviewer_role, 5, 1, final_review_step,
-                    review(approved=True),
-                ),
-            )
-        )
-
     changes = [
         _scripted_change(2, 1, base, "1" * 64, scope, "implementation"),
-        _scripted_change(3, 1, base, "2" * 64, scope, "initial final review"),
     ]
     for round_number in range(1, correction_rounds + 1):
         fingerprint = str(round_number + 2) * 64
         changes.append(
             _scripted_change(
-                4,
-                round_number,
-                slice_commit,
+                2,
+                round_number + 1,
+                base,
                 fingerprint,
                 scope,
                 f"correction round {round_number}",
             )
-        )
-    if not stalled:
-        changes.append(
-            _scripted_change(5, 1, base, "9" * 64, scope, "repeated final review")
         )
     validation_fingerprints = tuple(item.fingerprint for item in changes)
     return DryRunScenario(
@@ -2497,8 +2424,7 @@ def build_progressive_correction_scenario(
             for fingerprint in validation_fingerprints
         ),
         commits=(
-            ScriptedCommit(1, "1" * 64, slice_commit),
-            *((ScriptedCommit(2, "8" * 64, correction_commit),) if not stalled else ()),
+            *((ScriptedCommit(1, "8" * 64, slice_commit),) if not stalled else ()),
         ),
     )
 

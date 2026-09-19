@@ -3,7 +3,6 @@
   "source_commit": "d3f30ef075909fbc93c73cb8e5ea378dcfd893ec",
   "source_blob": "c3e83c1f014b84e142a1ac439b05c758086bf0bf",
   "scenario_order": [
-    "recovered-final-history",
     "waiting-quota",
     "resume-quota",
     "gate-reframed",
@@ -14,19 +13,15 @@
     "slice-head-drift",
     "slice-boundary",
     "slice-round",
-    "correction-round",
-    "final-review-entry",
     "plan-to-first-slice",
     "pending-slice",
     "plan-only-handoff",
     "plan-only-missing-commit",
     "plan-only-bind-error",
     "plan-only-handoff-error",
-    "completed-plan-without-slices",
-    "transition-bound-overflow"
+    "completed-plan-without-slices"
   ],
   "scenario_sha256": {
-    "recovered-final-history": "c0522160cf5c5136b0101b5efddb6b80eb33443c169320c28c5ca98677b1549d",
     "waiting-quota": "e5699a3f5d3b66d721c25865f3c4907f9f001caed787c5bcd5120f3ba9226d76",
     "resume-quota": "6b486e6d291f964bd32bb7d699237cacb7a1ce1ae5554fb9e385f0d50fb614c5",
     "gate-reframed": "243a3e766128a275fa9da35672e98a20380cf9e47634abc18dc1cd60997ec048",
@@ -37,15 +32,12 @@
     "slice-head-drift": "50dd995ab3551b9a6af3507f39739e912c65ee7a03bab49d329dec3be8f36c91",
     "slice-boundary": "44802bee588f265230380af88201b5cf41c5d426e07d81e5cac14d1c05d41563",
     "slice-round": "6db1698ef16f4488f602a174d985e9fb8d761acd2cd442d9ad78b3e567caaffb",
-    "correction-round": "0ee29278c0765efc2f571e87b201545e80e67664cb54ff682ac6aec991e0a8cd",
-    "final-review-entry": "92eb511c512eb37bc3e37bf88740088a4352ee33aa5d8ba7a6c741c52376e45f",
     "plan-to-first-slice": "7e0819ca0fdf0df1c09beabef888097ac9b1623df580200797fdf7c0da2895e3",
     "pending-slice": "752db8848c331297ffc1708b7d2ce652ab899bc6865b05979d995ae36b1af766",
     "plan-only-handoff": "28896a5f40dd13ad62aac6c3533e85446dd70f5a6e52b9ee989e74f86417bf27",
     "plan-only-missing-commit": "ceac5fcdac987809d743da7fc657a84952b22ac7828048217becf7e113c4e7dd",
     "plan-only-bind-error": "a84ae2895167c804d62e29176c4085e589f74d73b2cb7b3e44aafa571440b2e3",
     "plan-only-handoff-error": "7a3a0e8c8f77b60fee9ec50e1f498525d0eb9b34d94c83e525a5f8144e6c49f3",
-    "completed-plan-without-slices": "bdb321a978d8be53335222cbb2f6858a3dc723cb305865a69eadb6cee217b603",
-    "transition-bound-overflow": "eeeb7bbcee5b1f8ad5295ef3dd9afeed7a0ad9f0b834b7b2412b854967738d84"
+    "completed-plan-without-slices": "bdb321a978d8be53335222cbb2f6858a3dc723cb305865a69eadb6cee217b603"
   }
 }

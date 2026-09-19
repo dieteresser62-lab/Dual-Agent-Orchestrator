@@ -14,7 +14,6 @@ from typing import Mapping, Sequence
 from artifact_models import (
     BranchDiscoveryHandoffImportPayload,
     ArtifactRecord,
-    CorrectionWorkUnitPayload,
     FindingHandoffImportPayload,
     FindingSeverity,
     FindingTransitionPayload,
@@ -56,28 +55,6 @@ def is_closed_finding_status(status: FindingStatus) -> bool:
     """Keep finding-state decisions inside the canonical reduction boundary."""
 
     return status is FindingStatus.CLOSED
-
-
-def first_correction_work_unit_payload(
-    records: Sequence[ArtifactRecord], work_unit_id: int | str
-) -> CorrectionWorkUnitPayload | None:
-    """Return the immutable first path authorization for one correction unit.
-
-    Later ``CorrectionWorkUnitPayload`` revisions advance round-local facts.  The
-    first record is the authorization boundary; validated replay separately
-    guarantees that later revisions cannot widen or otherwise drift its paths.
-    """
-
-    logical_id = f"work-unit-{work_unit_id}"
-    return next(
-        (
-            record.payload
-            for record in records
-            if record.logical_id == logical_id
-            and isinstance(record.payload, CorrectionWorkUnitPayload)
-        ),
-        None,
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,26 +136,6 @@ class ReviewFindingMerge:
 
 
 @dataclass(frozen=True, slots=True)
-class CorrectionRoundAttributionProjection:
-    round_number: int
-    finding_ids: tuple[str, ...]
-    record_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class CorrectionAttributionProjection:
-    """Immutable Finding assignment of one correction work unit."""
-
-    work_unit_id: str
-    slice_id: str
-    round_number: int
-    finding_ids: tuple[str, ...]
-    record_ids: tuple[str, ...]
-    findings: tuple[FindingRecord, ...]
-    rounds: tuple[CorrectionRoundAttributionProjection, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class FindingImportSnapshotProjection:
     """Foreign ledger imported for the first implementation work unit."""
 
@@ -202,16 +159,6 @@ class FindingStatusTransitionsProjection:
     """Reviewer-owned opening, status, and reclassification transitions."""
 
     transitions: tuple[FindingTransitionProjection, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class FinalReviewDispositionProjection:
-    """Record-derived delivery progress for one final-review work unit."""
-
-    work_unit_id: str
-    initial_finding_ids: tuple[str, ...]
-    dispositioned_finding_ids: tuple[str, ...]
-    pending: FindingRequestProjection
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,7 +238,6 @@ class FindingReduction:
 
     ledger: FindingLedgerProjection
     open_set: FindingOpenSetProjection
-    correction_attribution: tuple[CorrectionAttributionProjection, ...]
     import_snapshot: FindingImportSnapshotProjection | None
     status_transitions: FindingStatusTransitionsProjection
     responsibilities: tuple[FindingResponsibilityProjection, ...]
@@ -331,20 +277,6 @@ class FindingReduction:
             finding_ids=selected.finding_ids,
             findings=selected.findings,
         )
-
-    def correction_for(
-        self, work_unit_id: int | str
-    ) -> CorrectionAttributionProjection | None:
-        target = str(work_unit_id)
-        return next(
-            (
-                item
-                for item in self.correction_attribution
-                if item.work_unit_id == target
-            ),
-            None,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class ReviewerStatusChange:
@@ -411,13 +343,9 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
         if item.responsibility is not None
     )
     import_snapshot = _project_import_snapshot(records, events)
-    correction_attribution = _project_correction_attribution(
-        records, events
-    )
     return FindingReduction(
         ledger=ledger,
         open_set=open_set,
-        correction_attribution=correction_attribution,
         import_snapshot=import_snapshot,
         status_transitions=status_transitions,
         responsibilities=responsibilities,
@@ -502,43 +430,6 @@ def project_open_set(
     )
 
 
-def project_cleanup_review_targets(
-    reduction: FindingReduction,
-    work_unit_id: int | str,
-) -> FindingRequestProjection:
-    """Project an initial cleanup offer or its actionable blocker follow-up."""
-
-    target = str(work_unit_id)
-    attribution = reduction.correction_for(target)
-    if attribution is None:
-        raise ValueError(
-            f"finding cleanup work unit {target} has no correction attribution"
-        )
-    attributed = reduction.request_subset(
-        finding_ids=attribution.finding_ids,
-    ).findings
-    open_attributed = project_open_set(attributed).findings
-    has_disposition = any(
-        transition.payload.work_unit_id == target
-        and transition.payload.action in {"status_changed", "reclassified"}
-        for transition in reduction.status_transitions.transitions
-    )
-    selected = (
-        tuple(
-            finding
-            for finding in open_attributed
-            if finding.finding_class is FindingClass.BLOCKER
-        )
-        if has_disposition
-        else open_attributed
-    )
-    return FindingRequestProjection(
-        work_unit_id=target,
-        finding_ids=tuple(finding.finding_id for finding in selected),
-        findings=selected,
-    )
-
-
 def project_finding_transition_ids(
     previous: Sequence[FindingRecord],
     current: Sequence[FindingRecord],
@@ -557,63 +448,6 @@ def project_finding_transition_ids(
             current_by_id[item.finding_id].status is not item.status
             or current_by_id[item.finding_id].finding_class is not item.finding_class
         )
-    )
-
-
-def project_final_review_dispositions(
-    replay: ArtifactReplayResult,
-    work_unit_id: int | str,
-) -> FinalReviewDispositionProjection:
-    """Derive the exact undispositioned final-review set from the record chain.
-
-    The first work-unit record is the immutable entry boundary. A regular final
-    review owes dispositions for every Finding open at that boundary. A bounded
-    correction owes them only for the Finding IDs offered by its correction
-    boundary. Runtime history and the state mirror are deliberately not inputs.
-    """
-
-    target = str(work_unit_id)
-    boundary_positions = tuple(
-        index
-        for index, record in enumerate(replay.records)
-        if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
-        and record.logical_id == f"work-unit-{target}"
-    )
-    if not boundary_positions:
-        raise ValueError(
-            f"final review work unit {target} has no record-chain boundary"
-        )
-    boundary = boundary_positions[0]
-    boundary_payload = replay.records[boundary].payload
-    if isinstance(boundary_payload, CorrectionWorkUnitPayload):
-        initial_ids = sorted_finding_ids(boundary_payload.finding_ids)
-    else:
-        entry_findings = _reduce_events(_transition_events(replay.records[:boundary]))
-        initial_ids = project_open_set(entry_findings).finding_ids
-    dispositioned = sorted_finding_ids(
-        {
-            event.payload.finding_id
-            for event in _transition_events(replay.records[boundary + 1 :])
-            if event.payload.work_unit_id == target
-            and event.payload.finding_id in frozenset(initial_ids)
-            and event.payload.action in {"status_changed", "reclassified"}
-        }
-    )
-    pending_ids = tuple(
-        finding_id
-        for finding_id in initial_ids
-        if finding_id not in frozenset(dispositioned)
-    )
-    pending = reduce_findings(replay).request_subset(finding_ids=pending_ids)
-    if pending.finding_ids != pending_ids:
-        raise ValueError(
-            "final review pending finding projection differs from its entry set"
-        )
-    return FinalReviewDispositionProjection(
-        work_unit_id=target,
-        initial_finding_ids=initial_ids,
-        dispositioned_finding_ids=dispositioned,
-        pending=FindingRequestProjection(target, pending.finding_ids, pending.findings),
     )
 
 
@@ -1297,9 +1131,7 @@ def _validate_opening_responsibility(
                 candidate.payload
                 for candidate in reversed(prior)
                 if candidate.logical_id == f"work-unit-{payload.work_unit_id}"
-                and isinstance(
-                    candidate.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
-                )
+                and isinstance(candidate.payload, WorkUnitPayload)
             ),
             None,
         )
@@ -1457,66 +1289,6 @@ def _project_import_snapshot(
     )
 
 
-def _project_correction_attribution(
-    records: Sequence[ArtifactRecord],
-    events: Sequence[FindingTransitionProjection],
-) -> tuple[CorrectionAttributionProjection, ...]:
-    grouped: dict[str, list[ArtifactRecord]] = {}
-    for record in records:
-        if (
-            isinstance(record.payload, CorrectionWorkUnitPayload)
-            and record.logical_id.startswith("work-unit-")
-        ):
-            grouped.setdefault(
-                record.logical_id.removeprefix("work-unit-"), []
-            ).append(record)
-    result: list[CorrectionAttributionProjection] = []
-    for work_unit_id in sorted(grouped, key=_identifier_sort_key):
-        correction_records = grouped[work_unit_id]
-        first_payload = correction_records[0].payload
-        assert isinstance(first_payload, CorrectionWorkUnitPayload)
-        round_number = max(
-            record.payload.round_number
-            for record in correction_records
-            if isinstance(record.payload, CorrectionWorkUnitPayload)
-        )
-        finding_ids = sorted_finding_ids(
-            {
-                finding_id
-                for record in correction_records
-                if isinstance(record.payload, CorrectionWorkUnitPayload)
-                for finding_id in record.payload.finding_ids
-            }
-        )
-        findings = _reduce_events(
-            tuple(
-                event
-                for event in events
-                if event.payload.finding_id in frozenset(finding_ids)
-            )
-        )
-        result.append(
-            CorrectionAttributionProjection(
-                work_unit_id=work_unit_id,
-                slice_id=first_payload.slice_id,
-                round_number=round_number,
-                finding_ids=finding_ids,
-                record_ids=tuple(record.record_id for record in correction_records),
-                findings=findings,
-                rounds=tuple(
-                    CorrectionRoundAttributionProjection(
-                        record.payload.round_number,
-                        sorted_finding_ids(record.payload.finding_ids),
-                        record.record_id,
-                    )
-                    for record in correction_records
-                    if isinstance(record.payload, CorrectionWorkUnitPayload)
-                ),
-            )
-        )
-    return tuple(result)
-
-
 def _canonical_findings(
     findings: Sequence[FindingRecord],
 ) -> tuple[FindingRecord, ...]:
@@ -1531,7 +1303,3 @@ def _canonical_findings(
 
 def _event_record(event: FindingTransitionProjection) -> ArtifactRecord:
     return event._record
-
-
-def _identifier_sort_key(value: str) -> tuple[int, int | str]:
-    return (0, int(value)) if value.isdigit() else (1, value)

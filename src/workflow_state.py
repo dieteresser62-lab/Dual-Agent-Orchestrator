@@ -36,32 +36,6 @@ QUOTA_RESUME_DIFF_PATTERN = re.compile(
 )
 
 
-def managed_correction_slice_report_path(
-    audit_report_path: str, slice_id: int
-) -> str:
-    """Derive the report path that must belong to a correction Slice's scope."""
-    _require_positive_int(slice_id, "correction slice_id")
-    stem = re.sub(
-        r"-(?:gesamtpruefung|review)-[0-9a-f]{8}$",  # allowlist:german
-        "",
-        PurePosixPath(audit_report_path).stem,
-    )
-    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "task"
-    return (
-        f"docs/internal/slice-{slug}-{slice_id:02d}-abschlusskorrektur.md"
-    )
-
-
-def _is_managed_correction_slice_report(
-    audit_report_path: str, candidate: str
-) -> bool:
-    first = managed_correction_slice_report_path(audit_report_path, 1)
-    prefix = first.removesuffix("01-abschlusskorrektur.md")
-    return re.fullmatch(
-        rf"{re.escape(prefix)}[0-9]{{2,}}-abschlusskorrektur\.md", candidate
-    ) is not None
-
-
 def quota_resume_diff_acknowledgement(
     invocation_id: str, fingerprint: str
 ) -> str:
@@ -75,8 +49,7 @@ class WorkflowStateValidationError(ValueError):
 class WorkUnitKind(str, Enum):
     PLAN = "plan"
     SLICE = "slice"
-    CORRECTION = "correction"
-    FINAL_REVIEW = "final_review"
+    BRANCH_DISCOVERY = "branch_discovery"
 
 
 class WorkflowStep(str, Enum):
@@ -87,9 +60,7 @@ class WorkflowStep(str, Enum):
     CLAUDE_SLICE_REVIEW = "claude_slice_review"
     CODEX_CORRECTION = "codex_correction"
     SLICE_COMMIT = "slice_commit"
-    CODEX_FINAL_REVIEW = "codex_final_review"
-    CODEX_FINAL_CORRECTION = "codex_final_correction"
-    CLAUDE_FINAL_REVIEW = "claude_final_review"
+    CLAUDE_BRANCH_DISCOVERY = "claude_branch_discovery"
     COMPLETED = "completed"
 
 
@@ -1424,25 +1395,9 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "planned slice ids must be contiguous and 1-based"
                 )
-            if len(self.planned_slices) > len(self.slices):
+            if len(self.planned_slices) != len(self.slices):
                 raise WorkflowStateValidationError(
-                    "planned slice count cannot exceed persisted slices"
-                )
-            extra_slice_ids = {
-                item.slice_id for item in self.slices[len(self.planned_slices):]
-            }
-            allowed_extra_slice_work_units = {
-                WorkUnitKind.CORRECTION,
-                WorkUnitKind.FINAL_REVIEW,
-            }
-            if any(
-                unit.slice_id in extra_slice_ids
-                and unit.kind not in allowed_extra_slice_work_units
-                for unit in self.work_units
-            ):
-                raise WorkflowStateValidationError(
-                    "only correction and subsequent final-review work units may "
-                    "extend the persisted Slice plan"
+                    "planned slice count must equal persisted slices"
                 )
         if self.runtime_history is not None and not isinstance(
             self.runtime_history, Mapping
@@ -1467,13 +1422,6 @@ class WorkflowState:
         if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"}:
             raise WorkflowStateValidationError(
                 "execution_mode must be IMPLEMENT, PLAN_ONLY, or BRANCH_DISCOVERY"
-            )
-        if (
-            self.execution_mode == "BRANCH_DISCOVERY"
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise WorkflowStateValidationError(
-                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
             )
         if self.task_digest is not None:
             if not SHA256_PATTERN.fullmatch(self.task_digest):
@@ -1752,153 +1700,6 @@ class WorkflowState:
             current_step=step,
             slices=slices,
             work_units=(*self.work_units, new_unit),
-            updated_at=updated_at or _now_iso(),
-        )
-
-    def start_final_review_work_unit(
-        self, *, updated_at: str | None = None
-    ) -> WorkflowState:
-        """Start branch-wide final review without reopening a committed slice."""
-        if self.current_work_unit.status is not WorkUnitStatus.COMPLETED:
-            raise WorkflowStateValidationError(
-                "the current work unit must be completed before final review"
-            )
-        if any(item.status is not SliceStatus.COMPLETED for item in self.slices):
-            raise WorkflowStateValidationError(
-                "final review requires every current slice to be committed"
-            )
-        new_unit = WorkUnitRecord(
-            work_unit_id=len(self.work_units) + 1,
-            slice_id=self.current_slice_id,
-            kind=WorkUnitKind.FINAL_REVIEW,
-            status=WorkUnitStatus.IN_PROGRESS,
-            current_step=WorkflowStep.CODEX_FINAL_REVIEW,
-        )
-        return replace(
-            self,
-            current_work_unit_id=new_unit.work_unit_id,
-            current_step=new_unit.current_step,
-            work_units=(*self.work_units, new_unit),
-            updated_at=updated_at or _now_iso(),
-        )
-
-    def start_finding_cleanup_work_unit(
-        self,
-        *,
-        finding_ids: tuple[str, ...],
-        updated_at: str | None = None,
-    ) -> WorkflowState:
-        """Start a reviewer-only correction unit without creating a plan Slice.
-
-        The unit deliberately reuses the just-completed Slice identifier.  Its
-        exact independent path boundary is carried by the existing
-        ``CorrectionWorkUnitPayload`` derived from ``finding_ids``.
-        """
-
-        _require_unique_non_empty(finding_ids, "finding cleanup finding_ids")
-        if not finding_ids:
-            raise WorkflowStateValidationError(
-                "a finding cleanup work unit requires open findings"
-            )
-        if (
-            self.current_work_unit.kind is not WorkUnitKind.SLICE
-            or self.current_work_unit.status is not WorkUnitStatus.COMPLETED
-            or self.current_slice.status is not SliceStatus.COMPLETED
-        ):
-            raise WorkflowStateValidationError(
-                "a finding cleanup work unit requires a completed planned Slice"
-            )
-        cleanup_unit = WorkUnitRecord(
-            work_unit_id=len(self.work_units) + 1,
-            slice_id=self.current_slice_id,
-            kind=WorkUnitKind.CORRECTION,
-            status=WorkUnitStatus.IN_PROGRESS,
-            # The final-review contract already supports bounded disposition
-            # delivery and a denied no-progress terminal round.  Starting at
-            # The reviewer keeps cleanup read-only and reviewer-owned.
-            current_step=WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- canonical state-v3 step
-            open_findings=finding_ids,
-        )
-        return replace(
-            self,
-            current_work_unit_id=cleanup_unit.work_unit_id,
-            current_step=cleanup_unit.current_step,
-            work_units=(*self.work_units, cleanup_unit),
-            updated_at=updated_at or _now_iso(),
-        )
-
-    def start_correction_work_unit(
-        self,
-        *,
-        start_commit: str,
-        scope_paths: tuple[str, ...],
-        scope_change_groups: tuple[tuple[str, ...], ...] | None = None,
-        start_fingerprint: str,
-        finding_ids: tuple[str, ...],
-        updated_at: str | None = None,
-    ) -> WorkflowState:
-        """Append one regular, commit-backed correction after a failed final review."""
-        _require_non_empty(start_commit, "correction start_commit")
-        correction_slice_id = len(self.slices) + 1
-        if self.audit_report_path is not None:
-            current_report = managed_correction_slice_report_path(
-                self.audit_report_path, correction_slice_id
-            )
-            scope_paths = (
-                *(
-                    path
-                    for path in scope_paths
-                    if not _is_managed_correction_slice_report(
-                        self.audit_report_path, path
-                    )
-                ),
-                current_report,
-            )
-        normalized_scope = _normalize_scope_paths(scope_paths)
-        normalized_groups = (
-            tuple((path,) for path in normalized_scope)
-            if scope_change_groups is None
-            else _normalize_scope_change_groups(scope_change_groups, normalized_scope)
-        )
-        if not SHA256_PATTERN.fullmatch(start_fingerprint):
-            raise WorkflowStateValidationError(
-                "correction start_fingerprint must be a lowercase SHA-256 digest"
-            )
-        _require_unique_non_empty(finding_ids, "correction finding_ids")
-        if not finding_ids:
-            raise WorkflowStateValidationError(
-                "a correction work unit requires at least one open finding"
-            )
-        if (
-            self.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
-            or self.current_work_unit.status is not WorkUnitStatus.COMPLETED
-        ):
-            raise WorkflowStateValidationError(
-                "a correction work unit requires a completed final review attempt"
-            )
-        correction_slice = SliceRecord(
-            slice_id=correction_slice_id,
-            status=SliceStatus.IN_PROGRESS,
-            start_commit=start_commit,
-            scope_paths=normalized_scope,
-            scope_change_groups=normalized_groups,
-            start_fingerprint=start_fingerprint,
-        )
-        correction_unit = WorkUnitRecord(
-            work_unit_id=len(self.work_units) + 1,
-            slice_id=correction_slice.slice_id,
-            kind=WorkUnitKind.CORRECTION,
-            status=WorkUnitStatus.IN_PROGRESS,
-            current_step=WorkflowStep.CODEX_FINAL_CORRECTION,
-            open_findings=finding_ids,
-        )
-        return replace(
-            self,
-            current_slice_id=correction_slice.slice_id,
-            current_work_unit_id=correction_unit.work_unit_id,
-            current_step=correction_unit.current_step,
-            slices=(*self.slices, correction_slice),
-            work_units=(*self.work_units, correction_unit),
             updated_at=updated_at or _now_iso(),
         )
 
@@ -2738,7 +2539,7 @@ class WorkflowState:
     def _slices_with_current_status(
         self, status: SliceStatus
     ) -> tuple[SliceRecord, ...]:
-        if self.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+        if self.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
             return self.slices
         return tuple(
             replace(item, status=status)
@@ -2829,10 +2630,7 @@ class WorkflowState:
 
     @property
     def active_family_binding(self) -> FamilyBindingPayload | None:
-        """Expose family semantics only behind the shared 67/68 cutover."""
-
-        if not native_finding_decisions.native_finding_decisions_enabled():
-            return None
+        """Expose the installed shared 67/68 family semantics."""
         return self.family_binding
 
     @property
@@ -3123,11 +2921,11 @@ def init_workflow_state(
         work_unit_id=1,
         slice_id=1,
         kind=(
-            WorkUnitKind.FINAL_REVIEW if branch_discovery else WorkUnitKind.PLAN
+            WorkUnitKind.BRANCH_DISCOVERY if branch_discovery else WorkUnitKind.PLAN
         ),
         status=WorkUnitStatus.IN_PROGRESS,
         current_step=(
-            WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- canonical state-v3 step
+            WorkflowStep.CLAUDE_BRANCH_DISCOVERY  # allowlist:provider -- canonical state-v3 step
             if branch_discovery
             else WorkflowStep.CODEX_PLAN
         ),

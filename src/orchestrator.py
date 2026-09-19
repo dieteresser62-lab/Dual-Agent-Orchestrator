@@ -38,7 +38,6 @@ from artifact_resume import (
 )
 from artifact_models import (
     ArtifactRecord, BindingPayload, DiagnosticPayload,
-    CorrectionWorkUnitPayload,
     FingerprintKind, GateDecisionPayload, GateTransitionPayload,
     AgentResultPayload, InvocationFailurePayload, ReviewPayload,
     Role,
@@ -58,19 +57,7 @@ from artifact_replay import (
     pending_workflow_event_payload,
     replay_artifacts,
 )
-from finding_reducer import (
-    first_correction_work_unit_payload,
-    project_cleanup_review_targets,
-    project_final_review_dispositions,
-    reduce_findings,
-)
-from finding_cleanup import (
-    FindingCleanupPlan,
-    derive_slice_finding_balances,
-    is_finding_cleanup_work_unit,
-    plan_finding_cleanup,
-    positive_balance_streak,
-)
+from finding_reducer import reduce_findings
 from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
@@ -130,7 +117,6 @@ from workflow import (
     WorkflowChanges,
     WorkflowCommitRequest,
     WorkflowContext,
-    WorkflowCorrectionBoundary,
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
@@ -182,7 +168,6 @@ from workflow_state import (
     NATIVE_CODEX_RESULT_TRANSPORT,
     init_workflow_state,
     BootstrapCheckFact,
-    managed_correction_slice_report_path,
 )
 from side_effects import (
     file_state_digest,
@@ -249,15 +234,6 @@ def run_v3_work_unit(
     history: WorkflowHistory | None = None,
 ) -> WorkflowRunResult:
     return engine.run_current_work_unit(state, context, history)
-
-
-def run_v3_final_review(
-    engine: WorkflowEngine,
-    state: WorkflowState,
-    context: WorkflowContext,
-    history: WorkflowHistory | None = None,
-) -> WorkflowRunResult:
-    return engine.run_final_review(state, context, history)
 
 
 def find_task_file(explicit_path: str | None) -> Path:
@@ -1122,21 +1098,7 @@ class ProductionWorkflowDriver:
             replay = replay_artifacts(
                 bridge.store.current_chain(), state.run_id, allow_empty=True
             )
-            reduced = reduce_findings(replay)
-            if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
-                attribution = reduced.correction_for(
-                    state.current_work_unit_id
-                )
-                if attribution is None:
-                    raise WorkflowExecutionError(
-                        "correction finding replay requires a bound correction "
-                        "work-unit record"
-                    )
-                projected = reduced.request_subset(
-                    finding_ids=attribution.finding_ids
-                ).findings
-            else:
-                projected = reduced.ledger.findings
+            projected = reduce_findings(replay).ledger.findings
         except (ArtifactReplayError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"
@@ -1171,77 +1133,6 @@ class ProductionWorkflowDriver:
             round_number=round_number,
             approved_plan_commit=state.approved_plan_commit,
         )
-
-    def authoritative_cleanup_scope_paths(
-        self, state: WorkflowState
-    ) -> tuple[str, ...]:
-        """Replay the once-authorized cleanup boundary without re-deriving it."""
-
-        bridge = self._artifact_bridge
-        active = self.active_state
-        if (
-            bridge is None
-            or active is None
-            or active.run_id != state.run_id
-            or active.current_work_unit_id != state.current_work_unit_id
-            or not is_finding_cleanup_work_unit(state)
-        ):
-            raise WorkflowExecutionError(
-                "cleanup scope replay lacks its immutable work-unit binding"
-            )
-        chain = bridge.store.current_chain()
-        boundary = first_correction_work_unit_payload(
-            chain, state.current_work_unit_id
-        )
-        if boundary is None or not boundary.paths:
-            raise WorkflowExecutionError(
-                "cleanup scope replay requires a bound correction work-unit record"
-            )
-        return boundary.paths
-
-    def authoritative_final_review_findings(
-        self,
-        state: WorkflowState,
-        _projected_findings: tuple[FindingRecord, ...],
-    ) -> tuple[FindingRecord, ...]:
-        """Return only still-undispositioned final-review Findings from records."""
-
-        active = self.active_state
-        bridge = self._artifact_bridge
-        if (
-            active is None
-            or bridge is None
-            or active.run_id != state.run_id
-            or active.current_work_unit_id != state.current_work_unit_id
-            or (
-                state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
-                and not is_finding_cleanup_work_unit(state)
-            )
-            or state.protocol_binding is None
-            or state.protocol_binding.claude_review_transport  # allowlist:provider -- protocol binding
-            != NATIVE_CLAUDE_REVIEW_TRANSPORT  # allowlist:provider -- protocol binding
-        ):
-            raise WorkflowExecutionError(
-                "final-review finding replay lacks its immutable state binding"
-            )
-        try:
-            replay = replay_artifacts(
-                bridge.store.current_chain(), state.run_id, allow_empty=True
-            )
-            if is_finding_cleanup_work_unit(state):
-                reduced = reduce_findings(replay)
-                projected = project_cleanup_review_targets(
-                    reduced, state.current_work_unit_id
-                ).findings
-            else:
-                projected = project_final_review_dispositions(
-                    replay, state.current_work_unit_id
-                ).pending.findings
-        except (ArtifactReplayError, ValueError) as exc:
-            raise WorkflowExecutionError(
-                f"authoritative final-review finding replay failed: {exc}"
-            ) from exc
-        return projected
 
     def carry_forward_native_findings(
         self,
@@ -1784,10 +1675,7 @@ class ProductionWorkflowDriver:
             return state.task_digest
         start_commit = (
             state.branch_review_base_commit
-            if (
-                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-                or is_finding_cleanup_work_unit(state)
-            )
+            if state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
             else state.current_slice.start_commit or state.branch_base
         )
         try:
@@ -2285,7 +2173,8 @@ class ProductionWorkflowDriver:
         )
         final_review = (
             self.active_state is not None
-            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            and self.active_state.current_work_unit.kind
+            is WorkUnitKind.BRANCH_DISCOVERY
         )
         audit_path = (
             self.active_state.audit_report_path if final_review else None
@@ -2433,101 +2322,6 @@ class ProductionWorkflowDriver:
             scope_patterns=scope_patterns,
             plan_only=plan_only,
         )
-
-    def prepare_correction(self) -> WorkflowCorrectionBoundary:
-        if self.active_state is None:
-            raise WorkflowExecutionError("correction preparation has no active state")
-        identity = inspect_repository(self.root)
-        remediation_scope = tuple(
-            sorted(
-                {
-                    path
-                    for planned in self.active_state.planned_slices
-                    for path in planned.scope_paths
-                    if not _is_managed_audit_path(self.active_state, path)
-                }
-            )
-        )
-        if not remediation_scope:
-            raise WorkflowExecutionError("final correction has no persisted remediation scope")
-        scope = remediation_scope
-        correction_slice_id = len(self.active_state.slices) + 1
-        if self.active_state.audit_report_path is not None:
-            correction_doc = managed_correction_slice_report_path(
-                self.active_state.audit_report_path, correction_slice_id
-            )
-            scope = tuple(
-                sorted(
-                    {
-                        *scope,
-                        self.active_state.audit_report_path,
-                        correction_doc,
-                    }
-                )
-            )
-        start = collect_repository_changes(
-            self.root,
-            identity.head,
-            excluded_paths=_bound_task_control_paths(self.root, self.active_state),
-        )
-        return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
-
-    def prepare_finding_cleanup(self) -> FindingCleanupPlan | None:
-        """Derive one cleanup offer entirely from the authoritative record chain."""
-
-        state = self.active_state
-        bridge = self._artifact_bridge
-        if state is None or bridge is None:
-            raise WorkflowExecutionError(
-                "finding cleanup preparation has no active artifact state"
-            )
-        chain = bridge.store.current_chain()
-        cleanup_work_unit_ids = {
-            unit.work_unit_id
-            for unit in state.work_units
-            if is_finding_cleanup_work_unit(state, unit)
-        }
-        addressed_ids = {
-            finding_id
-            for record in chain
-            for payload in (record.payload,)
-            if isinstance(payload, CorrectionWorkUnitPayload)
-            and record.logical_id.startswith("work-unit-")
-            and record.logical_id.removeprefix("work-unit-").isdigit()
-            and int(record.logical_id.removeprefix("work-unit-"))
-            in cleanup_work_unit_ids
-            for finding_id in payload.finding_ids
-        }
-        replay = replay_artifacts(
-            chain,
-            state.run_id,
-            allow_empty=True,
-            allow_incomplete_review_tail=True,
-        )
-        plan = plan_finding_cleanup(
-            reduce_findings(replay).ledger.findings,
-            repository_root=self.root,
-            previously_addressed_ids=addressed_ids,
-        )
-        balances = derive_slice_finding_balances(chain)
-        if balances:
-            latest = balances[-1]
-            logger.info(
-                "Finding balance through Slice %02d: opened=%s closed=%s net=%+d; "
-                "positive-streak=%s; cleanup=%s; locally-fixed=%s rejected=%s "
-                "later-slice=%s branch-planning=%s",
-                latest.slice_id,
-                latest.opened,
-                latest.closed,
-                latest.net,
-                positive_balance_streak(balances),
-                "scheduled" if plan is not None else "not-scheduled",
-                latest.locally_fixed,
-                latest.rejected,
-                latest.routed_to_later_slice,
-                latest.routed_to_branch_planning,
-            )
-        return plan
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         return self._git_commit_boundary().commit_slice(request)

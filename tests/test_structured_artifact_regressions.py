@@ -226,85 +226,6 @@ def test_external_side_effect_guard_reuses_the_process_local_chain(
     assert reads == 0
 
 
-def test_not_ready_final_report_resumes_without_a_final_report_mirror(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    head = _git(repository, "rev-parse", "HEAD")
-    state = (
-        _state(repository, "not-ready-final-report")
-        .bind_slice_plan(
-            (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
-            first_start_commit=head,
-        )
-        .complete_current_work_unit()
-        .start_work_unit(
-            slice_id=1,
-            kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
-        )
-        .bind_current_slice_git_boundary(
-            start_commit=head,
-            scope_paths=("src/runtime.py",),
-            start_fingerprint="b" * 64,
-        )
-    )
-    final_unit = replace(
-        state.current_work_unit,
-        kind=WorkUnitKind.FINAL_REVIEW,
-        current_step=WorkflowStep.CODEX_FINAL_REVIEW,
-    )
-    state = replace(
-        state,
-        current_step=WorkflowStep.CODEX_FINAL_REVIEW,
-        work_units=(*state.work_units[:-1], final_unit),
-    )
-    driver = _driver(repository)
-    history = WorkflowHistory(state.current_work_unit_id)
-    driver.checkpoint(state, history)
-    request_id = "native-codex-request-" + "b" * 64
-    canonical = json.dumps(
-        {"request_id": request_id, "ready": False},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    driver.persist_native_codex_contract(
-        NativeAgentCodexOutput(
-            result=CodexContractResult(
-                ready=False,
-                stopped=False,
-                stop_request=None,
-                validation=None,
-                test_files=(),
-                findings=(),
-                slice_plan=(),
-            ),
-            canonical_json=canonical,
-            request_id=request_id,
-            response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        ),
-        (),
-    )
-    halted = state.await_policy_gate(
-        reason=GateReason.STOP_REQUEST,
-        detail="CODEX-FINAL-REPORT-NOT-READY | retry the same final report step",
-    )
-    driver.checkpoint(halted, history)
-    persisted = driver.active_state
-    assert persisted is not None
-
-    resolution = resolve_resume_state(repository, persisted)
-    contents = tuple(
-        record.payload
-        for record in resolution.replay_result.records
-        if isinstance(record.payload, ProviderContentPayload)
-    )
-
-    assert contents[-1].content_kind == "agent_result"
-    assert history.codex_final_report is None
-    assert resolution.state.current_step is WorkflowStep.CODEX_FINAL_REVIEW
-
-
 def test_resume_compares_only_latest_review_packet_per_work_unit(
     tmp_path: Path,
 ) -> None:
@@ -1248,59 +1169,6 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
     assert len(measurements) == 1
 
 
-def test_legacy_final_review_keeps_budget_fact_without_structured_preflight(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/legacy-final-review")
-    task = repository / "task.md"
-    task.write_text("legacy final review\n", encoding="utf-8")
-    head = _git(repository, "rev-parse", "HEAD")
-    (repository / "src").mkdir()
-    (repository / "src/runtime.py").write_text("VALUE = 1\n", encoding="utf-8")
-    state = init_workflow_state(
-        run_id="legacy-final-review-bootstrap",
-        task_file=str(task),
-        branch="feature/legacy-final-review",
-        branch_base=head,
-        first_slice_start_commit=head,
-        slice_count=1,
-        task_scope_patterns=("src/runtime.py",),
-        protocol_binding=None,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="a" * 64,
-    ).complete_current_slice(
-        commit_ref=head,
-    ).start_final_review_work_unit()
-    driver = _driver(repository)
-    driver.bind_work_unit(state)
-    measurement = measure_provider_input(
-        PreparedProviderInput(
-            command=("codex",),
-            stdin_text="final review",
-            components=(ProviderInputComponent("stdin_prompt", "final review"),),
-        ),
-        provider="codex",
-        role="codex",
-        operation="codex_final_review",
-        binding_fingerprint="b" * 64,
-        policy=default_provider_input_budget_policy(),
-    )
-
-    driver._persist_provider_bootstrap(measurement)
-
-    persisted = WorkflowState.from_dict(
-        json.loads(driver.state_file.read_text(encoding="utf-8"))
-    )
-    assert persisted.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3
-    assert tuple(item.check_kind for item in persisted.bootstrap_checks) == (
-        RecordType.PROVIDER_INPUT_MEASUREMENT.value,
-    )
-    assert persisted.bootstrap_checks[0].decision == "allowed"
-    assert not (repository / ".orchestrator" / "artifacts" / state.run_id).exists()
-
-
 def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
     tmp_path: Path,
 ) -> None:
@@ -1354,13 +1222,13 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
     ("current_step", "error_code", "rewind_step"),
     [
         (
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            "CODEX-FINAL-RESULT-MISSING",
-            WorkflowStep.CODEX_FINAL_REVIEW,
+            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
+            "BRANCH-DISCOVERY-PREREQUISITE-MISSING",
+            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
         ),
     ],
 )
-def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(
+def test_branch_discovery_preflight_missing_prerequisite_halts_for_resume(
     tmp_path: Path,
     current_step: WorkflowStep,
     error_code: str,
@@ -1368,20 +1236,20 @@ def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(
 ) -> None:
     repository = _repository(tmp_path, "feature/preflight-rewind")
     head = _git(repository, "rev-parse", "HEAD")
-    state = _state(repository, f"preflight-rewind-{current_step.value}").bind_slice_plan(
-        (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
-        first_start_commit=head,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="b" * 64,
-    ).complete_current_slice(
-        commit_ref=head,
-    ).start_final_review_work_unit().with_current_step(current_step)
+    base = _state(repository, f"preflight-resume-{current_step.value}")
+    state = init_workflow_state(
+        run_id=base.run_id,
+        task_file=base.task_file,
+        branch=base.branch,
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest=base.task_digest,
+        execution_mode="BRANCH_DISCOVERY",
+        task_scope_patterns=base.task_scope_patterns,
+        target_branch=base.target_branch,
+        protocol_binding=base.protocol_binding,
+    )
 
     class RewindDriver:
         def __init__(self) -> None:
@@ -1410,7 +1278,7 @@ def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(
     def denied_provider_start() -> str:
         raise denial
 
-    rewound, output = WorkflowEngine(driver)._invoke_role(
+    halted, output = WorkflowEngine(driver)._invoke_role(
         state,
         history,
         WorkflowContext("assignment", "plan", "slice"),
@@ -1419,9 +1287,11 @@ def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(
     )
 
     assert output is None
-    assert rewound.current_step is rewind_step
-    assert rewound.current_work_unit.status.value == "in_progress"
-    assert rewound.current_work_unit.gate.reason.value == "none"
+    assert halted.current_step is rewind_step
+    assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
+    assert halted.current_work_unit.gate.detail is not None
+    assert halted.current_work_unit.gate.detail.startswith(f"{error_code} | ")
 
 
 def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(

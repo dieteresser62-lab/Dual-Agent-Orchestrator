@@ -25,6 +25,8 @@ if str(SOURCE_ROOT) not in sys.path:
 from artifact_bridge import (
     ArtifactBridge,
     attestation_payload,
+    branch_discovery_handoff_export_payload,
+    branch_discovery_handoff_import_payload,
     provider_input_measurement_payload,
     review_payload_matches_complete_result,
 )
@@ -33,9 +35,12 @@ from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     BindingPayload,
+    BranchDiscoveryCompletedPayload,
+    FamilyBindingPayload,
     FingerprintKind,
     ReviewPayload,
     ValidationAttestationPayload,
+    WorkflowCompletionPayload,
     canonical_json,
     technical_text_evidence,
 )
@@ -86,6 +91,17 @@ LEDGER_ORDER = (
     "ledger",
 )
 BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
+RUNTIME_BOUNDARY_EFFECTS = {
+    "slice_commit": "git_commit",
+    "slice_provider": "provider_start",
+    "implementation_handoff": "file_write",
+    "queue_finalization": "queue_move",
+    "slice_validation": "internal",
+    "baseline_initialization": "ledger",
+    "branch_discovery_provider": "provider_start",
+    "branch_discovery_validation": "internal",
+    "family_handoff": "file_write",
+}
 
 
 class CrashHarnessError(RuntimeError):
@@ -331,6 +347,7 @@ class CrashHarnessManifest:
     scenario_version: str
     effect_classes: tuple[str, ...]
     boundary_matrix: Mapping[str, tuple[str, ...]]
+    runtime_boundaries: Mapping[str, str]
     journeys: tuple[str, ...]
     retry_kinds: tuple[str, ...]
 
@@ -345,6 +362,7 @@ class CrashHarnessManifest:
             "scenario_version",
             "effect_classes",
             "boundary_matrix",
+            "runtime_boundaries",
             "journeys",
             "retry_kinds",
         }:
@@ -358,7 +376,19 @@ class CrashHarnessManifest:
             and all(isinstance(item, str) and item for item in document[key])
         }
         matrix_raw = document["boundary_matrix"]
-        if len(values) != 3 or not isinstance(matrix_raw, dict):
+        runtime_raw = document["runtime_boundaries"]
+        if (
+            len(values) != 3
+            or not isinstance(matrix_raw, dict)
+            or not isinstance(runtime_raw, dict)
+            or not all(
+                isinstance(boundary, str)
+                and boundary
+                and isinstance(effect_class, str)
+                and effect_class
+                for boundary, effect_class in runtime_raw.items()
+            )
+        ):
             raise CrashHarnessError("crash harness manifest lists must contain strings")
         version = document["scenario_version"]
         if not isinstance(version, str) or not version.strip():
@@ -372,7 +402,12 @@ class CrashHarnessManifest:
         }
         if len(boundary_matrix) != len(matrix_raw):
             raise CrashHarnessError("crash harness boundary matrix is invalid")
-        manifest = cls(version, boundary_matrix=boundary_matrix, **values)
+        manifest = cls(
+            version,
+            boundary_matrix=boundary_matrix,
+            runtime_boundaries=dict(runtime_raw),
+            **values,
+        )
         if manifest.effect_classes != LEDGER_ORDER or set(manifest.effect_classes) != set(
             SIDE_EFFECT_CLASSES
         ):
@@ -395,9 +430,14 @@ class CrashHarnessManifest:
             raise CrashHarnessError(
                 "manifest boundary matrix differs from the production ledger topology"
             )
+        if dict(manifest.runtime_boundaries) != RUNTIME_BOUNDARY_EFFECTS:
+            raise CrashHarnessError(
+                "manifest runtime boundaries differ from the linked-run topology"
+            )
         if manifest.journeys != (
-            "plan-implement-finalreview",
+            "plan-implement-branch-discovery",
             "multi-slice-correction-observation-resume",
+            "branch-discovery-remediation-handoff",
         ):
             raise CrashHarnessError("manifest journey inventory is incomplete")
         if manifest.retry_kinds != ("quota", "network", "process"):
@@ -495,7 +535,9 @@ def _production_baseline(
     )
 
 
-def _effect_spec(effect_class: str) -> tuple[SideEffectSpec, str]:
+def _effect_spec(
+    effect_class: str, runtime_boundary: str | None = None
+) -> tuple[SideEffectSpec, str]:
     digest = sha256_bytes(b"s5-harness-content")
     if effect_class == "git_commit":
         operation = (
@@ -509,19 +551,35 @@ def _effect_spec(effect_class: str) -> tuple[SideEffectSpec, str]:
         result = "3" * 40
         work_unit_id = "2"
     elif effect_class == "provider_start":
+        branch_discovery = runtime_boundary == "branch_discovery_provider"
         operation = (
-            "codex",  # allowlist:provider -- persisted provider-start vocabulary
-            "implementation",
+            (
+                "claude"  # allowlist:provider -- persisted provider-start vocabulary
+                if branch_discovery
+                else "codex"  # allowlist:provider -- persisted provider-start vocabulary
+            ),
+            "branch_discovery" if branch_discovery else "implementation",
             digest,
             "d" * 64,
             "attempt",
             "1",
-            ".orchestrator/provider-results/harness.json",
+            (
+                ".orchestrator/provider-results/branch-discovery-harness.json"
+                if branch_discovery
+                else ".orchestrator/provider-results/harness.json"
+            ),
         )
         result = sha256_bytes(b"s5-provider-response")
         work_unit_id = "2"
     elif effect_class == "file_write":
-        operation = ("inbox/s5-implement.md", digest)
+        operation = (
+            (
+                "inbox/s5-branch-discovery.md"
+                if runtime_boundary == "family_handoff"
+                else "inbox/s5-implement.md"
+            ),
+            digest,
+        )
         result = digest
         work_unit_id = "2"
     elif effect_class == "queue_move":
@@ -529,7 +587,13 @@ def _effect_spec(effect_class: str) -> tuple[SideEffectSpec, str]:
         result = digest
         work_unit_id = "queue"
     elif effect_class == "internal":
-        operation = ("validation-attestation",)
+        operation = (
+            (
+                "branch-discovery-validation-attestation"
+                if runtime_boundary == "branch_discovery_validation"
+                else "validation-attestation"
+            ),
+        )
         result = "completed"
         work_unit_id = "2"
     elif effect_class == "ledger":
@@ -584,12 +648,17 @@ def _provider_context(
     return driver, measurement_record, response
 
 
-def _physical_paths(root: Path, effect_class: str) -> tuple[Path, Path]:
+def _physical_paths(
+    root: Path,
+    effect_class: str,
+    runtime_boundary: str,
+    spec: SideEffectSpec,
+) -> tuple[Path, Path]:
     physical = root / "physical"
     physical.mkdir(parents=True, exist_ok=True)
-    counter = physical / f"{effect_class}.count"
+    counter = physical / f"{runtime_boundary}.count"
     if effect_class == "file_write":
-        target = root / "inbox" / "s5-implement.md"
+        target = root.joinpath(*Path(spec.operation[0]).parts)
     elif effect_class == "queue_move":
         target = root / "outbox" / "harness.md"
     else:
@@ -607,6 +676,7 @@ def _run_baseline_stop_case(
     phase: SideEffectBoundaryPhase,
     *,
     requested_crashes: int,
+    runtime_boundary: str = "baseline_initialization",
 ) -> Mapping[str, object]:
     """Drive the real baseline writer until it converges or names the stop."""
 
@@ -660,6 +730,7 @@ def _run_baseline_stop_case(
     if not stopped and len(completed) != 1:
         raise CrashHarnessError("resumed baseline has no initialized ledger")
     return {
+        "runtime_boundary": runtime_boundary,
         "effect_class": "ledger",
         "phase": phase.value,
         "requested_crashes": requested_crashes,
@@ -710,6 +781,7 @@ def _run_baseline_stop_case(
 
 def _run_crash_case(
     root: Path,
+    runtime_boundary: str,
     effect_class: str,
     phase: SideEffectBoundaryPhase,
     *,
@@ -717,18 +789,23 @@ def _run_crash_case(
 ) -> Mapping[str, object]:
     if effect_class == "ledger":
         return _run_baseline_stop_case(
-            root, phase, requested_crashes=requested_crashes
+            root,
+            phase,
+            requested_crashes=requested_crashes,
+            runtime_boundary=runtime_boundary,
         )
 
     # The run identity stays constant across injection points.  Separate
     # physical directories model separate executions while allowing their
     # terminal record heads to be compared byte-for-byte.
-    run_id = f"s5-{effect_class}"
+    run_id = f"s5-{runtime_boundary}"
     case_root = root / f"{run_id}-{phase.value}-{requested_crashes}"
     case_root.mkdir(parents=True, exist_ok=False)
     _production_baseline(case_root, run_id)
-    spec, expected_result = _effect_spec(effect_class)
-    marker, counter = _physical_paths(case_root, effect_class)
+    spec, expected_result = _effect_spec(effect_class, runtime_boundary)
+    marker, counter = _physical_paths(
+        case_root, effect_class, runtime_boundary, spec
+    )
     source = (
         case_root / "inbox" / "harness.md"
         if effect_class == "queue_move"
@@ -912,6 +989,7 @@ def _run_crash_case(
         raise CrashHarnessError("crash case has no unique completed ledger effect")
     production_resume()
     return {
+        "runtime_boundary": runtime_boundary,
         "effect_class": effect_class,
         "phase": phase.value,
         "requested_crashes": requested_crashes,
@@ -956,32 +1034,39 @@ def run_crash_matrix(root: Path, manifest: CrashHarnessManifest) -> tuple[Mappin
     """Run every manifest-derived boundary plus a repeated worst-window crash."""
 
     matrix = [
-        _run_crash_case(root, effect_class, SideEffectBoundaryPhase(phase))
-        for effect_class in manifest.effect_classes
+        _run_crash_case(
+            root,
+            runtime_boundary,
+            effect_class,
+            SideEffectBoundaryPhase(phase),
+        )
+        for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
         for phase in manifest.boundary_matrix[effect_class]
     ]
     matrix.extend(
         _run_crash_case(
             root,
+            runtime_boundary,
             effect_class,
             SideEffectBoundaryPhase.AFTER_EFFECT,
             requested_crashes=2,
         )
-        for effect_class in manifest.effect_classes
+        for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
         if "after_effect" in manifest.boundary_matrix[effect_class]
     )
     expected_single_cases = {
-        (effect_class, phase, 1)
-        for effect_class, phases in manifest.boundary_matrix.items()
-        for phase in phases
+        (runtime_boundary, effect_class, phase, 1)
+        for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        for phase in manifest.boundary_matrix[effect_class]
     }
     expected_repeated_cases = {
-        (effect_class, "after_effect", 2)
-        for effect_class, phases in manifest.boundary_matrix.items()
-        if "after_effect" in phases
+        (runtime_boundary, effect_class, "after_effect", 2)
+        for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        if "after_effect" in manifest.boundary_matrix[effect_class]
     }
     observed_cases = {
         (
+            str(row["runtime_boundary"]),
             str(row["effect_class"]),
             str(row["phase"]),
             int(row["requested_crashes"]),
@@ -994,17 +1079,19 @@ def run_crash_matrix(root: Path, manifest: CrashHarnessManifest) -> tuple[Mappin
         row["observed_crashes"] != row["requested_crashes"] for row in matrix
     ):
         raise CrashHarnessError("a declared crash boundary was not reached")
-    canonical_by_class: dict[str, set[tuple[str, str]]] = {}
+    canonical_by_boundary: dict[str, set[tuple[str, str]]] = {}
     for row in matrix:
         if row["end_state"] != "converged":
             continue
-        canonical_by_class.setdefault(str(row["effect_class"]), set()).add(
+        canonical_by_boundary.setdefault(
+            str(row["runtime_boundary"]), set()
+        ).add(
             (
                 str(row["chain_semantic_sha256"]),
                 str(row["side_effect_projection_sha256"]),
             )
         )
-    if any(len(values) != 1 for values in canonical_by_class.values()):
+    if any(len(values) != 1 for values in canonical_by_boundary.values()):
         raise CrashHarnessError("crash boundary changed chain or projected semantics")
     return tuple(matrix)
 
@@ -1177,6 +1264,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     """Execute a commit-bound PLAN_ONLY handoff and its IMPLEMENT journey."""
 
     from dry_run_scenarios import (
+        build_joint_branch_discovery_scenario,
         build_s5_plan_only_scenario,
         build_s5_long_run_scenario,
         run_scripted_workflow_resumable,
@@ -1239,9 +1327,32 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     if handoff_contract.approved_plan_commit != plan_commit:
         raise CrashHarnessError("IMPLEMENT handoff lost its approved-plan binding")
 
+    source_family = FamilyBindingPayload(
+        family_id="s5-linked-family",
+        family_base_commit="a" * 40,
+        family_authorized_change_set=(
+            "docs/internal/s5-work-plan.md",
+            "src/first.py",
+            "src/second.py",
+        ),
+        predecessor_run_id=None,
+        predecessor_head_record_id=None,
+        cycle_number=1,
+        current_plan_commit=plan_commit,
+        current_implementation_commit="d" * 40,
+    )
     long_scenario = build_s5_long_run_scenario()
+    long_scenario = replace(
+        long_scenario,
+        initial=replace(long_scenario.initial, family_binding=source_family),
+    )
     independent_scenario = replace(
-        build_s5_long_run_scenario(), name="s5-long-run-independent-v1"
+        build_s5_long_run_scenario(),
+        name="s5-long-run-independent-v1",
+        initial=replace(
+            build_s5_long_run_scenario().initial,
+            family_binding=source_family,
+        ),
     )
     long = run_scripted_workflow_resumable(
         scenario=long_scenario,
@@ -1255,12 +1366,201 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     )
     findings = long.result.history.findings
     second_findings = second_long.result.history.findings
+
+    long_store = ArtifactStore(journey_root, f"dry-{long_scenario.name}")
+    implementation_replay = replay_artifacts(
+        long_store.load_chain(), f"dry-{long_scenario.name}"
+    )
+    implementation_attestation = next(
+        record
+        for record in reversed(implementation_replay.records)
+        if isinstance(record.payload, ValidationAttestationPayload)
+    )
+    implementation_completion = next(
+        record
+        for record in reversed(implementation_replay.records)
+        if isinstance(record.payload, WorkflowCompletionPayload)
+    )
+    discovery_task = journey_root / "s5-branch-discovery.md"
+    discovery_task_bytes = (
+        "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
+        "TARGET_BRANCH: feature/dry-run\n"
+        "FINDING_HANDOFF_SOURCE_RUN: dry-s5-long-run-v1\n"
+    ).encode("utf-8")
+    discovery_task.write_bytes(discovery_task_bytes)
+    discovery_run_id = "dry-joint-branch-discovery-v1"
+    discovery_family = FamilyBindingPayload(
+        family_id=source_family.family_id,
+        family_base_commit=source_family.family_base_commit,
+        family_authorized_change_set=source_family.family_authorized_change_set,
+        predecessor_run_id=implementation_replay.expected_run_id,
+        predecessor_head_record_id=implementation_replay.head_record_id,
+        cycle_number=2,
+        current_plan_commit=plan_commit,
+        current_implementation_commit="d" * 40,
+    )
+    implementation_export = branch_discovery_handoff_export_payload(
+        implementation_replay,
+        discovery_review_record_id=None,
+        validation_attestation_record_id=implementation_attestation.record_id,
+        reviewed_head_commit="d" * 40,
+        family_binding=discovery_family,
+        target_task_path="s5-branch-discovery.md",
+        target_task_bytes=discovery_task_bytes,
+        target_run_identity=discovery_run_id,
+        target_execution_mode="BRANCH_DISCOVERY",
+        source_completion_record_id=implementation_completion.record_id,
+    )
+    implementation_export_record = ArtifactBridge(
+        long_store, now=lambda: FIXED_TIME
+    ).append(
+        implementation_export,
+        logical_id="branch-discovery-handoff-export",
+        idempotency_key="branch-discovery-handoff-export",
+        fingerprint_sha256=implementation_attestation.fingerprint.sha256,
+        fingerprint_kind=implementation_attestation.fingerprint.kind,
+    )
+    implementation_replay = replay_artifacts(
+        long_store.load_chain(), f"dry-{long_scenario.name}"
+    )
+    discovery_import = branch_discovery_handoff_import_payload(
+        implementation_replay,
+        implementation_export_record,
+        target_run_id=discovery_run_id,
+        target_task_path="s5-branch-discovery.md",
+        target_task_bytes=discovery_task_bytes,
+        target_family_binding=discovery_family,
+    )
+    discovery_task_digest = hashlib.sha256(discovery_task_bytes).hexdigest()
+    ArtifactBridge(
+        ArtifactStore(journey_root, discovery_run_id), now=lambda: FIXED_TIME
+    ).append(
+        discovery_import,
+        logical_id="branch-discovery-handoff-import",
+        idempotency_key="branch-discovery-handoff-import",
+        fingerprint_sha256=discovery_task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    discovery_scenario = build_joint_branch_discovery_scenario(discovery_family)
+    discovery = run_scripted_workflow_resumable(
+        scenario=discovery_scenario,
+        task_file=discovery_task,
+        driver_factory=driver_factory,
+    )
+
+    discovery_store = ArtifactStore(journey_root, discovery_run_id)
+    discovery_replay = replay_artifacts(
+        discovery_store.load_chain(), discovery_run_id
+    )
+    discovery_attestation = next(
+        record
+        for record in reversed(discovery_replay.records)
+        if isinstance(record.payload, ValidationAttestationPayload)
+    )
+    discovery_completion = next(
+        record
+        for record in reversed(discovery_replay.records)
+        if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+    )
+    remediation_task = journey_root / "s5-remediation-plan.md"
+    remediation_task_bytes = (
+        "ORCHESTRATOR_MODE: PLAN_ONLY\n"
+        "TARGET_BRANCH: feature/dry-run\n"
+        "WORK_PLAN_PATH: docs/internal/s5-remediation-plan.md\n"
+        "## Allowed Scope\n"
+        "- docs/internal/s5-remediation-plan.md\n"
+    ).encode("utf-8")
+    remediation_task.write_bytes(remediation_task_bytes)
+    remediation_run_id = "dry-joint-remediation-plan-v1"
+    remediation_family = FamilyBindingPayload(
+        family_id=source_family.family_id,
+        family_base_commit=source_family.family_base_commit,
+        family_authorized_change_set=tuple(
+            sorted(
+                (
+                    *source_family.family_authorized_change_set,
+                    "docs/internal/s5-remediation-plan.md",
+                )
+            )
+        ),
+        predecessor_run_id=discovery_replay.expected_run_id,
+        predecessor_head_record_id=discovery_replay.head_record_id,
+        cycle_number=3,
+        current_plan_commit=plan_commit,
+        current_implementation_commit="d" * 40,
+    )
+    remediation_export = branch_discovery_handoff_export_payload(
+        discovery_replay,
+        discovery_review_record_id=discovery_completion.record_id,
+        validation_attestation_record_id=discovery_attestation.record_id,
+        reviewed_head_commit="d" * 40,
+        family_binding=remediation_family,
+        target_task_path="s5-remediation-plan.md",
+        target_task_bytes=remediation_task_bytes,
+        target_run_identity=remediation_run_id,
+    )
+    remediation_export_record = ArtifactBridge(
+        discovery_store, now=lambda: FIXED_TIME
+    ).append(
+        remediation_export,
+        logical_id="remediation-plan-handoff-export",
+        idempotency_key="remediation-plan-handoff-export",
+        fingerprint_sha256=discovery_attestation.fingerprint.sha256,
+        fingerprint_kind=discovery_attestation.fingerprint.kind,
+    )
+    discovery_replay = replay_artifacts(
+        discovery_store.load_chain(), discovery_run_id
+    )
+    remediation_import = branch_discovery_handoff_import_payload(
+        discovery_replay,
+        remediation_export_record,
+        target_run_id=remediation_run_id,
+        target_task_path="s5-remediation-plan.md",
+        target_task_bytes=remediation_task_bytes,
+        target_family_binding=remediation_family,
+    )
+    remediation_task_digest = hashlib.sha256(remediation_task_bytes).hexdigest()
+    remediation_store = ArtifactStore(journey_root, remediation_run_id)
+    ArtifactBridge(remediation_store, now=lambda: FIXED_TIME).append(
+        remediation_import,
+        logical_id="remediation-plan-handoff-import",
+        idempotency_key="remediation-plan-handoff-import",
+        fingerprint_sha256=remediation_task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    remediation_state = init_workflow_state(
+        run_id=remediation_run_id,
+        task_file=str(remediation_task.resolve()),
+        branch="feature/dry-run",
+        branch_base=remediation_family.family_base_commit,
+        first_slice_start_commit="d" * 40,
+        slice_count=1,
+        task_digest=remediation_task_digest,
+        execution_mode="PLAN_ONLY",
+        task_scope_patterns=("docs/internal/s5-remediation-plan.md",),
+        work_plan_path="docs/internal/s5-remediation-plan.md",
+        target_branch="feature/dry-run",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        family_binding=remediation_family,
+        timestamp=FIXED_TIME,
+    )
+    remediation_driver = _production_driver(journey_root)
+    remediation_driver._artifact_bridge = ArtifactBridge(  # noqa: SLF001
+        remediation_store, now=lambda: FIXED_TIME
+    )
+    remediation_driver.bind_work_unit(remediation_state)
+    remediation_resolution = resolve_resume_state(
+        journey_root, remediation_run_id
+    )
+
     journey_resolutions = {
         "plan": resolve_resume_state(journey_root, "dry-s5-plan-only-v1"),
         "long": resolve_resume_state(journey_root, f"dry-{long_scenario.name}"),
         "independent": resolve_resume_state(
             journey_root, f"dry-{independent_scenario.name}"
         ),
+        "discovery": resolve_resume_state(journey_root, discovery_run_id),
+        "remediation": remediation_resolution,
     }
     if (
         not long.result.workflow_completed
@@ -1279,31 +1579,77 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("independent multi-slice journey did not converge")
+    discovery_findings = discovery.result.history.findings
+    if (
+        not discovery.result.workflow_completed
+        or discovery.result.state.execution_mode != "BRANCH_DISCOVERY"
+        or discovery.result.state.current_step is not WorkflowStep.COMPLETED
+        or journey_resolutions["discovery"].state.current_step
+        is not WorkflowStep.COMPLETED
+        or tuple(item.finding_id for item in discovery_findings)
+        != ("C-01", "C-02", "C-03")
+    ):
+        raise CrashHarnessError(
+            "linked BRANCH_DISCOVERY run did not converge: "
+            f"workflow_completed={discovery.result.workflow_completed}, "
+            f"mode={discovery.result.state.execution_mode}, "
+            f"step={discovery.result.state.current_step.value}, "
+            f"projected_step="
+            f"{journey_resolutions['discovery'].state.current_step.value}, "
+            f"finding_ids={tuple(item.finding_id for item in discovery_findings)!r}"
+        )
+    imported_remediation_ids = tuple(
+        item.finding_id for item in remediation_import.finding_snapshot
+    )
+    if (
+        remediation_resolution.state.current_step is not WorkflowStep.CODEX_PLAN  # allowlist:provider -- typed workflow step
+        or imported_remediation_ids != ("C-01", "C-02", "C-03")
+    ):
+        raise CrashHarnessError(
+            "BRANCH_DISCOVERY remediation handoff did not preserve its finding ledger"
+        )
     plan_agents = tuple(call for call in plan.calls if call.startswith("agent:"))
     long_agents = tuple(call for call in long.calls if call.startswith("agent:"))
+    discovery_agents = tuple(
+        call for call in discovery.calls if call.startswith("agent:")
+    )
     second_long_agents = tuple(
         call for call in second_long.calls if call.startswith("agent:")
     )
     handoff_sha256 = hashlib.sha256(handoff_content.encode("utf-8")).hexdigest()
+    discovery_handoff_sha256 = hashlib.sha256(discovery_task_bytes).hexdigest()
+    remediation_handoff_sha256 = hashlib.sha256(remediation_task_bytes).hexdigest()
     return (
         {
-            "scenario_id": "plan-implement-finalreview",
-            "agent_invocation_count": len(plan_agents) + len(long_agents),
+            "scenario_id": "plan-implement-branch-discovery",
+            "agent_invocation_count": (
+                len(plan_agents) + len(long_agents) + len(discovery_agents)
+            ),
             "commit_count": sum(call.startswith("commit:") for call in plan.calls)
             + sum(call.startswith("commit:") for call in long.calls),
             "validation_count": sum(plan.validation_counts.values())
-            + sum(long.validation_counts.values()),
+            + sum(long.validation_counts.values())
+            + sum(discovery.validation_counts.values()),
             "resume_count": sum(call.startswith("interrupt:") for call in long.calls),
             "plan_only_execution_mode": plan.result.state.execution_mode,
             "implement_execution_mode": long.result.state.execution_mode,
+            "branch_discovery_execution_mode": (
+                discovery.result.state.execution_mode
+            ),
             "approved_plan_commit": plan_commit,
             "handoff_sha256": handoff_sha256,
+            "family_handoff_sha256": discovery_handoff_sha256,
             "handoff_idempotent": True,
             "durability_mode": "structured-v2-record-chain",
-            "record_run_ids": ["dry-s5-plan-only-v1", f"dry-{long_scenario.name}"],
+            "record_run_ids": [
+                "dry-s5-plan-only-v1",
+                f"dry-{long_scenario.name}",
+                discovery_run_id,
+            ],
             "record_heads": [
                 journey_resolutions["plan"].record_head_id,
                 journey_resolutions["long"].record_head_id,
+                journey_resolutions["discovery"].record_head_id,
             ],
             "end_state": "completed",
         },
@@ -1331,6 +1677,30 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
             "durability_mode": "structured-v2-record-chain",
             "record_run_ids": [f"dry-{independent_scenario.name}"],
             "record_heads": [journey_resolutions["independent"].record_head_id],
+            "end_state": "completed",
+        },
+        {
+            "scenario_id": "branch-discovery-remediation-handoff",
+            "agent_invocation_count": 0,
+            "commit_count": 0,
+            "validation_count": 0,
+            "resume_count": 0,
+            "source_execution_mode": discovery.result.state.execution_mode,
+            "target_execution_mode": (
+                remediation_resolution.state.execution_mode
+            ),
+            "finding_statuses": [
+                f"{item.finding_id}:{item.finding_status}"
+                for item in remediation_import.finding_snapshot
+            ],
+            "handoff_sha256": remediation_handoff_sha256,
+            "transitive_finding_count": len(remediation_import.transitions),
+            "durability_mode": "structured-v2-record-chain",
+            "record_run_ids": [discovery_run_id, remediation_run_id],
+            "record_heads": [
+                journey_resolutions["discovery"].record_head_id,
+                journey_resolutions["remediation"].record_head_id,
+            ],
             "end_state": "completed",
         },
     )
@@ -1464,54 +1834,46 @@ def run_provider_free_harness(
     if real_provider_starts != 0 or real_provider_process_starts != 0:
         raise CrashHarnessError("provider-free harness crossed the real provider boundary")
     heads = {
-        effect_class: next(
+        runtime_boundary: next(
             str(row["record_head"])
             for row in matrix
-            if row["effect_class"] == effect_class
+            if row["runtime_boundary"] == runtime_boundary
             and row["requested_crashes"] == 1
         )
-        for effect_class in manifest.effect_classes
+        for runtime_boundary in manifest.runtime_boundaries
     }
     semantic_heads = {
-        effect_class: next(
+        runtime_boundary: next(
             str(row["chain_semantic_sha256"])
             for row in matrix
-            if row["effect_class"] == effect_class
+            if row["runtime_boundary"] == runtime_boundary
             and row["requested_crashes"] == 1
         )
-        for effect_class in manifest.effect_classes
-    }
-    boundary_roles = {
-        "provider": "provider_start",
-        "validation": "internal",
-        "commit": "git_commit",
-        "handoff": "file_write",
-        "queue_finalization": "queue_move",
-        "baseline_initialization": "ledger",
+        for runtime_boundary in manifest.runtime_boundaries
     }
     boundary_evidence = {
-        role: {
+        runtime_boundary: {
             "ledger_class": effect_class,
             "tested_phases": list(manifest.boundary_matrix[effect_class]),
             "all_injected_crashes_observed": all(
                 row["observed_crashes"] == row["requested_crashes"]
                 for row in matrix
-                if row["effect_class"] == effect_class
+                if row["runtime_boundary"] == runtime_boundary
             ),
             "all_cases_converged": all(
                 row["end_state"] == "converged"
                 for row in matrix
-                if row["effect_class"] == effect_class
+                if row["runtime_boundary"] == runtime_boundary
             ),
             "end_states": sorted(
                 {
                     str(row["end_state"])
                     for row in matrix
-                    if row["effect_class"] == effect_class
+                    if row["runtime_boundary"] == runtime_boundary
                 }
             ),
         }
-        for role, effect_class in boundary_roles.items()
+        for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
     }
     stop_conditions = tuple(
         {
@@ -1579,23 +1941,23 @@ def run_provider_free_harness(
         "crash_matrix": matrix,
         "workflow_boundary_evidence": boundary_evidence,
         "record_ahead_evidence": {
-            effect_class: {
+            runtime_boundary: {
                 "physical_execution_count": next(
                     row["physical_execution_count"]
                     for row in matrix
-                    if row["effect_class"] == effect_class
+                    if row["runtime_boundary"] == runtime_boundary
                     and row["phase"] == "after_effect"
                     and row["requested_crashes"] == 2
                 ),
                 "result_completion_count": next(
                     row["result_completion_count"]
                     for row in matrix
-                    if row["effect_class"] == effect_class
+                    if row["runtime_boundary"] == runtime_boundary
                     and row["phase"] == "after_effect"
                     and row["requested_crashes"] == 2
                 ),
             }
-            for effect_class in manifest.effect_classes
+            for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
             if "after_effect" in manifest.boundary_matrix[effect_class]
         },
         "semantic_binding": semantic,

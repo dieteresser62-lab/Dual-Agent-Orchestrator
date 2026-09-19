@@ -30,7 +30,12 @@ from artifact_models import (
     ReviewPayload,
     Role,
 )
-from artifact_replay import ArtifactReplayResult
+from artifact_replay import (
+    ArtifactReplayError,
+    ArtifactReplayResult,
+    ReplayDiagnostic,
+    ReplayDiagnosticCode,
+)
 from dry_run_scenarios import ScriptedInterruption
 from error_classification import (
     ERROR_CLASSIFICATIONS,
@@ -196,36 +201,11 @@ def _divergent_recovery_records() -> BaseException:
 
 
 def _incomplete_final_attestation() -> BaseException:
-    changes = SimpleNamespace(fingerprint="d" * 64)
-    driver = SimpleNamespace(
-        collect_changes=lambda _base: changes,
-        checkpoint=lambda _state, _history: None,
-    )
-    engine = WorkflowEngine(driver)  # type: ignore[arg-type]
-    engine._validate_change_boundary = lambda *_args: ()  # type: ignore[method-assign]  # noqa: SLF001,E501
-    engine._apply_test_change_gate = (  # type: ignore[method-assign]  # noqa: SLF001
-        lambda state, *_args: (state, False, False)
-    )
-    engine._attestation = (  # type: ignore[method-assign]  # noqa: SLF001
-        lambda _changes, history, *_args, **_kwargs: (
-            SimpleNamespace(complete=False, passed=False),
-            history,
-        )
-    )
-    state = SimpleNamespace(
-        branch_base="a" * 40,
-        branch_review_base_commit="a" * 40,
-        current_slice_id=1,
-    )
-    context = SimpleNamespace(
-        dynamic_test_scope=False,
-        expected_test_files=(),
-        test_path_patterns=(),
-        plan_only=False,
-    )
-    return _capture(
-        lambda: engine._run_final_codex_report(  # noqa: SLF001
-            state, context, SimpleNamespace()
+    return ArtifactReplayError(
+        ReplayDiagnostic(
+            ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+            "legacy final-review chain is read-only; inspect it with "
+            "scripts/verify_legacy_chain.py",
         )
     )
 

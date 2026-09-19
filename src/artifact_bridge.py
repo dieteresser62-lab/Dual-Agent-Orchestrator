@@ -100,7 +100,10 @@ from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
 from artifact_replay import (
+    ArtifactReplayError,
     ArtifactReplayResult,
+    ReplayDiagnostic,
+    ReplayDiagnosticCode,
     _validate_work_unit_revision,
     replay_artifacts,
 )
@@ -569,16 +572,7 @@ def finding_handoff_export_payload(
     plans = [record.payload for record in replay.records if isinstance(record.payload, PlanPayload)]
     if not plans or not any(plan.approved_plan_commit == approved_plan_commit for plan in plans):
         raise ArtifactBridgeError("finding export plan commit is not present in accepted replay")
-    transitive = native_finding_decisions.native_finding_decisions_enabled()
-    transitions = (
-        flatten_finding_transition_history(replay.records)
-        if transitive
-        else tuple(
-            ImportedFindingTransition(record.record_id, record.payload)
-            for record in replay.records
-            if isinstance(record.payload, FindingTransitionPayload)
-        )
-    )
+    transitions = flatten_finding_transition_history(replay.records)
     if not transitions:
         raise ArtifactBridgeError("finding export requires at least one source transition")
     return FindingHandoffExportPayload(
@@ -773,10 +767,6 @@ def branch_discovery_handoff_export_payload(
 
     from artifact_models import FamilyBindingPayload
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise ArtifactBridgeError(
-            "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     if replay.head_record_id is None:
         raise ArtifactBridgeError(
             "branch discovery handoff export requires a non-empty accepted replay"
@@ -1034,10 +1024,6 @@ def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
     scan can contain open findings and therefore need not accept the family.
     """
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise ArtifactBridgeError(
-            "family acceptance requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     identity = replay.run_identity
     profile = replay.run_profile
     if (
@@ -1138,10 +1124,6 @@ def plan_assignment_payload(
 ) -> PlanAssignmentPayload:
     """Build the sole E3 authority from a positive explicit plan review."""
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise ArtifactBridgeError(
-            "plan assignment requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     snapshot = source_snapshot_record.payload
     plan_result = plan_result_record.payload
     review = review_record.payload
@@ -1327,11 +1309,6 @@ def no_implementation_required_payload(
 ) -> NoImplementationRequiredPayload:
     """Build E7's explicit completion only from a fully closed No-Code plan."""
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED requires "
-            "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     assignment_record = next(
         (
             record
@@ -1544,10 +1521,6 @@ def remediation_cohort_checkpoint_payload(
 ) -> RemediationCohortCheckpointPayload:
     """Measure S_r at the pre-discovery boundary from authoritative records."""
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise ArtifactBridgeError(
-            "remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     assignment = assignment_record.payload
     if not isinstance(assignment, PlanAssignmentPayload):
         raise ArtifactBridgeError(
@@ -1757,6 +1730,15 @@ class ArtifactBridge:
         fingerprint_sha256: str,
         fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
     ) -> ArtifactRecord:
+        if isinstance(payload, CorrectionWorkUnitPayload):
+            raise ArtifactReplayError(
+                ReplayDiagnostic(
+                    ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+                    "legacy correction_work_unit records cannot be written under "
+                    "the installed reducer; inspect historical chains with "
+                    "scripts/verify_legacy_chain.py",
+                )
+            )
         fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)
         context = self.store.append_context(
             record_type=payload.record_type,

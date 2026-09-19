@@ -386,6 +386,14 @@ def replay_artifacts(
                 "record type does not match its typed payload",
                 record,
             )
+        if isinstance(record.payload, CorrectionWorkUnitPayload):
+            _fail(
+                ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+                "legacy correction_work_unit records cannot be written under the "
+                f"installed reducer; inspect historical chains with "
+                "scripts/verify_legacy_chain.py",
+                record,
+            )
         if record.record_type in {
             RecordType.TASK,
             RecordType.RUN_IDENTITY,
@@ -559,7 +567,7 @@ def _ensure_projection_event_prefix(
             else "validation"
             if isinstance(record.payload, ValidationAttestationPayload)
             else "review"
-            if isinstance(record.payload, ReviewPayload)
+            if isinstance(record.payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
             else None,
         )
         if kind is not None
@@ -713,7 +721,7 @@ def _project_slice_documents(
             if slice_id == "1"
             else prior_commit
         )
-        commit_ref = commit_refs.get(slice_id)
+        commit_ref = identity.first_slice_start_commit if identity.execution_mode == "BRANCH_DISCOVERY" and slice_id == "1" else commit_refs.get(slice_id)
         slices.append(
             {
                 "slice_id": int(slice_id),

@@ -10,7 +10,6 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     CommandSpec,
-    CorrectionWorkUnitPayload,
     FindingSeverity,
     FindingTransitionPayload,
     FindingHandoffImportPayload,
@@ -126,11 +125,11 @@ def _semantic_fixture_digest(records):  # type: ignore[no-untyped-def]
 
 def _chain() -> tuple[ArtifactRecord, ...]:
     payloads = (
-        CorrectionWorkUnitPayload(
+        WorkUnitPayload(
             slice_id="5",
             round_number=2,
             paths=("src/a.py", "tests/test_a.py"),
-            finding_ids=("C-01",),
+            open_finding_ids=("C-01",),
         ),
         FindingTransitionPayload(
             finding_id="C-01",
@@ -265,7 +264,7 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert first == second
     table = first["decision-table"]
     assert table.index(chain[0].record_id[:16]) < table.index(chain[-1].record_id[:16])
-    assert "Korrektur-Work-Unit" in first["approval-status"]
+    assert "Work-Unit" in first["approval-status"]
     assert "`src/a.py`" in first["approval-status"]
     assert "### Binding · commit" in first["approval-status"]
     assert "### Nachweis vollständiger Bindungswerte" in table
@@ -347,11 +346,11 @@ def test_projection_renders_native_finding_convergence_from_records(tmp_path) ->
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-convergence"))
     _bind_bridge(bridge)
     bridge.append(
-        CorrectionWorkUnitPayload(
+        WorkUnitPayload(
             slice_id="1",
             round_number=2,
             paths=("src/a.py",),
-            finding_ids=("C-01",),
+            open_finding_ids=("C-01",),
         ),
         logical_id="work-unit-7",
         idempotency_key="work-unit:7:round:2",
@@ -557,11 +556,11 @@ def test_projection_keeps_structured_prose_inside_finding_response_and_gate_rows
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-table-prose"))
     _bind_bridge(bridge)
     bridge.append(
-        CorrectionWorkUnitPayload(
+        WorkUnitPayload(
             slice_id="2",
             round_number=1,
             paths=("src/a.py",),
-            finding_ids=("C-02",),
+            open_finding_ids=("C-02",),
         ),
         logical_id="work-unit-4",
         idempotency_key="work-unit:4",

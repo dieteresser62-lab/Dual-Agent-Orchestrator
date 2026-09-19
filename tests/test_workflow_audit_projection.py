@@ -15,7 +15,6 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_replay",
     "audit_trail",
     "contracts",
-    "finding_cleanup",
     "finding_reducer",
     "gates",
     "git_service",
@@ -44,7 +43,6 @@ EXPECTED_PROJECTION_FUNCTIONS = {
 EXPECTED_PROJECTION_EDGES = Counter(
     {
         ("_audit_projection", "_authorized_test_approval"): 1,
-        ("_audit_projection", "_latest_review_approved"): 1,
         ("_persisted_histories", "_attach_record_events"): 2,
         ("_hydrate_record_history", "_attach_record_events"): 1,
         ("_recover_final_review_attestation", "_persisted_histories"): 1,

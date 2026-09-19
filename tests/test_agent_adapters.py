@@ -198,8 +198,15 @@ def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
         "request_id": bundle.bound_context.request_id,
         "result_type": "plan_result",
         "ready": True,
-        "slice_plan": [{"slice_id": 1, "summary": "Plan", "scope_paths": ["docs/internal/plan.md"]}],
+        "slice_plan": [{
+            "slice_id": 1,
+            "summary": "Plan",
+            "scope_paths": ["docs/internal/plan.md"],
+            "acceptance_criteria": ["The reviewed plan artifact is complete."],
+        }],
         "finding_dispositions": [],
+        "plan_treatments": [],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     assert adapter._last_message_file is not None
     adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
@@ -245,6 +252,8 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness",

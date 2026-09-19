@@ -141,8 +141,8 @@ def test_codex_responsibility_proposal_cannot_enter_reviewer_projection(
         )
 
 
-def test_decision_projection_fails_named_under_the_single_cutover_switch() -> None:
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
+def test_decision_projection_is_unconditionally_active_after_cutover() -> None:
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
     response = _review(
         routes=(
             NativeResponsibilityRoute(
@@ -153,13 +153,11 @@ def test_decision_projection_fails_named_under_the_single_cutover_switch() -> No
         )
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-    ):
-        project_native_review_decision_payloads(
-            response, (_finding(),), work_unit_id="6"
-        )
+    payloads = project_native_review_decision_payloads(
+        response, (_finding(),), work_unit_id="6"
+    )
+    assert len(payloads) == 1
+    assert payloads[0].action == "routed"
 
 
 def test_a_s_keeps_ever_routed_finding_after_slice_s_routes_it_onward() -> None:

@@ -4,7 +4,7 @@
     {
       "exception_id": "claude-acceptance-command-family",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "acceptance-invalid",
       "local_invariant": "A BLOCKER validation command belongs to one of the request-bound configured argv families.",
       "missing_schema_feature": "positional_tuple_and_argv_prefix_relation",
@@ -14,7 +14,7 @@
     {
       "exception_id": "claude-anchor-id-uniqueness",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "anchor-invalid",
       "local_invariant": "Anchor identifiers are unique within one review result.",
       "missing_schema_feature": "cross_item_property_uniqueness",
@@ -24,7 +24,7 @@
     {
       "exception_id": "claude-finding-event-uniqueness",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "finding-event-conflict",
       "local_invariant": "A finding identifier occurs in exactly one status, reclassification, or new-finding event.",
       "missing_schema_feature": "cross_array_and_cross_item_uniqueness",
@@ -34,7 +34,7 @@
     {
       "exception_id": "claude-new-finding-order",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "finding-id-invalid",
       "local_invariant": "New finding identifiers start at next_finding_id and remain contiguous in canonical order.",
       "missing_schema_feature": "positional_tuple",
@@ -44,7 +44,7 @@
     {
       "exception_id": "claude-request-id-binding",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "request-mismatch",
       "local_invariant": "The response request_id equals the request identifier whose digest includes the response-schema digest.",
       "missing_schema_feature": "cyclic_request_id_const",
@@ -54,7 +54,7 @@
     {
       "exception_id": "claude-resulting-blocker-state",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "approval-invalid",
       "local_invariant": "A denial leaves an own BLOCKER open and an approval leaves no own BLOCKER open after every finding transition is applied.",
       "missing_schema_feature": "cross_array_state_transition_fold",
@@ -64,7 +64,7 @@
     {
       "exception_id": "codex-disposition-order-and-uniqueness",
       "provider": "codex",
-      "operations": ["correction", "final_report", "implementation", "plan"],
+      "operations": ["correction", "implementation", "plan"],
       "error_code": "finding-reference-invalid",
       "local_invariant": "Every open finding is disposed exactly once in canonical order.",
       "missing_schema_feature": "positional_tuple",
@@ -74,7 +74,7 @@
     {
       "exception_id": "codex-nonblank-safe-text",
       "provider": "codex",
-      "operations": ["correction", "final_report", "implementation", "plan"],
+      "operations": ["correction", "implementation", "plan"],
       "error_code": "schema-invalid",
       "local_invariant": "Human rationale and self-check fields are non-blank and NUL-free.",
       "missing_schema_feature": "regex_lookaround",
@@ -84,7 +84,7 @@
     {
       "exception_id": "codex-request-id-binding",
       "provider": "codex",
-      "operations": ["correction", "final_report", "implementation", "plan"],
+      "operations": ["correction", "implementation", "plan"],
       "error_code": "request-mismatch",
       "local_invariant": "The response request_id equals the request identifier whose digest includes the response-schema digest.",
       "missing_schema_feature": "cyclic_request_id_const",
@@ -94,7 +94,7 @@
     {
       "exception_id": "codex-safe-path-lookaround",
       "provider": "codex",
-      "operations": ["correction", "final_report", "implementation", "plan"],
+      "operations": ["correction", "implementation", "plan"],
       "error_code": "schema-invalid",
       "local_invariant": "Repository paths are relative, traversal-free, canonical POSIX paths outside .orchestrator.",
       "missing_schema_feature": "regex_lookaround_and_unique_items",
@@ -114,7 +114,7 @@
     {
       "exception_id": "codex-stop-remediation-path-order",
       "provider": "codex",
-      "operations": ["correction", "final_report", "implementation", "plan"],
+      "operations": ["correction", "implementation", "plan"],
       "error_code": "stop-content-invalid",
       "local_invariant": "Stop remediation paths are sorted in canonical repository order.",
       "missing_schema_feature": "array_lexicographic_order",
@@ -134,7 +134,7 @@
     {
       "exception_id": "review-finding-signature-uniqueness",
       "provider": "claude",
-      "operations": ["final", "plan", "slice"],
+      "operations": ["plan", "slice"],
       "error_code": "finding-signature-duplicate",
       "local_invariant": "A new finding signature differs from every earlier new finding in the same result; a unique match to an offered open finding is coalesced into that finding as an occurrence, while ambiguous or contradictory matches are rejected.",
       "missing_schema_feature": "cross_array_derived_hash_uniqueness",

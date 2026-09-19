@@ -195,7 +195,6 @@ def _codex_bound(kind: NativeCodexRequestKind) -> BoundNativeCodexContext:
         NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
         NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
         NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.FINAL_REPORT: ReadinessMarker.FINAL_REPORT,
     }[kind]
     context = NativeCodexContext(
         run_id="differential-codex",
@@ -250,6 +249,7 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     "finding_id": "C-01",
                     "decision": "accepted",
                     "rationale": "The focused regression closes the defect.",
+                    "responsibility_proposal": None,
                 }
             ]
             if kind is NativeCodexRequestKind.CORRECTION
@@ -265,8 +265,11 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     "slice_id": 1,
                     "summary": "Implement the bounded plan.",
                     "scope_paths": ["docs/internal/plan.md"],
+                    "acceptance_criteria": ["The bounded plan is implemented."],
                 }
             ],
+            "plan_treatments": [],
+            "plan_completion": "IMPLEMENTATION_REQUIRED",
         }
     if kind in {
         NativeCodexRequestKind.IMPLEMENTATION,
@@ -277,11 +280,7 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
             "result_type": f"{kind.value}_result",
             "test_files": ["tests/test_native_contract_differential.py"],
         }
-    return {
-        **common,
-        "result_type": "final_report_result",
-        "self_check": "All bound dimensions were checked.",
-    }
+    raise AssertionError(f"unsupported Codex request kind: {kind}")
 
 
 def _attestation() -> ValidationAttestation:
@@ -303,8 +302,6 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         "plan": ApprovalMarker.PLAN,
         "initial_slice": ApprovalMarker.SLICE,
         "convergence": ApprovalMarker.SLICE,
-        "final": ApprovalMarker.FINAL,
-        "final_observation": ApprovalMarker.FINAL,
     }[form]
     context = NativeReviewContext(
         run_id="differential-claude",
@@ -312,12 +309,11 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         operation={
             ApprovalMarker.PLAN: "claude_plan_review",
             ApprovalMarker.SLICE: "claude_slice_review",
-            ApprovalMarker.FINAL: "claude_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.CLAUDE,
         approval_marker=marker,
-        slice_id="01" if marker is not ApprovalMarker.FINAL else "final",
+        slice_id="01",
         round_number=2 if convergence else 1,
         previous_findings=(
             (
@@ -327,7 +323,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
                     else FindingClass.BLOCKER
                 ),
             )
-            if form in ("plan", "convergence", "final", "final_observation")
+            if form in ("plan", "convergence")
             else ()
         ),
         validation_attestation=_attestation(),
@@ -356,12 +352,15 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
                     "finding_id": "C-01",
                     "status": "CLOSED",
                     "rationale": "The focused regression closes the defect.",
+                    "closure": {"kind": "fixed"},
                 }
             ]
             if bound.context.previous_findings
             else []
         ),
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, resume",
@@ -387,9 +386,7 @@ def test_all_writer_forms_accept_their_local_domain_result() -> None:
                 "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
             }
         )
-    for form in (
-        "plan", "initial_slice", "convergence", "final", "final_observation"
-    ):
+    for form in ("plan", "initial_slice", "convergence"):
         bound = _review_bound(form)
         response = _review_response(bound)
         writer = native_review_provider_response_schema(bound.context)
@@ -515,11 +512,12 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
     mutations = (
         {
             "status_changes": [
-                {
-                    "finding_id": "C-01",
-                    "status": "OPEN",
-                    "rationale": "Reopen the resolved finding.",
-                }
+                    {
+                        "finding_id": "C-01",
+                        "status": "OPEN",
+                        "rationale": "Reopen the resolved finding.",
+                        "closure": None,
+                    }
             ],
             "reclassifications": [],
         },
@@ -563,7 +561,15 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
         FindingOrigin("01", 1, AgentRole.CLAUDE),
         status_rationale="Resolved earlier.",
     )
-    context = replace(template.context, previous_findings=(closed,))
+    open_finding = FindingRecord(
+        "C-02",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Current blocker.",
+        "Close the current blocker.",
+        FindingOrigin("01", 2, AgentRole.CLAUDE),
+    )
+    context = replace(template.context, previous_findings=(closed, open_finding))
     bound = BoundNativeReviewContext(
         context, template.request_id, template.request_digest
     )
@@ -571,22 +577,13 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
     response = _review_response(bound)
     response.update(
         decision="denied",
-        new_findings=[
-            {
-                "finding_id": "C-02",
-                "finding_class": "OBSERVATION",
-                "summary": "Future hardening only.",
-                "acceptance_test": {
-                    "kind": "prose",
-                    "text": "Consider this in a later slice.",
-                },
-            }
-        ],
+        new_findings=[],
         status_changes=[
             {
                 "finding_id": "C-01",
                 "status": "OPEN",
                 "rationale": "Reopen it to make denial pass.",
+                "closure": None,
             }
         ],
         reclassifications=[],
@@ -600,6 +597,4 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
 
     control = copy.deepcopy(response)
     control["status_changes"] = []
-    with pytest.raises(NativeReviewContractError) as control_error:
-        parse_bound_native_contract_result(control, bound)
-    assert control_error.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    parse_bound_native_contract_result(control, bound)

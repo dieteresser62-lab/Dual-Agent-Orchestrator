@@ -19,7 +19,6 @@ from typing import Callable
 from artifact_bridge import review_payload_matches_result
 from artifact_models import (
     AgentResultPayload,
-    CorrectionWorkUnitPayload,
     ProviderContentPayload,
     ReviewPacketPayload,
     ReviewPayload,
@@ -45,7 +44,6 @@ from contracts import (
     PlannedSlice,
     ValidationAttestation,
 )
-from finding_cleanup import is_finding_cleanup_work_unit
 from finding_reducer import reduce_findings
 from gates import matches_path_patterns
 from git_service import inspect_repository
@@ -125,28 +123,13 @@ def _audit_projection(
         else unit.current_step not in {
             WorkflowStep.CODEX_IMPLEMENTATION,
             WorkflowStep.CODEX_CORRECTION,
-            WorkflowStep.CODEX_FINAL_CORRECTION,
         }
     )
-    # A regular Slice or final-review correction owns its Slice record, so the
-    # completed Slice proves that this unit passed its own commit.  A finding
-    # cleanup deliberately reuses an already completed Slice id, so that proof
-    # belongs to the earlier unit; it must authorize only its own commit.
-    cleanup_unit = is_finding_cleanup_work_unit(state, unit)
     commit_authorized = (
-        unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+        unit.kind is WorkUnitKind.SLICE
         and (
             unit.current_step is WorkflowStep.SLICE_COMMIT
-            or (
-                slice_record.status is SliceStatus.COMPLETED
-                and (
-                    not cleanup_unit
-                    or (
-                        unit.status is WorkUnitStatus.COMPLETED
-                        and _latest_review_approved(history)
-                    )
-                )
-            )
+            or slice_record.status is SliceStatus.COMPLETED
         )
     )
     latest_review = next(
@@ -298,7 +281,7 @@ def _attach_record_events(
         is_final_review = (
             prior_steps
             and prior_steps[-1]
-            == WorkflowStep.CLAUDE_FINAL_REVIEW.value  # allowlist:provider -- canonical state-v3 step
+            == WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value
         )
         allowed_origins = allowed_review_finding_origins(
             finding_ledger,
@@ -376,38 +359,7 @@ def _hydrate_record_history(
         {history.work_unit_id: history}, replay, read_blob
     )[history.work_unit_id]
     reduced = reduce_findings(replay)
-    correction = reduced.correction_for(history.work_unit_id)
-    findings = (
-        reduced.ledger.findings
-        if correction is None
-        else reduced.request_subset(finding_ids=correction.finding_ids).findings
-    )
-
-    positions = {
-        record.record_id: index for index, record in enumerate(replay.records)
-    }
-    final_report_records = tuple(
-        record
-        for record in replay.records
-        if isinstance(record.payload, ProviderContentPayload)
-        and record.payload.work_unit_id == str(history.work_unit_id)
-        and record.payload.content_kind == "final_report"
-        and any(
-            isinstance(decision.payload, AgentResultPayload)
-            and positions[record.record_id] < positions[decision.record_id]
-            and decision.payload.work_unit_id == record.payload.work_unit_id
-            and decision.payload.outcome == "ready"
-            and decision.payload.request_id == record.payload.request_id
-            and decision.payload.response_sha256 == record.payload.response_sha256
-            and decision.fingerprint == record.fingerprint
-            for decision in replay.records
-        )
-    )
-    final_report = None
-    if final_report_records:
-        final_report = read_blob(
-            final_report_records[-1].payload.blob
-        ).decode("utf-8")
+    findings = reduced.ledger.findings
 
     packet_records = tuple(
         record
@@ -434,7 +386,6 @@ def _hydrate_record_history(
     return replace(
         projected,
         findings=findings,
-        codex_final_report=final_report,  # allowlist:provider -- canonical history field
         active_review_packet=active_review_packet,
     )
 
@@ -452,8 +403,7 @@ def _recover_final_review_attestation(
     a changed branch still selects and persists a new validation normally.
     """
     if (
-        state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
-        and not is_finding_cleanup_work_unit(state)
+        state.current_work_unit.kind is not WorkUnitKind.BRANCH_DISCOVERY
     ):
         return current_history
     carried = current_history.attestations[-1:]
@@ -521,18 +471,12 @@ def _overall_audit_entries(
                     }
                 )
             )
-        elif unit.kind is WorkUnitKind.FINAL_REVIEW:
-            label = "Arbeitseinheit %02d – Gesamtreview" % unit.work_unit_id
-            summary = "Branchweite Gesamtabnahme durch Codex und Claude"
+        elif unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
+            label = "Arbeitseinheit %02d – Branch-Entdeckung" % unit.work_unit_id
+            summary = "Branchweiter Entdeckungsreview durch Claude"
             scope = tuple(
                 sorted({path for item in state.slices for path in item.scope_paths})
             )
-        elif unit.kind is WorkUnitKind.CORRECTION:
-            label = "Arbeitseinheit %02d – Abschlusskorrektur" % unit.work_unit_id
-            summary = "Abschlusskorrektur für " + ", ".join(unit.open_findings)
-            scope = next(
-                item for item in state.slices if item.slice_id == unit.slice_id
-            ).scope_paths
         else:
             label = "Arbeitseinheit %02d – Slice %02d" % (
                 unit.work_unit_id,

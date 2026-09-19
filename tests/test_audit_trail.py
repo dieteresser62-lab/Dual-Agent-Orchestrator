@@ -894,7 +894,7 @@ def test_review_origins_are_derived_from_complete_ledger_not_request_subset() ->
         _review(approval=False, findings=(ledger_finding,)),
         allowed_finding_origins=allowed,
     )
-    assert event.allowed_finding_origins == ("23", "FINAL")
+    assert event.allowed_finding_origins == ("23", "DISCOVERY")
 
     unknown = replace(
         ledger_finding, origin=FindingOrigin("24", 1, AgentRole.CLAUDE)

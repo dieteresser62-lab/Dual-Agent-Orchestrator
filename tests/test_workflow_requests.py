@@ -35,10 +35,10 @@ from workflow_state import WorkflowStep, init_workflow_state
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "0e3a7ca33838f8cd393782864d99259863cd80d182c69cd63b47a4eea0b6dc9d"
+    "5ae1d8a295a5df081744501eb70a3387c781ff0d3f25c0eb7d6204c66d06eed8"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "d5c38e8d992c23ede9bd780e7ee1c0985b6d4485d0babdb344c9c2e125ddf8d7"
+    "584d9900826f115f8610954337c0ff04cfba161b0f21ba3a47d9340ec2e19c0e"
 )
 
 
@@ -91,7 +91,10 @@ def _codex_bundle(
 
 
 def _review_bundle(
-    *, context: WorkflowContext | None = None
+    *,
+    context: WorkflowContext | None = None,
+    review_diff: str | None = None,
+    evidence_kind: EvidenceKind = EvidenceKind.FULL_SLICE,
 ) -> workflow_requests.NativeReviewRequestBundle:
     state = init_workflow_state(
         run_id="b31-request-review",
@@ -106,7 +109,11 @@ def _review_bundle(
         start_commit="a" * 40,
         fingerprint="c" * 64,
         paths=("src/workflow_requests.py", "tests/test_workflow_requests.py"),
-        full_diff="diff --git a/src/workflow.py b/src/workflow.py\n-old\n+new\n",
+        full_diff=(
+            review_diff
+            if review_diff is not None
+            else "diff --git a/src/workflow.py b/src/workflow.py\n-old\n+new\n"
+        ),
     )
     command = "python3 -m pytest tests/ -v -m not crash_harness"
     attestation = ValidationAttestation(
@@ -133,67 +140,13 @@ def _review_bundle(
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
         changes=changes,
-        evidence_kind=EvidenceKind.FULL_SLICE,
+        evidence_kind=evidence_kind,
         review_diff=changes.full_diff,
         review_packet=None,
         expected_test_files=("tests/test_workflow_requests.py",),
         execution_error=WorkflowExecutionError,
         full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
     )
-
-
-def _final_review_bundle(review_diff: str) -> workflow_requests.NativeReviewRequestBundle:
-    state = init_workflow_state(
-        run_id="b117-final-review-boundary",
-        task_file="/repo/inbox/backlog/00-b117.md",
-        branch="feature/grenzen-unter-wachstum",
-        branch_base="a" * 40,
-        first_slice_start_commit="a" * 40,
-        slice_count=1,
-        timestamp="2026-09-12T10:00:00+00:00",
-    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
-    changes = WorkflowChanges(
-        start_commit="a" * 40,
-        fingerprint="c" * 64,
-        paths=("src/workflow_requests.py", "tests/test_workflow_requests.py"),
-        full_diff=review_diff,
-    )
-    command = "python3 -m pytest tests/ -v -m not crash_harness"
-    attestation = ValidationAttestation(
-        attestation_id="validation-b117-final-review",
-        diff_fingerprint=changes.fingerprint,
-        expected_commands=(command,),
-        records=(ValidationRecord(ValidationStatus.PASS, command, 0),),
-        output_digest="d" * 64,
-        summary="B117 provider-free tests passed.",
-    )
-    contract = StepContract(
-        name="b117-final-review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.FINAL,
-        slice_id="FINAL",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=attestation,
-        test_changes_approved=True,
-    )
-    return workflow_requests.native_review_request(
-        state=state,
-        context=_context(),
-        history=replace(
-            WorkflowHistory(state.current_work_unit_id),
-            codex_final_report='{"result_type":"final_report_result"}',
-        ),
-        contract=contract,
-        changes=changes,
-        evidence_kind=EvidenceKind.FULL_BRANCH,
-        review_diff=review_diff,
-        review_packet=None,
-        expected_test_files=("tests/test_workflow_requests.py",),
-        execution_error=WorkflowExecutionError,
-        full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
-    )
-
 
 def test_request_builders_are_free_functions_with_one_way_imports() -> None:
     tree = ast.parse((SRC / "workflow_requests.py").read_text(encoding="utf-8"))
@@ -239,7 +192,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
     ]
     codex_calls = [node for node in calls if node.func.attr == "native_codex_request"]
     review_calls = [node for node in calls if node.func.attr == "native_review_request"]
-    assert len(codex_calls) == 3
+    assert len(codex_calls) == 2
     assert len(review_calls) == 1
     assert all(
         any(
@@ -275,7 +228,7 @@ def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
         _review_bundle(context=context)
 
 
-def test_canonical_requests_match_the_pre_cut_bytes() -> None:
+def test_canonical_requests_match_the_cutover_bytes() -> None:
     assert _canonical_digest(_codex_bundle().canonical_json) == (
         PRE_CUT_CODEX_REQUEST_SHA256
     )
@@ -284,11 +237,14 @@ def test_canonical_requests_match_the_pre_cut_bytes() -> None:
     )
 
 
-def test_oversized_final_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:
+def test_oversized_branch_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:
     sentinel = "complete-diff-sentinel-"
     review_diff = sentinel + ("ä" * workflow_requests.FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS)
 
-    bundle = _final_review_bundle(review_diff)
+    bundle = _review_bundle(
+        review_diff=review_diff,
+        evidence_kind=EvidenceKind.FULL_BRANCH,
+    )
     item = next(
         item
         for item in bundle.document["evidence_manifest"]

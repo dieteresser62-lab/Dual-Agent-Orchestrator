@@ -243,29 +243,6 @@
         },
         {
           "ordinal": 17,
-          "expression": "is_finding_cleanup_work_unit(state, unit)",
-          "read_names": [
-            "is_finding_cleanup_work_unit",
-            "state",
-            "unit"
-          ]
-        },
-        {
-          "ordinal": 18,
-          "expression": "cleanup_boundary is not None",
-          "read_names": [
-            "cleanup_boundary"
-          ]
-        },
-        {
-          "ordinal": 19,
-          "expression": "not work_unit_paths",
-          "read_names": [
-            "work_unit_paths"
-          ]
-        },
-        {
-          "ordinal": 20,
           "expression": "prior is None or prior.payload != work_unit_payload",
           "read_names": [
             "prior",
@@ -301,12 +278,6 @@
           "exception_type": "ArtifactResumeError",
           "message": "re-raise caught exception unchanged",
           "source_expression": "raise"
-        },
-        {
-          "ordinal": 4,
-          "exception_type": "WorkflowExecutionError",
-          "message": "'finding cleanup has no finding-derived repository scope'",
-          "source_expression": "raise WorkflowExecutionError('finding cleanup has no finding-derived repository scope')"
         }
       ],
       "catchers": [

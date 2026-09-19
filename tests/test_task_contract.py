@@ -14,17 +14,8 @@ TASK_SCOPE: src/**, tests/**
 """
 
 
-def test_branch_discovery_task_is_dormant_and_requires_its_family_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    with pytest.raises(TaskContractError, match="JOINT_67_68"):
-        parse_task_contract(BRANCH_DISCOVERY_TASK)
-
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
+def test_branch_discovery_task_is_active_and_requires_its_family_handoff() -> None:
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
     contract = parse_task_contract(BRANCH_DISCOVERY_TASK)
     assert contract.mode is TaskMode.BRANCH_DISCOVERY
     assert contract.work_plan_path is None

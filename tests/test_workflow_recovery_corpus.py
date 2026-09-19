@@ -103,16 +103,16 @@ FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-e85a8a1bc0410900f2b1c9542ace87a1913c00cb28269416bafac61bd10e612d"
+    "native-codex-request-43cebfb22d475845db283134ab253589f6a8a6baede24ac91c203425347498f2"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-c927e110dd5ab40e730a534ff0a1cf9e8c78074b14302a2f34e5dac6922a3d60"
+    "native-review-request-8d1c1743f1d8b1e242d9600e5eb91fd64e3efb33e8327e129c130b2f75d50b46"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "b6829d0ad2ef34e3363970bdfb0e906d3e4d2c46944f3bba82fe5fa6ca1bc363"
+    "92b8d4bd6f25bf426c12a56fed74c5e14ab1c5f716d47adc938d8b9936ee1b94"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "4843b816f810882c23785840329c75724da9809ce89e75d6aa209471f3ebfa15"
+    "19c5248c5a6dffe0fd938e5614cc093f6798091a87e518ded4f15b3898a7a0fe"
 )
 
 RECOVERY_HELPERS = {
@@ -1042,6 +1042,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
                 "finding_id": "C-02",
                 "decision": "accepted",
                 "rationale": "The earlier finding remains valid and open.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1235,6 +1236,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
                 "finding_id": "C-02",
                 "decision": "accepted",
                 "rationale": "This answer was stale when it was written.",
+                "responsibility_proposal": None,
             }
         ],
     }
@@ -1321,6 +1323,7 @@ def _reviewer_base() -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "recovery identity and idempotency",
@@ -1379,6 +1382,7 @@ def _reviewer_base() -> dict[str, object]:
         slice_id=1,
         kind=WorkUnitKind.SLICE,
         open_findings=(),
+        codex_return_count=0,
     )
     state = SimpleNamespace(
         run_id=RUN_ID,
@@ -1450,6 +1454,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
             "finding_id": "C-02",
             "status": "CLOSED",
             "rationale": "The request-time acceptance test is satisfied.",
+            "closure": {"kind": "fixed"},
         }
     ]
     expected = parse_bound_native_contract_result(document, bundle.bound_context)

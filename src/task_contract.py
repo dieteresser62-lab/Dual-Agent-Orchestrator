@@ -61,13 +61,6 @@ class TaskContract:
             raise TaskContractError("informal_intake must be a boolean")
         if self.informal_intake and self.mode is not TaskMode.PLAN_ONLY:
             raise TaskContractError("informal intake must be bound to PLAN_ONLY")
-        if (
-            self.mode is TaskMode.BRANCH_DISCOVERY
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise TaskContractError(
-                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-            )
         if self.mode is TaskMode.PLAN_ONLY:
             if self.work_plan_path is None:
                 raise TaskContractError("PLAN_ONLY requires WORK_PLAN_PATH")

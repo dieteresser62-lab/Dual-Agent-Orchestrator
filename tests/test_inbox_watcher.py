@@ -93,8 +93,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
         scope_paths=("src/second.py",),
         start_fingerprint="1" * 64,
     ).complete_current_slice(commit_ref="c" * 40)
-    if final:
-        state = state.start_final_review_work_unit().complete_current_work_unit()
+    _ = final
     return WorkflowRunResult(state, WorkflowHistory(state.current_work_unit_id))
 
 
@@ -831,7 +830,7 @@ def test_stuck_task_safety_net_renames_to_stuck(tmp_path: Path) -> None:
     assert not (inbox / "stuck.md.success").exists()
 
 
-def test_workflow_result_requires_commits_and_completed_final_review() -> None:
+def test_workflow_result_completes_after_all_slice_commits() -> None:
     slice_only = WatchTaskResult.from_workflow(
         _workflow_result("watch-slice-only", final=False)
     )
@@ -855,10 +854,9 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
         WorkflowRunResult(gate_state, WorkflowHistory(1))
     )
 
-    assert slice_only.disposition is WatchTaskDisposition.RESUMABLE_HALT
-    assert slice_only.exit_code == 4
-    assert slice_only.classified_failure is not None
-    assert slice_only.classified_failure.explicitly_mapped is False
+    assert slice_only.disposition is WatchTaskDisposition.COMPLETED
+    assert slice_only.exit_code == 0
+    assert slice_only.classified_failure is None
     assert completed.disposition is WatchTaskDisposition.COMPLETED
     assert completed.exit_code == 0
     assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT

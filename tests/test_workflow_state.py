@@ -79,8 +79,8 @@ def test_branch_discovery_state_starts_as_its_own_terminal_review_run(
         execution_mode="BRANCH_DISCOVERY",
     )
 
-    assert state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
+    assert state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
     assert state.current_slice.status is SliceStatus.COMPLETED
     assert state.current_slice.start_commit == reviewed_head
     assert state.current_slice.commit_ref == reviewed_head
@@ -1095,113 +1095,6 @@ def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:
         planned_slices=(PlannedSlice(1, "implementation", ("src/one.py",)),),
     )
     assert "acceptance_criteria" not in legacy.to_dict()["planned_slices"][0]
-
-
-def test_final_review_references_committed_slice_and_appends_bounded_correction() -> None:
-    state = init_workflow_state(
-        run_id="run-final",
-        task_file="/repo/task.md",
-        branch="feature/state-v3",
-        branch_base="a" * 40,
-        first_slice_start_commit="a" * 40,
-        slice_count=1,
-        timestamp="2026-08-11T10:00:00+00:00",
-    ).bind_slice_plan(
-        (PlannedSlice(1, "initial implementation", ("src/one.py",)),),
-        first_start_commit="a" * 40,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit="a" * 40,
-        scope_paths=("src/one.py",),
-        start_fingerprint="1" * 64,
-    ).complete_current_slice(commit_ref="b" * 40)
-
-    final = state.start_final_review_work_unit()
-    halted = final.await_policy_gate(
-        reason=GateReason.STOP_REQUEST,
-        detail="scripted final-review pause",
-    )
-    resumed = halted.resume_after_user_decision().complete_current_work_unit()
-    correction = resumed.start_correction_work_unit(
-        start_commit="b" * 40,
-        scope_paths=("src/fix.py",),
-        start_fingerprint="2" * 64,
-        finding_ids=("C-01",),
-    )
-    loaded = WorkflowState.from_dict(correction.to_dict())
-    repeated_final = loaded.complete_current_slice(
-        commit_ref="c" * 40,
-    ).start_final_review_work_unit()
-    repeated_final_loaded = WorkflowState.from_dict(repeated_final.to_dict())
-
-    assert final.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-    assert final.current_step is WorkflowStep.CODEX_FINAL_REVIEW
-    assert halted.current_slice.status is SliceStatus.COMPLETED
-    assert halted.current_slice.commit_ref == "b" * 40
-    assert loaded.current_work_unit.kind is WorkUnitKind.CORRECTION
-    assert loaded.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
-    assert loaded.current_slice.slice_id == 2
-    assert loaded.current_slice.status is SliceStatus.IN_PROGRESS
-    assert loaded.current_slice.scope_paths == ("src/fix.py",)
-    assert loaded.current_work_unit.open_findings == ("C-01",)
-    assert repeated_final_loaded.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-    assert repeated_final_loaded.current_slice.slice_id == 2
-    assert repeated_final_loaded.current_slice.status is SliceStatus.COMPLETED
-    assert repeated_final_loaded.current_slice.commit_ref == "c" * 40
-
-
-def test_correction_slice_remediation_scope_includes_current_slice_report_path() -> None:
-    audit_path = "docs/internal/strukturierte-agentenkommunikation-implement-review-542ccc72.md"
-    stale_report = (
-        "docs/internal/slice-strukturierte-agentenkommunikation-implement-"
-        "01-abschlusskorrektur.md"
-    )
-    state = init_workflow_state(
-        run_id="run-correction-scope",
-        task_file="/repo/task.md",
-        branch="feature/state-v3",
-        branch_base="a" * 40,
-        first_slice_start_commit="a" * 40,
-        slice_count=1,
-        audit_report_path=audit_path,
-        timestamp="2026-08-11T10:00:00+00:00",
-    ).bind_slice_plan(
-        (PlannedSlice(1, "initial implementation", ("src/one.py",)),),
-        first_start_commit="a" * 40,
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
-    ).bind_current_slice_git_boundary(
-        start_commit="a" * 40,
-        scope_paths=("src/one.py",),
-        start_fingerprint="1" * 64,
-    ).complete_current_slice(
-        commit_ref="b" * 40,
-    ).start_final_review_work_unit().complete_current_work_unit()
-
-    correction = state.start_correction_work_unit(
-        start_commit="b" * 40,
-        scope_paths=("src/one.py", audit_path, stale_report),
-        start_fingerprint="2" * 64,
-        finding_ids=("C-25",),
-    )
-
-    expected_report = (
-        "docs/internal/slice-strukturierte-agentenkommunikation-implement-"
-        "02-abschlusskorrektur.md"
-    )
-    assert expected_report in correction.current_slice.scope_paths
-    assert stale_report not in correction.current_slice.scope_paths
-    assert WorkflowState.from_dict(correction.to_dict()) == correction
-
-
-def test_final_review_requires_all_slices_committed() -> None:
-    with pytest.raises(WorkflowStateValidationError, match="every current slice"):
-        make_state().complete_current_work_unit().start_final_review_work_unit()
 
 
 def test_slice_git_boundary_is_canonical_persisted_and_immutable() -> None:

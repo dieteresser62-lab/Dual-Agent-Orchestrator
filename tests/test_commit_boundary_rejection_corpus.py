@@ -462,6 +462,7 @@ def _run_upper(
         scope_paths=("scope.py",),
     )
     work_unit = SimpleNamespace(
+        kind=production.WorkUnitKind.PLAN,
         gate_decisions=[],
         has_gate_approval=lambda *_args: False,
     )
@@ -803,8 +804,8 @@ def test_static_corpus_is_cleartext_complete_and_source_bound() -> None:
     baseline = json.loads(STATIC_BASELINE.read_text(encoding="utf-8"))
     assert _static_document() == baseline
     upper, lower = baseline["layers"]
-    assert len(upper["conditions"]) == 19
-    assert len(upper["aborts"]) == 11
+    assert len(upper["conditions"]) == 22
+    assert len(upper["aborts"]) == 13
     assert upper["catchers"] == []
     assert len(lower["conditions"]) == 19
     assert len(lower["aborts"]) == 13  # twelve explicit errors plus one bare rethrow
@@ -861,7 +862,11 @@ def test_runtime_corpus_is_built_once_and_every_reachable_rejection_matches(
     assert len(rejections) == 23
     upper_static, lower_static = _static_document()["layers"]
     assert [item["expected_error"]["type"] for item in rejections[:11]] == [
-        item["exception_type"] for item in upper_static["aborts"]
+        item["exception_type"] for item in upper_static["aborts"][:11]
+    ]
+    assert [item["message_expression"] for item in upper_static["aborts"][-2:]] == [
+        "'Slice commit requires the authoritative record chain for E4'",
+        "'Slice commit rejected by the record-derived E4 exit condition' + (f': {reasons}' if reasons else '')",
     ]
     assert [item["expected_error"]["type"] for item in rejections[11:]] == [
         item["exception_type"]
@@ -957,7 +962,7 @@ def test_moving_a_condition_between_layers_is_detected() -> None:
     baseline_upper, baseline_lower = _static_document()["layers"]
     assert upper != baseline_upper
     assert lower != baseline_lower
-    assert len(upper["conditions"]) == 18
+    assert len(upper["conditions"]) == 21
     assert len(lower["conditions"]) == 20
 
 

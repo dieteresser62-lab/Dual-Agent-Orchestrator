@@ -4,7 +4,7 @@
     {
       "dimension": "autonomy",
       "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[happy-path]",
-      "expected_result": "Plan, zwei Slices und Finalreview terminieren ohne Gate; vier Validierungen und zwei Commits laufen genau einmal.",
+      "expected_result": "Plan und zwei Slices terminieren ohne Gate; drei Validierungen und zwei Commits laufen genau einmal; die Branchentdeckung ist ein verknüpfter Folgelauf.",
       "scenario_id": "happy-path"
     },
     {
@@ -12,18 +12,6 @@
       "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[slice-correction]",
       "expected_result": "Slice-Denial führt über Codex-Korrektur und Reviewrunde zwei zur gebundenen Folgekante.",
       "scenario_id": "slice-correction"
-    },
-    {
-      "dimension": "autonomy",
-      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[final-correction]",
-      "expected_result": "Final-Denial führt in Korrekturrunde eins und danach in ein erneutes Finalreview.",
-      "scenario_id": "final-correction"
-    },
-    {
-      "dimension": "autonomy",
-      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[second-correction-new-blocker]",
-      "expected_result": "Ein neuer Blocker in Korrekturrunde zwei erweitert den vollständigen Ledger ohne frühere Linien zu verlieren.",
-      "scenario_id": "second-correction-new-blocker"
     },
     {
       "dimension": "availability",

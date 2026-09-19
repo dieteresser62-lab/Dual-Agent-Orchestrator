@@ -1,4 +1,4 @@
-"""Pure, dormant Slice-exit evaluation over authoritative artifact records."""
+"""Pure Slice-exit evaluation over authoritative artifact records."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Sequence
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
-    CorrectionWorkUnitPayload,
     FindingSeverity,
     FingerprintKind,
     PlanPayload,
@@ -268,7 +267,7 @@ def _slice_cohort(
         (
             record.payload
             for record in records
-            if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+            if isinstance(record.payload, WorkUnitPayload)
             and record.payload.slice_id == slice_id
         ),
         None,
@@ -277,15 +276,13 @@ def _slice_cohort(
         record.logical_id.removeprefix("work-unit-")
         for record in records
         if record.logical_id.startswith("work-unit-")
-        and isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+        and isinstance(record.payload, WorkUnitPayload)
         and record.payload.slice_id == slice_id
     )
     cohort: set[str] = set()
     reasons: tuple[str, ...] = ()
     if isinstance(start_unit, WorkUnitPayload):
         cohort.update(start_unit.open_finding_ids)
-    elif isinstance(start_unit, CorrectionWorkUnitPayload):
-        cohort.update(start_unit.finding_ids)
     else:
         reasons = (f"Slice {slice_id} has no record-bound start Work Unit",)
     cohort.update(

@@ -78,7 +78,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
         }
       },
       {
@@ -378,7 +378,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
         }
       },
       {
@@ -714,7 +714,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
         }
       },
       {
@@ -1037,7 +1037,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
         }
       },
       {
@@ -1356,7 +1356,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
         }
       },
       {

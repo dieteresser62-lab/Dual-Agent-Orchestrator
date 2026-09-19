@@ -68,11 +68,9 @@ EXPECTED_SCENARIOS = {
     "commit-head-drift",
     "direct-resume-queue-finalization",
     "exact-structured-output-retry",
-    "final-correction",
     "happy-path",
     "record-ahead-resume",
     "scope-violation",
-    "second-correction-new-blocker",
     "slice-boundary-drift",
     "slice-correction",
     "structured-output-near-miss",
@@ -98,19 +96,11 @@ def _evidence_node(scenario_id: str) -> str:
 EVIDENCE_ORACLE = {
     "happy-path": (
         "autonomy",
-        "Plan, zwei Slices und Finalreview terminieren ohne Gate; vier Validierungen und zwei Commits laufen genau einmal.",
+        "Plan und zwei Slices terminieren ohne Gate; drei Validierungen und zwei Commits laufen genau einmal; die Branchentdeckung ist ein verknüpfter Folgelauf.",
     ),
     "slice-correction": (
         "autonomy",
         "Slice-Denial führt über Codex-Korrektur und Reviewrunde zwei zur gebundenen Folgekante.",
-    ),
-    "final-correction": (
-        "autonomy",
-        "Final-Denial führt in Korrekturrunde eins und danach in ein erneutes Finalreview.",
-    ),
-    "second-correction-new-blocker": (
-        "autonomy",
-        "Ein neuer Blocker in Korrekturrunde zwei erweitert den vollständigen Ledger ohne frühere Linien zu verlieren.",
     ),
     "exact-structured-output-retry": (
         "availability",
@@ -530,14 +520,14 @@ def _runtime_diff(
     )
 
 
-def test_provider_free_happy_path_reaches_terminal_final_review(tmp_path: Path) -> None:
+def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -> None:
     task = tmp_path / "task.md"
     task.write_text("provider-free resilience", encoding="utf-8")
 
     result, calls, validations = orchestrator.run_default_dry_run(task)
 
     assert result.workflow_completed
-    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert result.state.current_work_unit.kind is WorkUnitKind.SLICE
     assert result.state.current_step is WorkflowStep.COMPLETED
     assert tuple(call for call in calls if call.startswith("agent:")) == (
         "agent:codex:work-unit-1:round-1:codex_plan",
@@ -546,11 +536,9 @@ def test_provider_free_happy_path_reaches_terminal_final_review(tmp_path: Path) 
         "agent:claude:work-unit-2:round-1:claude_slice_review",
         "agent:codex:work-unit-3:round-1:codex_implementation",
         "agent:claude:work-unit-3:round-1:claude_slice_review",
-        "agent:codex:work-unit-4:round-1:codex_final_review",
-        "agent:claude:work-unit-4:round-1:claude_final_review",
     )
     assert sum(call.startswith("commit:") for call in calls) == 2
-    assert sum(validations.values()) == 4
+    assert sum(validations.values()) == 3
     assert result.history.findings == ()
 
 
@@ -562,16 +550,14 @@ def test_provider_free_correction_continues_beyond_four_returns(tmp_path: Path) 
         scenario=build_progressive_correction_scenario(), task_file=task
     )
 
-    correction = next(
-        item for item in report.result.state.work_units
-        if item.kind is WorkUnitKind.CORRECTION
-    )
+    correction = report.result.state.current_work_unit
     assert report.result.workflow_completed
     assert report.remaining_agent_events == 0
-    assert correction.codex_return_count == 5
+    assert correction.kind is WorkUnitKind.SLICE
+    assert correction.codex_return_count == 6
     assert correction.max_codex_returns == 8
     assert correction.gate.status is GateStatus.CLEAR
-    assert sum(call.startswith("commit:") for call in report.calls) == 2
+    assert sum(call.startswith("commit:") for call in report.calls) == 1
     assert all(
         item.status is FindingStatus.CLOSED
         for item in report.result.history.findings
@@ -592,21 +578,21 @@ def test_provider_free_stalled_correction_is_a_named_terminal_verdict(
     result = report.result
     assert result.workflow_rejected
     assert result.exit_code == 5
-    assert result.state.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert result.state.current_work_unit.kind is WorkUnitKind.SLICE
     assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
     assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
-    assert result.rejection_code == "CORRECTION-REVIEW-DENIED"
+    assert result.rejection_code == "SLICE-REVIEW-DENIED"
     assert result.rejection_detail is not None
-    assert "no further closure, reclassification, or finding-opening progress" in (
+    assert "no attested fingerprint-changing remediation" in (
         result.rejection_detail
     )
     assert "remaining open findings: C-01" in result.rejection_detail
     assert report.remaining_agent_events == 0
-    assert sum(call.startswith("commit:") for call in report.calls) == 1
+    assert sum(call.startswith("commit:") for call in report.calls) == 0
     watch_result = WatchTaskResult.from_workflow(result)
     assert watch_result.disposition is WatchTaskDisposition.REJECTED
     assert watch_result.status == "rejected"
-    assert watch_result.gate_reason == "CORRECTION-REVIEW-DENIED"
+    assert watch_result.gate_reason == "SLICE-REVIEW-DENIED"
     assert watch_result.resume_available is False
 
 
@@ -926,9 +912,9 @@ def test_provider_free_resilience_scenario(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario_id: str
 ) -> None:
     if scenario_id == "happy-path":
-        test_provider_free_happy_path_reaches_terminal_final_review(tmp_path)
-    elif scenario_id in {"slice-correction", "final-correction", "second-correction-new-blocker"}:
-        _run_correction_journey(tmp_path, scenario_id, monkeypatch)
+        test_provider_free_happy_path_completes_implementation_run(tmp_path)
+    elif scenario_id == "slice-correction":
+        test_provider_free_correction_continues_beyond_four_returns(tmp_path)
     elif scenario_id in {"exact-structured-output-retry", "structured-output-near-miss"}:
         _run_structured_output_probe(scenario_id)
     elif scenario_id == "record-ahead-resume":

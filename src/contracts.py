@@ -19,7 +19,6 @@ from native_finding_decisions import (
     PlanCompletionKind,
     PlanTreatmentDecision,
     PlanTreatmentProposal,
-    native_finding_decisions_enabled,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
@@ -38,14 +37,12 @@ class AgentRole(str, Enum):
 class ApprovalMarker(str, Enum):
     PLAN = "PLAN_APPROVAL"
     SLICE = "SLICE_APPROVAL"
-    FINAL = "FINAL_APPROVAL"
     BRANCH_DISCOVERY = "BRANCH_DISCOVERY_COMPLETED"
 
 
 class ReadinessMarker(str, Enum):
     PLAN = "PLAN_READY"
     IMPLEMENTATION = "IMPLEMENTATION_READY"
-    FINAL_REPORT = "FINAL_REPORT_READY"
 
 
 class FindingClass(str, Enum):
@@ -496,11 +493,6 @@ class ContractResult:
         ):
             raise ValueError("plan treatment decisions must be typed")
         if (
-            self.plan_treatment_decisions
-            and not native_finding_decisions_enabled()
-        ):
-            raise ValueError("plan treatment decisions require the joint 67/68 cutover")
-        if (
             self.red_state_followup_slice is not None
             and not self.red_state_followup_slice.strip()
         ):
@@ -627,18 +619,7 @@ class CodexStepContract:
         ):
             raise ValueError("Codex contract requires a SHA-256 review fingerprint")
         if self.validation_attestation is not None:
-            if self.readiness_marker is not ReadinessMarker.FINAL_REPORT:
-                raise ValueError(
-                    "orchestrator attestation is reserved for the final Codex report"
-                )
-            if self.review_fingerprint is None:
-                raise ValueError(
-                    "final Codex attestation requires a review fingerprint"
-                )
-            if self.validation_attestation.diff_fingerprint != self.review_fingerprint:
-                raise ValueError(
-                    "final Codex attestation fingerprint does not match review"
-                )
+            raise ValueError("Codex contracts cannot carry reviewer attestations")
         if self.require_slice_plan and self.readiness_marker is not ReadinessMarker.PLAN:
             raise ValueError("slice planning records are reserved for Codex plan steps")
         if self.plan_artifact_path is not None:
@@ -677,14 +658,10 @@ class CodexContractResult:
             for item in self.plan_treatments
         ):
             raise ValueError("plan treatments must be typed")
-        if self.plan_treatments and not native_finding_decisions_enabled():
-            raise ValueError("plan treatments require the joint 67/68 cutover")
         if self.plan_completion is not None and not isinstance(
             self.plan_completion, PlanCompletionKind
         ):
             raise ValueError("plan completion must be typed")
-        if self.plan_completion is not None and not native_finding_decisions_enabled():
-            raise ValueError("plan completion requires the joint 67/68 cutover")
 
 
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:

@@ -69,7 +69,6 @@ class NativeReviewRequestError(ValueError):
 class NativeReviewKind(StrEnum):
     PLAN = "plan"
     SLICE = "slice"
-    FINAL = "final"
     BRANCH_DISCOVERY = "branch_discovery"
 
 
@@ -207,8 +206,7 @@ class NativeReviewRequestSpec:
         expected_operation = {
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
-            NativeReviewKind.FINAL: "claude_final_review",
-            NativeReviewKind.BRANCH_DISCOVERY: "claude_final_review",  # allowlist:provider -- canonical operation
+            NativeReviewKind.BRANCH_DISCOVERY: "claude_branch_discovery",  # allowlist:provider -- canonical operation
         }[self.review_kind]
         if self.context.operation != expected_operation:
             raise NativeReviewRequestError(
@@ -380,9 +378,8 @@ def load_native_review_request_schema() -> dict[str, Any]:
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
             "bundled native request schema must be an object",
         )
-    if native_finding_decisions.native_finding_decisions_enabled():
-        _enable_native_review_request_finding_decision_schema(schema)
-        _enable_branch_discovery_request_schema(schema)
+    _enable_native_review_request_finding_decision_schema(schema)
+    _enable_branch_discovery_request_schema(schema)
     try:
         check_schema(schema, location="<native-review-request-schema>")
     except SchemaDefinitionError as exc:
@@ -417,12 +414,10 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
         isinstance(review_contract, Mapping)
         and "disposition_budget" in review_contract
     )
-    if (document.get("review_kind") == NativeReviewKind.FINAL.value) != (
-        has_disposition_budget
-    ):
+    if has_disposition_budget:
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
-            "final reviews alone must bind review_contract.disposition_budget",
+            "legacy final-review disposition budgets are unsupported",
         )
     has_discovery_capacity = (
         isinstance(review_contract, Mapping)
@@ -589,11 +584,7 @@ def _review_context_request_projection(
     review_kind = {
         "claude_plan_review": NativeReviewKind.PLAN.value,
         "claude_slice_review": NativeReviewKind.SLICE.value,
-        "claude_final_review": (
-            NativeReviewKind.BRANCH_DISCOVERY.value
-            if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY
-            else NativeReviewKind.FINAL.value
-        ),
+        "claude_branch_discovery": NativeReviewKind.BRANCH_DISCOVERY.value,
     }.get(context.operation)
     if review_kind is None:
         raise NativeReviewRequestError(
@@ -625,29 +616,18 @@ def _review_context_request_projection(
         review_contract["plan_artifact_path"] = context_binding[
             "plan_artifact_path"
         ]
-    if review_kind == NativeReviewKind.FINAL.value:
-        eligible_ids = tuple(
-            item.finding_id
-            for item in context.previous_findings
-        )
-        review_contract["disposition_budget"] = {
-            "maximum_items": len(eligible_ids),
-            "eligible_finding_ids": list(eligible_ids),
-            "pending_finding_count": context.final_review_pending_count,
-        }
     if review_kind == NativeReviewKind.BRANCH_DISCOVERY.value:
         review_contract["max_new_findings"] = context_binding[
             "max_new_findings"
         ]
-    if native_finding_decisions.native_finding_decisions_enabled():
-        review_contract["implementer_responsibility_proposals"] = context_binding[
-            "implementer_responsibility_proposals"
-        ]
-        review_contract["planned_slices"] = context_binding["planned_slices"]
-        review_contract["plan_treatments"] = context_binding["plan_treatments"]
-        review_contract["closed_finding_bindings"] = context_binding[
-            "closed_finding_bindings"
-        ]
+    review_contract["implementer_responsibility_proposals"] = context_binding[
+        "implementer_responsibility_proposals"
+    ]
+    review_contract["planned_slices"] = context_binding["planned_slices"]
+    review_contract["plan_treatments"] = context_binding["plan_treatments"]
+    review_contract["closed_finding_bindings"] = context_binding[
+        "closed_finding_bindings"
+    ]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -673,10 +653,7 @@ def _sha256_text(value: str) -> str:
 
 
 def _validate_plan_disposition_capacity(spec: NativeReviewRequestSpec) -> None:
-    if (
-        not native_finding_decisions.native_finding_decisions_enabled()
-        or spec.review_kind is not NativeReviewKind.PLAN
-    ):
+    if spec.review_kind is not NativeReviewKind.PLAN:
         return
     disposition_count = native_review_disposition_capacity(spec.context)
     if disposition_count > MAX_NATIVE_REVIEW_DISPOSITIONS:
@@ -945,9 +922,9 @@ def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:
         "maximum": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
     }
     request = definitions["review_request"]
-    request["properties"]["review_kind"]["enum"].append(
-        NativeReviewKind.BRANCH_DISCOVERY.value
-    )
+    review_kinds = request["properties"]["review_kind"]["enum"]
+    if NativeReviewKind.BRANCH_DISCOVERY.value not in review_kinds:
+        review_kinds.append(NativeReviewKind.BRANCH_DISCOVERY.value)
 
 
 def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:

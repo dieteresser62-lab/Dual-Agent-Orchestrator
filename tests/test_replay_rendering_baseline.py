@@ -16,7 +16,6 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     CommandSpec,
-    CorrectionWorkUnitPayload,
     FinalReviewPreflightPayload,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
@@ -61,7 +60,6 @@ FINGERPRINT = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 RENDERED_RECORD_TYPES = (
     "agent_result",
     "binding",
-    "correction_work_unit",
     "final_review_preflight",
     "finding_handoff_export",
     "finding_handoff_import",
@@ -171,7 +169,7 @@ def _core_review_replay() -> ArtifactReplayResult:
     )
     _append(
         records,
-        CorrectionWorkUnitPayload("2", 2, ("src/two.py",), ("C-01",)),
+        WorkUnitPayload("2", 2, ("src/two.py",), ("C-01",)),
         "work-unit-2",
     )
     _append(
@@ -704,7 +702,7 @@ def test_rendering_anchor_rejects_swapped_record_sections(
     def swap_record_sections(rendering):  # type: ignore[no-untyped-def]
         output = rendering.bindings_and_units
         first = output.index("### Codex · Runde 1 · ready")
-        second = output.index("### Korrektur-Work-Unit · Slice 2 · Runde 2")
+        second = output.index("### Work-Unit · Slice 2 · Runde 2")
         after_second = next(
             index
             for index in range(second + 1, len(output))

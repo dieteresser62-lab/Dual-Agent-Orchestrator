@@ -6,7 +6,6 @@
     { "$ref": "#/$defs/plan_result" },
     { "$ref": "#/$defs/implementation_result" },
     { "$ref": "#/$defs/correction_result" },
-    { "$ref": "#/$defs/final_report_result" },
     { "$ref": "#/$defs/stop_result" }
   ],
   "$defs": {
@@ -73,7 +72,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
+          "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -100,7 +99,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
+          "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -127,7 +126,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
+          "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -135,30 +134,9 @@
       "required": ["schema_version", "result_type", "request_id", "ready", "test_files", "finding_dispositions"],
       "additionalProperties": false
     },
-    "final_report_result": {
-      "type": "object",
-      "properties": {
-        "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
-        "result_type": { "type": "string", "const": "final_report_result" },
-        "request_id": { "$ref": "#/$defs/request_id" },
-        "ready": {
-          "type": "boolean",
-          "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead."
-        },
-        "finding_dispositions": {
-          "type": "array",
-          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
-          "maxItems": 128,
-          "items": { "$ref": "#/$defs/finding_disposition" }
-        },
-        "self_check": { "$ref": "#/$defs/safe_text" }
-      },
-      "required": ["schema_version", "result_type", "request_id", "ready", "finding_dispositions", "self_check"],
-      "additionalProperties": false
-    },
     "stop_result": {
       "type": "object",
-      "description": "Return stop_result instead of plan_result, implementation_result, correction_result, or final_report_result with ready false when the current step cannot be performed; rule_id and rationale document the blocker.",
+      "description": "Return stop_result instead of a task result when the current step cannot be performed; rule_id and rationale document the blocker.",
       "properties": {
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "stop_result" },

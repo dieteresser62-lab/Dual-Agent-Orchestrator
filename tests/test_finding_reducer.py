@@ -31,11 +31,7 @@ from artifact_replay import (
     ArtifactReplayResult,
     replay_artifacts as replay_artifacts_checked,
 )
-from finding_reducer import (
-    FindingReduction,
-    project_final_review_dispositions,
-    reduce_findings,
-)
+from finding_reducer import reduce_findings
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +74,14 @@ def _corpus() -> tuple[dict[str, Any], ...]:
     assert {case["commit"] for case in cases} == HISTORICAL_COMMITS
     assert len(cases) == 12
     return cases
+
+
+def _current_corpus() -> tuple[dict[str, Any], ...]:
+    return tuple(
+        case
+        for case in _corpus()
+        if all(event["op"] != "correction" for event in case["events"])
+    )
 
 
 def _append(
@@ -285,7 +289,7 @@ def _finding_states(findings: tuple[object, ...]) -> list[str]:
     return [f"{item.finding_id}:{item.status.value}" for item in findings]
 
 
-@pytest.mark.parametrize("case", _corpus(), ids=lambda case: case["commit"])
+@pytest.mark.parametrize("case", _current_corpus(), ids=lambda case: case["commit"])
 def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
     records = _build_case(case)
     replay = replay_artifacts(records, RUN_ID)
@@ -303,10 +307,7 @@ def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
             for item in reduction.ledger.lineages
         ] == expected["lineages"]
     assert list(reduction.open_set.finding_ids) == expected["open"]
-    assert {
-        item.work_unit_id: list(item.finding_ids)
-        for item in reduction.correction_attribution
-    } == expected["correction"]
+    assert expected["correction"] == {}
     assert (
         []
         if reduction.import_snapshot is None
@@ -339,12 +340,11 @@ def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
     )
 
 
-def test_six_named_projections_are_independent_and_immutable() -> None:
+def test_named_projections_are_independent_and_immutable() -> None:
     case = next(item for item in _corpus() if item["commit"] == "924a554")
     reduction = reduce_findings(replay_artifacts(_build_case(case), RUN_ID))
     assert reduction.ledger.transitions
     assert reduction.open_set.finding_ids == ("C-02",)
-    assert reduction.correction_attribution == ()
     assert reduction.import_snapshot is not None
     assert reduction.request_subset(work_unit_id="2").finding_ids == (
         "C-01",
@@ -357,18 +357,13 @@ def test_six_named_projections_are_independent_and_immutable() -> None:
         reduction.open_set.findings += ()  # type: ignore[misc]
 
 
-def test_ledger_correction_subset_and_errors_share_natural_finding_order() -> None:
+def test_ledger_subset_and_errors_share_natural_finding_order() -> None:
     records = _build_case(
         {
             "events": [
                 {"op": "open", "finding_id": "C-1000", "work_unit": "2"},
                 {"op": "open", "finding_id": "C-101", "work_unit": "2"},
                 {"op": "open", "finding_id": "C-62", "work_unit": "2"},
-                {
-                    "op": "correction",
-                    "work_unit": "3",
-                    "finding_ids": ["C-1000", "C-101", "C-62"],
-                },
             ]
         }
     )
@@ -378,7 +373,6 @@ def test_ledger_correction_subset_and_errors_share_natural_finding_order() -> No
 
     assert tuple(item.finding_id for item in reduction.ledger.findings) == expected
     assert reduction.open_set.finding_ids == expected
-    assert reduction.correction_attribution[0].finding_ids == expected
     assert reduction.request_subset(
         finding_ids=("C-1000", "C-62", "C-101")
     ).finding_ids == expected
@@ -388,76 +382,24 @@ def test_ledger_correction_subset_and_errors_share_natural_finding_order() -> No
     assert str(raised.value).endswith("unknown id C-102")
 
 
-def test_final_review_pending_dispositions_are_derived_from_chain_boundary() -> None:
-    records = _build_case(
-        {
-            "events": [
-                {"op": "work", "work_unit": "2", "open_ids": []},
-                *(
-                    {
-                        "op": "open",
-                        "finding_id": f"C-{number:02d}",
-                        "work_unit": "2",
-                        "class": "OBSERVATION",
-                    }
-                    for number in range(1, 6)
-                ),
-                # open_ids is deliberately empty: the projection must use the
-                # accepted transition prefix, never this mirror-like field.
-                {"op": "work", "work_unit": "3", "open_ids": []},
-                {
-                    "op": "review",
-                    "work_unit": "3",
-                    "round": 1,
-                    "verdict": "denied",
-                    "finding_ids": [f"C-{number:02d}" for number in range(1, 6)],
-                },
-                {"op": "close", "finding_id": "C-01", "work_unit": "3"},
-                {"op": "close", "finding_id": "C-02", "work_unit": "3"},
-            ]
-        }
-    )
-
-    projection = project_final_review_dispositions(
-        replay_artifacts(records, RUN_ID), "3"
-    )
-
-    assert projection.initial_finding_ids == (
-        "C-01", "C-02", "C-03", "C-04", "C-05"
-    )
-    assert projection.dispositioned_finding_ids == ("C-01", "C-02")
-    assert projection.pending.finding_ids == ("C-03", "C-04", "C-05")
-
-
-def test_correction_dispositions_are_limited_to_the_boundary_offer() -> None:
-    records = _build_case(
-        {
-            "events": [
-                {"op": "work", "work_unit": "2", "open_ids": []},
-                {"op": "open", "finding_id": "C-01", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-02", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-03", "work_unit": "2"},
-                {
-                    "op": "correction",
-                    "work_unit": "3",
-                    "finding_ids": ["C-01", "C-02"],
-                },
-                {"op": "close", "finding_id": "C-01", "work_unit": "3"},
-            ]
-        }
-    )
-
-    projection = project_final_review_dispositions(
-        replay_artifacts(records, RUN_ID), "3"
-    )
-
-    assert projection.initial_finding_ids == ("C-01", "C-02")
-    assert projection.dispositioned_finding_ids == ("C-01",)
-    assert projection.pending.finding_ids == ("C-02",)
+@pytest.mark.parametrize(
+    "case",
+    tuple(
+        case
+        for case in _corpus()
+        if any(event["op"] == "correction" for event in case["events"])
+    ),
+    ids=lambda case: case["commit"],
+)
+def test_legacy_correction_work_units_are_rejected_by_current_replay(
+    case: dict[str, Any],
+) -> None:
+    with pytest.raises(ArtifactReplayError, match="UNSUPPORTED-PROTOCOL"):
+        replay_artifacts(_build_case(case), RUN_ID)
 
 
 def test_reducer_is_pure_deterministic_and_does_not_mutate_records() -> None:
-    records = _build_case(_corpus()[6])
+    records = _build_case(_current_corpus()[0])
     replay = replay_artifacts(records, RUN_ID)
     before = tuple(record.canonical_json() for record in records)
     assert reduce_findings(replay) == reduce_findings(replay)
@@ -487,52 +429,6 @@ def test_reducer_is_pure_deterministic_and_does_not_mutate_records() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     } & forbidden_calls
-
-
-def test_combined_multi_slice_correction_sequence_resumes_at_every_prefix() -> None:
-    case = {
-        "events": [
-            {"op": "work", "work_unit": "2", "open_ids": []},
-            {"op": "open", "finding_id": "C-02", "work_unit": "2", "class": "OBSERVATION"},
-            {"op": "review", "work_unit": "2", "verdict": "approved", "finding_ids": ["C-02"]},
-            {"op": "work", "work_unit": "3", "open_ids": ["C-02"]},
-            {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-            {"op": "review", "work_unit": "3", "verdict": "denied", "finding_ids": ["C-01", "C-02"]},
-            {"op": "correction", "work_unit": "4", "round": 1, "finding_ids": ["C-01", "C-02"]},
-            {"op": "respond", "finding_id": "C-01", "work_unit": "4"},
-            {"op": "close", "finding_id": "C-01", "work_unit": "4"},
-            {"op": "open", "finding_id": "C-03", "work_unit": "4"},
-            {"op": "review", "work_unit": "4", "round": 1, "verdict": "denied", "finding_ids": ["C-02", "C-03"]},
-            {"op": "correction", "work_unit": "4", "round": 2, "finding_ids": ["C-02", "C-03"]},
-            {"op": "respond", "finding_id": "C-03", "work_unit": "4"},
-            {"op": "close", "finding_id": "C-03", "work_unit": "4"},
-            {"op": "close", "finding_id": "C-02", "work_unit": "4", "class": "OBSERVATION"},
-            {"op": "review", "work_unit": "4", "round": 2, "verdict": "approved", "finding_ids": ["C-01", "C-02", "C-03"]}
-        ]
-    }
-    records = _build_case(case)
-    reductions: list[FindingReduction] = []
-    for end in range(1, len(records) + 1):
-        if end == 1:
-            with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
-                replay_artifacts(records[:end], RUN_ID)
-            continue
-        replay = replay_artifacts(records[:end], RUN_ID)
-        first = reduce_findings(replay)
-        second = reduce_findings(replay)
-        assert first == second
-        reductions.append(first)
-    final = reductions[-1]
-    assert _finding_states(final.ledger.findings) == [
-        "C-01:CLOSED", "C-02:CLOSED", "C-03:CLOSED"
-    ]
-    assert final.open_set.finding_ids == ()
-    correction = final.correction_for("4")
-    assert correction is not None
-    assert correction.finding_ids == ("C-01", "C-02", "C-03")
-    assert final.request_subset(
-        finding_ids=correction.finding_ids
-    ).finding_ids == ("C-01", "C-02", "C-03")
 
 
 def test_reopening_same_finding_id_replays_with_first_opening_and_diagnostic() -> None:
@@ -663,10 +559,8 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "artifact_replay.py",
         "audit_trail.py",
         "contracts.py",
-        "dry_run_scenarios.py",
-            "finding_cleanup.py",
-            "finding_planning.py",
-            "git_service.py",
+        "finding_planning.py",
+        "git_service.py",
         "native_codex_contract.py",
         "native_codex_request.py",
         "native_review_contract.py",
@@ -676,7 +570,6 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "validation_matrix.py",
         "workflow.py",
         "workflow_audit_projection.py",
-        "workflow_baseline.py",
         "workflow_persistence.py",
         "workflow_recovery.py",
         "workflow_requests.py",

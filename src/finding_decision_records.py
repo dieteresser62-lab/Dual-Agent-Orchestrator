@@ -31,11 +31,6 @@ def project_native_review_decision_payloads(
     decision by a future caller.
     """
 
-    if not native_finding_decisions.native_finding_decisions_enabled():
-        raise RuntimeError(
-            "finding decision projection requires "
-            "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
-        )
     if not isinstance(response, NativeReviewResult):
         raise TypeError(
             "finding decision projection requires a parsed NativeReviewResult"

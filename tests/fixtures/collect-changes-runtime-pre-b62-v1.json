@@ -9,12 +9,18 @@
       "outcome": {
         "kind": "returned",
         "evidence": {
-          "paths": ["docs/internal/work-plan.md"],
+          "paths": [
+            "docs/internal/work-plan.md"
+          ],
           "digest": "1111111111111111111111111111111111111111111111111111111111111111",
           "raw_plan_artifact": "docs/internal/work-plan.md",
-          "semantic_paths": ["docs/internal/work-plan.md"],
+          "semantic_paths": [
+            "docs/internal/work-plan.md"
+          ],
           "full_diff": "unicode-plan-raw-fallback evidence",
-          "gate_paths": ["docs/internal/work-plan.md"]
+          "gate_paths": [
+            "docs/internal/work-plan.md"
+          ]
         },
         "collection_count": 1
       },
@@ -27,12 +33,18 @@
       "outcome": {
         "kind": "returned",
         "evidence": {
-          "paths": ["docs/internal/work-plan.md"],
+          "paths": [
+            "docs/internal/work-plan.md"
+          ],
           "digest": "2222222222222222222222222222222222222222222222222222222222222222",
           "raw_plan_artifact": null,
-          "semantic_paths": ["docs/internal/work-plan.md"],
+          "semantic_paths": [
+            "docs/internal/work-plan.md"
+          ],
           "full_diff": "oserror-plan-suppressed evidence",
-          "gate_paths": ["docs/internal/work-plan.md"]
+          "gate_paths": [
+            "docs/internal/work-plan.md"
+          ]
         },
         "collection_count": 1
       },
@@ -57,12 +69,21 @@
       "outcome": {
         "kind": "returned",
         "evidence": {
-          "paths": ["docs/internal/final-review.md", "src/runtime.py"],
+          "paths": [
+            "docs/internal/final-review.md",
+            "src/runtime.py"
+          ],
           "digest": "4444444444444444444444444444444444444444444444444444444444444444",
           "raw_plan_artifact": null,
-          "semantic_paths": ["docs/internal/final-review.md", "docs/internal/work-plan.md"],
+          "semantic_paths": [
+            "docs/internal/final-review.md",
+            "docs/internal/work-plan.md"
+          ],
           "full_diff": "compacted final-review evidence",
-          "gate_paths": ["docs/internal/final-review.md", "src/runtime.py"]
+          "gate_paths": [
+            "docs/internal/final-review.md",
+            "src/runtime.py"
+          ]
         },
         "cache": {
           "target": "cache.json",
@@ -80,12 +101,21 @@
       "outcome": {
         "kind": "returned",
         "evidence": {
-          "paths": ["docs/internal/work-plan.md", "src/runtime.py"],
+          "paths": [
+            "docs/internal/work-plan.md",
+            "src/runtime.py"
+          ],
           "digest": "5555555555555555555555555555555555555555555555555555555555555555",
           "raw_plan_artifact": null,
-          "semantic_paths": ["docs/internal/final-review.md", "docs/internal/work-plan.md"],
+          "semantic_paths": [
+            "docs/internal/final-review.md",
+            "docs/internal/work-plan.md"
+          ],
           "full_diff": "cache-derived compact evidence",
-          "gate_paths": ["docs/internal/work-plan.md", "src/runtime.py"]
+          "gate_paths": [
+            "docs/internal/work-plan.md",
+            "src/runtime.py"
+          ]
         },
         "plan_artifact": "docs/internal/work-plan.md",
         "cache": {

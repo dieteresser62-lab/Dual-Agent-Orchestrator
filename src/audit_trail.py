@@ -175,11 +175,11 @@ class ReviewAuditEvent:
         _require_event_identity(self.event_id, self.slice_id)
         _require_positive_int(self.round_number, "round_number")
         if any(
-            origin != "FINAL" and not re.fullmatch(r"0*[1-9][0-9]*", origin)
+            origin not in {"FINAL", "DISCOVERY"} and not re.fullmatch(r"0*[1-9][0-9]*", origin)
             for origin in self.allowed_finding_origins
         ):
             raise AuditTrailError(
-                "review audit finding origins must be FINAL or 1-based Slice ids"
+                "review audit finding origins must be FINAL, DISCOVERY, or 1-based Slice ids"
             )
         if self.result.reviewer is not AgentRole.CLAUDE:
             raise AuditTrailError("review audit event requires claude")
@@ -244,7 +244,7 @@ def allowed_review_finding_origins(
                 for finding in finding_ledger
                 if finding.origin.slice_id != current_origin
             }
-            | ({"FINAL"} if is_final_review else set())
+            | ({"DISCOVERY"} if is_final_review else set())
         )
     )
 

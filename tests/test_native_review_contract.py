@@ -131,6 +131,8 @@ def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str,
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, failure paths, resume",
@@ -178,7 +180,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
     )
     context = replace(
         _context(previous=(existing,), anchor_origin=None),
-        operation="claude_final_review",
+        operation="claude_branch_discovery",
         approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
         slice_id="FINAL",
     )
@@ -247,7 +249,7 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
 ) -> None:
     context = replace(
         _context(anchor_origin=None),
-        operation="claude_final_review",
+        operation="claude_branch_discovery",
         approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
         slice_id="FINAL",
         max_new_findings=1,
@@ -470,7 +472,7 @@ def test_combined_review_budget_counts_status_class_and_route_before_effects(
         _finding(f"C-{number:02d}", AgentRole.CLAUDE)
         for number in range(1, 34)
     )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    context = _context(approval=ApprovalMarker.SLICE, previous=previous)
     document = _review(context, approved=False)
     document["status_changes"] = [{} for _ in range(30)]
     document["reclassifications"] = [{}]
@@ -485,23 +487,15 @@ def test_combined_review_budget_counts_status_class_and_route_before_effects(
     assert "responsibility_routes=2" in raised.value.detail
 
 
-def test_dormant_review_contract_rejects_new_fields_with_named_diagnostic() -> None:
+def test_active_review_contract_accepts_empty_responsibility_routes() -> None:
     context = _context()
-    document = _review(context, approved=False)
-    document["responsibility_routes"] = []
-
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_review_response(document, context)
-
-    assert (
-        raised.value.code
-        is NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD
-    )
-    assert "responsibility_routes" in raised.value.detail
+    parsed = parse_native_review_response(_review(context), context)
+    assert isinstance(parsed, NativeReviewResult)
+    assert parsed.responsibility_routes == ()
 
 
-def test_dormant_review_contract_rejects_closure_with_named_diagnostic() -> None:
-    context = _context()
+def test_active_review_contract_accepts_typed_closure() -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
     document = _review(context, approved=False)
     document["status_changes"] = [
         {
@@ -512,14 +506,10 @@ def test_dormant_review_contract_rejects_closure_with_named_diagnostic() -> None
         }
     ]
 
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_review_response(document, context)
-
-    assert (
-        raised.value.code
-        is NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD
-    )
-    assert "closure" in raised.value.detail
+    parsed = parse_native_review_response(document, context)
+    assert isinstance(parsed, NativeReviewResult)
+    assert parsed.status_changes[0].closure is not None
+    assert parsed.status_changes[0].closure.kind.value == "fixed"
 
 
 def _assert_error(
@@ -585,7 +575,7 @@ def test_new_findings_must_start_at_next_reviewer_id_and_remain_contiguous() -> 
     context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
     document = _review(context, approved=False)
     document["status_changes"] = [
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed"}
+        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed", "closure": {"kind": "fixed"}}
     ]
     document["new_findings"] = [
         {
@@ -685,7 +675,7 @@ def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -
 
     updated = _review(denied_context, approved=False)
     updated["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still reproducible"}
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still reproducible", "closure": None}
     ]
     assert (
         parse_native_contract_result(updated, denied_context).findings[0].status
@@ -750,6 +740,7 @@ def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
             "finding_id": "C-01",
             "status": "OPEN",
             "rationale": "src/current.py is another TypeScript occurrence.",
+            "closure": None,
         }
     ]
     document["new_findings"] = [
@@ -794,7 +785,7 @@ def test_contradictory_repeated_finding_is_still_rejected() -> None:
     context = _context(previous=(existing,))
     document = _review(context, approved=False)
     document["status_changes"] = [
-        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed."}
+        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed.", "closure": {"kind": "fixed"}}
     ]
     document["new_findings"] = [
         {
@@ -848,6 +839,7 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
             "finding_id": "C-01",
             "status": "OPEN",
             "rationale": "Also occurs at src/second_site.py.",
+            "closure": None,
         }
     ]
 
@@ -878,6 +870,7 @@ def test_existing_id_rejects_an_invisible_open_to_open_noop() -> None:
             "finding_id": "C-01",
             "status": "OPEN",
             "rationale": "Already recorded at src/first_site.py.",
+            "closure": None,
         }
     ]
 
@@ -928,9 +921,9 @@ def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() ->
 
 @pytest.mark.parametrize(
     "approval",
-    (ApprovalMarker.PLAN, ApprovalMarker.FINAL),
+    (ApprovalMarker.PLAN,),
 )
-def test_non_slice_approval_defers_complete_open_disposition_to_domain_contract(
+def test_plan_approval_defers_complete_open_disposition_to_domain_contract(
     approval: ApprovalMarker,
 ) -> None:
     prior = _finding(
@@ -951,7 +944,7 @@ def test_non_slice_approval_defers_complete_open_disposition_to_domain_contract(
     )
 
 
-def test_large_non_slice_approval_accepts_complete_mixed_disposition() -> None:
+def test_large_plan_approval_rejects_combined_disposition_overflow() -> None:
     previous = tuple(
         _finding(f"C-{number:02d}", AgentRole.CLAUDE)
         for number in range(1, 34)
@@ -963,6 +956,7 @@ def test_large_non_slice_approval_accepts_complete_mixed_disposition() -> None:
             "finding_id": f"C-{number:02d}",
             "status": "CLOSED",
             "rationale": "The reviewed correction closes this blocker.",
+            "closure": {"kind": "fixed"},
         }
         for number in range(1, 31)
     ]
@@ -977,115 +971,25 @@ def test_large_non_slice_approval_accepts_complete_mixed_disposition() -> None:
 
     writer = native_review_provider_response_schema(context)
     validate_schema_document({"result": document}, writer)
-    result = parse_native_contract_result(document, context)
-
-    assert result.approval is True
-    assert tuple(
-        item.finding_id
-        for item in result.findings
-        if item.status is FindingStatus.OPEN
-    ) == (
-        "C-31",
-        "C-32",
-        "C-33",
-    )
-
-
-def test_large_final_denial_accepts_thirty_closures_and_three_escalations() -> None:
-    previous = tuple(
-        _finding(
-            f"C-{number:02d}",
-            AgentRole.CLAUDE,
-            finding_class=(
-                FindingClass.BLOCKER
-                if number <= 30
-                else FindingClass.OBSERVATION
-            ),
-        )
-        for number in range(1, 34)
-    )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
-    document = _review(context, approved=False)
-    document["status_changes"] = [
-        {
-            "finding_id": f"C-{number:02d}",
-            "status": "CLOSED",
-            "rationale": "The branch correction closes this blocker.",
-        }
-        for number in range(1, 31)
-    ]
-    document["reclassifications"] = [
-        {
-            "finding_id": f"C-{number:02d}",
-            "finding_class": "BLOCKER",
-            "rationale": "The final review escalates this remaining defect.",
-        }
-        for number in range(31, 34)
-    ]
-
-    writer = native_review_provider_response_schema(context)
-    validate_schema_document({"result": document}, writer)
-    result = parse_native_contract_result(document, context)
-
-    assert result.approval is False
-    assert tuple(
-        (item.finding_id, item.finding_class)
-        for item in result.findings
-        if item.status is FindingStatus.OPEN
-    ) == (
-        ("C-31", FindingClass.BLOCKER),
-        ("C-32", FindingClass.BLOCKER),
-        ("C-33", FindingClass.BLOCKER),
-    )
-
-
-def test_final_disposition_budget_rejects_combined_event_overflow() -> None:
-    previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
-        for number in range(1, 34)
-    )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
-    document = _review(context, approved=False)
-    document["status_changes"] = [
-        {
-            "finding_id": f"C-{number:02d}",
-            "status": "CLOSED",
-            "rationale": "Verified in the branch-wide evidence.",
-        }
-        for number in range(1, 31)
-    ]
-    document["reclassifications"] = [
-        {
-            "finding_id": f"C-{number:02d}",
-            "finding_class": "BLOCKER",
-            "rationale": "The unresolved defect remains blocking.",
-        }
-        for number in range(31, 34)
-    ]
-
     with pytest.raises(NativeReviewContractError) as raised:
-        validate_native_review_disposition_budget(document, context)
-
+        parse_native_contract_result(document, context)
     assert raised.value.disposition_limit == NativeReviewDispositionLimit(33, 32)
 
 
-def test_final_denial_accepts_nonempty_partial_observation_delivery() -> None:
+def test_slice_denial_accepts_nonempty_sparse_blocker_delivery() -> None:
     previous = tuple(
-        _finding(
-            f"C-{number:02d}",
-            AgentRole.CLAUDE,
-            finding_class=FindingClass.OBSERVATION,
-        )
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
         for number in range(1, 4)
     )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    context = _context(approval=ApprovalMarker.SLICE, previous=previous)
     document = _review(context, approved=False)
     document["new_findings"] = []
     document["status_changes"] = [
         {
             "finding_id": "C-01",
             "status": "CLOSED",
-            "rationale": "The final review disposes this carried observation.",
+            "rationale": "The Slice review disposes this carried blocker.",
+            "closure": {"kind": "fixed"},
         }
     ]
 
@@ -1102,16 +1006,12 @@ def test_final_denial_accepts_nonempty_partial_observation_delivery() -> None:
     ) == ("C-02", "C-03")
 
 
-def test_final_denial_accepts_zero_progress_with_open_observations() -> None:
+def test_slice_denial_preserves_open_blockers_for_no_progress_policy() -> None:
     previous = tuple(
-        _finding(
-            f"C-{number:02d}",
-            AgentRole.CLAUDE,
-            finding_class=FindingClass.OBSERVATION,
-        )
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
         for number in range(1, 4)
     )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    context = _context(approval=ApprovalMarker.SLICE, previous=previous)
     document = _review(context, approved=False)
 
     validate_schema_document(
@@ -1125,27 +1025,6 @@ def test_final_denial_accepts_zero_progress_with_open_observations() -> None:
         "C-02",
         "C-03",
     )
-
-
-def test_final_denial_accepts_closed_offer_when_unoffered_findings_remain() -> None:
-    offered = (_finding("C-107", AgentRole.CLAUDE),)
-    context = replace(
-        _context(approval=ApprovalMarker.FINAL, previous=offered),
-        final_review_pending_count=5,
-    )
-    document = _review(context, approved=False)
-    document["status_changes"] = [
-        {
-            "finding_id": "C-107",
-            "status": "CLOSED",
-            "rationale": "The offered finding is resolved.",
-        }
-    ]
-
-    result = parse_native_contract_result(document, context)
-
-    assert result.approval is False
-    assert result.findings[0].status is FindingStatus.CLOSED
 
 
 @pytest.mark.parametrize(
@@ -1167,6 +1046,7 @@ def test_large_non_slice_approval_names_every_missing_disposition(
             "finding_id": f"C-{number:02d}",
             "status": "CLOSED",
             "rationale": "The reviewed correction closes this blocker.",
+            "closure": {"kind": "fixed"},
         }
         for number in range(1, 31)
     ]
@@ -1191,53 +1071,19 @@ def test_large_non_slice_approval_names_every_missing_disposition(
     )
 
 
-@pytest.mark.parametrize(
-    ("last_closed_id", "missing_ids"),
-    ((32, ("C-33",)), (31, ("C-32", "C-33"))),
-)
-def test_large_final_approval_names_every_missing_disposition(
-    last_closed_id: int,
-    missing_ids: tuple[str, ...],
-) -> None:
-    previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
-        for number in range(1, 34)
-    )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
-    document = _review(context)
-    document["status_changes"] = [
-        {
-            "finding_id": f"C-{number:02d}",
-            "status": "CLOSED",
-            "rationale": "The branch correction closes this blocker.",
-        }
-        for number in range(1, last_closed_id + 1)
-    ]
-
-    validate_schema_document(
-        {"result": document}, native_review_provider_response_schema(context)
-    )
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
-
-    assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
-    assert raised.value.detail == (
-        "missing updates for previous open findings: " + ", ".join(missing_ids)
-    )
-
-
-def test_seventy_five_finding_final_approval_names_exact_missing_dispositions() -> None:
+def test_seventy_five_finding_plan_approval_names_exact_missing_updates() -> None:
     previous = tuple(
         _finding(f"C-{number:02d}", AgentRole.CLAUDE)
         for number in range(1, 76)
     )
-    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    context = _context(approval=ApprovalMarker.PLAN, previous=previous)
     document = _review(context)
     document["status_changes"] = [
         {
             "finding_id": f"C-{number:02d}",
             "status": "CLOSED",
-            "rationale": "The branch correction closes this blocker.",
+            "rationale": "The reviewed plan treatment closes this blocker.",
+            "closure": {"kind": "fixed"},
         }
         for number in range(1, 33)
     ]
@@ -1259,7 +1105,6 @@ def test_seventy_five_finding_final_approval_names_exact_missing_dispositions() 
     ("approval", "branch_name"),
     (
         (ApprovalMarker.PLAN, "plan"),
-        (ApprovalMarker.FINAL, "final"),
     ),
 )
 def test_large_non_slice_schema_has_no_disposition_partition_branch_list(
@@ -1280,7 +1125,7 @@ def test_large_non_slice_schema_has_no_disposition_partition_branch_list(
     thirty_three_findings = approval_schema(33)
 
     assert thirty_three_findings["anyOf"] == one_finding["anyOf"]
-    assert len(thirty_three_findings["anyOf"]) == 4
+    assert len(thirty_three_findings["anyOf"]) == 5
     assert not any(
         {"status_changes", "reclassifications"}
         <= set(branch.get("properties", {}))
@@ -1296,7 +1141,7 @@ def test_closed_own_finding_is_neither_writer_offered_nor_locally_mutable() -> N
 
     reopened = _review(context, approved=False)
     reopened["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it"}
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it", "closure": None}
     ]
     with pytest.raises(SchemaMismatch):
         validate_schema_document({"result": reopened}, writer)
@@ -1365,7 +1210,7 @@ def test_domain_rejects_unknown_or_non_open_disposition(
         status_changes=(
             NativeStatusChange(
                 finding_id,
-                FindingStatus.CLOSED,
+                FindingStatus.OPEN,
                 "Apply only to a known open finding.",
             ),
         ),
@@ -1401,7 +1246,7 @@ def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker()
         }
     ]
     document["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it"}
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it", "closure": None}
     ]
     with pytest.raises(SchemaMismatch):
         validate_schema_document({"result": document}, writer)
@@ -1429,24 +1274,23 @@ def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker()
     assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
 
-def test_production_final_context_cannot_reclassify_blocker_to_observation() -> None:
+def test_same_slice_correction_cannot_reclassify_blocker_to_observation() -> None:
     blocker = _finding("C-01", AgentRole.CLAUDE)
-    unit_kind = WorkUnitKind.FINAL_REVIEW
     context = replace(
         _context(
-            approval=ApprovalMarker.FINAL,
+            approval=ApprovalMarker.SLICE,
             previous=(blocker,),
-            allow_observations=unit_kind is not WorkUnitKind.CORRECTION,
+            allow_observations=False,
         ),
-        operation="claude_final_review",
-        slice_id="FINAL",
+        operation="claude_slice_review",
+        slice_id="01",
     )
     document = _review(context, approved=False)
     document["reclassifications"] = [
         {
             "finding_id": "C-01",
             "finding_class": "OBSERVATION",
-            "rationale": "Defer this blocker beyond final review.",
+            "rationale": "Defer this blocker beyond the current Slice.",
         }
     ]
     writer = native_review_provider_response_schema(context)
@@ -1570,7 +1414,7 @@ def test_whitespace_status_rationale_has_a_content_error_not_reference_error() -
     context = _context(previous=(own,))
     document = _review(context, approved=False)
     document["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "   "}
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "   ", "closure": None}
     ]
 
     _assert_error(
@@ -1645,37 +1489,11 @@ def test_positive_review_requires_premortem_attestation_and_no_own_blocker() -> 
     blocker_context = _context(previous=(blocker,))
     with_open_blocker = _review(blocker_context)
     with_open_blocker["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still blocking"}
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still blocking", "closure": None}
     ]
     _assert_error(
         with_open_blocker, blocker_context, NativeReviewErrorCode.APPROVAL_INVALID
     )
-
-
-def test_final_review_rejects_new_observation_and_open_own_observation() -> None:
-    final = _context(approval=ApprovalMarker.FINAL)
-    new_observation = _review(final)
-    new_observation["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "summary": "Future idea",
-            "acceptance_test": {"kind": "prose", "text": "Consider later"},
-        }
-    ]
-    _assert_error(new_observation, final, NativeReviewErrorCode.APPROVAL_INVALID)
-
-    prior = _finding(
-        "C-01",
-        AgentRole.CLAUDE,
-        finding_class=FindingClass.OBSERVATION,
-    )
-    prior_context = _context(approval=ApprovalMarker.FINAL, previous=(prior,))
-    still_open = _review(prior_context)
-    still_open["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still relevant"}
-    ]
-    _assert_error(still_open, prior_context, NativeReviewErrorCode.APPROVAL_INVALID)
 
 
 def test_native_anchors_preserve_context_origin_and_trigger_drift_guard() -> None:

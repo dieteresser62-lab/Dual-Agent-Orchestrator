@@ -303,7 +303,7 @@
       "conditions": [
         {
           "ordinal": 1,
-          "expression": "bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_FINAL_REVIEW}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)",
+          "expression": "bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_BRANCH_DISCOVERY}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)",
           "read_names": [
             "NATIVE_REVIEW_TRANSPORT",
             "WorkflowStep",
@@ -482,7 +482,7 @@
           "ordinal": 1,
           "expression": "None",
           "condition_path": [
-            "bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_FINAL_REVIEW}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)"
+            "bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_BRANCH_DISCOVERY}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)"
           ]
         },
         {
