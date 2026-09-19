@@ -141,7 +141,7 @@ def test_codex_responsibility_proposal_cannot_enter_reviewer_projection(
         )
 
 
-def test_decision_projection_is_dormant_under_the_single_cutover_switch() -> None:
+def test_decision_projection_fails_named_under_the_single_cutover_switch() -> None:
     assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
     response = _review(
         routes=(
@@ -153,9 +153,13 @@ def test_decision_projection_is_dormant_under_the_single_cutover_switch() -> Non
         )
     )
 
-    assert project_native_review_decision_payloads(
-        response, (_finding(),), work_unit_id="6"
-    ) == ()
+    with pytest.raises(
+        RuntimeError,
+        match="JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    ):
+        project_native_review_decision_payloads(
+            response, (_finding(),), work_unit_id="6"
+        )
 
 
 def test_a_s_keeps_ever_routed_finding_after_slice_s_routes_it_onward() -> None:
@@ -222,6 +226,78 @@ def test_branch_route_satisfies_condition_5_with_matching_run_family() -> None:
 
     assert result.condition(5).status is SliceExitStatus.SATISFIED
     assert result.commit_eligible
+
+
+@pytest.mark.parametrize(
+    "responsibility",
+    (
+        BranchPlanningResponsibility("foreign-family", 1),
+        BranchPlanningResponsibility("family-1", 2),
+    ),
+)
+def test_branch_route_rejects_foreign_family_or_cycle(responsibility) -> None:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "a" * 40,
+        ("docs/internal/plan.md", "src/fix.py"),
+        None,
+        None,
+        1,
+        PLAN_COMMIT,
+        None,
+    )
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        family_binding=binding,
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route("C-01", responsibility, "6"),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(5).status is SliceExitStatus.VIOLATED
+    assert "run-bound family identity" in result.condition(5).reasons[0]
+
+
+def test_branch_route_without_implementation_fingerprint_is_rejected() -> None:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "a" * 40,
+        ("docs/internal/plan.md", "src/fix.py"),
+        None,
+        None,
+        1,
+        PLAN_COMMIT,
+        None,
+    )
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        family_binding=binding,
+    )
+    records.append(
+        ArtifactRecord.create(
+            run_id=RUN_ID,
+            logical_id="slice-exit-route-contract-fingerprint",
+            revision=1,
+            fingerprint=Fingerprint(FingerprintKind.CONTRACT, FINGERPRINT),
+            predecessor_ids=(records[-1].record_id,),
+            created_at="2026-09-18T12:00:30+00:00",
+            idempotency_key="slice-exit:route-contract-fingerprint",
+            payload=_route(
+                "C-01", BranchPlanningResponsibility("family-1", 1), "6"
+            ),
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(5).status is SliceExitStatus.VIOLATED
+    assert "implementation-fingerprint-bound" in result.condition(5).reasons[0]
 
 
 def test_open_blocker_cannot_be_routed_out_of_its_slice() -> None:

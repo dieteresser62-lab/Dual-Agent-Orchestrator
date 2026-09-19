@@ -1659,6 +1659,8 @@ gebundene Bridge-Fehlerinventur um folgende fail-closed Grenzen:
 - `plan assignment result and Review use different work units`
 - `plan assignment requires a typed family binding`
 - `plan assignment family binding differs from its source snapshot`
+- `plan assignment open finding lacks BRANCH_PLANNING responsibility: `
+- `plan assignment open finding has foreign or future BRANCH_PLANNING responsibility: `
 - `persisted implementer plan treatment is invalid: `
 - `plan assignment coverage is invalid: `
 - `remediation cohort checkpoint requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER`

@@ -1,7 +1,7 @@
 """Dormant projection of native reviewer decisions into Finding records.
 
 The joint 67/68 switch is the sole activation boundary.  Until it is enabled,
-this module produces no payloads and no production caller writes the new
+this module rejects projection and no production caller writes the new
 decisions.  Implementer responsibility proposals are not an input to this
 projection and therefore cannot acquire reviewer authority here.
 """
@@ -32,7 +32,10 @@ def project_native_review_decision_payloads(
     """
 
     if not native_finding_decisions.native_finding_decisions_enabled():
-        return ()
+        raise RuntimeError(
+            "finding decision projection requires "
+            "JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
     if not isinstance(response, NativeReviewResult):
         raise TypeError(
             "finding decision projection requires a parsed NativeReviewResult"

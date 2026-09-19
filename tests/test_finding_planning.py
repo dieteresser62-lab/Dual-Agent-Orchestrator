@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from artifact_bridge import (
     ArtifactBridgeError,
     evaluate_recorded_remediation_round,
     plan_assignment_payload,
+    remediation_cohort_checkpoint_payload,
 )
 from artifact_models import (
     AgentResultPayload,
@@ -21,6 +23,7 @@ from artifact_models import (
     BranchDiscoveryHandoffImportPayload,
     FamilyBindingPayload,
     FindingSnapshotItem,
+    FindingHandoffImportPayload,
     FindingSeverity,
     FindingTransitionPayload,
     Fingerprint,
@@ -34,11 +37,14 @@ from artifact_models import (
     ReviewPayload,
     RemediationCohortCheckpointPayload,
     Role,
+    RoleProfilePayload,
+    RunProfilePayload,
     SliceSpec,
     artifact_payload_document,
     finding_transition_sequence_sha256,
     validate_artifact_document,
 )
+from artifact_replay import ArtifactReplayResult
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -68,6 +74,10 @@ from finding_planning import (
     validate_plan_treatment_decisions,
 )
 from finding_signature import finding_record_signature
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    SliceResponsibility,
+)
 from native_finding_decisions import NativeRejectionReason
 from native_codex_contract import (
     BoundNativeCodexContext,
@@ -95,10 +105,11 @@ def _finding(
     *,
     summary: str = "The defect affects src/fix.py.",
     acceptance: str = "Repair src/fix.py and preserve its contract.",
+    finding_class: FindingClass = FindingClass.BLOCKER,
 ) -> FindingRecord:
     return FindingRecord(
         finding_id=finding_id,
-        finding_class=FindingClass.BLOCKER,
+        finding_class=finding_class,
         status=FindingStatus.OPEN,
         summary=summary,
         acceptance_test=acceptance,
@@ -332,7 +343,7 @@ def test_absolute_round_limit_stops_and_names_its_value(caplog: pytest.LogCaptur
     assert f"absolute_round_limit={MAX_REMEDIATION_ROUNDS}" in caplog.text
 
 
-def test_plan_assignment_uses_persisted_codex_treatments_and_review_decisions(
+def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -340,27 +351,47 @@ def test_plan_assignment_uses_persisted_codex_treatments_and_review_decisions(
         "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
         True,
     )
-    finding = _finding("C-01")
+    finding = _finding("C-01", finding_class=FindingClass.OBSERVATION)
     signature = finding_record_signature(finding)
     opening = FindingTransitionPayload(
         "C-01",
         Role.CLAUDE,
         Role.CLAUDE,
         "opened",
-        FindingSeverity.BLOCKER,
+        FindingSeverity.OBSERVATION,
         "open",
         "Found during branch discovery.",
         "discovery",
         finding.summary,
         finding.acceptance_test,
-        "discovery",
+        "6",
         1,
+        responsibility=SliceResponsibility(
+            "implementation-run", "0" * 40, "6"
+        ),
     )
     imported = ImportedFindingTransition(
         "ar1-" + "1" * 64,
         opening,
-        "discovery-run",
+        "implementation-run",
         "ar1-" + "1" * 64,
+    )
+    route = FindingTransitionPayload(
+        "C-01",
+        Role.CLAUDE,
+        Role.CLAUDE,
+        "routed",
+        FindingSeverity.OBSERVATION,
+        "open",
+        "No approved later Slice carries the repair.",
+        "6",
+        responsibility=BranchPlanningResponsibility("family-1", 1),
+    )
+    routed = ImportedFindingTransition(
+        "ar1-" + "6" * 64,
+        route,
+        "implementation-run",
+        "ar1-" + "6" * 64,
     )
     snapshot = BranchDiscoveryHandoffImportPayload(
         source_run_id="discovery-run",
@@ -378,11 +409,13 @@ def test_plan_assignment_uses_persisted_codex_treatments_and_review_decisions(
         target_task_path="inbox/doing/remediation.md",
         target_task_sha256="6" * 64,
         target_run_identity="plan-run",
-        finding_transitions_sha256=finding_transition_sequence_sha256((imported,)),
-        transitions=(imported,),
+        finding_transitions_sha256=finding_transition_sequence_sha256(
+            (imported, routed)
+        ),
+        transitions=(imported, routed),
         finding_snapshot=(
             FindingSnapshotItem(
-                "C-01", signature, "open", FindingSeverity.BLOCKER
+                "C-01", signature, "open", FindingSeverity.OBSERVATION
             ),
         ),
         authority=Role.ORCHESTRATOR,
@@ -459,6 +492,64 @@ def test_plan_assignment_uses_persisted_codex_treatments_and_review_decisions(
     assert assignment.plan_result_record_id == codex_record.record_id
     assert assignment.review_record_id == review_record.record_id
     assert assignment.implementation_scope == ("src/fix.py",)
+    assert tuple(item.signature for item in assignment.treatments) == (signature,)
+    assert assignment.treatments[0].finding_ids == ("C-01",)
+
+    assignment_record = _record("plan-run", "assignment", assignment)
+    implementation_import = FindingHandoffImportPayload(
+        source_run_id="plan-run",
+        source_head_record_id="ar1-" + "7" * 64,
+        approved_plan_commit="0" * 40,
+        approval_review_record_id=review_record.record_id,
+        export_record_id="ar1-" + "8" * 64,
+        target_run_id="implementation-run",
+        target_task_sha256="9" * 64,
+        finding_transitions_sha256=finding_transition_sequence_sha256(
+            (imported, routed)
+        ),
+        transitions=(imported, routed),
+        authority=Role.ORCHESTRATOR,
+    )
+    implementation_import_record = _record(
+        "implementation-run", "finding-import", implementation_import
+    )
+    implementation_replay = ArtifactReplayResult(
+        expected_run_id="implementation-run",
+        records=(implementation_import_record,),
+        head_record_id=implementation_import_record.record_id,
+        semantic_facts=(),
+        semantic_digest="0" * 64,
+        audit_events=(),
+        run_profile=RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            family_binding=family,
+        ),
+    )
+
+    checkpoint = remediation_cohort_checkpoint_payload(
+        assignment_record=assignment_record,
+        implementation_replay=implementation_replay,
+    )
+
+    assert checkpoint.inherited_signatures == (signature,)
+    assert checkpoint.unresolved_inherited_signatures == (signature,)
+
+    unrouted_snapshot = replace(
+        snapshot,
+        finding_transitions_sha256=finding_transition_sequence_sha256((imported,)),
+        transitions=(imported,),
+    )
+    with pytest.raises(ArtifactBridgeError, match="lacks BRANCH_PLANNING"):
+        plan_assignment_payload(
+            source_snapshot_record=_record(
+                "plan-run", "unrouted-snapshot", unrouted_snapshot
+            ),
+            plan_result_record=codex_record,
+            review_record=review_record,
+            family_binding=family,
+            remediation_round_number=1,
+        )
 
     foreign_codex_record = _record(
         "other-plan-run", "codex-plan", codex_record.payload

@@ -427,13 +427,7 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
 def project_slice_exit_findings(
     records: Sequence[ArtifactRecord],
 ) -> SliceExitFindingProjection:
-    """Fold only record facts required by E4 without validating route consumers.
-
-    Branch-planning consumers are intentionally introduced after this dormant
-    Slice.  The general reducer therefore still rejects such routes today,
-    while this policy projection must be able to evaluate their complete typed
-    payloads in provider-free cutover tests.
-    """
+    """Fold only record facts required by E4 without changing route policy."""
 
     events = _transition_events(records)
     mutable: dict[str, _MutableSliceExitFindingHead] = {}
@@ -1090,7 +1084,11 @@ def _reduce_lineages(
                     f"structured finding opening is invalid: {exc}",
                     record,
                 )
-            if payload.responsibility is not None and records is not None:
+            if (
+                payload.responsibility is not None
+                and records is not None
+                and not event.imported
+            ):
                 _validate_opening_responsibility(event, records)
             if lineage_key in findings or payload.finding_id in active_keys:
                 head = head_openings[payload.finding_id]
@@ -1180,7 +1178,7 @@ def _reduce_lineages(
                         f"cannot route closed finding {payload.finding_id}",
                         record,
                     )
-                if records is not None:
+                if records is not None and not event.imported:
                     _validate_routed_responsibility(
                         payload.responsibility, record, records
                     )
@@ -1228,7 +1226,11 @@ def _validate_opening_responsibility(
     assert responsibility is not None
     record = _event_record(event)
     if event.imported:
-        _validate_routed_responsibility(responsibility, record, records)
+        # Imported transitions are immutable historical facts. Their source
+        # run validated the responsibility against its own family binding
+        # before the orchestrator created the digest-bound handoff. Rebinding
+        # them to a child would reject a valid BRANCH_PLANNING route as soon as
+        # the monotonically increasing family cycle advances.
         return
     prior = records[: event.sequence - 1]
     review_step = next(
