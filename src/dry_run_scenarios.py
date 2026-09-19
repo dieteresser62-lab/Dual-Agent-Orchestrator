@@ -22,6 +22,7 @@ from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import (
     AgentRole,
     CodexStepContract,  # allowlist:provider -- typed boundary
+    FindingAcceptanceMeasurement,
     FindingRecord,
     PlannedSlice,
     StepContract,
@@ -1359,6 +1360,15 @@ class ScriptedWorkflowDriver:
         self, attestation: ValidationAttestation
     ) -> None:
         self.structured_events.append(("validation-attestation", attestation))
+
+    def persist_finding_acceptance_measurement(
+        self,
+        finding: FindingRecord,
+        measurement: FindingAcceptanceMeasurement,
+    ) -> None:
+        self.structured_events.append(
+            ("finding-acceptance-measurement", (finding, measurement))
+        )
 
     @property
     def remaining_agent_events(self) -> int:

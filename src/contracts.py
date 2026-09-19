@@ -16,6 +16,7 @@ from content_authority import (
 )
 from finding_order import sorted_finding_ids
 from native_finding_decisions import (
+    NativeFindingClosure,
     PlanCompletionKind,
     PlanTreatmentDecision,
     PlanTreatmentProposal,
@@ -136,6 +137,34 @@ class FindingResponse:
 
 
 @dataclass(frozen=True)
+class FindingAcceptanceMeasurement:
+    """One orchestrator-measured typed acceptance result at an exact fingerprint."""
+
+    fingerprint: str
+    command: ValidationCommandSpec
+    status: ValidationStatus
+    exit_code: int
+    output_sha256: str
+    attestation_id: str
+
+    def __post_init__(self) -> None:
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise ValueError("finding acceptance measurement requires a SHA-256 fingerprint")
+        if not isinstance(self.command, ValidationCommandSpec) or not self.command.argv:
+            raise ValueError("finding acceptance measurement requires typed argv")
+        if not isinstance(self.status, ValidationStatus):
+            raise ValueError("finding acceptance measurement status must be typed")
+        if self.status is ValidationStatus.PASS and self.exit_code != 0:
+            raise ValueError("passing finding acceptance measurement requires exit code 0")
+        if self.status is ValidationStatus.FAIL and self.exit_code == 0:
+            raise ValueError("failing finding acceptance measurement requires non-zero exit code")
+        if not SHA256_PATTERN.fullmatch(self.output_sha256):
+            raise ValueError("finding acceptance measurement requires an output digest")
+        if not isinstance(self.attestation_id, str) or not self.attestation_id.strip():
+            raise ValueError("finding acceptance measurement requires an attestation id")
+
+
+@dataclass(frozen=True)
 class FindingRecord:
     finding_id: str
     finding_class: FindingClass
@@ -148,6 +177,7 @@ class FindingRecord:
     class_history: tuple[FindingClass, ...] = ()
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
+    acceptance_measurements: tuple[FindingAcceptanceMeasurement, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_finding_id(self.finding_id, self.origin.reporter)
@@ -173,6 +203,19 @@ class FindingRecord:
         elif self.evidence_anchor_sha256 is not None:
             raise ValueError(
                 "evidence anchor digest requires a predecessor Finding reference"
+            )
+        if any(
+            not isinstance(item, FindingAcceptanceMeasurement)
+            for item in self.acceptance_measurements
+        ):
+            raise ValueError("finding acceptance measurements must be typed")
+        identities = tuple(
+            (item.fingerprint, item.command.argv)
+            for item in self.acceptance_measurements
+        )
+        if len(identities) != len(set(identities)):
+            raise ValueError(
+                "finding acceptance measurements must be unique by fingerprint and command"
             )
 
 
@@ -456,6 +499,7 @@ class ContractResult:
     occurrences: tuple[FindingOccurrence, ...] = ()
     scan_complete: bool | None = None
     plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
+    finding_closures: tuple[tuple[str, NativeFindingClosure], ...] = ()
 
     def __post_init__(self) -> None:
         if self.delivery_kind not in {"review", "branch_discovery_completed"}:
@@ -492,6 +536,18 @@ class ContractResult:
             for item in self.plan_treatment_decisions
         ):
             raise ValueError("plan treatment decisions must be typed")
+        closure_ids = tuple(item[0] for item in self.finding_closures)
+        if (
+            any(
+                not isinstance(item, tuple)
+                or len(item) != 2
+                or not SOURCE_FINDING_ID_PATTERN.fullmatch(item[0])
+                or not isinstance(item[1], NativeFindingClosure)
+                for item in self.finding_closures
+            )
+            or closure_ids != sorted_finding_ids(closure_ids)
+        ):
+            raise ValueError("finding closures must be typed, sorted, and unique")
         if (
             self.red_state_followup_slice is not None
             and not self.red_state_followup_slice.strip()

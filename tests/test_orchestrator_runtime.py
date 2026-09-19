@@ -3133,6 +3133,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         work_unit_id=str(state.current_work_unit_id),
         operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
         diff_fingerprint=fingerprint,
+        pre_change_fingerprint="c" * 64,
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",

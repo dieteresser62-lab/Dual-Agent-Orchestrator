@@ -126,6 +126,55 @@ def test_rejected_closure_projects_reason_and_named_evidence(
     assert restored.payload == payload
 
 
+def test_partial_decision_projects_open_record_and_keeps_slice_responsibility(
+    decisions_enabled: None,
+) -> None:
+    finding = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Repair src/fix.py",
+        "src/fix.py passes its regression test",
+        FindingOrigin("6", 1, AgentRole.CLAUDE),
+    )
+    closure = NativeFindingClosure(
+        NativeClosureKind.PARTIAL,
+        evidence="Nine paths now pass.",
+        remaining="Three paths remain unreachable.",
+    )
+    response = _review(
+        status_changes=(
+            NativeStatusChange(
+                "C-01",
+                FindingStatus.OPEN,
+                "The repair is incomplete.",
+                closure,
+            ),
+        )
+    )
+
+    payload = project_native_review_decision_payloads(
+        response, (finding,), work_unit_id="6"
+    )[0]
+    assert payload.finding_status == "open"
+    assert payload.closure_kind == "partial"
+    assert payload.closure_evidence == "Nine paths now pass."
+    assert payload.remaining_work == "Three paths remain unreachable."
+
+    responsibility = SliceResponsibility(RUN_ID, PLAN_COMMIT, "6")
+    records = _slice_with_opening(
+        severity=FindingSeverity.BLOCKER,
+        responsibility=responsibility,
+    )
+    records.append(_record(len(records) + 1, payload, records))
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(1).status is SliceExitStatus.VIOLATED
+    assert "C-01" in result.condition(1).reasons[0]
+    assert result.responsibility_finding_ids == ("C-01",)
+
+
 def test_codex_responsibility_proposal_cannot_enter_reviewer_projection(
     decisions_enabled: None,
 ) -> None:

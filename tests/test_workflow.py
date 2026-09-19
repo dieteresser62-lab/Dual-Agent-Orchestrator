@@ -45,6 +45,7 @@ from contracts import (
     ReadinessMarker,
     StepContract,
     ContractResult,
+    FindingAcceptanceMeasurement,
     ReviewEvidence,
     ValidationAttestation,
     ValidationRecord,
@@ -748,6 +749,15 @@ class FakeDriver:
         self, attestation: ValidationAttestation
     ) -> None:
         self.structured_events.append(("validation-attestation", attestation))
+
+    def persist_finding_acceptance_measurement(
+        self,
+        finding: FindingRecord,
+        measurement: FindingAcceptanceMeasurement,
+    ) -> None:
+        self.structured_events.append(
+            ("finding-acceptance-measurement", (finding, measurement))
+        )
 
 
 def _slice_state(
@@ -3762,7 +3772,7 @@ def test_plan_only_rejects_future_product_slices_as_executable_records() -> None
         run_v3_work_unit(WorkflowEngine(driver), state, context)
 
 
-def test_new_validation_requirement_without_new_fingerprint_does_not_rerun() -> None:
+def test_new_typed_acceptance_requirement_is_measured_at_existing_fingerprint() -> None:
     unchanged = _changes("1", "src/early.py", TEST_FILE)
     denial = "\n".join(
         (
@@ -3776,15 +3786,24 @@ def test_new_validation_requirement_without_new_fingerprint_does_not_rerun() -> 
     driver = FakeDriver(
         snapshots=[unchanged, unchanged],
         codex_outputs=[_codex_ready(), _codex_ready("C-01")],
-        reviewer_outputs=[denial],
+        reviewer_outputs=[denial, _review_stop(AgentRole.CLAUDE, "CONTRACT-UNCLEAR")],
         deltas={(unchanged.fingerprint, unchanged.fingerprint): "no content change"},
         convergence_evaluations=[_discovery_convergence()],
     )
 
-    with pytest.raises(WorkflowExecutionError, match="requirements changed"):
-        WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(), _context()
+    )
 
-    assert len(driver.validation_requests) == 1
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.validation_requests) == 2
+    assert driver.validation_requests[-1].expected_commands == (
+        "python3 -m pytest tests/ -v",
+        "python3 -m pytest tests/test_focus.py -q",
+    )
+    finding = next(item for item in result.history.findings if item.finding_id == "C-01")
+    assert len(finding.acceptance_measurements) == 1
+    assert finding.acceptance_measurements[0].fingerprint == unchanged.fingerprint
 
 
 def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -> None:

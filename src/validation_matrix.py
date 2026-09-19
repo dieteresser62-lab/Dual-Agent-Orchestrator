@@ -281,35 +281,9 @@ def _finding_validation_commands(
 ) -> tuple[ValidationCommand, ...]:
     commands: list[ValidationCommand] = []
     for finding in project_open_set(tuple(findings)).findings:
-        acceptance = finding.acceptance_test.strip()
-        if not acceptance.startswith(FINDING_COMMAND_PREFIX):
+        command = finding_validation_command(finding)
+        if command is None:
             continue
-        if finding.finding_class is not FindingClass.BLOCKER:
-            LOGGER.warning(
-                "Ignoring VALIDATE directive from non-blocking finding %s; "
-                "only BLOCKER findings may extend the validation matrix",
-                finding.finding_id,
-            )
-            continue
-        payload = acceptance[len(FINDING_COMMAND_PREFIX) :].strip()
-        try:
-            value = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValidationMatrixError(
-                f"finding {finding.finding_id} has invalid VALIDATE JSON argv: {exc}"
-            ) from exc
-        if not isinstance(value, list) or not value or any(
-            not isinstance(item, str) for item in value
-        ):
-            raise ValidationMatrixError(
-                f"finding {finding.finding_id} VALIDATE command must be a non-empty JSON string array"
-            )
-        try:
-            command = _finding_validation_command(value)
-        except ValidationMatrixError as exc:
-            raise ValidationMatrixError(
-                f"finding {finding.finding_id} has invalid VALIDATE command: {exc}"
-            ) from exc
         if not any(
             matches_validation_family(command.argv, prefix)
             for prefix in allowed_prefixes
@@ -321,6 +295,42 @@ def _finding_validation_commands(
             )
         commands.append(command)
     return tuple(commands)
+
+
+def finding_validation_command(
+    finding: FindingRecord,
+) -> ValidationCommand | None:
+    """Return only the explicit typed directive; prose is deliberately opaque."""
+
+    acceptance = finding.acceptance_test.strip()
+    if not acceptance.startswith(FINDING_COMMAND_PREFIX):
+        return None
+    if finding.finding_class is not FindingClass.BLOCKER:
+        LOGGER.warning(
+            "Ignoring VALIDATE directive from non-blocking finding %s; "
+            "only BLOCKER findings may extend the validation matrix",
+            finding.finding_id,
+        )
+        return None
+    payload = acceptance[len(FINDING_COMMAND_PREFIX) :].strip()
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValidationMatrixError(
+            f"finding {finding.finding_id} has invalid VALIDATE JSON argv: {exc}"
+        ) from exc
+    if not isinstance(value, list) or not value or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise ValidationMatrixError(
+            f"finding {finding.finding_id} VALIDATE command must be a non-empty JSON string array"
+        )
+    try:
+        return _finding_validation_command(value)
+    except ValidationMatrixError as exc:
+        raise ValidationMatrixError(
+            f"finding {finding.finding_id} has invalid VALIDATE command: {exc}"
+        ) from exc
 
 
 class ValidationMatrixRunner:

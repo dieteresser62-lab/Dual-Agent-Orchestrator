@@ -453,6 +453,12 @@ def native_review_request(
         plan_artifact_path=plan_artifact_path,
         final_review_pending_count=None,
         planned_slices=state.planned_slices,
+        pre_change_fingerprint=(
+            None
+            if review_kind is NativeReviewKind.BRANCH_DISCOVERY
+            else history.last_claude_fingerprint
+            or state.current_slice.start_fingerprint
+        ),
     )
     workflow_context = (
         context.render_distilled_context(

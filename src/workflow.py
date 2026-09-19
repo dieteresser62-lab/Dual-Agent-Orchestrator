@@ -26,6 +26,7 @@ from agent_runtime import (
 import workflow_requests
 import workflow_failure_recording
 import workflow_validation_evidence
+import native_finding_decisions
 from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
@@ -59,6 +60,7 @@ from contracts import (
     CodexContractResult,
     CodexStepContract,
     ContractResult,
+    FindingAcceptanceMeasurement,
     FindingRecord,
     FindingClass,
     FindingOccurrence,
@@ -95,7 +97,10 @@ from task_contract import TaskMode
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
+    ValidationMatrixError,
     ValidationRequest,
+    finding_validation_command,
+    select_validation_request,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -311,6 +316,18 @@ class WorkflowChanges:
     def user_gate_paths(self) -> tuple[str, ...]:
         """Include historical rename paths when the driver captured them."""
         return self.gate_paths or self.paths
+
+
+@dataclass(frozen=True)
+class _FingerprintValidationTarget:
+    """Minimal read-only validation target for an unchanged baseline."""
+
+    fingerprint: str
+    user_gate_paths: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise ValueError("validation target requires a SHA-256 fingerprint")
 
 
 @dataclass(frozen=True)
@@ -666,6 +683,12 @@ class WorkflowDriver(Protocol):
         self, attestation: ValidationAttestation
     ) -> None: ...
 
+    def persist_finding_acceptance_measurement(
+        self,
+        finding: FindingRecord,
+        measurement: FindingAcceptanceMeasurement,
+    ) -> None: ...
+
 
 MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
     {
@@ -688,6 +711,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "persist_review_packet",
         "persist_validation_attestation",
         "persist_validation_request",
+        "persist_finding_acceptance_measurement",
         "recover_pending_native_codex",  # allowlist:provider -- canonical capability
         "recover_pending_native_reviewer",
         "recover_pending_native_reviewer_before_policy",
@@ -857,6 +881,17 @@ def _finding_to_dict(item: FindingRecord) -> dict[str, object]:
         ],
         "status_rationale": item.status_rationale,
         "class_history": [value.value for value in item.class_history],
+        "acceptance_measurements": [
+            {
+                "fingerprint": measurement.fingerprint,
+                "argv": list(measurement.command.argv),
+                "status": measurement.status.value,
+                "exit_code": measurement.exit_code,
+                "output_sha256": measurement.output_sha256,
+                "attestation_id": measurement.attestation_id,
+            }
+            for measurement in item.acceptance_measurements
+        ],
     }
 
 
@@ -888,6 +923,23 @@ def _finding_from_dict(raw: object) -> FindingRecord:
         ),
         class_history=tuple(
             FindingClass(str(value)) for value in _json_list(raw.get("class_history", []))
+        ),
+        acceptance_measurements=tuple(
+            FindingAcceptanceMeasurement(
+                fingerprint=str(value["fingerprint"]),
+                command=ValidationCommandSpec(
+                    argv=tuple(
+                        str(part)
+                        for part in _json_list(value.get("argv", []))
+                    )
+                ),
+                status=ValidationStatus(str(value["status"])),
+                exit_code=int(value["exit_code"]),
+                output_sha256=str(value["output_sha256"]),
+                attestation_id=str(value["attestation_id"]),
+            )
+            for value in _json_list(raw.get("acceptance_measurements", []))
+            if isinstance(value, dict)
         ),
     )
 
@@ -986,6 +1038,20 @@ def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
             for value in item.anchors
         ],
         "red_state_followup_slice": item.red_state_followup_slice,
+        "finding_closures": [
+            {
+                "finding_id": finding_id,
+                "kind": closure.kind.value,
+                "rejection_reason": (
+                    None
+                    if closure.rejection_reason is None
+                    else closure.rejection_reason.value
+                ),
+                "evidence": closure.evidence,
+                "remaining": closure.remaining,
+            }
+            for finding_id, closure in item.finding_closures
+        ],
         **(
             {"delivery_kind": item.delivery_kind}
             if item.delivery_kind != "review"
@@ -1059,6 +1125,35 @@ def _review_from_dict(raw: object) -> ContractResult | None:
             FindingOccurrence(str(item["finding_id"]), str(item["rationale"]))
             for item in _json_list(raw.get("occurrences", []))
             if isinstance(item, dict)
+        ),
+        finding_closures=tuple(
+            (
+                str(value["finding_id"]),
+                native_finding_decisions.NativeFindingClosure(
+                    kind=native_finding_decisions.NativeClosureKind(
+                        str(value["kind"])
+                    ),
+                    rejection_reason=(
+                        None
+                        if value.get("rejection_reason") is None
+                        else native_finding_decisions.NativeRejectionReason(
+                            str(value["rejection_reason"])
+                        )
+                    ),
+                    evidence=(
+                        None
+                        if value.get("evidence") is None
+                        else str(value["evidence"])
+                    ),
+                    remaining=(
+                        None
+                        if value.get("remaining") is None
+                        else str(value["remaining"])
+                    ),
+                ),
+            )
+            for value in _json_list(raw.get("finding_closures", []))
+            if isinstance(value, dict)
         ),
     )
 
@@ -1543,6 +1638,13 @@ class WorkflowEngine:
                 WorkflowStep.CODEX_IMPLEMENTATION,
                 WorkflowStep.CODEX_CORRECTION,
             ):
+                state, active_history, acceptance_halted = (
+                    self._measure_typed_acceptance_before_codex(
+                        state, active_history, context
+                    )
+                )
+                if acceptance_halted:
+                    return WorkflowRunResult(state, active_history)
                 state, active_history = self._run_codex(
                     state, context, active_history
                 )
@@ -1554,6 +1656,13 @@ class WorkflowEngine:
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
                 WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
             ):
+                state, active_history, acceptance_halted = (
+                    self._measure_typed_acceptance_before_review(
+                        state, active_history, context
+                    )
+                )
+                if acceptance_halted:
+                    return WorkflowRunResult(state, active_history)
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.CLAUDE
                 )
@@ -3275,6 +3384,216 @@ class WorkflowEngine:
             context,
             slice_id,
             plan_contract=plan_contract,
+        )
+
+    def _ensure_typed_acceptance_measurements(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        target: WorkflowChanges | _FingerprintValidationTarget,
+        *,
+        preferred_attestation: ValidationAttestation | None = None,
+        verify_start_commit: str | None = None,
+    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+        """Measure every missing typed BLOCKER test at exactly ``target``."""
+
+        def halt(
+            rationale: str,
+            current_history: WorkflowHistory = history,
+        ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+            halted = self._halt_for_stop_request(
+                state,
+                context,
+                StopRequest(VALIDATION_UNAVAILABLE_RULE_ID, rationale),
+            )
+            self.driver.checkpoint(halted, current_history)
+            return halted, current_history, True
+
+        missing: list[tuple[FindingRecord, ValidationCommand]] = []
+        try:
+            for finding in project_open_set(history.findings).findings:
+                command = finding_validation_command(finding)
+                if command is None:
+                    continue
+                if any(
+                    item.fingerprint == target.fingerprint
+                    and item.command.argv == command.argv
+                    for item in finding.acceptance_measurements
+                ):
+                    continue
+                missing.append((finding, command))
+            if missing:
+                # Reuse the matrix selector as the configured-family authority.
+                selected = select_validation_request(
+                    context.validation_matrix,
+                    diff_fingerprint=target.fingerprint,
+                    changed_paths=target.user_gate_paths,
+                    findings=tuple(item[0] for item in missing),
+                )
+                selected_argv = {
+                    command.argv for command in selected.commands if command.argv
+                }
+                if any(command.argv not in selected_argv for _, command in missing):
+                    raise ValidationMatrixError(
+                        "typed finding acceptance command was not selected by the "
+                        "configured validation matrix"
+                    )
+        except ValidationMatrixError as exc:
+            return halt(
+                "typed acceptance test cannot be executed at fingerprint "
+                f"{target.fingerprint}: {exc}"
+            )
+        if not missing:
+            return state, history, False
+
+        if verify_start_commit is not None:
+            try:
+                before_run = self.driver.collect_changes(verify_start_commit)
+            except NoWorkflowChangesError:
+                before_run = None
+            except Exception as exc:
+                return halt(
+                    "typed acceptance baseline cannot be inspected without "
+                    f"changing state: {type(exc).__name__}: {exc}"
+                )
+            if (
+                before_run is not None
+                and before_run.fingerprint != target.fingerprint
+            ):
+                return halt(
+                    "typed acceptance fingerprint shifted before execution: "
+                    f"expected {target.fingerprint}, observed "
+                    f"{before_run.fingerprint}"
+                )
+
+        unique_commands = selected.commands
+        try:
+            attestation, history = self._validation_evidence.acceptance_attestation(
+                target,
+                history,
+                unique_commands,
+                state.current_slice_id,
+                preferred=preferred_attestation,
+            )
+        except ValidationExecutionError as exc:
+            return halt(
+                "typed acceptance test cannot be executed at fingerprint "
+                f"{target.fingerprint}: {exc}"
+            )
+        if not attestation.complete:
+            return halt(
+                "typed acceptance test has no complete result at fingerprint "
+                f"{target.fingerprint}",
+                history,
+            )
+
+        records = {item.command: item for item in attestation.records}
+        updated = {item.finding_id: item for item in history.findings}
+        for finding, command in missing:
+            record = records.get(command.display)
+            if record is None:
+                return halt(
+                    f"typed acceptance test for {finding.finding_id} has no "
+                    f"result at fingerprint {target.fingerprint}",
+                    history,
+                )
+            measurement = FindingAcceptanceMeasurement(
+                fingerprint=target.fingerprint,
+                command=command.command_spec,
+                status=record.status,
+                exit_code=record.exit_code,
+                output_sha256=hashlib.sha256(
+                    record.output.encode("utf-8")
+                ).hexdigest(),
+                attestation_id=attestation.attestation_id,
+            )
+            self._persist_structured(
+                self.driver.persist_finding_acceptance_measurement,
+                finding,
+                measurement,
+            )
+            updated[finding.finding_id] = replace(
+                finding,
+                acceptance_measurements=(
+                    *finding.acceptance_measurements,
+                    measurement,
+                ),
+            )
+        history = replace(
+            history,
+            findings=tuple(updated[item.finding_id] for item in history.findings),
+        )
+
+        if verify_start_commit is not None:
+            try:
+                observed = self.driver.collect_changes(verify_start_commit)
+            except NoWorkflowChangesError:
+                observed = None
+            except Exception as exc:
+                return halt(
+                    "could not verify the read-only typed acceptance run: "
+                    f"{type(exc).__name__}: {exc}",
+                    history,
+                )
+            if observed is not None and observed.fingerprint != target.fingerprint:
+                return halt(
+                    "typed acceptance validation changed the repository "
+                    f"fingerprint from {target.fingerprint} to "
+                    f"{observed.fingerprint}",
+                    history,
+                )
+        self.driver.checkpoint(state, history)
+        return state, history, False
+
+    def _measure_typed_acceptance_before_codex(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+        if state.current_step not in {
+            WorkflowStep.CODEX_IMPLEMENTATION,
+            WorkflowStep.CODEX_CORRECTION,
+        }:
+            return state, history, False
+        pre_change_fingerprint = (
+            history.last_claude_fingerprint
+            or state.current_slice.start_fingerprint
+        )
+        if pre_change_fingerprint is None:
+            raise WorkflowExecutionError(
+                "typed acceptance baseline requires a persisted Slice fingerprint"
+            )
+        return self._ensure_typed_acceptance_measurements(
+            state,
+            history,
+            context,
+            _FingerprintValidationTarget(pre_change_fingerprint),
+            verify_start_commit=(
+                state.current_slice.start_commit or state.branch_base
+            ),
+        )
+
+    def _measure_typed_acceptance_before_review(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+        if state.current_step is not WorkflowStep.CLAUDE_SLICE_REVIEW:
+            return state, history, False
+        start_commit = state.current_slice.start_commit or state.branch_base
+        try:
+            changes = self._collect_review_dispatch_changes(start_commit)
+        except NoWorkflowChangesError:
+            return state, history, False
+        return self._ensure_typed_acceptance_measurements(
+            state,
+            history,
+            context,
+            changes,
+            verify_start_commit=start_commit,
         )
 
     def _record_review(

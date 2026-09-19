@@ -611,6 +611,9 @@ def _review_context_request_projection(
         "red_state_followup_slice": context_binding[
             "red_state_followup_slice"
         ],
+        "pre_change_fingerprint": context_binding[
+            "pre_change_fingerprint"
+        ],
     }
     if review_kind == NativeReviewKind.PLAN.value:
         review_contract["plan_artifact_path"] = context_binding[
@@ -751,6 +754,7 @@ def _enable_native_review_request_finding_decision_schema(
     schema: dict[str, Any],
 ) -> None:
     definitions = schema["$defs"]
+    _enable_finding_acceptance_measurement_request_schema(definitions)
     definitions["acceptance_criterion"] = {
         "type": "object",
         "properties": {
@@ -803,6 +807,13 @@ def _enable_native_review_request_finding_decision_schema(
         "additionalProperties": False,
     }
     contract = definitions["review_contract"]
+    contract["properties"]["pre_change_fingerprint"] = {
+        "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"},
+        ]
+    }
+    contract["required"].append("pre_change_fingerprint")
     contract["properties"]["implementer_responsibility_proposals"] = {
         "type": "array",
         "maxItems": 128,
@@ -908,6 +919,46 @@ def _enable_native_review_request_finding_decision_schema(
     }
     contract["required"].append("plan_treatments")
     _enable_closed_finding_binding_request_schema(definitions, contract)
+
+
+def _enable_finding_acceptance_measurement_request_schema(
+    definitions: dict[str, Any],
+) -> None:
+    definitions["finding_acceptance_measurement"] = {
+        "type": "object",
+        "properties": {
+            "fingerprint": {"$ref": "#/$defs/sha256"},
+            "argv": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000\\r\\n]+$",
+                },
+            },
+            "status": {"enum": ["PASS", "FAIL"]},
+            "exit_code": {"type": "integer"},
+            "output_sha256": {"$ref": "#/$defs/sha256"},
+            "attestation_id": {"type": "string", "minLength": 1},
+        },
+        "required": [
+            "fingerprint",
+            "argv",
+            "status",
+            "exit_code",
+            "output_sha256",
+            "attestation_id",
+        ],
+        "additionalProperties": False,
+    }
+    definitions["finding"]["properties"]["acceptance_measurements"] = {
+        "type": "array",
+        "maxItems": 128,
+        "items": {"$ref": "#/$defs/finding_acceptance_measurement"},
+    }
+    definitions["finding"]["required"].append("acceptance_measurements")
 
 
 def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:

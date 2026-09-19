@@ -1089,13 +1089,20 @@ class FindingTransitionPayload:
     origin_slice_id: str | None = None
     origin_round_number: int | None = None
     response_decision: str | None = None
-    # Optional until the joint 67/68 cutover ratchets new openings to mandatory.
+    # Older structured-v2 chains may omit responsibility on historical openings.
     responsibility: FindingResponsibility | None = None
-    # Dormant until the joint 67/68 cutover.  These fields preserve the
-    # reviewer's typed closure decision instead of collapsing it into prose.
+    # Preserve the reviewer's active typed decision instead of collapsing it
+    # into prose; partial is intentionally an open intermediate state.
     closure_kind: str | None = None
     rejection_reason: str | None = None
     closure_evidence: str | None = None
+    remaining_work: str | None = None
+    acceptance_command: CommandSpec | None = None
+    acceptance_outcome: str | None = None
+    acceptance_exit_code: int | None = None
+    acceptance_output_sha256: str | None = None
+    acceptance_attestation_id: str | None = None
+    acceptance_fingerprint: str | None = None
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
     status: ClassVar[str] = "recorded"
@@ -1107,12 +1114,21 @@ class FindingTransitionPayload:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {
             "opened", "responded", "status_changed", "reclassified", "routed",
+            "acceptance_measured",
         }:
             raise ArtifactValidationError("finding action is invalid")
         if self.finding_status not in {"open", "closed"}:
             raise ArtifactValidationError("finding_status is invalid")
         if self.action in {"opened", "status_changed", "reclassified"} and self.actor != self.reporter:
             raise ArtifactValidationError("only the reporting reviewer may mutate a finding")
+        if self.action == "acceptance_measured" and self.actor is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError(
+                "only the orchestrator may record a finding acceptance measurement"
+            )
+        if self.action == "acceptance_measured" and self.finding_status != "open":
+            raise ArtifactValidationError(
+                "a finding acceptance measurement must retain finding_status open"
+            )
         if self.action == "responded" and self.actor is not Role.CODEX:
             raise ArtifactValidationError("only codex may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
@@ -1200,42 +1216,119 @@ class FindingTransitionPayload:
                 raise ArtifactValidationError(
                     "response_decision must describe a responded transition"
                 )
-        closure_fields = (
-            self.closure_kind,
-            self.rejection_reason,
-            self.closure_evidence,
+        _validate_finding_transition_decision(self)
+        _validate_finding_acceptance_measurement(self)
+
+
+def _validate_finding_transition_decision(
+    payload: FindingTransitionPayload,
+) -> None:
+    fields = (
+        payload.closure_kind,
+        payload.rejection_reason,
+        payload.closure_evidence,
+        payload.remaining_work,
+    )
+    if not any(item is not None for item in fields):
+        return
+    if payload.action != "status_changed":
+        raise ArtifactValidationError(
+            "finding closure fields require a status_changed transition"
         )
-        if any(item is not None for item in closure_fields):
-            if self.action != "status_changed" or self.finding_status != "closed":
-                raise ArtifactValidationError(
-                    "finding closure fields require a closed status_changed transition"
-                )
-            if self.closure_kind not in {"fixed", "rejected"}:
-                raise ArtifactValidationError("finding closure_kind is invalid")
-            if self.closure_kind == "fixed":
-                if (
-                    self.rejection_reason is not None
-                    or self.closure_evidence is not None
-                ):
-                    raise ArtifactValidationError(
-                        "fixed finding closure forbids rejection fields"
-                    )
-            else:
-                if self.rejection_reason not in {
-                    "no_defect",
-                    "out_of_scope",
-                    "already_fixed",
-                }:
-                    raise ArtifactValidationError(
-                        "rejected finding closure requires a valid rejection_reason"
-                    )
-                if (
-                    not isinstance(self.closure_evidence, str)
-                    or not self.closure_evidence.strip()
-                ):
-                    raise ArtifactValidationError(
-                        "rejected finding closure requires named evidence"
-                    )
+    if payload.closure_kind not in {"fixed", "partial", "rejected"}:
+        raise ArtifactValidationError("finding closure_kind is invalid")
+    if payload.closure_kind == "fixed":
+        if any(item is not None for item in fields[1:]):
+            raise ArtifactValidationError(
+                "fixed finding closure forbids rejection fields"
+            )
+        if payload.finding_status != "closed":
+            raise ArtifactValidationError(
+                "fixed finding closure requires closed status"
+            )
+        return
+    if payload.closure_kind == "partial":
+        if payload.finding_status != "open":
+            raise ArtifactValidationError(
+                "partial finding decision must retain open status"
+            )
+        if payload.rejection_reason is not None:
+            raise ArtifactValidationError(
+                "partial finding decision forbids rejection_reason"
+            )
+        for value, label in (
+            (payload.closure_evidence, "partial finding evidence"),
+            (payload.remaining_work, "partial finding remaining_work"),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ArtifactValidationError(f"{label} must not be empty")
+        return
+    if payload.finding_status != "closed":
+        raise ArtifactValidationError(
+            "rejected finding closure requires closed status"
+        )
+    if payload.rejection_reason not in {
+        "no_defect", "out_of_scope", "already_fixed",
+    }:
+        raise ArtifactValidationError(
+            "rejected finding closure requires a valid rejection_reason"
+        )
+    if not isinstance(payload.closure_evidence, str) or not payload.closure_evidence.strip():
+        raise ArtifactValidationError(
+            "rejected finding closure requires named evidence"
+        )
+    if payload.remaining_work is not None:
+        raise ArtifactValidationError(
+            "rejected finding closure forbids remaining_work"
+        )
+
+
+def _validate_finding_acceptance_measurement(
+    payload: FindingTransitionPayload,
+) -> None:
+    fields = (
+        payload.acceptance_command,
+        payload.acceptance_outcome,
+        payload.acceptance_exit_code,
+        payload.acceptance_output_sha256,
+        payload.acceptance_attestation_id,
+        payload.acceptance_fingerprint,
+    )
+    if not any(item is not None for item in fields):
+        if payload.action == "acceptance_measured":
+            raise ArtifactValidationError(
+                "acceptance_measured transition requires complete measurement fields"
+            )
+        return
+    if payload.action != "acceptance_measured" or any(item is None for item in fields):
+        raise ArtifactValidationError(
+            "finding acceptance measurement fields must be complete and limited to acceptance_measured"
+        )
+    if payload.severity is not FindingSeverity.BLOCKER:
+        raise ArtifactValidationError(
+            "only a BLOCKER may carry a typed acceptance measurement"
+        )
+    if not isinstance(payload.acceptance_command, CommandSpec) or payload.acceptance_command.mode != "argv":
+        raise ArtifactValidationError(
+            "finding acceptance measurement requires a typed argv command"
+        )
+    if payload.acceptance_outcome not in {"pass", "fail"}:
+        raise ArtifactValidationError(
+            "finding acceptance measurement outcome is invalid"
+        )
+    if isinstance(payload.acceptance_exit_code, bool) or not isinstance(
+        payload.acceptance_exit_code, int
+    ):
+        raise ArtifactValidationError(
+            "finding acceptance measurement exit_code must be an integer"
+        )
+    if (payload.acceptance_outcome == "pass") != (payload.acceptance_exit_code == 0):
+        raise ArtifactValidationError(
+            "finding acceptance measurement outcome differs from exit_code"
+        )
+    _require_sha256(payload.acceptance_output_sha256, "finding acceptance measurement output_sha256")
+    _require_identifier(payload.acceptance_attestation_id, "finding acceptance measurement attestation_id")
+    _require_sha256(payload.acceptance_fingerprint, "finding acceptance measurement fingerprint")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3210,9 +3303,22 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("closure_kind", None)
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
+            raw.pop("remaining_work", None)
         elif payload.closure_kind == "fixed":
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
+            raw.pop("remaining_work", None)
+        elif payload.closure_kind == "partial":
+            raw.pop("rejection_reason", None)
+        elif payload.closure_kind == "rejected":
+            raw.pop("remaining_work", None)
+        if payload.acceptance_command is None:
+            raw.pop("acceptance_command", None)
+            raw.pop("acceptance_outcome", None)
+            raw.pop("acceptance_exit_code", None)
+            raw.pop("acceptance_output_sha256", None)
+            raw.pop("acceptance_attestation_id", None)
+            raw.pop("acceptance_fingerprint", None)
         if payload.predecessor_finding_ref is None:
             raw.pop("predecessor_finding_ref", None)
             raw.pop("evidence_anchor_sha256", None)
@@ -3778,6 +3884,21 @@ _PAYLOAD_READERS: dict[
             closure_kind=data.get("closure_kind"),
             rejection_reason=data.get("rejection_reason"),
             closure_evidence=data.get("closure_evidence"),
+            remaining_work=data.get("remaining_work"),
+            acceptance_command=(
+                None
+                if data.get("acceptance_command") is None
+                else CommandSpec(
+                    data["acceptance_command"]["family"],
+                    tuple(data["acceptance_command"]["argv"]),
+                    data["acceptance_command"]["mode"],
+                )
+            ),
+            acceptance_outcome=data.get("acceptance_outcome"),
+            acceptance_exit_code=data.get("acceptance_exit_code"),
+            acceptance_output_sha256=data.get("acceptance_output_sha256"),
+            acceptance_attestation_id=data.get("acceptance_attestation_id"),
+            acceptance_fingerprint=data.get("acceptance_fingerprint"),
             predecessor_finding_ref=data.get("predecessor_finding_ref"),
             evidence_anchor_sha256=data.get("evidence_anchor_sha256"),
         ),

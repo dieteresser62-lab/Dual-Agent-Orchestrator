@@ -8,7 +8,7 @@ semantics before those changes are persisted as new transition records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
 from artifact_models import (
@@ -31,12 +31,15 @@ from artifact_replay import (
 )
 from contracts import (
     AgentRole,
+    FindingAcceptanceMeasurement,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingResponseDecision,
     FindingResponse,
     FindingStatus,
+    ValidationCommandSpec,
+    ValidationStatus,
     apply_finding_response,
     apply_reviewer_finding_update,
 )
@@ -488,6 +491,8 @@ def project_latest_recorded_statuses(
     """Select the last recorded status per ID under explicit record filters."""
     latest: dict[str, FindingRecordedStatusProjection] = {}
     for event in _transition_events(records):
+        if event.payload.action == "acceptance_measured":
+            continue
         if imported is not None and event.imported is not imported:
             continue
         if bound_only and event.payload.work_unit_id is None:
@@ -830,6 +835,16 @@ def merge_history_snapshots(
                     raise ValueError(
                         f"finding class history regressed: {finding.finding_id}"
                     )
+                if (
+                    finding.acceptance_measurements[
+                        : len(previous.acceptance_measurements)
+                    ]
+                    != previous.acceptance_measurements
+                ):
+                    raise ValueError(
+                        "finding acceptance measurement history regressed: "
+                        f"{finding.finding_id}"
+                    )
             latest[finding.finding_id] = finding
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
@@ -1010,49 +1025,13 @@ def _reduce_lineages(
                 record,
             )
         try:
-            if payload.action == "responded":
-                if payload.response_decision is None:
-                    _fail(
-                        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                        "structured finding response lacks response_decision",
-                        record,
-                    )
-                finding = apply_finding_response(
-                    finding,
-                    FindingResponseDecision(payload.response_decision.upper()),
-                    payload.rationale,
-                )
-            elif payload.action == "reclassified":
-                finding = apply_reviewer_finding_update(
-                    finding,
-                    reviewer=finding.origin.reporter,
-                    status=finding.status,
-                    rationale=payload.rationale,
-                    finding_class=FindingClass(payload.severity.value),
-                )
-            elif payload.action == "status_changed":
-                finding = apply_reviewer_finding_update(
-                    finding,
-                    reviewer=finding.origin.reporter,
-                    status=FindingStatus(payload.finding_status.upper()),
-                    rationale=payload.rationale,
-                    finding_class=FindingClass(payload.severity.value),
-                )
-                if is_closed_finding_status(finding.status):
-                    responsibilities[lineage_key] = None
-            elif payload.action == "routed":
-                assert payload.responsibility is not None
-                if finding.status is not FindingStatus.OPEN:
-                    _fail(
-                        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                        f"cannot route closed finding {payload.finding_id}",
-                        record,
-                    )
-                if records is not None and not event.imported:
-                    _validate_routed_responsibility(
-                        payload.responsibility, record, records
-                    )
-                responsibilities[lineage_key] = payload.responsibility
+            finding, responsibility = _apply_transition_to_finding(
+                event,
+                finding,
+                responsibilities[lineage_key],
+                records,
+            )
+            responsibilities[lineage_key] = responsibility
         except ValueError as exc:
             _fail(
                 ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
@@ -1070,6 +1049,106 @@ def _reduce_lineages(
             responsibility=responsibilities[lineage_key],
         )
         for lineage_key in opening_order
+    )
+
+
+def _apply_transition_to_finding(
+    event: FindingTransitionProjection,
+    finding: FindingRecord,
+    responsibility: FindingResponsibility | None,
+    records: Sequence[ArtifactRecord] | None,
+) -> tuple[FindingRecord, FindingResponsibility | None]:
+    payload = event.payload
+    record = _event_record(event)
+    if payload.action == "responded":
+        if payload.response_decision is None:
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                "structured finding response lacks response_decision",
+                record,
+            )
+        return (
+            apply_finding_response(
+                finding,
+                FindingResponseDecision(payload.response_decision.upper()),
+                payload.rationale,
+            ),
+            responsibility,
+        )
+    if payload.action == "reclassified":
+        return (
+            apply_reviewer_finding_update(
+                finding,
+                reviewer=finding.origin.reporter,
+                status=finding.status,
+                rationale=payload.rationale,
+                finding_class=FindingClass(payload.severity.value),
+            ),
+            responsibility,
+        )
+    if payload.action == "status_changed":
+        updated = apply_reviewer_finding_update(
+            finding,
+            reviewer=finding.origin.reporter,
+            status=FindingStatus(payload.finding_status.upper()),
+            rationale=payload.rationale,
+            finding_class=FindingClass(payload.severity.value),
+        )
+        return updated, None if is_closed_finding_status(updated.status) else responsibility
+    if payload.action == "acceptance_measured":
+        return _apply_acceptance_measurement(event, finding), responsibility
+    if payload.action == "routed":
+        assert payload.responsibility is not None
+        if finding.status is not FindingStatus.OPEN:
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                f"cannot route closed finding {payload.finding_id}",
+                record,
+            )
+        if records is not None and not event.imported:
+            _validate_routed_responsibility(payload.responsibility, record, records)
+        return finding, payload.responsibility
+    return finding, responsibility
+
+
+def _apply_acceptance_measurement(
+    event: FindingTransitionProjection,
+    finding: FindingRecord,
+) -> FindingRecord:
+    payload = event.payload
+    record = _event_record(event)
+    if finding.status is not FindingStatus.OPEN:
+        _fail(
+            ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+            f"cannot measure closed finding {payload.finding_id}",
+            record,
+        )
+    assert payload.acceptance_command is not None
+    assert payload.acceptance_outcome is not None
+    assert payload.acceptance_exit_code is not None
+    assert payload.acceptance_output_sha256 is not None
+    assert payload.acceptance_attestation_id is not None
+    assert payload.acceptance_fingerprint is not None
+    if (
+        not event.imported
+        and record.fingerprint.sha256 != payload.acceptance_fingerprint
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "finding acceptance measurement payload differs from its record fingerprint",
+            record,
+        )
+    measurement = FindingAcceptanceMeasurement(
+        fingerprint=payload.acceptance_fingerprint,
+        command=ValidationCommandSpec(argv=payload.acceptance_command.argv),
+        status=ValidationStatus(payload.acceptance_outcome.upper()),
+        exit_code=payload.acceptance_exit_code,
+        output_sha256=payload.acceptance_output_sha256,
+        attestation_id=payload.acceptance_attestation_id,
+    )
+    return replace(
+        finding,
+        acceptance_measurements=(*finding.acceptance_measurements, measurement),
     )
 
 

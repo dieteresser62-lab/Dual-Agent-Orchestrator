@@ -36,6 +36,7 @@ from contracts import (
     SOURCE_FINDING_ID_PATTERN,
     StopRequest,
     ValidationAttestation,
+    ValidationStatus,
 )
 from finding_reducer import (
     ReviewerReclassification,
@@ -55,7 +56,12 @@ from finding_signature import (
     finding_signature,
     mentioned_repository_paths,
 )
-from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
+from validation_matrix import (
+    FINDING_COMMAND_PREFIX,
+    ValidationMatrixError,
+    finding_validation_command,
+    matches_validation_family,
+)
 from native_provider_schema import defensive_provider_projection
 import native_finding_decisions
 from native_finding_decisions import (
@@ -481,6 +487,7 @@ class NativeReviewContext:
     planned_slices: tuple[PlannedSlice, ...] = ()
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
     closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
+    pre_change_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -525,6 +532,17 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "validation attestation fingerprint does not match context",
+            )
+        if self.pre_change_fingerprint is not None and (
+            len(self.pre_change_fingerprint) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.pre_change_fingerprint
+            )
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "pre_change_fingerprint must be lowercase SHA-256",
             )
         previous_ids = tuple(item.finding_id for item in self.previous_findings)
         if previous_ids != sorted_finding_ids(previous_ids):
@@ -1785,6 +1803,11 @@ def _native_response_to_contract_result(
             context.red_state_followup_slice if response.approved else None
         ),
         plan_treatment_decisions=response.plan_treatment_decisions,
+        finding_closures=tuple(
+            (update.finding_id, update.closure)
+            for update in response.status_changes
+            if update.closure is not None
+        ),
     )
 
 
@@ -1865,6 +1888,12 @@ def _parse_native_closure(raw: object) -> NativeFindingClosure | None:
     kind = NativeClosureKind(raw["kind"])
     if kind is NativeClosureKind.FIXED:
         return NativeFindingClosure(kind=kind)
+    if kind is NativeClosureKind.PARTIAL:
+        return NativeFindingClosure(
+            kind=kind,
+            evidence=raw["evidence"],
+            remaining=raw["remaining"],
+        )
     return NativeFindingClosure(
         kind=kind,
         rejection_reason=NativeRejectionReason(raw["rejection_reason"]),
@@ -1893,12 +1922,43 @@ def _validate_native_closure(
     finding_id: str, closure: NativeFindingClosure
 ) -> None:
     if closure.kind is NativeClosureKind.FIXED:
-        if closure.rejection_reason is not None or closure.evidence is not None:
+        if any(
+            item is not None
+            for item in (
+                closure.rejection_reason,
+                closure.evidence,
+                closure.remaining,
+            )
+        ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_CONTENT_INVALID,
                 f"fixed closure for {finding_id} forbids rejection fields",
             )
         return
+    if closure.kind is NativeClosureKind.PARTIAL:
+        if closure.rejection_reason is not None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                f"partial finding decision for {finding_id} forbids rejection_reason",
+            )
+        _require_native_text(
+            closure.evidence,
+            f"partial finding evidence for {finding_id}",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
+        _require_native_text(
+            closure.remaining,
+            f"partial finding remaining work for {finding_id}",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
+        return
+    if closure.remaining is not None:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+            f"rejected closure for {finding_id} forbids remaining work",
+        )
     if closure.rejection_reason is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_CONTENT_INVALID,
@@ -1923,6 +1983,24 @@ def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> Non
                     "kind": {"type": "string", "const": "fixed"},
                 },
                 "required": ["kind"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "partial"},
+                    "evidence": {
+                        "type": "string",
+                        "pattern": NONBLANK_TEXT_PATTERN,
+                        "maxLength": 3000,
+                    },
+                    "remaining": {
+                        "type": "string",
+                        "pattern": NONBLANK_TEXT_PATTERN,
+                        "maxLength": 3000,
+                    },
+                },
+                "required": ["kind", "evidence", "remaining"],
                 "additionalProperties": False,
             },
             {
@@ -2104,6 +2182,66 @@ def _validate_plan_treatment_response_decisions(
                 )
 
 
+def _validate_fixed_acceptance_evidence(
+    finding: FindingRecord,
+    context: NativeReviewContext,
+) -> None:
+    """Require red-before/green-after only for the explicit typed command."""
+
+    try:
+        command = finding_validation_command(finding)
+    except ValidationMatrixError as exc:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"typed acceptance test for {finding.finding_id} is invalid: {exc}",
+        ) from exc
+    if command is None:
+        # Prose remains opaque.  No textual inference or substitute evidence is
+        # permitted at this boundary.
+        return
+    before_fingerprint = context.pre_change_fingerprint
+    if before_fingerprint is None:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"fixed finding {finding.finding_id} lacks a bound pre-change fingerprint",
+        )
+    if before_fingerprint == context.diff_fingerprint:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"fixed finding {finding.finding_id} has identical before and after fingerprints",
+        )
+    matching = tuple(
+        item
+        for item in finding.acceptance_measurements
+        if item.command.argv == command.argv
+    )
+    before = tuple(
+        item for item in matching if item.fingerprint == before_fingerprint
+    )
+    after = tuple(
+        item for item in matching if item.fingerprint == context.diff_fingerprint
+    )
+    if len(before) != 1 or len(after) != 1:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"fixed finding {finding.finding_id} requires one record-backed acceptance "
+            "result at each bound before/after fingerprint",
+        )
+    if before[0].status is ValidationStatus.PASS:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"typed acceptance test for {finding.finding_id} was already passing "
+            f"at the pre-change fingerprint {before_fingerprint}; a previously "
+            "green test does not prove a fix",
+        )
+    if after[0].status is not ValidationStatus.PASS:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            f"typed acceptance test for {finding.finding_id} does not pass at "
+            f"the post-change fingerprint {context.diff_fingerprint}",
+        )
+
+
 def _validate_response_events(
     response: NativeReviewResult, context: NativeReviewContext
 ) -> None:
@@ -2118,53 +2256,7 @@ def _validate_response_events(
             NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
             "review requires at least one finding event or review evidence",
         )
-    for finding in response.new_findings:
-        _require_native_text(
-            finding.summary,
-            "finding summary",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-        if isinstance(finding.acceptance_test, NativeProseAcceptance):
-            _require_native_text(
-                finding.acceptance_test.text,
-                "finding prose acceptance test",
-                max_length=2000,
-                code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            )
-    for update in response.status_changes:
-        _require_native_text(
-            update.rationale,
-            "finding status rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-        if is_closed_finding_status(update.status) and update.closure is None:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                f"CLOSED status change for {update.finding_id} requires closure",
-            )
-        if not is_closed_finding_status(update.status) and update.closure is not None:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                f"OPEN status change for {update.finding_id} forbids closure",
-            )
-        if update.closure is not None:
-            _validate_native_closure(update.finding_id, update.closure)
-    for update in response.reclassifications:
-        _require_native_text(
-            update.rationale,
-            "finding reclassification rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-    for route in response.responsibility_routes:
-        _require_native_text(
-            route.rationale,
-            "responsibility routing rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
+    _validate_finding_event_content(response)
     _validate_plan_treatment_response_decisions(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     previous_open_ids = frozenset(
@@ -2203,6 +2295,13 @@ def _validate_response_events(
                 f"finding update references non-open id {finding_id}",
             )
     for update in response.status_changes:
+        if (
+            update.closure is not None
+            and update.closure.kind is NativeClosureKind.FIXED
+        ):
+            _validate_fixed_acceptance_evidence(
+                previous[update.finding_id], context
+            )
         if update.rationale == previous[update.finding_id].status_rationale:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
@@ -2293,6 +2392,75 @@ def _validate_response_events(
         raise NativeReviewContractError(
             NativeReviewErrorCode.ANCHOR_INVALID,
             "native anchors require a bound anchor_origin",
+        )
+
+
+def _validate_finding_event_content(response: NativeReviewResult) -> None:
+    for finding in response.new_findings:
+        _require_native_text(
+            finding.summary,
+            "finding summary",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
+        if isinstance(finding.acceptance_test, NativeProseAcceptance):
+            _require_native_text(
+                finding.acceptance_test.text,
+                "finding prose acceptance test",
+                max_length=2000,
+                code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+            )
+            if finding.acceptance_test.text.strip().startswith("VALIDATE:"):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.ACCEPTANCE_INVALID,
+                    "prose acceptance must not use the reserved typed "
+                    "VALIDATE prefix",
+                )
+    for update in response.status_changes:
+        _require_native_text(
+            update.rationale,
+            "finding status rationale",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
+        if is_closed_finding_status(update.status) and update.closure is None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                f"CLOSED status change for {update.finding_id} requires closure",
+            )
+        if (
+            not is_closed_finding_status(update.status)
+            and update.closure is not None
+            and update.closure.kind is not NativeClosureKind.PARTIAL
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                f"OPEN status change for {update.finding_id} permits only partial",
+            )
+        if (
+            is_closed_finding_status(update.status)
+            and update.closure is not None
+            and update.closure.kind is NativeClosureKind.PARTIAL
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                f"partial finding decision for {update.finding_id} must remain OPEN",
+            )
+        if update.closure is not None:
+            _validate_native_closure(update.finding_id, update.closure)
+    for update in response.reclassifications:
+        _require_native_text(
+            update.rationale,
+            "finding reclassification rationale",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
+    for route in response.responsibility_routes:
+        _require_native_text(
+            route.rationale,
+            "responsibility routing rationale",
+            max_length=3000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
 
 
@@ -2816,6 +2984,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
             list(prefix) for prefix in context.validation_command_prefixes
         ],
         "red_state_followup_slice": context.red_state_followup_slice,
+        "pre_change_fingerprint": context.pre_change_fingerprint,
     }
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
@@ -2909,6 +3078,17 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
         ],
         "status_rationale": finding.status_rationale,
         "class_history": [item.value for item in finding.class_history],
+        "acceptance_measurements": [
+            {
+                "fingerprint": item.fingerprint,
+                "argv": list(item.command.argv),
+                "status": item.status.value,
+                "exit_code": item.exit_code,
+                "output_sha256": item.output_sha256,
+                "attestation_id": item.attestation_id,
+            }
+            for item in finding.acceptance_measurements
+        ],
     }
     if finding.predecessor_finding_ref is not None:
         binding["predecessor_finding_ref"] = finding.predecessor_finding_ref

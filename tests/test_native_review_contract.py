@@ -11,6 +11,7 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
+    FindingAcceptanceMeasurement,
     FindingClass,
     FindingOccurrence,
     FindingOrigin,
@@ -57,6 +58,14 @@ from workflow_state import WorkUnitKind
 
 
 FINGERPRINT = "a" * 64
+PRE_CHANGE_FINGERPRINT = "b" * 64
+TYPED_ACCEPTANCE_ARGV = (
+    "python3",
+    "-m",
+    "pytest",
+    "tests/test_native_review_contract.py",
+    "-q",
+)
 
 
 def _attestation() -> ValidationAttestation:
@@ -159,6 +168,46 @@ def _finding(
         origin=FindingOrigin("1", 1, reporter),
         status_rationale="Closed earlier" if status is FindingStatus.CLOSED else None,
     )
+
+
+def _typed_measurement(
+    fingerprint: str,
+    status: ValidationStatus,
+) -> FindingAcceptanceMeasurement:
+    return FindingAcceptanceMeasurement(
+        fingerprint=fingerprint,
+        command=ValidationCommandSpec(argv=TYPED_ACCEPTANCE_ARGV),
+        status=status,
+        exit_code=0 if status is ValidationStatus.PASS else 1,
+        output_sha256=hashlib.sha256(status.value.encode("utf-8")).hexdigest(),
+        attestation_id=f"acceptance-{fingerprint[:12]}-{status.value.lower()}",
+    )
+
+
+def _typed_finding(
+    *measurements: FindingAcceptanceMeasurement,
+) -> FindingRecord:
+    return replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        acceptance_test=(
+            'VALIDATE: ["python3","-m","pytest",'
+            '"tests/test_native_review_contract.py","-q"]'
+        ),
+        acceptance_measurements=measurements,
+    )
+
+
+def _fixed_document(context: NativeReviewContext) -> dict[str, object]:
+    document = _review(context, approved=True)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "The bound regression now passes.",
+            "closure": {"kind": "fixed"},
+        }
+    ]
+    return document
 
 
 @pytest.fixture
@@ -425,6 +474,107 @@ def test_closed_status_accepts_fixed_or_evidenced_rejection(
 
     assert response.status_changes[0].closure is not None
     assert result.findings[0].status is FindingStatus.CLOSED
+
+
+def test_typed_fixed_requires_recorded_red_before_and_green_after() -> None:
+    finding = _typed_finding(
+        _typed_measurement(PRE_CHANGE_FINGERPRINT, ValidationStatus.FAIL),
+        _typed_measurement(FINGERPRINT, ValidationStatus.PASS),
+    )
+    context = replace(
+        _context(previous=(finding,)),
+        pre_change_fingerprint=PRE_CHANGE_FINGERPRINT,
+    )
+
+    result = parse_native_contract_result(_fixed_document(context), context)
+
+    assert result.findings[0].status is FindingStatus.CLOSED
+    assert result.finding_closures[0][1].kind.value == "fixed"
+
+
+def test_typed_fixed_rejects_an_acceptance_test_that_was_already_green() -> None:
+    finding = _typed_finding(
+        _typed_measurement(PRE_CHANGE_FINGERPRINT, ValidationStatus.PASS),
+        _typed_measurement(FINGERPRINT, ValidationStatus.PASS),
+    )
+    context = replace(
+        _context(previous=(finding,)),
+        pre_change_fingerprint=PRE_CHANGE_FINGERPRINT,
+    )
+
+    with pytest.raises(NativeReviewContractError, match="already passing") as raised:
+        parse_native_contract_result(_fixed_document(context), context)
+
+    assert "previously green test does not prove a fix" in raised.value.detail
+
+
+@pytest.mark.parametrize(
+    "measurements",
+    (
+        (_typed_measurement(PRE_CHANGE_FINGERPRINT, ValidationStatus.FAIL),),
+        (_typed_measurement(FINGERPRINT, ValidationStatus.PASS),),
+        (
+            _typed_measurement("c" * 64, ValidationStatus.FAIL),
+            _typed_measurement(FINGERPRINT, ValidationStatus.PASS),
+        ),
+        (
+            _typed_measurement(PRE_CHANGE_FINGERPRINT, ValidationStatus.PASS),
+            _typed_measurement(FINGERPRINT, ValidationStatus.FAIL),
+        ),
+    ),
+)
+def test_typed_fixed_rejects_missing_foreign_or_swapped_measurements(
+    measurements: tuple[FindingAcceptanceMeasurement, ...],
+) -> None:
+    context = replace(
+        _context(previous=(_typed_finding(*measurements),)),
+        pre_change_fingerprint=PRE_CHANGE_FINGERPRINT,
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(_fixed_document(context), context)
+
+    assert raised.value.code is NativeReviewErrorCode.ACCEPTANCE_INVALID
+
+
+def test_prose_fixed_does_not_infer_or_require_machine_measurements() -> None:
+    finding = _finding("C-01", AgentRole.CLAUDE)
+    context = replace(
+        _context(previous=(finding,)),
+        pre_change_fingerprint=PRE_CHANGE_FINGERPRINT,
+    )
+
+    result = parse_native_contract_result(_fixed_document(context), context)
+
+    assert result.findings[0].status is FindingStatus.CLOSED
+    assert result.findings[0].acceptance_measurements == ()
+
+
+def test_partial_finding_decision_records_evidence_and_keeps_blocker_open() -> None:
+    finding = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(previous=(finding,))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "Nine of twelve factories are now wired.",
+            "closure": {
+                "kind": "partial",
+                "evidence": "The bound route test reaches nine factories.",
+                "remaining": "Wire onboarding, backup, and ingredient guide.",
+            },
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert result.findings[0].status is FindingStatus.OPEN
+    assert result.own_open_blockers == (result.findings[0],)
+    closure = dict(result.finding_closures)["C-01"]
+    assert closure.kind is native_finding_decisions.NativeClosureKind.PARTIAL
+    assert closure.evidence == "The bound route test reaches nine factories."
+    assert closure.remaining == "Wire onboarding, backup, and ingredient guide."
 
 
 @pytest.mark.parametrize(

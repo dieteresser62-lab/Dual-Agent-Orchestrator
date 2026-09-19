@@ -21,6 +21,7 @@ MAX_REMEDIATION_ROUNDS = 64
 
 class NativeClosureKind(StrEnum):
     FIXED = "fixed"
+    PARTIAL = "partial"
     REJECTED = "rejected"
 
 
@@ -300,14 +301,28 @@ class NativeFindingClosure:
     kind: NativeClosureKind
     rejection_reason: NativeRejectionReason | None = None
     evidence: str | None = None
+    remaining: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, NativeClosureKind):
             raise TypeError("native finding closure kind must be typed")
         if self.kind is NativeClosureKind.FIXED:
-            if self.rejection_reason is not None or self.evidence is not None:
+            if any(
+                item is not None
+                for item in (self.rejection_reason, self.evidence, self.remaining)
+            ):
                 raise ValueError("fixed closure forbids rejection fields")
             return
+        if self.kind is NativeClosureKind.PARTIAL:
+            if self.rejection_reason is not None:
+                raise ValueError("partial finding decision forbids rejection_reason")
+            if not isinstance(self.evidence, str) or not self.evidence.strip():
+                raise ValueError("partial finding decision requires named evidence")
+            if not isinstance(self.remaining, str) or not self.remaining.strip():
+                raise ValueError("partial finding decision requires remaining work")
+            return
+        if self.remaining is not None:
+            raise ValueError("rejected closure forbids partial remaining work")
         if not isinstance(self.rejection_reason, NativeRejectionReason):
             raise ValueError("rejected closure requires a typed rejection reason")
         if not isinstance(self.evidence, str) or not self.evidence.strip():

@@ -1127,6 +1127,7 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
                     "occurrences",
                     "scan_complete",
                     "plan_treatment_decisions",
+                    "finding_closures",
         },
         ("src/artifact_models.py", "ReviewPayload"): {
             "reviewer",

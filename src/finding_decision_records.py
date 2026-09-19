@@ -1,9 +1,8 @@
-"""Dormant projection of native reviewer decisions into Finding records.
+"""Projection of authoritative native reviewer decisions into Finding records.
 
-The joint 67/68 switch is the sole activation boundary.  Until it is enabled,
-this module rejects projection and no production caller writes the new
-decisions.  Implementer responsibility proposals are not an input to this
-projection and therefore cannot acquire reviewer authority here.
+The joint 67/68 cutover is active. Implementer responsibility proposals are
+not an input to this projection and therefore cannot acquire reviewer
+authority here.
 """
 
 from __future__ import annotations
@@ -39,10 +38,14 @@ def project_native_review_decision_payloads(
     findings = {item.finding_id: item for item in previous_findings}
     payloads: list[FindingTransitionPayload] = []
     for update in response.status_changes:
-        if not is_closed_finding_status(update.status):
+        closure = update.closure
+        is_partial = (
+            closure is not None
+            and closure.kind is native_finding_decisions.NativeClosureKind.PARTIAL
+        )
+        if not is_closed_finding_status(update.status) and not is_partial:
             continue
         finding = _referenced_open_finding(findings, update.finding_id)
-        closure = update.closure
         if closure is None:
             raise ValueError(
                 f"closed finding {update.finding_id} lacks its typed closure"
@@ -54,7 +57,7 @@ def project_native_review_decision_payloads(
                 actor=Role(response.reviewer.value),
                 action="status_changed",
                 severity=FindingSeverity(finding.finding_class.value),
-                finding_status="closed",
+                finding_status=("open" if is_partial else "closed"),
                 rationale=update.rationale,
                 work_unit_id=str(work_unit_id),
                 closure_kind=closure.kind.value,
@@ -64,6 +67,7 @@ def project_native_review_decision_payloads(
                     else closure.rejection_reason.value
                 ),
                 closure_evidence=closure.evidence,
+                remaining_work=closure.remaining,
             )
         )
 

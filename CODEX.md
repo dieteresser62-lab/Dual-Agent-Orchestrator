@@ -8,6 +8,8 @@ Every Slice-owned Finding must be fixed, evidentially rejected by Claude as `not
 
 Only a reviewer-owned `BLOCKER` may add a typed validation-command acceptance test; an `OBSERVATION` remains prose-only and cannot extend or stop the matrix. Never run the configured full validation matrix inside the agent sandbox; focused implementation checks are allowed and the orchestrator owns the authoritative matrix. A sandbox-only port-bind or browser-launch failure does not justify a validation-unavailable stop. Never create or switch branches, approve or review your own work, claim the orchestrator validation result, stage, commit, push, or merge; Git transactions are user- or orchestrator-owned side effects after the required approvals.
 
+A typed `BLOCKER` acceptance command is measured by the orchestrator at the pre-change and post-change fingerprints, and `fixed` requires recorded `FAIL` then `PASS`; a pre-green result cannot prove `fixed`. `partial` records evidence and remaining work but stays open with its current responsibility. Prose acceptance remains opaque and has no inferred substitute check.
+
 Machine-readable planning, implementation, same-Slice correction, and stop results use only the bound native JSON schema. Plain-text markers, Markdown wrappers, normalization, and repair turns are not accepted.
 
 ## Structured artifact authority

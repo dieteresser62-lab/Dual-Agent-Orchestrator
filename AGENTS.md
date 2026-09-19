@@ -33,6 +33,7 @@
 - Only the reporting reviewer may close or reclassify its Finding. Codex `finding_dispositions` remain sparse during plan, implementation, and same-Slice correction work; omitted open Findings retain their complete state and produce no response transition.
 - Branch discovery only discovers new Findings or records occurrences of known signatures. It never disposes inherited Findings or creates a special final-correction or reviewer-only cleanup work unit; an open discovery snapshot starts a linked ordinary `PLAN_ONLY` remediation run.
 - Only an open `BLOCKER` may extend the orchestrator validation matrix with a typed `validation_command` acceptance test from a configured command family. An `OBSERVATION` uses a typed prose acceptance test and cannot extend or pause the matrix.
+- A typed `BLOCKER` acceptance command is measured by the orchestrator at the pre-change and post-change fingerprints, and `fixed` requires recorded `FAIL` then `PASS`; a pre-green result cannot prove `fixed`. `partial` records evidence and remaining work but stays open with its current responsibility. Prose acceptance remains opaque and has no inferred substitute check.
 - Missing, inconsistent, or unparsable verdicts are denials. A stop request replaces readiness or approval.
 - Exhausted watch retries move a task to `outbox/failed/*.poison` and persist the final technical diagnosis beside it as `*.poison.error.json`.
 

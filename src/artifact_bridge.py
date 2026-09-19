@@ -503,6 +503,7 @@ def finding_payload(
     rationale: str | None = None,
     work_unit_id: int | str | None = None,
     response_decision: FindingResponseDecision | None = None,
+    closure: native_finding_decisions.NativeFindingClosure | None = None,
 ) -> FindingTransitionPayload:
     reporter = _role(finding.origin.reporter)
     structured = work_unit_id is not None
@@ -528,6 +529,14 @@ def finding_payload(
         response_decision=(
             response_decision.value.lower() if response_decision is not None else None
         ),
+        closure_kind=None if closure is None else closure.kind.value,
+        rejection_reason=(
+            None
+            if closure is None or closure.rejection_reason is None
+            else closure.rejection_reason.value
+        ),
+        closure_evidence=None if closure is None else closure.evidence,
+        remaining_work=None if closure is None else closure.remaining,
         predecessor_finding_ref=(
             finding.predecessor_finding_ref
             if structured and action == "opened"

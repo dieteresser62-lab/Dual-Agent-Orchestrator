@@ -25,6 +25,7 @@ class SliceFindingBalance:
     opened: int
     closed: int
     locally_fixed: int = 0
+    partially_fixed: int = 0
     rejected: int = 0
     routed_to_later_slice: int = 0
     routed_to_branch_planning: int = 0
@@ -42,7 +43,7 @@ def derive_slice_finding_balances(
     chain = tuple(records)
     slice_by_work_unit = _slice_work_units(chain)
     counts: dict[int, list[int]] = {
-        slice_id: [0, 0, 0, 0, 0, 0]
+        slice_id: [0, 0, 0, 0, 0, 0, 0]
         for slice_id in sorted(set(slice_by_work_unit.values()))
     }
     for record in chain:
@@ -54,19 +55,24 @@ def derive_slice_finding_balances(
             continue
         if payload.action == "opened":
             counts[slice_id][0] += 1
+        elif (
+            payload.action == "status_changed"
+            and payload.closure_kind == "partial"
+        ):
+            counts[slice_id][3] += 1
         elif is_closed_finding_transition(record):
             counts[slice_id][1] += 1
             if payload.closure_kind == "fixed":
                 counts[slice_id][2] += 1
             elif payload.closure_kind == "rejected":
-                counts[slice_id][3] += 1
+                counts[slice_id][4] += 1
         elif payload.action == "routed":
             if isinstance(payload.responsibility, SliceResponsibility):
-                counts[slice_id][4] += 1
+                counts[slice_id][5] += 1
             elif isinstance(
                 payload.responsibility, BranchPlanningResponsibility
             ):
-                counts[slice_id][5] += 1
+                counts[slice_id][6] += 1
     return tuple(
         SliceFindingBalance(slice_id, *values)
         for slice_id, values in sorted(counts.items())
