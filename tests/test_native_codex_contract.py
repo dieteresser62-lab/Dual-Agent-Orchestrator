@@ -29,12 +29,14 @@ from gates import (
 )
 from native_codex_contract import (
     BoundNativeCodexContext,
+    NATIVE_CODEX_RESPONSE_RETRY_CODES,
     NativeCodexContext,
     NativeCodexContractError,
     NativeCodexErrorCode,
     NativeCodexRequestKind,
     canonical_native_codex_json,
     load_native_codex_schema,
+    native_codex_retry_guidance,
     native_codex_provider_response_schema,
     native_responsibility_proposals,
     parse_native_codex_response,
@@ -1628,3 +1630,28 @@ def test_unknown_properties_and_unsorted_paths_fail_closed() -> None:
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(document, bound)
     assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+
+
+def test_retry_guidance_inventory_covers_every_retryable_codex_code() -> None:
+    assert set(native_codex_contract._NATIVE_CODEX_RETRY_GUIDANCE) == set(
+        NATIVE_CODEX_RESPONSE_RETRY_CODES
+    )
+
+
+def test_retry_guidance_uses_the_precise_closed_diagnostic() -> None:
+    diagnostic = (
+        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
+    )
+
+    guidance = native_codex_retry_guidance(
+        NativeCodexErrorCode.SLICE_PLAN_INVALID,
+        diagnostic,
+    )
+
+    assert guidance == diagnostic.text
+    assert "implementation treatment forbids No-Code disposition fields" in guidance
+
+
+def test_context_invalid_has_no_codex_retry_guidance() -> None:
+    with pytest.raises(ValueError, match="is not retryable"):
+        native_codex_retry_guidance(NativeCodexErrorCode.CONTEXT_INVALID)

@@ -650,6 +650,8 @@
         },
         "native_review_rejection": {"enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "acceptance-invalid", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid"]},
         "native_review_retry_round": {"type": "integer", "minimum": 1},
+        "native_implementer_rejection": {"enum": ["schema-invalid", "request-mismatch", "result-kind-mismatch", "result-content-invalid", "finding-reference-invalid", "test-files-invalid", "slice-plan-invalid", "stop-content-invalid", "dormant-finding-decision-field"]},
+        "native_implementer_retry_round": {"type": "integer", "minimum": 1},
         "received_at": {"type": "string", "format": "date-time"},
         "decision_at_utc": {"type": "string", "format": "date-time"},
         "step": {"$ref": "#/$defs/identifier"},

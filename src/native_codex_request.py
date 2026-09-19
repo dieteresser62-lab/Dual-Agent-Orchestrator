@@ -15,7 +15,9 @@ from contracts import ReadinessMarker, ValidationAttestation
 from finding_reducer import project_open_set
 from native_codex_contract import (
     BoundNativeCodexContext,
+    NATIVE_CODEX_RESPONSE_RETRY_CODES as NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,  # allowlist:provider -- typed implementer boundary
     NativeCodexContext,
+    NativeCodexErrorCode as NativeImplementerErrorCode,  # allowlist:provider -- typed implementer boundary
     NativeCodexRequestKind,
     native_codex_provider_response_schema,
 )
@@ -37,6 +39,7 @@ REQUEST_SCHEMA_PATH = (
     / "native-agent-codex-request-v2.schema.json"
 )
 SAFE_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,199}")
+INVOCATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 
 
 class NativeCodexRequestErrorCode(StrEnum):
@@ -113,6 +116,34 @@ class NativeCodexEvidenceAsset:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeImplementerRetryFeedback:
+    prior_invocation_id: str
+    rejection_code: NativeImplementerErrorCode
+    correction_instruction: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.prior_invocation_id, str)
+            or INVOCATION_ID_PATTERN.fullmatch(self.prior_invocation_id) is None
+        ):
+            raise NativeCodexRequestError(  # allowlist:provider -- established request error
+                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+                "retry feedback prior_invocation_id is not a safe identifier",
+            )
+        if self.rejection_code not in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES:
+            raise NativeCodexRequestError(  # allowlist:provider -- established request error
+                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+                "retry feedback requires a response-dependent rejection code",
+            )
+        _require_text(
+            self.correction_instruction,
+            "retry feedback correction_instruction",
+            3000,
+            NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class NativeCodexRequestSpec:
     context: NativeCodexContext
     target_branch: str
@@ -121,11 +152,12 @@ class NativeCodexRequestSpec:
     assignment: str
     work_context: str
     evidence: tuple[NativeCodexEvidenceInput, ...]
+    retry_feedback: NativeImplementerRetryFeedback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, NativeCodexContext):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            raise NativeCodexRequestError(  # allowlist:provider -- established request error
+                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
                 "request spec requires NativeCodexContext",
             )
         _require_text(
@@ -167,6 +199,13 @@ class NativeCodexRequestSpec:
             self.evidence,
             NativeCodexRequestErrorCode.EVIDENCE_INVALID,
         )
+        if self.retry_feedback is not None and not isinstance(
+            self.retry_feedback, NativeImplementerRetryFeedback
+        ):
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.CONTEXT_INVALID,
+                "retry_feedback must be a NativeImplementerRetryFeedback",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +428,12 @@ def build_native_codex_request(
             "schema_sha256": response_schema_digest,
         },
     }
+    if spec.retry_feedback is not None:
+        binding["retry_feedback"] = {
+            "prior_invocation_id": spec.retry_feedback.prior_invocation_id,
+            "rejection_code": spec.retry_feedback.rejection_code.value,
+            "correction_instruction": spec.retry_feedback.correction_instruction,
+        }
     request_digest = _sha256_text(_canonical_json(binding))
     request_id = "native-codex-request-" + request_digest
     document = {**binding, "request_id": request_id}

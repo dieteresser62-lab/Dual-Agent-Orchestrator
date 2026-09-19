@@ -946,7 +946,7 @@ def _project_work_unit_document(
             "auto_resume_count": item.auto_resume_count,
             "automatic_resume": item.automatic_resume,
             "diff_fingerprint": item.diff_fingerprint,
-            **item.native_review_feedback_document,
+            **item.native_response_feedback_document,
         }
         for item in replay.invocation_failures
         if item.work_unit_id == unit.work_unit_id
@@ -3627,6 +3627,12 @@ def _semantic_payload_document(payload: object) -> dict[str, object]:
     ):
         raw.pop("native_review_rejection", None)
         raw.pop("native_review_retry_round", None)
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.native_implementer_rejection is None
+    ):
+        raw.pop("native_implementer_rejection", None)
+        raw.pop("native_implementer_retry_round", None)
     return raw
 
 

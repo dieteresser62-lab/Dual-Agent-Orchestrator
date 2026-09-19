@@ -44,6 +44,12 @@ from error_classification import (
     enforce_record_start_boundary,
 )
 from final_review_preflight import FinalReviewPreflightDenied
+from native_codex_contract import (
+    NATIVE_CODEX_RESPONSE_RETRY_CODES,
+    NativeCodexContractError,
+    NativeCodexErrorCode,
+    NativeImplementerRejectionSource,
+)
 from native_review_contract import (
     NATIVE_REVIEW_RESPONSE_RETRY_CODES,
     NativeReviewContractError,
@@ -439,11 +445,50 @@ def test_local_review_schema_failure_is_not_retried_as_model_output() -> None:
     assert classified.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
 
 
+@pytest.mark.parametrize("code", tuple(NativeCodexErrorCode))
+def test_native_codex_rejections_distinguish_context_from_model_response(
+    code: NativeCodexErrorCode,
+) -> None:
+    classified = classify_exception(NativeCodexContractError(code, "rejected"))
+
+    if code is NativeCodexErrorCode.CONTEXT_INVALID:
+        assert classified.failure_class is FailureClass.RESUMABLE_HALT
+        assert classified.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
+    else:
+        assert classified.failure_class is FailureClass.TRANSIENT
+        assert classified.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+
+
+def test_local_codex_schema_failure_is_not_retried_as_model_output() -> None:
+    classified = classify_exception(
+        NativeCodexContractError(
+            NativeCodexErrorCode.SCHEMA_INVALID,
+            "bundled schema is invalid",
+            source=NativeImplementerRejectionSource.REQUEST_LEDGER,
+        )
+    )
+
+    assert classified.failure_class is FailureClass.RESUMABLE_HALT
+    assert classified.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
+
+
 def test_retry_rejection_code_wire_inventories_match_the_contract_enum() -> None:
     expected = {code.value for code in NATIVE_REVIEW_RESPONSE_RETRY_CODES}
 
     assert workflow_state.NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
     assert artifact_models._NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
+
+    implementer_expected = {
+        code.value for code in NATIVE_CODEX_RESPONSE_RETRY_CODES
+    }
+    assert (
+        workflow_state.NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES
+        == implementer_expected
+    )
+    assert (
+        artifact_models._NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES
+        == implementer_expected
+    )
 
 
 def test_terminal_rejection_is_promoted_after_record_start() -> None:

@@ -39,12 +39,15 @@ from contracts import (
 from native_codex_contract import (
     NativeCodexContractError,
     NativeCodexErrorCode,
+    find_native_implementer_contract_error,
+    is_retryable_native_codex_response_error as is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
     parse_bound_native_codex_contract_result,
     validate_native_codex_document,
 )
 from native_codex_request import (
     NativeCodexRequestBundle,
     NativeCodexRequestError,
+    NativeCodexRequestErrorCode as NativeImplementerRequestErrorCode,  # allowlist:provider -- typed implementer boundary
     validate_native_codex_provider_response,
 )
 from native_review_contract import (
@@ -89,6 +92,9 @@ from orchestrator_diagnostics import (
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
 logger = logging.getLogger(__name__)
+NativeImplementerErrorCode = NativeCodexErrorCode  # allowlist:provider -- local role alias
+NativeImplementerContractError = NativeCodexContractError  # allowlist:provider -- local role alias
+NativeImplementerRequestError = NativeCodexRequestError  # allowlist:provider -- local role alias
 REVIEW_SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {
         ".git",
@@ -149,6 +155,9 @@ class AgentInvocationError(RuntimeError):
         native_review_rejection: NativeReviewErrorCode | None = None,
         native_review_rejection_detail: str | None = None,
         native_review_response_retryable: bool = False,
+        native_implementer_rejection: NativeImplementerErrorCode | None = None,
+        native_implementer_rejection_detail: str | None = None,
+        native_implementer_response_retryable: bool = False,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
@@ -176,6 +185,34 @@ class AgentInvocationError(RuntimeError):
             raise TypeError(
                 "native review response retryability requires a typed rejection"
             )
+        if native_implementer_rejection is not None and not isinstance(
+            native_implementer_rejection, NativeImplementerErrorCode
+        ):
+            raise TypeError("native implementer rejection must be a closed enum member")
+        if native_implementer_rejection_detail is not None and (
+            native_implementer_rejection is None
+            or not native_implementer_rejection_detail.strip()
+            or len(native_implementer_rejection_detail) > 1200
+            or any(
+                character in native_implementer_rejection_detail
+                for character in ("\x00", "\r", "\n")
+            )
+        ):
+            raise TypeError(
+                "native implementer rejection detail must be a bounded typed diagnostic"
+            )
+        if not isinstance(native_implementer_response_retryable, bool) or (
+            native_implementer_response_retryable
+            and native_implementer_rejection is None
+        ):
+            raise TypeError(
+                "native implementer response retryability requires a typed rejection"
+            )
+        if (
+            native_review_rejection is not None
+            and native_implementer_rejection is not None
+        ):
+            raise TypeError("one invocation cannot carry two native rejection roles")
         self.agent_key = agent_key
         self.kind = kind
         self.invocation_id = invocation_id
@@ -189,6 +226,11 @@ class AgentInvocationError(RuntimeError):
         self.native_review_rejection = native_review_rejection
         self.native_review_rejection_detail = native_review_rejection_detail
         self.native_review_response_retryable = native_review_response_retryable
+        self.native_implementer_rejection = native_implementer_rejection
+        self.native_implementer_rejection_detail = native_implementer_rejection_detail
+        self.native_implementer_response_retryable = (
+            native_implementer_response_retryable
+        )
         label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
         super().__init__(
             f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
@@ -210,6 +252,16 @@ class AgentInvocationError(RuntimeError):
             if isinstance(detail, str)
             else rejection.value
         )
+
+    @property
+    def readable_native_implementer_rejection(self) -> str | None:
+        rejection = self.native_implementer_rejection
+        if not isinstance(rejection, NativeImplementerErrorCode):
+            return None
+        # Implementer guidance is repository-owned.  The validator detail can
+        # contain provider-authored values and must never become feedback or a
+        # readable log field.
+        return self.readable_orchestrator_diagnostic or rejection.value
 
 
 class ProviderRequestRoundRequired(RuntimeError):
@@ -1686,12 +1738,28 @@ def run_native_codex_agent(
             "native Codex result is not valid JSON",
             technical_text=f"native-json-invalid: {exc}",
         ) from exc
-    except (NativeCodexContractError, NativeCodexRequestError) as exc:
+    except NativeImplementerContractError as exc:
+        raise AgentOutputError(
+            "native implementer result violates its bound contract",
+            provider_data=document,
+            technical_text=f"{exc.code.value}: {exc.detail}",
+            orchestrator_diagnostic=exc.orchestrator_diagnostic,
+        ) from exc
+    except NativeImplementerRequestError as exc:
+        if exc.code is NativeImplementerRequestErrorCode.SCHEMA_INVALID:
+            form_error = NativeImplementerContractError(
+                NativeImplementerErrorCode.SCHEMA_INVALID, exc.detail
+            )
+            raise AgentOutputError(
+                "native implementer result violates its bound contract",
+                provider_data=document,
+                technical_text=f"{form_error.code.value}: {form_error.detail}",
+                orchestrator_diagnostic=form_error.orchestrator_diagnostic,
+            ) from form_error
         raise AgentOutputError(
             "native Codex result violates its bound contract",
             provider_data=document,
             technical_text=f"{exc.code.value}: {exc.detail}",
-            orchestrator_diagnostic=getattr(exc, "orchestrator_diagnostic", None),
         ) from exc
     return NativeAgentCodexOutput(
         result=result,
@@ -2234,7 +2302,16 @@ def classify_agent_failure(
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
     )
     native_review_form_failure = find_native_review_contract_error(exc)
-    if native_review_form_failure is not None:
+    native_implementer_form_failure = find_native_implementer_contract_error(exc)
+    if (
+        native_review_form_failure is not None
+        and native_implementer_form_failure is not None
+    ):
+        raise TypeError("one invocation cannot contain two native rejection roles")
+    if (
+        native_review_form_failure is not None
+        or native_implementer_form_failure is not None
+    ):
         # A validated provider response was rejected by deterministic local
         # semantics.  Provider-like words inside its prose cannot turn that
         # response-content fact into a transient quota or transport failure.
@@ -2304,7 +2381,7 @@ def classify_agent_failure(
             else None
         ),
         native_review_rejection_detail=(
-            _bounded_native_review_rejection_detail(native_review_form_failure)
+            _bounded_native_response_rejection_detail(native_review_form_failure)
             if native_review_form_failure is not None
             else None
         ),
@@ -2314,17 +2391,35 @@ def classify_agent_failure(
                 native_review_form_failure
             )
         ),
+        native_implementer_rejection=(
+            native_implementer_form_failure.code
+            if native_implementer_form_failure is not None
+            else None
+        ),
+        native_implementer_rejection_detail=(
+            _bounded_native_response_rejection_detail(
+                native_implementer_form_failure
+            )
+            if native_implementer_form_failure is not None
+            else None
+        ),
+        native_implementer_response_retryable=(
+            native_implementer_form_failure is not None
+            and is_retryable_native_implementer_response_error(
+                native_implementer_form_failure
+            )
+        ),
     )
 
 
-def _bounded_native_review_rejection_detail(
-    error: NativeReviewContractError,
+def _bounded_native_response_rejection_detail(
+    error: NativeReviewContractError | NativeImplementerContractError,
 ) -> str:
     """Keep local validator feedback single-line and safe for logs/requests."""
 
     detail = " ".join(error.detail.replace("\x00", " ").split())
     if not detail:
-        detail = error.operator_detail or error.code.value
+        detail = getattr(error, "operator_detail", None) or error.code.value
     return detail[:1200]
 
 

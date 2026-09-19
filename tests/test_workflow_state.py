@@ -10,6 +10,7 @@ from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import FamilyBindingPayload, technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     WorkflowChanges,
     WorkflowContext,
@@ -701,6 +702,38 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     assert resumed.current_step is WorkflowStep.CODEX_PLAN
     assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
     assert resumed.current_work_unit.invocation_failures == (failure,)
+
+
+def test_native_codex_retry_feedback_roundtrips_in_state() -> None:
+    diagnostic = OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID.text
+    failure = InvocationFailureRecord(
+        invocation_id="inv-codex-form-1",
+        idempotency_key="run-1:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.OUTPUT,
+        provider_text="native Codex result violates its bound contract",
+        received_at="2026-09-19T20:24:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
+        resume_at_utc="2026-09-19T20:24:02+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        orchestrator_diagnostic=diagnostic,
+        native_implementer_rejection="slice-plan-invalid",
+        native_implementer_retry_round=2,
+    )
+
+    waiting = make_state().record_invocation_failure(
+        failure, wait_automatically=True
+    )
+    loaded = WorkflowState.from_dict(waiting.to_dict())
+
+    assert loaded.current_work_unit.invocation_failures == (failure,)
+    assert loaded.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
 
 
 def test_nonautomatic_quota_failure_completes_as_terminal_verdict() -> None:

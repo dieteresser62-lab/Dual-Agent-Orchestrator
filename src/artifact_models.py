@@ -2848,6 +2848,17 @@ _NATIVE_REVIEW_RESPONSE_REJECTION_CODES = {
     "approval-invalid",
     "dormant-finding-decision-field",
 }
+_NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES = {
+    "schema-invalid",
+    "request-mismatch",
+    "result-kind-mismatch",
+    "result-content-invalid",
+    "finding-reference-invalid",
+    "test-files-invalid",
+    "slice-plan-invalid",
+    "stop-content-invalid",
+    "dormant-finding-decision-field",
+}
 _PROVIDER_TEXT_MARKER_RE = re.compile(
     r"^\[provider text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"
 )
@@ -2924,17 +2935,36 @@ class InvocationFailurePayload:
     orchestrator_diagnostic: str | None = None
     native_review_rejection: str | None = None
     native_review_retry_round: int | None = None
+    native_implementer_rejection: str | None = None
+    native_implementer_retry_round: int | None = None
     status: ClassVar[str] = "classified"
     record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
 
     @property
+    def native_response_feedback_document(self) -> dict[str, object]:
+        document: dict[str, object] = {}
+        if (
+            self.orchestrator_diagnostic is not None
+            and self.native_implementer_rejection is not None
+        ):
+            document["orchestrator_diagnostic"] = self.orchestrator_diagnostic
+        if self.native_review_rejection is not None:
+            document.update(
+                native_review_rejection=self.native_review_rejection,
+                native_review_retry_round=self.native_review_retry_round,
+            )
+        if self.native_implementer_rejection is not None:
+            document.update(
+                native_implementer_rejection=self.native_implementer_rejection,
+                native_implementer_retry_round=self.native_implementer_retry_round,
+            )
+        return document
+
+    @property
     def native_review_feedback_document(self) -> dict[str, object]:
-        if self.native_review_rejection is None:
-            return {}
-        return {
-            "native_review_rejection": self.native_review_rejection,
-            "native_review_retry_round": self.native_review_retry_round,
-        }
+        """Compatibility alias for callers predating implementer feedback."""
+
+        return self.native_response_feedback_document
 
     def __post_init__(self) -> None:
         _require_identifier(self.invocation_id, "invocation failure invocation_id")
@@ -2994,7 +3024,7 @@ class InvocationFailurePayload:
             raise ArtifactValidationError(
                 "invocation failure orchestrator diagnostic is not allowlisted"
             )
-        _validate_native_review_failure_feedback(self)
+        _validate_native_response_failure_feedback(self)
         for value, label in (
             (self.received_at, "invocation failure received_at"),
             (self.decision_at_utc, "invocation failure decision_at_utc"),
@@ -3085,8 +3115,16 @@ class InvocationFailurePayload:
             and self.step.startswith(f"{self.role.value}_")
             and self.step.endswith("_review")
         )
+        automatic_implementer_form = (
+            self.failure_kind == "output"
+            and self.role is Role.CODEX  # allowlist:provider -- implementer role
+            and self.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+            and self.step.startswith(f"{self.role.value}_")
+        )
         automatic_transient = self.automatic_resume and (
-            self.failure_kind in {"network", "timeout"} or automatic_review_form
+            self.failure_kind in {"network", "timeout"}
+            or automatic_review_form
+            or automatic_implementer_form
         )
         if automatic_transient:
             if self.resume_at_utc is None or self.retry_delay_seconds < 1:
@@ -3110,9 +3148,13 @@ class InvocationFailurePayload:
                 "unscheduled invocation failure carries retry timing"
             )
         if self.automatic_resume:
-            if self.failure_kind not in {"quota", "network", "timeout"} and not automatic_review_form:
+            if (
+                self.failure_kind not in {"quota", "network", "timeout"}
+                and not automatic_review_form
+                and not automatic_implementer_form
+            ):
                 raise ArtifactValidationError(
-                    "automatic resume is limited to quota, network, timeout, and native review form failures"
+                    "automatic resume is limited to quota, network, timeout, and native response form failures"
                 )
             if self.resume_at_utc is None or self.auto_resume_count < 1:
                 raise ArtifactValidationError(
@@ -3120,7 +3162,7 @@ class InvocationFailurePayload:
                 )
 
 
-def _validate_native_review_failure_feedback(
+def _validate_native_response_failure_feedback(
     payload: InvocationFailurePayload,
 ) -> None:
     if payload.native_review_rejection is not None:
@@ -3148,6 +3190,49 @@ def _validate_native_review_failure_feedback(
         _require_positive(
             payload.native_review_retry_round,
             "invocation failure native review retry round",
+        )
+    if payload.native_implementer_rejection is not None:
+        if (
+            payload.native_implementer_rejection
+            not in _NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES
+        ):
+            raise ArtifactValidationError(
+                "invocation failure native implementer rejection is invalid"
+            )
+        if not (
+            payload.role is Role.CODEX  # allowlist:provider -- implementer role
+            and payload.failure_kind == "output"
+            and payload.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+            and payload.step.startswith(f"{payload.role.value}_")
+        ):
+            raise ArtifactValidationError(
+                "native implementer rejection requires an implementer output failure"
+            )
+        if payload.orchestrator_diagnostic is None or not (
+            payload.orchestrator_diagnostic.startswith(
+                f"{payload.native_implementer_rejection}: "
+            )
+        ):
+            raise ArtifactValidationError(
+                "native implementer rejection requires matching closed guidance"
+            )
+    if (payload.native_implementer_rejection is None) != (
+        payload.native_implementer_retry_round is None
+    ):
+        raise ArtifactValidationError(
+            "native implementer rejection and retry round must be bound together"
+        )
+    if payload.native_implementer_retry_round is not None:
+        _require_positive(
+            payload.native_implementer_retry_round,
+            "invocation failure native implementer retry round",
+        )
+    if (
+        payload.native_review_rejection is not None
+        and payload.native_implementer_rejection is not None
+    ):
+        raise ArtifactValidationError(
+            "invocation failure cannot contain two native rejection roles"
         )
 
 
@@ -3371,6 +3456,12 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     ):
         raw.pop("native_review_rejection", None)
         raw.pop("native_review_retry_round", None)
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.native_implementer_rejection is None
+    ):
+        raw.pop("native_implementer_rejection", None)
+        raw.pop("native_implementer_retry_round", None)
     if isinstance(payload, GateDecisionPayload) and payload.invocation_id is None:
         raw.pop("invocation_id", None)
     return _json_value(raw)
@@ -4106,6 +4197,8 @@ _PAYLOAD_READERS: dict[
             data.get("orchestrator_diagnostic"),
             data.get("native_review_rejection"),
             data.get("native_review_retry_round"),
+            data.get("native_implementer_rejection"),
+            data.get("native_implementer_retry_round"),
         ),
     RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
         Role(data["role"]), data["repository_fingerprint"], data["retry_at"],

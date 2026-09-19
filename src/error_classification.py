@@ -38,6 +38,8 @@ from final_review_preflight import FinalReviewPreflightDenied
 from git_service import GitTransactionError
 from native_codex_contract import (  # allowlist:provider -- typed module boundary
     NativeCodexContractError as NativeImplementerContractError,  # allowlist:provider
+    find_native_implementer_contract_error,
+    is_retryable_native_codex_response_error as is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
 )
 from native_codex_request import (  # allowlist:provider -- typed module boundary
     NativeCodexRequestError as NativeImplementerRequestError,  # allowlist:provider
@@ -221,6 +223,21 @@ def classify_exception(error: BaseException) -> ClassifiedFailure:
             exception_type=type(native_review_rejection).__name__,
             detail=f"{type(error).__name__}: {error}",
             cause_depth=chain.index(native_review_rejection),
+            explicitly_mapped=True,
+        )
+    native_implementer_rejection = find_native_implementer_contract_error(error)
+    if (
+        native_implementer_rejection is not None
+        and is_retryable_native_implementer_response_error(
+            native_implementer_rejection
+        )
+    ):
+        return ClassifiedFailure(
+            failure_class=_TRANSIENT,
+            diagnostic_code="NATIVE-IMPLEMENTER-FORM",
+            exception_type=type(native_implementer_rejection).__name__,
+            detail=f"{type(error).__name__}: {error}",
+            cause_depth=chain.index(native_implementer_rejection),
             explicitly_mapped=True,
         )
 

@@ -3210,6 +3210,12 @@ class WorkflowEngine:
                 disposition_limit_failure = (
                     find_native_review_disposition_limit_error(error)
                 )
+                native_response_retry_allowed = not (
+                    error.native_implementer_response_retryable
+                    and self._native_implementer_retry_crosses_scope(
+                        state, context
+                    )
+                )
                 state, failure = self._persist_invocation_failure(
                     state,
                     history,
@@ -3217,6 +3223,7 @@ class WorkflowEngine:
                     role,
                     error,
                     disposition_limit_failure is not None,
+                    native_response_retry_allowed,
                 )
                 if not failure.automatic_resume:
                     if (
@@ -3282,15 +3289,25 @@ class WorkflowEngine:
                     state = state.start_recomposed_request_round()
                     self.driver.checkpoint(state, history)
                     return state, None
-                if failure.native_review_rejection is not None:
+                native_rejection = (
+                    failure.native_review_rejection
+                    or failure.native_implementer_rejection
+                )
+                if native_rejection is not None:
+                    role_label = (
+                        "review"
+                        if failure.native_review_rejection is not None
+                        else "implementer"
+                    )
                     logger.warning(
-                        "Rejected native review response; recomposing the retry "
+                        "Rejected native %s response; recomposing the retry "
                         "request with corrective feedback: work_unit=%s "
                         "round=%s->%s rejection=%s",
+                        role_label,
                         state.current_work_unit_id,
                         state.current_work_unit.round_number,
                         state.current_work_unit.round_number + 1,
-                        failure.native_review_rejection,
+                        native_rejection,
                     )
                     state = state.start_recomposed_request_round()
                     self.driver.checkpoint(state, history)
@@ -3304,6 +3321,7 @@ class WorkflowEngine:
         role: AgentRole,
         error: AgentInvocationError,
         disposition_limit_failure: bool = False,
+        native_response_retry_allowed: bool = True,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
         return self._failure_recording.persist_invocation_failure(
             state,
@@ -3312,7 +3330,36 @@ class WorkflowEngine:
             role,
             error,
             disposition_limit_failure,
+            native_response_retry_allowed,
         )
+
+    def _native_implementer_retry_crosses_scope(
+        self, state: WorkflowState, context: WorkflowContext
+    ) -> bool:
+        """Fail closed when an invalid response also left out-of-scope work."""
+
+        start_commit = self._change_start_commit(state)
+        if start_commit is None:
+            return True
+        try:
+            changes = self.driver.collect_changes(start_commit)
+            unexpected = self._validate_change_boundary(
+                state,
+                changes,
+                state.current_work_unit.kind,
+                context=context,
+            )
+        except Exception:
+            return True
+        if unexpected:
+            logger.warning(
+                "Native implementer response retry suppressed by out-of-scope "
+                "work: work_unit=%s paths=%s",
+                state.current_work_unit_id,
+                ",".join(unexpected),
+            )
+            return True
+        return False
 
     def _current_invocation_fingerprint(
         self, state: WorkflowState

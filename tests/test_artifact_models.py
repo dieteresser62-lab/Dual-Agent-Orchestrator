@@ -458,7 +458,7 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
             validate_artifact_document(legacy_document)
 
 
-def test_automatic_output_retry_is_limited_to_native_claude_review_form() -> None:
+def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> None:
     marker, digest, byte_count = technical_text_evidence("schema-invalid")
     payload = InvocationFailurePayload(
         invocation_id="native-review-form-output",
@@ -496,6 +496,27 @@ def test_automatic_output_retry_is_limited_to_native_claude_review_form() -> Non
         replace(payload, diagnostic_code="AGENT-OUTPUT")
     with pytest.raises(ArtifactValidationError):
         replace(payload, role=Role.CODEX, step="codex_implementation")
+
+    codex_diagnostic = OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID.text
+    codex = replace(
+        payload,
+        invocation_id="native-codex-form-output",
+        idempotency_key="run-01:work-01:codex_implementation:codex",
+        role=Role.CODEX,
+        diagnostic_code="NATIVE-IMPLEMENTER-FORM",
+        step="codex_implementation",
+        orchestrator_diagnostic=codex_diagnostic,
+        native_review_rejection=None,
+        native_review_retry_round=None,
+        native_implementer_rejection="result-content-invalid",
+        native_implementer_retry_round=2,
+    )
+
+    document = json.loads(_record(codex).canonical_json())
+    assert document["payload"]["native_implementer_rejection"] == (
+        "result-content-invalid"
+    )
+    assert ArtifactRecord.from_dict(document).payload == codex
 
 
 def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> None:

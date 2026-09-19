@@ -156,6 +156,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert declarations == {
+        "_native_implementer_retry_feedback",
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
         "_review_request_finding_inputs",

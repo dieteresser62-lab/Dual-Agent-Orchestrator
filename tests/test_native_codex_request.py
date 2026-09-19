@@ -20,6 +20,7 @@ import native_codex_contract
 import plan_handoff
 from native_codex_contract import (
     NativeCodexContext,
+    NativeCodexErrorCode,
     NativeCodexRequestKind,
     load_native_codex_schema,
 )
@@ -28,6 +29,7 @@ from native_codex_request import (
     NativeCodexEvidenceInput,
     NativeCodexRequestError,
     NativeCodexRequestSpec,
+    NativeImplementerRetryFeedback,
     build_native_codex_request,
     load_native_codex_request_schema,
     validate_native_codex_request_document,
@@ -86,6 +88,39 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     assert json.loads(first.provider_response_schema_json) == (
         first.provider_response_schema
     )
+
+
+def test_retry_feedback_is_typed_and_changes_codex_request_identity() -> None:
+    initial = build_native_codex_request(_spec())
+    feedback = NativeImplementerRetryFeedback(
+        prior_invocation_id="codex-attempt-1",
+        rejection_code=NativeCodexErrorCode.SLICE_PLAN_INVALID,
+        correction_instruction=(
+            "slice-plan-invalid: plan treatment is invalid: implementation "
+            "treatment forbids No-Code disposition fields"
+        ),
+    )
+
+    retried = build_native_codex_request(
+        replace(_spec(), retry_feedback=feedback)
+    )
+
+    assert "retry_feedback" not in initial.document
+    assert retried.document["retry_feedback"] == {
+        "prior_invocation_id": "codex-attempt-1",
+        "rejection_code": "slice-plan-invalid",
+        "correction_instruction": feedback.correction_instruction,
+    }
+    assert retried.bound_context.request_id != initial.bound_context.request_id
+
+
+def test_context_invalid_cannot_be_bound_as_codex_retry_feedback() -> None:
+    with pytest.raises(NativeCodexRequestError, match="response-dependent"):
+        NativeImplementerRetryFeedback(
+            prior_invocation_id="codex-attempt-1",
+            rejection_code=NativeCodexErrorCode.CONTEXT_INVALID,
+            correction_instruction="Do not retry a local context error.",
+        )
 
 
 def test_plan_artifact_format_contract_is_the_parser_derived_contract() -> None:

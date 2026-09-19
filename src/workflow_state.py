@@ -21,6 +21,7 @@ from finding_responsibility import (
     responsibility_document,
 )
 import native_finding_decisions
+from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
 
 
 STATE_VERSION = 3
@@ -143,6 +144,19 @@ NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
         "dormant-finding-decision-field",
     }
 )
+NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES = frozenset(
+    {
+        "schema-invalid",
+        "request-mismatch",
+        "result-kind-mismatch",
+        "result-content-invalid",
+        "finding-reference-invalid",
+        "test-files-invalid",
+        "slice-plan-invalid",
+        "stop-content-invalid",
+        "dormant-finding-decision-field",
+    }
+)
 
 
 def is_native_review_output_retry(
@@ -155,6 +169,26 @@ def is_native_review_output_retry(
         and step.value.startswith(f"{role}_")
         and step.value.endswith("_review")
     )
+
+
+def is_native_implementer_output_retry(
+    failure_kind: AgentFailureKind, role: str, step: WorkflowStep
+) -> bool:
+    """Whether state-v3 can represent the typed native-implementer retry path."""
+    return (
+        failure_kind is AgentFailureKind.OUTPUT
+        and role == "codex"
+        and step.value.startswith("codex_")
+    )
+
+
+def is_native_response_output_retry(
+    failure_kind: AgentFailureKind, role: str, step: WorkflowStep
+) -> bool:
+    """Whether state-v3 can represent either native response retry path."""
+    return is_native_review_output_retry(
+        failure_kind, role, step
+    ) or is_native_implementer_output_retry(failure_kind, role, step)
 
 
 class ProtocolMode(str, Enum):
@@ -325,8 +359,11 @@ class InvocationFailureRecord:
     auto_resume_count: int = 0
     automatic_resume: bool = False
     diff_fingerprint: str | None = None
+    orchestrator_diagnostic: str | None = None
     native_review_rejection: str | None = None
     native_review_retry_round: int | None = None
+    native_implementer_rejection: str | None = None
+    native_implementer_retry_round: int | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -389,7 +426,7 @@ class InvocationFailureRecord:
             raise WorkflowStateValidationError(
                 "automatic resume requires a resume timestamp"
             )
-        automatic_review_output = is_native_review_output_retry(
+        automatic_native_output = is_native_response_output_retry(
             self.failure_kind, self.role, self.step
         )
         if (
@@ -399,10 +436,10 @@ class InvocationFailureRecord:
                 AgentFailureKind.NETWORK,
                 AgentFailureKind.TIMEOUT,
             }
-            and not automatic_review_output
+            and not automatic_native_output
         ):
             raise WorkflowStateValidationError(
-                "automatic resume is limited to quota, network, and native review form failures"
+                "automatic resume is limited to quota, network, and native response form failures"
             )
         if self.failure_kind is AgentFailureKind.QUOTA and self.automatic_resume and not has_reset:
             raise WorkflowStateValidationError(
@@ -421,6 +458,13 @@ class InvocationFailureRecord:
             raise WorkflowStateValidationError(
                 "invocation failure diff fingerprint must be a lowercase SHA-256 digest"
             )
+        if (
+            self.orchestrator_diagnostic is not None
+            and self.orchestrator_diagnostic not in ORCHESTRATOR_DIAGNOSTIC_TEXTS
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure orchestrator diagnostic is not allowlisted"
+            )
         if self.native_review_rejection is not None:
             if self.native_review_rejection not in NATIVE_REVIEW_RESPONSE_REJECTION_CODES:
                 raise WorkflowStateValidationError(
@@ -432,6 +476,35 @@ class InvocationFailureRecord:
                 raise WorkflowStateValidationError(
                     "native review rejection requires a reviewer output failure"
                 )
+        if self.native_implementer_rejection is not None:
+            if (
+                self.native_implementer_rejection
+                not in NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES
+            ):
+                raise WorkflowStateValidationError(
+                    "invocation failure native implementer rejection is invalid"
+                )
+            if not is_native_implementer_output_retry(
+                self.failure_kind, self.role, self.step
+            ):
+                raise WorkflowStateValidationError(
+                    "native implementer rejection requires an output failure"
+                )
+            if self.orchestrator_diagnostic is None or not (
+                self.orchestrator_diagnostic.startswith(
+                    f"{self.native_implementer_rejection}: "
+                )
+            ):
+                raise WorkflowStateValidationError(
+                    "native implementer rejection requires matching closed guidance"
+                )
+        if (
+            self.native_review_rejection is not None
+            and self.native_implementer_rejection is not None
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure cannot contain two native rejection roles"
+            )
         if (self.native_review_rejection is None) != (
             self.native_review_retry_round is None
         ):
@@ -442,6 +515,17 @@ class InvocationFailureRecord:
             _require_positive_int(
                 self.native_review_retry_round,
                 "invocation failure native review retry round",
+            )
+        if (self.native_implementer_rejection is None) != (
+            self.native_implementer_retry_round is None
+        ):
+            raise WorkflowStateValidationError(
+                "native implementer rejection and retry round must be bound together"
+            )
+        if self.native_implementer_retry_round is not None:
+            _require_positive_int(
+                self.native_implementer_retry_round,
+                "invocation failure native implementer retry round",
             )
 
     def to_dict(self) -> dict[str, object]:
@@ -467,9 +551,18 @@ class InvocationFailureRecord:
             "automatic_resume": self.automatic_resume,
             "diff_fingerprint": self.diff_fingerprint,
         }
+        if self.orchestrator_diagnostic is not None:
+            document["orchestrator_diagnostic"] = self.orchestrator_diagnostic
         if self.native_review_rejection is not None:
             document["native_review_rejection"] = self.native_review_rejection
             document["native_review_retry_round"] = self.native_review_retry_round
+        if self.native_implementer_rejection is not None:
+            document["native_implementer_rejection"] = (
+                self.native_implementer_rejection
+            )
+            document["native_implementer_retry_round"] = (
+                self.native_implementer_retry_round
+            )
         return document
 
     @classmethod
@@ -483,12 +576,16 @@ class InvocationFailureRecord:
                 "safety_margin_seconds", "auto_resume_count", "automatic_resume",
                 "diff_fingerprint",
         }
-        feedback_keys = {
-            *required_keys,
+        optional_keys = {
+            "orchestrator_diagnostic",
             "native_review_rejection",
             "native_review_retry_round",
+            "native_implementer_rejection",
+            "native_implementer_retry_round",
         }
-        if set(raw) not in {frozenset(required_keys), frozenset(feedback_keys)}:
+        if not required_keys.issubset(raw) or not set(raw).issubset(
+            required_keys | optional_keys
+        ):
             _require_exact_keys(raw, required_keys, "invocation failure")
         if not isinstance(raw["automatic_resume"], bool):
             raise WorkflowStateValidationError(
@@ -515,6 +612,10 @@ class InvocationFailureRecord:
             auto_resume_count=_non_negative_int(raw["auto_resume_count"], "invocation failure auto-resume count"),
             automatic_resume=raw["automatic_resume"],
             diff_fingerprint=_optional_string(raw["diff_fingerprint"], "invocation failure diff fingerprint"),
+            orchestrator_diagnostic=_optional_string(
+                raw.get("orchestrator_diagnostic"),
+                "invocation failure orchestrator diagnostic",
+            ),
             native_review_rejection=_optional_string(
                 raw.get("native_review_rejection"),
                 "invocation failure native review rejection",
@@ -525,6 +626,18 @@ class InvocationFailureRecord:
                 else _positive_int(
                     raw["native_review_retry_round"],
                     "invocation failure native review retry round",
+                )
+            ),
+            native_implementer_rejection=_optional_string(
+                raw.get("native_implementer_rejection"),
+                "invocation failure native implementer rejection",
+            ),
+            native_implementer_retry_round=(
+                None
+                if raw.get("native_implementer_retry_round") is None
+                else _positive_int(
+                    raw["native_implementer_retry_round"],
+                    "invocation failure native implementer retry round",
                 )
             ),
         )
@@ -2303,7 +2416,7 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "invocation wait mode differs from persisted failure evidence"
             )
-        automatic_review_output = is_native_review_output_retry(
+        automatic_native_output = is_native_response_output_retry(
             failure.failure_kind, failure.role, failure.step
         )
         if (
@@ -2313,10 +2426,10 @@ class WorkflowState:
                 AgentFailureKind.NETWORK,
                 AgentFailureKind.TIMEOUT,
             }
-            and not automatic_review_output
+            and not automatic_native_output
         ):
             raise WorkflowStateValidationError(
-                "only quota, network, timeout, and native review form failures may wait automatically"
+                "only quota, network, timeout, and native response form failures may wait automatically"
             )
         automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
         automatic_transient = wait_automatically and failure.failure_kind in {

@@ -65,6 +65,44 @@
         },
         { "type": "null" }
       ]
+    },
+    "retry_feedback": {
+      "type": ["object", "null"],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "prior_invocation_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"
+            },
+            "rejection_code": {
+              "enum": [
+                "schema-invalid",
+                "request-mismatch",
+                "result-kind-mismatch",
+                "result-content-invalid",
+                "finding-reference-invalid",
+                "test-files-invalid",
+                "slice-plan-invalid",
+                "stop-content-invalid",
+                "dormant-finding-decision-field"
+              ]
+            },
+            "correction_instruction": {
+              "type": "string",
+              "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$"
+            }
+          },
+          "required": [
+            "prior_invocation_id",
+            "rejection_code",
+            "correction_instruction"
+          ],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
     }
   },
   "properties": {
@@ -93,6 +131,7 @@
     },
     "assignment": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,120000}$" },
     "work_context": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,1000000}$" },
+    "retry_feedback": { "$ref": "#/$defs/retry_feedback" },
     "codex_contract": {
       "type": "object",
       "properties": {

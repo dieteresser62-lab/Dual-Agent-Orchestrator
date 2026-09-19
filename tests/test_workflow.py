@@ -1425,6 +1425,35 @@ def _native_review_contract_failure(
     return failure
 
 
+def _native_codex_contract_failure(
+    code: NativeCodexErrorCode,
+    invocation_id: str,
+    *,
+    received_at: datetime,
+    detail: str = "provider-authored implementer result rejected",
+    diagnostic: OrchestratorDiagnostic | None = None,
+) -> AgentInvocationError:
+    contract_error = NativeCodexContractError(
+        code,
+        detail,
+        orchestrator_diagnostic=diagnostic,
+    )
+    output_error = AgentOutputError(
+        "native Codex result violates its bound contract",
+        technical_text=f"{code.value}: {contract_error.detail}",
+        orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
+    )
+    output_error.__cause__ = contract_error
+    failure = classify_agent_failure(
+        AgentRole.CODEX.value,
+        output_error,
+        invocation_id=invocation_id,
+        received_at=received_at,
+    )
+    failure.__cause__ = output_error
+    return failure
+
+
 def _native_review_limit_failure(
     actual_items: int,
     maximum_items: int,
@@ -1636,7 +1665,9 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     )
 
     payload = driver.failure_payloads[0]
-    assert payload.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
+    assert payload.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+    assert payload.automatic_resume is True
+    assert payload.native_implementer_rejection == "slice-plan-invalid"
     assert payload.orchestrator_diagnostic == diagnostic.text
     assert persisted.current_work_unit.invocation_failures == (failure,)
     assert injected_provider_text not in payload.provider_text
@@ -1644,7 +1675,7 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     assert injected_provider_text not in caplog.text
     assert payload.provider_text.startswith("[provider text redacted; sha256=")
     assert payload.technical_text.startswith("[technical text redacted; sha256=")
-    assert "diagnostic_code=NATIVE-IMPLEMENTER-CONTRACT" in caplog.text
+    assert "diagnostic_code=NATIVE-IMPLEMENTER-FORM" in caplog.text
     assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
 
 
@@ -4554,6 +4585,184 @@ def test_codex_timeout_retry_limit_reports_exhausted_attempts(caplog) -> None:
     ]
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert "attempts_exhausted=3" in caplog.text
+
+
+def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
+    caplog,
+) -> None:
+    now = [datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)]
+    diagnostic = (
+        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
+    )
+    changes = _changes("1", "docs/internal/plan.md")
+    state = init_workflow_state(
+        run_id="run-codex-form-retry",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        first_slice_start_commit=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-09-19T20:24:00+00:00",
+        task_digest="d" * 64,
+        task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/workflow",
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_not_ready(plan=True)],
+        reviewer_outputs=[],
+        codex_failures=[
+            _native_codex_contract_failure(
+                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+                "codex-slice-plan-invalid-1",
+                received_at=now[0],
+                detail=(
+                    "plan treatment is invalid: implementation treatment "
+                    "forbids No-Code disposition fields"
+                ),
+                diagnostic=diagnostic,
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        state,
+        replace(
+            _context(),
+            task_scope_patterns=("docs/internal/plan.md",),
+        ),
+    )
+
+    assert len(driver.codex_calls) == 2
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    failure = driver.failure_payloads[0]
+    assert failure.failure_class == "transient"
+    assert failure.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+    assert failure.automatic_resume is True
+    assert failure.native_implementer_rejection == "slice-plan-invalid"
+    first = driver.codex_calls[0].native_request
+    second = driver.codex_calls[1].native_request
+    assert first is not None and second is not None
+    assert "retry_feedback" not in first.document
+    assert second.document["retry_feedback"] == {
+        "prior_invocation_id": "codex-slice-plan-invalid-1",
+        "rejection_code": "slice-plan-invalid",
+        "correction_instruction": diagnostic.text,
+    }
+    assert "implementation treatment forbids No-Code disposition fields" in (
+        second.document["retry_feedback"]["correction_instruction"]
+    )
+    assert first.bound_context.request_id != second.bound_context.request_id
+    assert "retry=scheduled" in caplog.text
+
+
+def test_codex_context_rejection_halts_without_retry() -> None:
+    now = datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _native_codex_contract_failure(
+                NativeCodexErrorCode.CONTEXT_INVALID,
+                "codex-context-invalid",
+                received_at=now,
+            )
+        ],
+    )
+
+    result = WorkflowEngine(driver, now_fn=lambda: now).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert len(driver.codex_calls) == 1
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    failure = driver.failure_payloads[0]
+    assert failure.failure_class == "resumable_halt"
+    assert failure.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
+    assert failure.automatic_resume is False
+    assert failure.native_implementer_rejection is None
+
+
+def test_codex_form_rejection_with_scope_violation_halts_without_retry() -> None:
+    now = datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)
+    changes = _changes("1", "outside/scope.py")
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _native_codex_contract_failure(
+                NativeCodexErrorCode.SCHEMA_INVALID,
+                "codex-form-with-scope-violation",
+                received_at=now,
+            )
+        ],
+    )
+
+    result = WorkflowEngine(driver, now_fn=lambda: now).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert len(driver.codex_calls) == 1
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    failure = driver.failure_payloads[0]
+    assert failure.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
+    assert failure.failure_class == "resumable_halt"
+    assert failure.automatic_resume is False
+    assert failure.native_implementer_rejection is None
+
+
+def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() -> None:
+    now = [datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    failures = [
+        _native_codex_contract_failure(
+            NativeCodexErrorCode.RESULT_CONTENT_INVALID,
+            f"codex-content-invalid-{attempt}",
+            received_at=now[0],
+        )
+        for attempt in range(1, 4)
+    ]
+    driver = FakeDriver(
+        snapshots=[changes, changes, changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=failures,
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    context = replace(
+        _context(),
+        transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=2),
+    )
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), context)
+
+    assert not result.completed
+    assert len(driver.codex_calls) == 3
+    assert [item.automatic_resume for item in driver.failure_payloads] == [
+        True,
+        True,
+        False,
+    ]
+    assert [item.failure_class for item in driver.failure_payloads] == [
+        "transient",
+        "transient",
+        "resumable_halt",
+    ]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
 
 
 def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) -> None:

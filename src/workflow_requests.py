@@ -19,11 +19,17 @@ from contracts import (
 )
 from finding_order import sorted_finding_ids
 from finding_reducer import project_open_set
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
+from native_codex_contract import (
+    NativeCodexContext,
+    NativeCodexErrorCode as NativeImplementerErrorCode,  # allowlist:provider -- typed implementer rejection
+    NativeCodexRequestKind,
+    native_codex_retry_guidance as native_implementer_retry_guidance,  # allowlist:provider -- typed implementer guidance
+)
 from native_codex_request import (
     NativeCodexEvidenceInput,
     NativeCodexRequestBundle,
     NativeCodexRequestSpec,
+    NativeImplementerRetryFeedback,
     build_native_codex_request,
 )
 from native_review_contract import (
@@ -42,6 +48,7 @@ from native_review_request import (
     build_native_review_request,
 )
 from prompts import NATIVE_CODEX_SYSTEM_POLICY
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from provider_input_efficiency import (
     ProviderInputEfficiencyError,
     build_correction_execution_package,
@@ -246,6 +253,7 @@ def native_codex_request(
         raise execution_error(
             f"native Codex execution package is invalid: {exc}"
         ) from exc
+    retry_feedback = _native_implementer_retry_feedback(state, contract)
     return build_native_codex_request(
         NativeCodexRequestSpec(
             context=native_context,
@@ -255,7 +263,36 @@ def native_codex_request(
             assignment=request_assignment,
             work_context=effective_work_context,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
+            retry_feedback=retry_feedback,
         )
+    )
+
+
+def _native_implementer_retry_feedback(
+    state: WorkflowState, contract: ImplementerStepContract
+) -> NativeImplementerRetryFeedback | None:
+    failure = next(
+        (
+            item
+            for item in reversed(state.current_work_unit.invocation_failures)
+            if item.step is state.current_step
+            and item.native_implementer_rejection is not None
+            and item.native_implementer_retry_round == contract.round_number
+        ),
+        None,
+    )
+    if (
+        failure is None
+        or failure.native_implementer_rejection is None
+        or failure.orchestrator_diagnostic is None
+    ):
+        return None
+    code = NativeImplementerErrorCode(failure.native_implementer_rejection)
+    diagnostic = OrchestratorDiagnostic(failure.orchestrator_diagnostic)
+    return NativeImplementerRetryFeedback(
+        prior_invocation_id=failure.invocation_id,
+        rejection_code=code,
+        correction_instruction=native_implementer_retry_guidance(code, diagnostic),
     )
 
 

@@ -85,32 +85,97 @@ class NativeCodexErrorCode(StrEnum):
     DORMANT_FINDING_DECISION_FIELD = "dormant-finding-decision-field"
 
 
+NativeImplementerErrorCode = NativeCodexErrorCode  # allowlist:provider -- local role alias
+
+
 _IMPLEMENTER_DIAGNOSTIC_BY_CODE = {
-    "schema-invalid": OrchestratorDiagnostic.IMPLEMENTER_SCHEMA_INVALID,
-    "context-invalid": OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_INVALID,
-    "request-mismatch": OrchestratorDiagnostic.IMPLEMENTER_REQUEST_MISMATCH,
-    "result-kind-mismatch": (
+    NativeImplementerErrorCode.SCHEMA_INVALID: OrchestratorDiagnostic.IMPLEMENTER_SCHEMA_INVALID,
+    NativeImplementerErrorCode.CONTEXT_INVALID: OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_INVALID,
+    NativeImplementerErrorCode.REQUEST_MISMATCH: OrchestratorDiagnostic.IMPLEMENTER_REQUEST_MISMATCH,
+    NativeImplementerErrorCode.RESULT_KIND_MISMATCH: (
         OrchestratorDiagnostic.IMPLEMENTER_RESULT_KIND_MISMATCH
     ),
-    "result-content-invalid": (
+    NativeImplementerErrorCode.RESULT_CONTENT_INVALID: (
         OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID
     ),
-    "finding-reference-invalid": (
+    NativeImplementerErrorCode.FINDING_REFERENCE_INVALID: (
         OrchestratorDiagnostic.IMPLEMENTER_FINDING_REFERENCE_INVALID
     ),
-    "test-files-invalid": (
+    NativeImplementerErrorCode.TEST_FILES_INVALID: (
         OrchestratorDiagnostic.IMPLEMENTER_TEST_FILES_INVALID
     ),
-    "slice-plan-invalid": (
+    NativeImplementerErrorCode.SLICE_PLAN_INVALID: (
         OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID
     ),
-    "stop-content-invalid": (
+    NativeImplementerErrorCode.STOP_CONTENT_INVALID: (
         OrchestratorDiagnostic.IMPLEMENTER_STOP_CONTENT_INVALID
     ),
-    "dormant-finding-decision-field": (
+    NativeImplementerErrorCode.DORMANT_FINDING_DECISION_FIELD: (
         OrchestratorDiagnostic.IMPLEMENTER_DORMANT_FINDING_DECISION_FIELD
     ),
 }
+
+
+class NativeImplementerRejectionSource(StrEnum):
+    REQUEST_LEDGER = "request-ledger"
+    MODEL_RESPONSE = "model-response"
+
+
+NATIVE_CODEX_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = frozenset(  # allowlist:provider -- public contract vocabulary
+    code
+    for code in NativeImplementerErrorCode
+    if code is not NativeImplementerErrorCode.CONTEXT_INVALID
+)
+
+
+# The concrete feedback uses the more precise closed diagnostic carried by the
+# rejection.  This one-per-code map is the fail-closed fallback and, more
+# importantly, makes a newly retryable code without repository-owned guidance
+# fail at import time.
+_NATIVE_CODEX_RETRY_GUIDANCE: dict[  # allowlist:provider -- public contract vocabulary
+    NativeImplementerErrorCode, OrchestratorDiagnostic
+] = {
+    code: _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code]
+    for code in NATIVE_CODEX_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+}
+
+assert set(_NATIVE_CODEX_RETRY_GUIDANCE) == set(NATIVE_CODEX_RESPONSE_RETRY_CODES)  # allowlist:provider -- completeness invariant
+assert all(
+    diagnostic.value.startswith(f"{code.value}: ")
+    for code, diagnostic in _NATIVE_CODEX_RETRY_GUIDANCE.items()  # allowlist:provider -- completeness invariant
+)
+
+
+def is_retryable_native_codex_response_error(error: BaseException) -> bool:  # allowlist:provider -- public contract API
+    """Return whether another model response can satisfy the same implementer task."""
+
+    return (
+        isinstance(error, NativeCodexContractError)  # allowlist:provider -- public contract type
+        and error.code in NATIVE_CODEX_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+        and error.source is NativeImplementerRejectionSource.MODEL_RESPONSE
+    )
+
+
+def native_codex_retry_guidance(  # allowlist:provider -- public contract API
+    code: NativeImplementerErrorCode,
+    diagnostic: OrchestratorDiagnostic | None = None,
+) -> str:
+    """Return closed, provider-free corrective guidance for one rejection."""
+
+    try:
+        fallback = _NATIVE_CODEX_RETRY_GUIDANCE[code]  # allowlist:provider -- complete map
+    except KeyError as exc:
+        raise ValueError(
+            f"native implementer rejection {code.value} is not retryable"
+        ) from exc
+    selected = fallback if diagnostic is None else diagnostic
+    if not isinstance(selected, OrchestratorDiagnostic) or not selected.value.startswith(
+        f"{code.value}: "
+    ):
+        raise ValueError(
+            "native implementer retry diagnostic does not match its rejection code"
+        )
+    return selected.text
 
 
 class NativeCodexContractError(ValueError):
@@ -122,6 +187,7 @@ class NativeCodexContractError(ValueError):
         detail: str,
         *,
         orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+        source: NativeImplementerRejectionSource | None = None,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
@@ -132,11 +198,35 @@ class NativeCodexContractError(ValueError):
             try:
                 orchestrator_diagnostic = OrchestratorDiagnostic(rendered)
             except ValueError:
-                orchestrator_diagnostic = _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code.value]
+                orchestrator_diagnostic = _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code]
         self.code = code
         self.detail = detail
         self.orchestrator_diagnostic = orchestrator_diagnostic
+        self.source = source or (
+            NativeImplementerRejectionSource.REQUEST_LEDGER
+            if code is NativeImplementerErrorCode.CONTEXT_INVALID
+            else NativeImplementerRejectionSource.MODEL_RESPONSE
+        )
+        if not isinstance(self.source, NativeImplementerRejectionSource):
+            raise TypeError(
+                "native implementer rejection source must be a closed enum member"
+            )
         super().__init__(f"{code.value}: {detail}")
+
+
+def find_native_implementer_contract_error(
+    error: BaseException,
+) -> NativeCodexContractError | None:  # allowlist:provider -- public contract type
+    """Find a native implementer rejection through explicit cause edges."""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, NativeCodexContractError):  # allowlist:provider -- public contract type
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
 
 
 class NativeCodexRequestKind(StrEnum):
@@ -280,13 +370,16 @@ def load_native_codex_schema() -> dict[str, Any]:
         raise NativeCodexContractError(
             NativeCodexErrorCode.SCHEMA_INVALID,
             "bundled native Codex schema must be an object",
+            source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         )
     _enable_native_finding_decision_schema(schema)
     try:
         check_schema(schema, location="<native-codex-result-schema>")
     except SchemaDefinitionError as exc:
         raise NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID, str(exc)
+            NativeCodexErrorCode.SCHEMA_INVALID,
+            str(exc),
+            source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         ) from exc
     return schema
 
