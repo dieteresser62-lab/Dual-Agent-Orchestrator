@@ -265,7 +265,10 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     "slice_id": 1,
                     "summary": "Implement the bounded plan.",
                     "scope_paths": ["docs/internal/plan.md"],
-                    "acceptance_criteria": ["The bounded plan is implemented."],
+                    "acceptance_criteria": [{
+                        "text": "The bounded plan is implemented.",
+                        "measured_against": "SOURCE",
+                    }],
                 }
             ],
             "plan_treatments": [],

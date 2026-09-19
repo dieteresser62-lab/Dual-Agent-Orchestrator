@@ -325,7 +325,10 @@ def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
                 "summary": "Implement the provider-free follow-up.",
                 "scope_paths": ["docs/internal/work-plan.md"],
                 "acceptance_criteria": [
-                    "The provider-free follow-up remains reproducible."
+                    {
+                        "text": "The provider-free follow-up remains reproducible.",
+                        "measured_against": "SOURCE",
+                    }
                 ],
             }
         ],

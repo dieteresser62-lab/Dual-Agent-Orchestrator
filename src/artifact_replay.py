@@ -3635,7 +3635,11 @@ def _slice_acceptance_projection(spec: SliceSpec) -> dict[str, object]:
         return {}
     return {
         "acceptance_criteria": tuple(
-            {"criterion_id": item.criterion_id, "text": item.text}
+            {
+                "criterion_id": item.criterion_id,
+                "text": item.text,
+                "measured_against": item.measured_against.value,
+            }
             for item in spec.acceptance_criteria
         )
     }

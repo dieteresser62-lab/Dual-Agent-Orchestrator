@@ -202,7 +202,10 @@ def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
             "slice_id": 1,
             "summary": "Plan",
             "scope_paths": ["docs/internal/plan.md"],
-            "acceptance_criteria": ["The reviewed plan artifact is complete."],
+            "acceptance_criteria": [{
+                "text": "The reviewed plan artifact is complete.",
+                "measured_against": "SOURCE",
+            }],
         }],
         "finding_dispositions": [],
         "plan_treatments": [],

@@ -522,7 +522,10 @@ def _native_plan_output(
                 "slice_id": 1,
                 "summary": summary,
                 "scope_paths": list(scope_paths),
-                "acceptance_criteria": [summary],
+                "acceptance_criteria": [{
+                    "text": summary,
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "plan_treatments": [],
@@ -4644,7 +4647,10 @@ def test_native_codex_plan_and_correction_recovery_are_raw_and_record_ahead_safe
                 "slice_id": 1,
                 "summary": "Implement the bound plan.",
                 "scope_paths": ["src/runtime.py"],
-                "acceptance_criteria": ["Implement the bound plan."],
+                "acceptance_criteria": [{
+                    "text": "Implement the bound plan.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ]
         document["plan_treatments"] = []

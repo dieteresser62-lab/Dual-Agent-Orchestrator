@@ -71,13 +71,19 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                        "slice_id": 1,
                                        "summary": "Execute the first native Slice.",
                                        "scope_paths": ["src/first.py"],
-                                       "acceptance_criteria": ["The first Slice is complete."],
+                                       "acceptance_criteria": [{
+                                           "text": "The first Slice is complete.",
+                                           "measured_against": "SOURCE",
+                                       }],
                                    },
                                    {
                                        "slice_id": 2,
                                        "summary": "Execute the second native Slice.",
                                        "scope_paths": ["src/second.py"],
-                                       "acceptance_criteria": ["The second Slice is complete."],
+                                       "acceptance_criteria": [{
+                                           "text": "The second Slice is complete.",
+                                           "measured_against": "SOURCE",
+                                       }],
                                    },
                                ], plan_treatments=[],
                                plan_completion="IMPLEMENTATION_REQUIRED")),

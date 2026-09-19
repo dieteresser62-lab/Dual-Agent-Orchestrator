@@ -26,6 +26,7 @@ from gates import matches_path_patterns, normalize_path_patterns
 
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 300
 VALIDATION_OUTPUT_LIMIT = 2_000
+ARTIFACT_CHECK_COMMAND = "internal:artifact-delivery"
 # A failed first run starts a bounded flake probe.  The run count is derived
 # from measured matrix time, while this budget caps the ordinary extra cost and
 # the sample cap prevents near-zero-duration commands from running unboundedly.
@@ -56,6 +57,8 @@ def _simple_shell_argv(command: str) -> tuple[str, ...] | None:
 def _canonical_argv(command: "ValidationCommand") -> tuple[str, ...] | None:
     if command.argv:
         return command.argv
+    if command.artifact_pattern is not None:
+        return (ARTIFACT_CHECK_COMMAND, command.artifact_pattern)
     assert command.shell_command is not None
     return _simple_shell_argv(command.shell_command)
 
@@ -98,14 +101,17 @@ class ValidationMatrixError(ValueError):
 class ValidationCommand:
     argv: tuple[str, ...] = ()
     shell_command: str | None = None
+    artifact_pattern: str | None = None
     timeout_seconds: int = DEFAULT_VALIDATION_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         has_argv = bool(self.argv)
         has_shell = self.shell_command is not None
-        if has_argv == has_shell:
+        has_artifact = self.artifact_pattern is not None
+        if sum((has_argv, has_shell, has_artifact)) != 1:
             raise ValidationMatrixError(
-                "validation command requires exactly one of argv or shell_command"
+                "validation command requires exactly one of argv, shell_command, "
+                "or artifact_pattern"
             )
         if has_argv and any(
             not isinstance(part, str)
@@ -115,6 +121,10 @@ class ValidationCommand:
         ):
             raise ValidationMatrixError(
                 "validation argv entries must be non-empty strings without NUL bytes"
+            )
+        if has_argv and self.argv[0] == ARTIFACT_CHECK_COMMAND:
+            raise ValidationMatrixError(
+                "validation argv must not use the reserved artifact-check command"
             )
         if has_shell and (
             not isinstance(self.shell_command, str)
@@ -127,6 +137,17 @@ class ValidationCommand:
             raise ValidationMatrixError(
                 "validation shell command must be non-empty and contain no NUL bytes"
             )
+        if has_artifact:
+            try:
+                normalized = normalize_path_patterns(
+                    (self.artifact_pattern,), "required artifact"
+                )
+            except ValueError as exc:
+                raise ValidationMatrixError(str(exc)) from exc
+            if normalized != (self.artifact_pattern,):
+                raise ValidationMatrixError(
+                    "required artifact pattern must be canonical"
+                )
         if (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, int)
@@ -140,6 +161,8 @@ class ValidationCommand:
     def display(self) -> str:
         if self.argv:
             return shlex.join(self.argv)
+        if self.artifact_pattern is not None:
+            return shlex.join((ARTIFACT_CHECK_COMMAND, self.artifact_pattern))
         assert self.shell_command is not None
         return f"shell: {self.shell_command.strip()}"
 
@@ -147,6 +170,10 @@ class ValidationCommand:
     def command_spec(self) -> ValidationCommandSpec:
         if self.argv:
             return ValidationCommandSpec(argv=self.argv)
+        if self.artifact_pattern is not None:
+            return ValidationCommandSpec(
+                argv=(ARTIFACT_CHECK_COMMAND, self.artifact_pattern)
+            )
         assert self.shell_command is not None
         # The display prefix is presentation only; the persisted legacy value
         # stays opaque and is never reconstructed with shlex.
@@ -177,12 +204,25 @@ class ValidationRule:
 class ValidationMatrix:
     default_command: ValidationCommand | None = None
     rules: tuple[ValidationRule, ...] = ()
+    required_artifacts: tuple[str, ...] = ()
+    product_command: ValidationCommand | None = None
 
     def __post_init__(self) -> None:
+        try:
+            normalized_artifacts = normalize_path_patterns(
+                self.required_artifacts, "required artifact"
+            )
+        except ValueError as exc:
+            raise ValidationMatrixError(str(exc)) from exc
+        if normalized_artifacts != self.required_artifacts:
+            raise ValidationMatrixError(
+                "required artifact patterns must be canonical and unique"
+            )
         by_display: dict[str, ValidationCommand] = {}
         commands = (
             *((self.default_command,) if self.default_command is not None else ()),
             *(rule.command for rule in self.rules),
+            *((self.product_command,) if self.product_command is not None else ()),
         )
         for command in commands:
             previous = by_display.setdefault(command.display, command)
@@ -190,6 +230,16 @@ class ValidationMatrix:
                 raise ValidationMatrixError(
                     f"validation command {command.display!r} has conflicting timeouts"
                 )
+        if self.product_command is not None and any(
+            command.display == self.product_command.display
+            for command in (
+                *((self.default_command,) if self.default_command is not None else ()),
+                *(rule.command for rule in self.rules),
+            )
+        ):
+            raise ValidationMatrixError(
+                "product validation command must be distinct from matrix commands"
+            )
 
     @property
     def finding_command_prefixes(self) -> tuple[tuple[str, ...], ...]:
@@ -266,6 +316,12 @@ def select_validation_request(
             findings, allowed_prefixes=matrix.finding_command_prefixes
         )
     )
+    commands.extend(
+        ValidationCommand(artifact_pattern=pattern)
+        for pattern in matrix.required_artifacts
+    )
+    if matrix.product_command is not None:
+        commands.append(matrix.product_command)
     unique: dict[tuple[str, ...], ValidationCommand] = {}
     for command in commands:
         canonical_argv = _canonical_argv(command)
@@ -372,6 +428,11 @@ class ValidationMatrixRunner:
         captures: list[ValidationCapture] = []
         unavailable = 0
         for command in commands:
+            if command.artifact_pattern is not None:
+                record, capture = self._check_artifact(command.artifact_pattern)
+                records.append(record)
+                captures.append(capture)
+                continue
             try:
                 result = subprocess.run(
                     command.shell_command if command.shell_command is not None else command.argv,
@@ -458,6 +519,67 @@ class ValidationMatrixRunner:
             captures=tuple(captures),
             unavailable=unavailable,
             elapsed_seconds=max(0.0, self._monotonic() - started),
+        )
+
+    def _check_artifact(
+        self, pattern: str
+    ) -> tuple[ValidationRecord, ValidationCapture]:
+        """Measure one declared build-output glob without product knowledge."""
+
+        matched: list[str] = []
+        empty: list[str] = []
+        non_regular: list[str] = []
+        unsafe: list[str] = []
+        error: str | None = None
+        try:
+            candidates = sorted(
+                self.repository_root.glob(pattern),
+                key=lambda item: item.as_posix(),
+            )
+            for candidate in candidates:
+                relative = candidate.relative_to(self.repository_root).as_posix()
+                try:
+                    resolved = candidate.resolve(strict=True)
+                    if (
+                        not resolved.is_relative_to(self.repository_root)
+                        or candidate.is_symlink()
+                    ):
+                        unsafe.append(relative)
+                    elif not candidate.is_file():
+                        non_regular.append(relative)
+                    else:
+                        matched.append(relative)
+                        if candidate.stat().st_size == 0:
+                            empty.append(relative)
+                except OSError as exc:
+                    unsafe.append(relative)
+                    error = str(exc)
+        except (OSError, RuntimeError, ValueError) as exc:
+            error = str(exc)
+        passed = bool(matched) and not empty and not non_regular and not unsafe and error is None
+        fact = json.dumps(
+            {
+                "declaration": pattern,
+                "empty_paths": empty,
+                "error": error,
+                "matched_paths": matched,
+                "non_regular_paths": non_regular,
+                "status": "PASS" if passed else "FAIL",
+                "unsafe_paths": unsafe,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        command = shlex.join((ARTIFACT_CHECK_COMMAND, pattern))
+        status = ValidationStatus.PASS if passed else ValidationStatus.FAIL
+        exit_code = 0 if passed else 1
+        compact = _compact_output(fact, "", self.output_limit)
+        return (
+            ValidationRecord(status, command, exit_code, compact),
+            ValidationCapture(
+                command, status.value.lower(), exit_code, fact, "", compact
+            ),
         )
 
     def _attestation(

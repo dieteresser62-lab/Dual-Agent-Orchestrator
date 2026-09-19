@@ -11,7 +11,7 @@ import pytest
 
 import artifact_replay as artifact_replay_module
 import native_finding_decisions
-from acceptance_criteria import acceptance_criteria_from_texts
+from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_bridge import ArtifactBridge
 from artifact_resume import (
     ArtifactResumeError,
@@ -1229,7 +1229,9 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
     bridge = _state_projection_bridge(tmp_path, "typed-responsibility")
     _journey(bridge)
     criteria = acceptance_criteria_from_texts(
-        "3", ("The third Slice owns the routed record fact.",)
+        "3",
+        ("The third Slice owns the routed record fact.",),
+        measured_against=MeasuredAgainst.SOURCE,
     )
     bridge.append(
         PlanPayload(
@@ -1282,7 +1284,13 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
     }
     assert projected.to_document()["planned_slices"][2][
         "acceptance_criteria"
-    ] == [{"criterion_id": criteria[0].criterion_id, "text": criteria[0].text}]
+    ] == [
+        {
+            "criterion_id": criteria[0].criterion_id,
+            "text": criteria[0].text,
+            "measured_against": "SOURCE",
+        }
+    ]
     assert WorkflowState.from_dict(projected.to_document()) == projected.state
 
 

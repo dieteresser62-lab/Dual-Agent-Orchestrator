@@ -1959,7 +1959,13 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                             "summary": "Create the executable S5 work-plan artifact.",
                             "scope_paths": ["docs/internal/s5-work-plan.md"],
                             "acceptance_criteria": [
-                                "The executable S5 work-plan artifact is committed."
+                                {
+                                    "text": (
+                                        "The executable S5 work-plan artifact is "
+                                        "committed."
+                                    ),
+                                    "measured_against": "SOURCE",
+                                }
                             ],
                         }
                     ],

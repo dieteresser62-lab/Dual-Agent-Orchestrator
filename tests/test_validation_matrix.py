@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -74,6 +75,109 @@ def test_no_path_match_selects_only_default_and_rename_source_can_match() -> Non
 
     assert default_only.expected_commands == ("npm test",)
     assert "npm run build:engine" in renamed.expected_commands
+
+
+def test_declared_artifacts_and_product_stage_follow_the_build_command(
+    tmp_path: Path,
+) -> None:
+    build = ValidationCommand(
+        argv=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('dist').mkdir(exist_ok=True); "
+            "Path('dist/app.css').write_text('body{}')",
+        )
+    )
+    product = ValidationCommand(
+        argv=(sys.executable, "-c", "print('product-ok')"),
+        timeout_seconds=17,
+    )
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=build,
+            required_artifacts=("dist/**/*.css",),
+            product_command=product,
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.ts",),
+    )
+
+    attestation = ValidationMatrixRunner(tmp_path).run(request)
+
+    assert request.commands[-2].artifact_pattern == "dist/**/*.css"
+    assert request.commands[-1] is product
+    assert attestation.passed
+    artifact_fact = json.loads(attestation.content_captures[-2].stdout)
+    assert artifact_fact == {
+        "declaration": "dist/**/*.css",
+        "empty_paths": [],
+        "error": None,
+        "matched_paths": ["dist/app.css"],
+        "non_regular_paths": [],
+        "status": "PASS",
+        "unsafe_paths": [],
+    }
+    assert attestation.records[-1].command == product.display
+    assert "product-ok" in attestation.content_captures[-1].stdout
+
+
+@pytest.mark.parametrize("empty", (False, True))
+def test_missing_or_empty_declared_artifact_is_a_failed_record_fact(
+    tmp_path: Path,
+    empty: bool,
+) -> None:
+    if empty:
+        (tmp_path / "dist").mkdir()
+        (tmp_path / "dist" / "app.css").write_bytes(b"")
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=ValidationCommand(
+                argv=(sys.executable, "-c", "print('build-complete')")
+            ),
+            required_artifacts=("dist/**/*.css",),
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.ts",),
+    )
+
+    attestation = ValidationMatrixRunner(tmp_path).run(request)
+
+    assert attestation.complete
+    assert attestation.status is ValidationAttestationStatus.FAIL
+    artifact_record = next(
+        record
+        for record in attestation.records
+        if record.command.startswith("internal:artifact-delivery")
+    )
+    assert artifact_record.status is ValidationStatus.FAIL
+    assert ("empty_paths" if empty else "matched_paths") in artifact_record.output
+
+
+def test_product_stage_has_no_embedded_browser_http_or_project_client() -> None:
+    tree = ast.parse(Path(validation_matrix.__file__).read_text(encoding="utf-8"))
+    imports = {
+        name
+        for node in ast.walk(tree)
+        for name in (
+            tuple(alias.name.split(".", 1)[0] for alias in node.names)
+            if isinstance(node, ast.Import)
+            else (str(node.module).split(".", 1)[0],)
+            if isinstance(node, ast.ImportFrom)
+            else ()
+        )
+    }
+
+    assert imports.isdisjoint(
+        {
+            "http",
+            "httpx",
+            "playwright",
+            "pyppeteer",
+            "requests",
+            "selenium",
+            "urllib",
+        }
+    )
 
 
 def test_identical_commands_from_multiple_matching_rules_are_deduplicated() -> None:

@@ -763,8 +763,12 @@ def _enable_native_review_request_finding_decision_schema(
                 "pattern": "^ac-[0-9a-f]{64}$",
             },
             "text": {"$ref": "#/$defs/safe_text"},
+            "measured_against": {
+                "type": "string",
+                "enum": ["SOURCE", "BUILD_OUTPUT", "RUNNING_PRODUCT"]
+            },
         },
-        "required": ["criterion_id", "text"],
+        "required": ["criterion_id", "text", "measured_against"],
         "additionalProperties": False,
     }
     definitions["planned_slice"] = {

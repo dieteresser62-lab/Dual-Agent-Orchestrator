@@ -231,7 +231,10 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
                 "slice_id": 1,
                 "summary": "Implement native Codex.",
                 "scope_paths": ["src/native_codex_contract.py"],
-                "acceptance_criteria": ["The native Codex contract is implemented."],
+                "acceptance_criteria": [{
+                    "text": "The native Codex contract is implemented.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "plan_treatments": [],
@@ -295,7 +298,10 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
                 "slice_id": 1,
                 "summary": "Unsorted domain-invalid slice paths.",
                 "scope_paths": ["src/z.py", "src/a.py"],
-                "acceptance_criteria": ["Paths are canonical and sorted."],
+                "acceptance_criteria": [{
+                    "text": "Paths are canonical and sorted.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "plan_treatments": [],
@@ -422,7 +428,10 @@ def test_native_codex_runtime_forwards_canary_execution_root(
                 "slice_id": 1,
                 "summary": "Exercise the isolated runtime.",
                 "scope_paths": ["src/native_codex_contract.py"],
-                "acceptance_criteria": ["The isolated runtime is exercised."],
+                "acceptance_criteria": [{
+                    "text": "The isolated runtime is exercised.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "plan_treatments": [],
@@ -482,7 +491,10 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                     "slice_id": 1,
                     "summary": "Implement it.",
                     "scope_paths": ["src/native_codex_contract.py"],
-                    "acceptance_criteria": ["The native contract is implemented."],
+                    "acceptance_criteria": [{
+                        "text": "The native contract is implemented.",
+                        "measured_against": "SOURCE",
+                    }],
                 }
             ],
             "finding_dispositions": [],
@@ -589,7 +601,10 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
                 "slice_id": 1,
                 "summary": "Implement it.",
                 "scope_paths": ["src/native_codex_contract.py"],
-                "acceptance_criteria": ["The native contract is implemented."],
+                "acceptance_criteria": [{
+                    "text": "The native contract is implemented.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "finding_dispositions": [],

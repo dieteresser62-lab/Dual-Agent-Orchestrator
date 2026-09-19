@@ -3384,7 +3384,11 @@ def _slice_spec_document(spec: SliceSpec) -> dict[str, Any]:
     }
     if spec.acceptance_criteria:
         document["acceptance_criteria"] = [
-            {"criterion_id": item.criterion_id, "text": item.text}
+            {
+                "criterion_id": item.criterion_id,
+                "text": item.text,
+                "measured_against": item.measured_against.value,
+            }
             for item in spec.acceptance_criteria
         ]
     return document

@@ -6,7 +6,7 @@ import pytest
 import workflow_requests
 import native_finding_decisions
 
-from acceptance_criteria import acceptance_criteria_from_texts
+from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import FamilyBindingPayload, technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
@@ -1068,7 +1068,9 @@ def test_family_profile_can_precede_the_plan_commit_created_by_plan_only() -> No
 
 def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:
     criteria = acceptance_criteria_from_texts(
-        1, ("First record-bound condition.", "Second record-bound condition.")
+        1,
+        ("First record-bound condition.", "Second record-bound condition."),
+        measured_against=MeasuredAgainst.SOURCE,
     )
     state = init_workflow_state(
         run_id="run-plan-criteria",
@@ -1087,7 +1089,11 @@ def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:
 
     assert WorkflowState.from_dict(document) == state
     assert document["planned_slices"][0]["acceptance_criteria"] == [
-        {"criterion_id": item.criterion_id, "text": item.text}
+        {
+            "criterion_id": item.criterion_id,
+            "text": item.text,
+            "measured_against": item.measured_against.value,
+        }
         for item in criteria
     ]
     legacy = replace(

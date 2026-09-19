@@ -438,6 +438,9 @@ description = "Stop when the named domain invariant changes."
 [validation]
 default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_harness"]
 default_timeout_seconds = 1800
+required_artifacts = ["dist/**/*.css", "dist/index.html"]
+product_command = ["npm", "run", "test:product"]
+product_timeout_seconds = 300
 
 [[provider_input_budget]]
 provider = "codex"
@@ -458,6 +461,8 @@ test_change_gate = false
 ```
 
 `default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
+
+Jedes geplante Akzeptanzkriterium deklariert `measured_against` als `SOURCE`, `BUILD_OUTPUT` oder `RUNNING_PRODUCT`. `BUILD_OUTPUT` ist nur zulässig, wenn `validation.required_artifacts` mindestens ein repositoryrelatives Artefaktmuster nennt; nach den normalen Validierungsbefehlen muss jedes Muster mindestens eine vorhandene, reguläre und nicht leere Datei liefern. `RUNNING_PRODUCT` ist nur zulässig, wenn `validation.product_command` oder `validation.product_shell_command` deklariert ist. Dieser optionale zweite Befehl läuft nach der Artefaktprüfung mit `product_timeout_seconds`. Artefaktprüfung und Produktbefehl werden in derselben fingerprintgebundenen Validierungsattestation festgehalten. Der Orchestrator enthält dafür weder Browser- noch HTTP- oder projektspezifische Logik. Fehlen beide Deklarationen, bleibt die bisherige Validierung unverändert.
 
 `provider_input_budget` ist eine geschlossene Tabelle für jede unterstützte Kombination aus Provider, Rolle und Operation; [orchestrator.toml](orchestrator.toml) zeigt die vollständige Liste. Zeichen und UTF-8-Bytes werden nach der verlustfreien Adapterserialisierung und vor Capabilityprüfung oder Providerprozess separat gemessen. Gleichheit mit dem positiven Sicherheitsbudget ist erlaubt, jede Überschreitung hält lokal an. Technische Providerlimits bleiben `null`, solange keine belastbare, versionierte Quelle einen Zeichen- und Bytewert belegt; ein unbekanntes Limit erweitert das Sicherheitsbudget nicht. Auditprojektion und Logs enthalten nur Größen, Grenzwerte, Komponentennamen, Überhang, Fehlercode und Bindungsdigests, niemals Prompttext, Secrets, Umgebungen oder vollständige Kommandozeilen.
 

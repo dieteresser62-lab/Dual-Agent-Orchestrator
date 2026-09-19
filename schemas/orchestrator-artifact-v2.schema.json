@@ -98,8 +98,8 @@
       "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "summary": {"$ref": "#/$defs/non_empty"}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "acceptance_criteria": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/acceptance_criterion"}}}
     },
     "acceptance_criterion": {
-      "type": "object", "additionalProperties": false, "required": ["criterion_id", "text"],
-      "properties": {"criterion_id": {"type": "string", "pattern": "^ac-[0-9a-f]{64}$"}, "text": {"$ref": "#/$defs/non_empty"}}
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "text", "measured_against"],
+      "properties": {"criterion_id": {"type": "string", "pattern": "^ac-[0-9a-f]{64}$"}, "text": {"$ref": "#/$defs/non_empty"}, "measured_against": {"type": "string", "enum": ["SOURCE", "BUILD_OUTPUT", "RUNNING_PRODUCT"]}}
     },
     "run_identity": {
       "type": "object", "additionalProperties": false,

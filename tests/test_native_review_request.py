@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import native_finding_decisions
 
-from acceptance_criteria import acceptance_criteria_from_texts
+from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -220,7 +220,9 @@ def test_enabled_review_request_binds_record_plan_criteria_structurally(
         True,
     )
     criteria = acceptance_criteria_from_texts(
-        2, ("Reviewer decides whether this condition adopts the finding.",)
+        2,
+        ("Reviewer decides whether this condition adopts the finding.",),
+        measured_against=MeasuredAgainst.SOURCE,
     )
     context = replace(
         _context(),
@@ -237,7 +239,11 @@ def test_enabled_review_request_binds_record_plan_criteria_structurally(
         "summary": "Later",
         "scope_paths": ["src/later.py"],
         "acceptance_criteria": [
-            {"criterion_id": criteria[0].criterion_id, "text": criteria[0].text}
+            {
+                "criterion_id": criteria[0].criterion_id,
+                "text": criteria[0].text,
+                "measured_against": "SOURCE",
+            }
         ],
     }
 

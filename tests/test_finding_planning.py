@@ -643,7 +643,10 @@ def test_native_codex_plan_transports_complete_signature_treatments(
                 "slice_id": 1,
                 "summary": "Repair the inherited defect.",
                 "scope_paths": ["src/fix.py"],
-                "acceptance_criteria": ["The inherited defect is closed."],
+                "acceptance_criteria": [{
+                    "text": "The inherited defect is closed.",
+                    "measured_against": "SOURCE",
+                }],
             }
         ],
         "finding_dispositions": [],

@@ -27,6 +27,7 @@ import workflow_requests
 import workflow_failure_recording
 import workflow_validation_evidence
 import native_finding_decisions
+from acceptance_criteria import validate_measurement_support
 from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
@@ -1445,6 +1446,23 @@ def _review_round_number(
     )
 
 
+def _validate_plan_measurement_support(
+    slices: tuple[PlannedSlice, ...], matrix: ValidationMatrix
+) -> None:
+    try:
+        validate_measurement_support(
+            (
+                criterion
+                for planned in slices
+                for criterion in planned.acceptance_criteria
+            ),
+            build_output_declared=bool(matrix.required_artifacts),
+            running_product_declared=matrix.product_command is not None,
+        )
+    except ValueError as exc:
+        raise WorkflowExecutionError(str(exc)) from exc
+
+
 class WorkflowEngine:
     """Additive state-v3 engine for the Codex/Claude chain."""
 
@@ -2143,6 +2161,9 @@ class WorkflowEngine:
             self.driver.checkpoint(state, history)
             return state, history
         if is_plan and result.slice_plan:
+            _validate_plan_measurement_support(
+                result.slice_plan, context.validation_matrix
+            )
             unexpected_plan_paths = tuple(
                 sorted(
                     {

@@ -3007,6 +3007,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
                     {
                         "criterion_id": criterion.criterion_id,
                         "text": criterion.text,
+                        "measured_against": criterion.measured_against.value,
                     }
                     for criterion in item.acceptance_criteria
                 ],

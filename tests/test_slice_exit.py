@@ -4,6 +4,7 @@ import pytest
 import native_finding_decisions
 
 from acceptance_criteria import (
+    MeasuredAgainst,
     acceptance_criteria_from_texts,
     acceptance_criterion_id,
 )
@@ -632,7 +633,9 @@ def _base_records(
                         "Follow-up",
                         ("src/fix.py",),
                         acceptance_criteria_from_texts(
-                            "7", target_acceptance_texts
+                            "7",
+                            target_acceptance_texts,
+                            measured_against=MeasuredAgainst.SOURCE,
                         ),
                     ),
                 ),

@@ -6,7 +6,7 @@ import json
 import artifact_models
 import pytest
 
-from acceptance_criteria import acceptance_criteria_from_texts
+from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
@@ -164,7 +164,9 @@ def test_family_authorized_change_set_includes_boundaries_plans_and_controls() -
 
 def test_plan_record_roundtrip_preserves_ordered_acceptance_criteria() -> None:
     criteria = acceptance_criteria_from_texts(
-        "1", ("First exact condition.", "Second exact condition.")
+        "1",
+        ("First exact condition.", "Second exact condition."),
+        measured_against=MeasuredAgainst.SOURCE,
     )
     record = _record(
         PlanPayload(
@@ -179,7 +181,11 @@ def test_plan_record_roundtrip_preserves_ordered_acceptance_criteria() -> None:
     assert restored == record
     assert restored.payload.slices[0].acceptance_criteria == criteria  # type: ignore[attr-defined]
     assert record.to_dict()["payload"]["slices"][0]["acceptance_criteria"] == [
-        {"criterion_id": item.criterion_id, "text": item.text}
+        {
+            "criterion_id": item.criterion_id,
+            "text": item.text,
+            "measured_against": item.measured_against.value,
+        }
         for item in criteria
     ]
 

@@ -9,7 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, TypeAlias
 
-from acceptance_criteria import acceptance_criteria_from_texts
+from acceptance_criteria import acceptance_criteria_from_specs
 from contracts import (
     AgentRole,
     CodexContractResult,
@@ -278,6 +278,20 @@ def native_codex_provider_response_schema(
         provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
+    if context.request_kind.value != "plan":
+        # Keep non-planning writer contracts byte-stable: planned_slice is
+        # unreachable from implementation/correction result variants, and the
+        # active measurement cutover belongs only to plan output.
+        schema["$defs"]["planned_slice"]["properties"]["acceptance_criteria"] = {
+            "type": "array",
+            "description": (
+                "Ordered, non-empty acceptance conditions for this Slice; exact "
+                "duplicate texts are forbidden."
+            ),
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {"$ref": "#/$defs/safe_text"},
+        }
     stop_rule_id = schema["$defs"]["stop_result"]["properties"]["rule_id"]
     projected_stop_rule_id = {
         "type": "string",
@@ -452,7 +466,7 @@ def parse_native_codex_response(
                     slice_id=item["slice_id"],
                     summary=item["summary"],
                     scope_paths=tuple(item["scope_paths"]),
-                    acceptance_criteria=acceptance_criteria_from_texts(
+                    acceptance_criteria=acceptance_criteria_from_specs(
                         item["slice_id"], item.get("acceptance_criteria", ())
                     ),
                 )
@@ -720,12 +734,24 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
         "type": "array",
         "description": (
             "Ordered, non-empty acceptance conditions for this Slice; exact "
-            "duplicate texts are forbidden."
+            "duplicate specifications are forbidden. Every condition declares "
+            "the product boundary at which it is measured."
         ),
         "minItems": 1,
         "maxItems": 256,
         "uniqueItems": True,
-        "items": {"$ref": "#/$defs/safe_text"},
+        "items": {
+            "type": "object",
+            "properties": {
+                "text": {"$ref": "#/$defs/safe_text"},
+                "measured_against": {
+                    "type": "string",
+                    "enum": ["SOURCE", "BUILD_OUTPUT", "RUNNING_PRODUCT"]
+                },
+            },
+            "required": ["text", "measured_against"],
+            "additionalProperties": False,
+        },
     }
     planned_slice["required"].append("acceptance_criteria")
     definitions["finding_responsibility"] = responsibility_json_schema()

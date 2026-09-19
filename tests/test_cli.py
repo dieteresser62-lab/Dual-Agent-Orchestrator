@@ -605,6 +605,9 @@ description = "Stop on invariant changes."
 
 [validation]
 default_command = ["pytest"]
+required_artifacts = ["dist/**/*.css"]
+product_command = ["python3", "tests/product_smoke.py"]
+product_timeout_seconds = 45
 
 [[validation.rules]]
 patterns = ["engine/**"]
@@ -624,6 +627,13 @@ test_change_gate = true
     assert config.stop_rules[0].id == "DOMAIN-001"
     assert config.validation.default_command is not None
     assert config.validation.default_command.argv == ("pytest",)
+    assert config.validation.required_artifacts == ("dist/**/*.css",)
+    assert config.validation.product_command is not None
+    assert config.validation.product_command.argv == (
+        "python3",
+        "tests/product_smoke.py",
+    )
+    assert config.validation.product_command.timeout_seconds == 45
     assert config.validation.rules[0].patterns == ("engine/**",)
     assert config.validation.rules[0].command.argv == (
         "npm",

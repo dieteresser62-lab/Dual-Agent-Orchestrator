@@ -165,10 +165,10 @@ def _load_validation(data: object) -> ValidationConfig:
     _reject_unknown_keys(
         table,
         {
-            "default_command",
-            "default_shell_command",
-            "default_timeout_seconds",
-            "rules",
+            "default_command", "product_command",
+            "default_shell_command", "product_shell_command",
+            "default_timeout_seconds", "product_timeout_seconds",
+            "required_artifacts", "rules",
         },
         "[validation]",
     )
@@ -217,7 +217,7 @@ def _load_validation(data: object) -> ValidationConfig:
         except ValidationMatrixError as exc:
             raise ConfigError(f"Invalid {location}: {exc}") from exc
     try:
-        return ValidationConfig(default_command=default_command, rules=tuple(rules))
+        return _validation_config(table, default_command, tuple(rules))
     except ValidationMatrixError as exc:
         raise ConfigError(f"Invalid [validation] configuration: {exc}") from exc
 
@@ -1037,6 +1037,42 @@ def run_cli(
     )
     task_file = task_path if missing_bound_recovery else find_task_file_fn(args.task_file)
     return run_pipeline_fn(task_file, args)
+
+
+def _validation_config(
+    table: Mapping[str, object],
+    default_command: ValidationCommand | None,
+    rules: tuple[ValidationRule, ...],
+) -> ValidationConfig:
+    """Complete optional product-level validation without shifting CLI guards."""
+
+    required_artifacts = (
+        _pattern_list(
+            table["required_artifacts"],
+            "validation.required_artifacts",
+            allow_empty=False,
+        )
+        if "required_artifacts" in table
+        else ()
+    )
+    product_timeout = _positive_config_int(
+        table.get("product_timeout_seconds", DEFAULT_VALIDATION_TIMEOUT_SECONDS),
+        "validation.product_timeout_seconds",
+    )
+    product_command = _load_validation_command(
+        table,
+        argv_key="product_command",
+        shell_key="product_shell_command",
+        location="validation product",
+        timeout_seconds=product_timeout,
+        required=False,
+    )
+    return ValidationConfig(
+        default_command=default_command,
+        rules=rules,
+        required_artifacts=required_artifacts,
+        product_command=product_command,
+    )
 
 
 def main(

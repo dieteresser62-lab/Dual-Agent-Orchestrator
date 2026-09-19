@@ -39,6 +39,7 @@ from workflow import (
     WorkflowContext,
     WorkflowExecutionError,
     WorkflowHistory,
+    _validate_plan_measurement_support,
 )
 from workflow_state import (
     AgentProfileBinding,
@@ -83,7 +84,10 @@ def _context(
                 else ValidationCommand(shell_command=raw_command)
             ),
             rules=validation_matrix.rules,
+            required_artifacts=validation_matrix.required_artifacts,
+            product_command=validation_matrix.product_command,
         )
+    _validate_plan_measurement_support(state.planned_slices, validation_matrix)
     agents_path = Path(str(args.agents_file)).expanduser().resolve()
     if agents_path.is_file():
         shared_instructions = agents_path.read_text(encoding="utf-8")[:12_000]

@@ -69,6 +69,10 @@ _REMAINING_PROVIDER_SEMANTIC_GAPS = (
 )
 
 
+def _criterion(text: str, measured_against: str = "SOURCE") -> dict[str, str]:
+    return {"text": text, "measured_against": measured_against}
+
+
 def _finding() -> FindingRecord:
     return FindingRecord(
         finding_id="C-01",
@@ -159,7 +163,7 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
                 "slice_id": 1,
                 "summary": "Implement native contracts.",
                 "scope_paths": ["src/native_codex_contract.py"],
-                "acceptance_criteria": ["The native contract is implemented."],
+                "acceptance_criteria": [_criterion("The native contract is implemented.")],
             }
         ],
         "finding_dispositions": [],
@@ -183,7 +187,7 @@ def test_v2_plan_result_without_dispositions_is_rejected() -> None:
                 "slice_id": 1,
                 "summary": "Historical native plan.",
                 "scope_paths": ["docs/internal/plan.md"],
-                "acceptance_criteria": ["The plan remains well formed."],
+                "acceptance_criteria": [_criterion("The plan remains well formed.")],
             }
         ],
     }
@@ -552,7 +556,7 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
                 "slice_id": 1,
                 "summary": "Implement the contract.",
                 "scope_paths": ["tests/test_contract.py", "src/contract.py"],
-                "acceptance_criteria": ["The contract is implemented."],
+                "acceptance_criteria": [_criterion("The contract is implemented.")],
             }
         ],
         "finding_dispositions": [],
@@ -576,7 +580,7 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
             "slice_id": 3,
             "summary": "Implement the contract.",
             "scope_paths": ["src/contract.py", "tests/test_contract.py"],
-            "acceptance_criteria": ["The contract is implemented."],
+            "acceptance_criteria": [_criterion("The contract is implemented.")],
         }
     ]
     provider_output = json.loads(json.dumps(response))
@@ -816,7 +820,7 @@ def test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally() -> 
                 "slice_id": 1,
                 "summary": "Implement the contract.",
                 "scope_paths": ["src/contract.py"],
-                "acceptance_criteria": ["The contract is implemented."],
+                "acceptance_criteria": [_criterion("The contract is implemented.")],
             }
         ],
         "finding_dispositions": [],
@@ -875,7 +879,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "slice_id": 1,
                         "summary": "Implement the contract.",
                         "scope_paths": ["src/contract.py"],
-                        "acceptance_criteria": ["The contract is implemented."],
+                        "acceptance_criteria": [_criterion("The contract is implemented.")],
                     }
                 ],
                 "finding_dispositions": [],
@@ -891,7 +895,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "slice_id": 1,
                         "summary": "Implement the contract.",
                         "scope_paths": ["tests/test_contract.py", "src/contract.py"],
-                        "acceptance_criteria": ["The contract is implemented."],
+                        "acceptance_criteria": [_criterion("The contract is implemented.")],
                     }
                 ],
                 "finding_dispositions": [],
@@ -942,7 +946,7 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
                 "slice_id": 1,
                 "summary": "Revise the native plan.",
                 "scope_paths": ["docs/internal/plan.md"],
-                "acceptance_criteria": ["The native plan is revised."],
+                "acceptance_criteria": [_criterion("The native plan is revised.")],
             }
         ],
         "finding_dispositions": [],
@@ -996,7 +1000,7 @@ def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
                 "slice_id": 1,
                 "summary": "Build the record fact.",
                 "scope_paths": ["src/record.py"],
-                "acceptance_criteria": texts,
+                "acceptance_criteria": [_criterion(text) for text in texts],
             }
         ],
         "finding_dispositions": [],
@@ -1036,7 +1040,7 @@ def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
                 "slice_id": 1,
                 "summary": "Active plan.",
                 "scope_paths": ["src/record.py"],
-                "acceptance_criteria": ["The record path is covered."],
+                "acceptance_criteria": [_criterion("The record path is covered.")],
             }
         ],
         "finding_dispositions": [],
