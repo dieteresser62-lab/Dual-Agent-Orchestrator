@@ -1648,6 +1648,57 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
 
 
+def test_plan_treatment_halt_reason_reaches_failure_record_and_log(caplog) -> None:
+    now = datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc)
+    detail = (
+        "plan treatment is invalid: implementation treatment forbids No-Code "
+        "disposition fields"
+    )
+    contract_error = NativeCodexContractError(
+        NativeCodexErrorCode.SLICE_PLAN_INVALID,
+        detail,
+    )
+    diagnostic = (
+        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
+    )
+    assert contract_error.orchestrator_diagnostic is diagnostic
+    output_error = AgentOutputError(
+        "native Codex result violates its bound contract",
+        technical_text=str(contract_error),
+        orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
+    )
+    output_error.__cause__ = contract_error
+    error = classify_agent_failure(
+        AgentRole.CODEX.value,
+        output_error,
+        invocation_id="canary-20260919-plan-treatment",
+        received_at=now,
+    )
+    error.__cause__ = output_error
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    caplog.set_level("INFO", logger="workflow")
+
+    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CODEX,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert payload.technical_text.startswith("[technical text redacted; sha256=")
+    assert payload.orchestrator_diagnostic == diagnostic.text
+    assert "implementation treatment forbids No-Code disposition fields" in (
+        payload.orchestrator_diagnostic
+    )
+    assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
+
+
 def test_mutated_orchestrator_diagnostic_cannot_expose_provider_text(caplog) -> None:
     now = datetime(2026, 9, 5, 22, 13, 8, tzinfo=timezone.utc)
     injected_provider_text = "provider-controlled diagnostic mutation"
@@ -1685,7 +1736,7 @@ def test_mutated_orchestrator_diagnostic_cannot_expose_provider_text(caplog) -> 
     assert injected_provider_text not in payload.provider_text
     assert injected_provider_text not in payload.technical_text
     assert injected_provider_text not in caplog.text
-    assert "orchestrator_diagnostic=redacted" in caplog.text
+    assert "orchestrator_diagnostic=none" in caplog.text
 
 
 def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> None:

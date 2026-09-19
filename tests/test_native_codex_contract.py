@@ -1003,6 +1003,47 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
     assert result.findings[0].responses[-1].decision is FindingResponseDecision.ACCEPTED
 
 
+def test_implementation_treatment_no_code_fields_get_exact_closed_diagnostic() -> None:
+    finding = _finding()
+    bound = _bound(NativeCodexRequestKind.PLAN, findings=(finding,))
+    document = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Implement the contract.",
+                "scope_paths": ["src/contract.py"],
+                "acceptance_criteria": [_criterion("The contract is implemented.")],
+            }
+        ],
+        "finding_dispositions": [],
+        "plan_treatments": [
+            {
+                "signature": finding_record_signature(finding),
+                "finding_ids": ["C-01"],
+                "treatment_kind": "implementation",
+                "closing_slice_ids": [1],
+                "no_code_reason": "no_defect",
+                "evidence": None,
+                "evidence_paths": [],
+                "affected_paths": [],
+            }
+        ],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_native_codex_response(document, bound)
+
+    assert str(raised.value) == (
+        "slice-plan-invalid: plan treatment is invalid: implementation treatment "
+        "forbids No-Code disposition fields"
+    )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
+    )
+
+
 def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

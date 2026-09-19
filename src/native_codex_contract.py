@@ -85,6 +85,34 @@ class NativeCodexErrorCode(StrEnum):
     DORMANT_FINDING_DECISION_FIELD = "dormant-finding-decision-field"
 
 
+_IMPLEMENTER_DIAGNOSTIC_BY_CODE = {
+    "schema-invalid": OrchestratorDiagnostic.IMPLEMENTER_SCHEMA_INVALID,
+    "context-invalid": OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_INVALID,
+    "request-mismatch": OrchestratorDiagnostic.IMPLEMENTER_REQUEST_MISMATCH,
+    "result-kind-mismatch": (
+        OrchestratorDiagnostic.IMPLEMENTER_RESULT_KIND_MISMATCH
+    ),
+    "result-content-invalid": (
+        OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID
+    ),
+    "finding-reference-invalid": (
+        OrchestratorDiagnostic.IMPLEMENTER_FINDING_REFERENCE_INVALID
+    ),
+    "test-files-invalid": (
+        OrchestratorDiagnostic.IMPLEMENTER_TEST_FILES_INVALID
+    ),
+    "slice-plan-invalid": (
+        OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID
+    ),
+    "stop-content-invalid": (
+        OrchestratorDiagnostic.IMPLEMENTER_STOP_CONTENT_INVALID
+    ),
+    "dormant-finding-decision-field": (
+        OrchestratorDiagnostic.IMPLEMENTER_DORMANT_FINDING_DECISION_FIELD
+    ),
+}
+
+
 class NativeCodexContractError(ValueError):
     """A stable machine-readable native Codex contract failure."""
 
@@ -99,6 +127,12 @@ class NativeCodexContractError(ValueError):
             orchestrator_diagnostic, OrchestratorDiagnostic
         ):
             raise TypeError("orchestrator diagnostic must be a closed enum member")
+        if orchestrator_diagnostic is None:
+            rendered = f"{code.value}: {detail}"
+            try:
+                orchestrator_diagnostic = OrchestratorDiagnostic(rendered)
+            except ValueError:
+                orchestrator_diagnostic = _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code.value]
         self.code = code
         self.detail = detail
         self.orchestrator_diagnostic = orchestrator_diagnostic

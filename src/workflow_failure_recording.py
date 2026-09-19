@@ -86,7 +86,7 @@ def _log_invocation_failure(
         else "none",
         diagnostic_code,
         provider_subtype,
-        orchestrator_diagnostic or "redacted",
+        orchestrator_diagnostic or "none",
         native_review_rejection or "none",
     )
 

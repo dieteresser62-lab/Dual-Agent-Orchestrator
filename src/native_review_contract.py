@@ -63,6 +63,7 @@ from validation_matrix import (
     matches_validation_family,
 )
 from native_provider_schema import defensive_provider_projection
+from orchestrator_diagnostics import OrchestratorDiagnostic
 import native_finding_decisions
 from native_finding_decisions import (
     ClosedFindingReviewBinding,
@@ -116,6 +117,53 @@ class NativeReviewErrorCode(StrEnum):
     STOP_CONTENT_INVALID = "stop-content-invalid"
     APPROVAL_INVALID = "approval-invalid"
     DORMANT_FINDING_DECISION_FIELD = "dormant-finding-decision-field"
+
+
+_REVIEW_DIAGNOSTIC_BY_CODE = {
+    NativeReviewErrorCode.SCHEMA_INVALID: OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID,
+    NativeReviewErrorCode.CONTEXT_INVALID: OrchestratorDiagnostic.REVIEW_CONTEXT_INVALID,
+    NativeReviewErrorCode.REQUEST_MISMATCH: OrchestratorDiagnostic.REVIEW_REQUEST_MISMATCH,
+    NativeReviewErrorCode.REVIEWER_MISMATCH: (
+        OrchestratorDiagnostic.REVIEW_REVIEWER_MISMATCH
+    ),
+    NativeReviewErrorCode.FINDING_ID_INVALID: (
+        OrchestratorDiagnostic.REVIEW_FINDING_ID_INVALID
+    ),
+    NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN: (
+        OrchestratorDiagnostic.REVIEW_FINDING_REFERENCE_UNKNOWN
+    ),
+    NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN: (
+        OrchestratorDiagnostic.REVIEW_FINDING_REFERENCE_NOT_OPEN
+    ),
+    NativeReviewErrorCode.FINDING_EVENT_CONFLICT: (
+        OrchestratorDiagnostic.REVIEW_FINDING_EVENT_CONFLICT
+    ),
+    NativeReviewErrorCode.FINDING_UPDATE_MISSING: (
+        OrchestratorDiagnostic.REVIEW_FINDING_UPDATE_MISSING
+    ),
+    NativeReviewErrorCode.FINDING_CONTENT_INVALID: (
+        OrchestratorDiagnostic.REVIEW_FINDING_CONTENT_INVALID
+    ),
+    NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE: (
+        OrchestratorDiagnostic.REVIEW_FINDING_SIGNATURE_DUPLICATE
+    ),
+    NativeReviewErrorCode.ACCEPTANCE_INVALID: (
+        OrchestratorDiagnostic.REVIEW_ACCEPTANCE_INVALID
+    ),
+    NativeReviewErrorCode.ANCHOR_INVALID: OrchestratorDiagnostic.REVIEW_ANCHOR_INVALID,
+    NativeReviewErrorCode.REVIEW_CONTENT_MISSING: (
+        OrchestratorDiagnostic.REVIEW_CONTENT_MISSING
+    ),
+    NativeReviewErrorCode.STOP_CONTENT_INVALID: (
+        OrchestratorDiagnostic.REVIEW_STOP_CONTENT_INVALID
+    ),
+    NativeReviewErrorCode.APPROVAL_INVALID: (
+        OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID
+    ),
+    NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD: (
+        OrchestratorDiagnostic.REVIEW_DORMANT_FINDING_DECISION_FIELD
+    ),
+}
 
 
 class NativeReviewRejectionSource(StrEnum):
@@ -210,9 +258,14 @@ class NativeReviewContractError(ValueError):
         code: NativeReviewErrorCode,
         detail: str,
         *,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
         operator_detail: str | None = None,
         source: NativeReviewRejectionSource | None = None,
     ) -> None:
+        if orchestrator_diagnostic is not None and not isinstance(
+            orchestrator_diagnostic, OrchestratorDiagnostic
+        ):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
         if operator_detail is not None and (
             not operator_detail.strip()
             or len(operator_detail) > 1200
@@ -224,8 +277,15 @@ class NativeReviewContractError(ValueError):
             raise ValueError(
                 "operator_detail must be a bounded single-line diagnostic"
             )
+        if orchestrator_diagnostic is None:
+            rendered = f"{code.value}: {detail}"
+            try:
+                orchestrator_diagnostic = OrchestratorDiagnostic(rendered)
+            except ValueError:
+                orchestrator_diagnostic = _REVIEW_DIAGNOSTIC_BY_CODE[code]
         self.code = code
         self.detail = detail
+        self.orchestrator_diagnostic = orchestrator_diagnostic
         self.operator_detail = operator_detail
         self.source = source or (
             NativeReviewRejectionSource.REQUEST_LEDGER

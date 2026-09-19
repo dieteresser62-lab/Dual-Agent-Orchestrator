@@ -1484,6 +1484,7 @@ def run_native_review_agent(
             "native review result violates its bound contract",
             provider_data=document,
             technical_text=f"{exc.code.value}: {exc.detail}",
+            orchestrator_diagnostic=exc.orchestrator_diagnostic,
         ) from exc
     except NativeReviewRequestError as exc:
         if exc.code is NativeReviewRequestErrorCode.SCHEMA_INVALID:
@@ -1494,6 +1495,7 @@ def run_native_review_agent(
                 "native review result violates its bound contract",
                 provider_data=document,
                 technical_text=f"{form_error.code.value}: {form_error.detail}",
+                orchestrator_diagnostic=form_error.orchestrator_diagnostic,
             ) from form_error
         raise AgentOutputError(
             "native review result violates its bound contract",

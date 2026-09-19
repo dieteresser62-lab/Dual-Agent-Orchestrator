@@ -839,6 +839,7 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 "native Claude response violates the local result schema",
                 provider_data=result,
                 technical_text=f"{exc.code.value}: {exc.detail}",
+                orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
     def cleanup(self) -> None:

@@ -48,6 +48,7 @@ from native_review_contract import (
     parse_native_review_response,
 )
 from native_finding_decisions import NativeResponsibilityRoute
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from schema_validation import SchemaMismatch, validate_schema_document
 from validation_matrix import (
     ValidationCommand,
@@ -66,6 +67,26 @@ TYPED_ACCEPTANCE_ARGV = (
     "tests/test_native_review_contract.py",
     "-q",
 )
+
+
+def test_review_contract_diagnostic_is_exact_or_value_free() -> None:
+    static = NativeReviewContractError(
+        NativeReviewErrorCode.APPROVAL_INVALID,
+        "approval requires pre_mortem",
+    )
+    assert static.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_APPROVAL_PRE_MORTEM_REQUIRED
+    )
+
+    provider_value = "provider-secret-in-schema-message"
+    value_bearing = NativeReviewContractError(
+        NativeReviewErrorCode.SCHEMA_INVALID,
+        f"schema validation failed at result: {provider_value}",
+    )
+    assert value_bearing.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID
+    )
+    assert provider_value not in value_bearing.orchestrator_diagnostic.text
 
 
 def _attestation() -> ValidationAttestation:

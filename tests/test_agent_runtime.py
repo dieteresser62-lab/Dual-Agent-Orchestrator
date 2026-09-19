@@ -733,6 +733,9 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         )
     assert "request-mismatch" in raised.value.technical_text
     assert raised.value.provider_data == mismatched
+    assert raised.value.orchestrator_diagnostic.text == (
+        "request-mismatch: response request_id does not match bound request"
+    )
 
     writer_invalid = {
         **response,
@@ -768,6 +771,10 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "result.new_findings.0.finding_class: must equal 'OBSERVATION'"
         in raised.value.technical_text
     )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID
+    )
+    assert "OBSERVATION" not in raised.value.orchestrator_diagnostic.text
     assert persisted == [returned["canonical"]]
 
 
