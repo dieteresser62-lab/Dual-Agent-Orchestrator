@@ -90,6 +90,7 @@ from gates import (
     TestChangeEvidence,
     detect_anchor_changes,
     matches_path_patterns,
+    validate_builtin_stop_content,
 )
 from review_packets import (
     ReviewPacket, ReviewPacketError, build_review_packet, exclude_review_diff_paths,
@@ -3864,6 +3865,16 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 f"STOP_REQUESTED references unknown rule {stop_request.rule_id!r}"
             )
+        try:
+            validate_builtin_stop_content(
+                stop_request.rule_id,
+                stop_request.rationale,
+            )
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                f"STOP_REQUESTED has invalid content for "
+                f"{stop_request.rule_id!r}: {exc}"
+            ) from exc
         return state.await_policy_gate(
             reason=GateReason.STOP_REQUEST,
             detail=f"{stop_request.rule_id} | {stop_request.rationale}",

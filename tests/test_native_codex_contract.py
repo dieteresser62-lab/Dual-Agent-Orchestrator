@@ -23,6 +23,10 @@ from contracts import (
 from finding_reducer import project_finding_response_delta
 from finding_signature import finding_record_signature
 from finding_responsibility import SliceResponsibility
+from gates import (
+    OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+    validate_builtin_stop_content,
+)
 from native_codex_contract import (
     BoundNativeCodexContext,
     NativeCodexContext,
@@ -1424,6 +1428,147 @@ def test_stop_result_is_exclusive_and_preserves_remediation_paths() -> None:
     assert result.stop_request.remediation_paths == (
         "schemas/native-agent-codex-result-v2.schema.json",
     )
+
+
+def _operator_prerequisite_rationale() -> str:
+    return (
+        "Missing prerequisite: jsdom 27.x devDependency\n"
+        "Why it cannot be self-provided: network package installation is forbidden\n"
+        "Operator action: run npm install --save-dev jsdom@27"
+    )
+
+
+def test_operator_prerequisite_stop_requires_and_preserves_all_three_details() -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "rationale": _operator_prerequisite_rationale(),
+        "remediation_paths": [],
+    }
+
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    assert result.stopped is True
+    assert result.stop_request is not None
+    assert result.stop_request.rationale == _operator_prerequisite_rationale()
+    assert OPERATOR_PREREQUISITE_MISSING_RULE_ID in bound.context.known_stop_rule_ids
+
+
+def test_operator_prerequisite_stop_allows_blank_lines_between_details() -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    rationale = _operator_prerequisite_rationale().replace("\n", "\n\n")
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "rationale": rationale,
+        "remediation_paths": [],
+    }
+
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    assert result.stop_request is not None
+    assert result.stop_request.rationale == rationale
+
+
+def test_operator_prerequisite_stop_ignores_unlabeled_surrounding_text() -> None:
+    details = validate_builtin_stop_content(
+        OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "Initial diagnostic context.\n"
+        "Missing prerequisite: jsdom 27.x devDependency\n"
+        "The local dependency cache was also checked.\n"
+        "Why it cannot be self-provided: network package installation is forbidden\n"
+        "No repository-only workaround is available.\n"
+        "Operator action: run npm install --save-dev jsdom@27\n"
+        "The run can resume afterward.",
+    )
+
+    assert details is not None
+    assert details.missing_prerequisite == "jsdom 27.x devDependency"
+    assert details.non_self_provision_reason == (
+        "network package installation is forbidden"
+    )
+    assert details.operator_action == "run npm install --save-dev jsdom@27"
+
+
+@pytest.mark.parametrize(
+    ("omitted_line", "expected_detail"),
+    [
+        (0, "requires missing prerequisite"),
+        (1, "requires reason it cannot be self-provided"),
+        (2, "requires operator action"),
+    ],
+)
+def test_operator_prerequisite_stop_rejects_each_missing_detail(
+    omitted_line: int,
+    expected_detail: str,
+) -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    lines = _operator_prerequisite_rationale().splitlines()
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "rationale": "\n".join(
+            line for index, line in enumerate(lines) if index != omitted_line
+        ),
+        "remediation_paths": [],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    assert expected_detail in raised.value.detail
+
+
+@pytest.mark.parametrize(
+    ("rationale", "expected_detail"),
+    [
+        (
+            "Missing prerequisite: jsdom\n"
+            "Why it cannot be self-provided: offline environment\n"
+            "Operator action: install jsdom\n"
+            "Operator action: retry installation",
+            "duplicate operator action",
+        ),
+        (
+            "Missing prerequisite: jsdom\n"
+            "Why it cannot be self-provided:   \n"
+            "Operator action: install jsdom",
+            "requires reason it cannot be self-provided",
+        ),
+    ],
+)
+def test_operator_prerequisite_stop_rejects_duplicate_labels_and_empty_values(
+    rationale: str,
+    expected_detail: str,
+) -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "rationale": rationale,
+        "remediation_paths": [],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    assert expected_detail in raised.value.detail
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "Cannot find module 'jsdom' while running a test.",
+        "A mounted file appears executable although the Git index records 100644.",
+    ],
+)
+def test_stop_rules_do_not_classify_error_text_or_environment_observations(
+    diagnostic: str,
+) -> None:
+    assert validate_builtin_stop_content("CONTRACT-UNCLEAR", diagnostic) is None
 
 
 def test_unknown_properties_and_unsorted_paths_fail_closed() -> None:

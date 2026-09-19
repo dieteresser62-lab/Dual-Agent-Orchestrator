@@ -18,6 +18,11 @@ BRANCH_MISMATCH_RULE_ID = "BRANCH-MISMATCH"
 VALIDATION_UNAVAILABLE_RULE_ID = "VALIDATION-UNAVAILABLE"
 UNEXPECTED_PATH_RULE_ID = "UNEXPECTED-PATH"
 CONTRACT_UNCLEAR_RULE_ID = "CONTRACT-UNCLEAR"
+OPERATOR_PREREQUISITE_MISSING_RULE_ID = "OPERATOR-PREREQUISITE-MISSING"
+
+MISSING_PREREQUISITE_LABEL = "Missing prerequisite:"
+NON_SELF_PROVISION_REASON_LABEL = "Why it cannot be self-provided:"
+OPERATOR_ACTION_LABEL = "Operator action:"
 
 
 class PathClass(str, Enum):
@@ -83,7 +88,74 @@ BUILTIN_STOP_RULES = (
         CONTRACT_UNCLEAR_RULE_ID,
         "The current step contract is technically ambiguous and requires user direction.",
     ),
+    StopRule(
+        OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+        "An operator-provided prerequisite is missing and the implementer cannot supply it. "
+        "The rationale must contain one non-empty line for each of these labels: "
+        f"'{MISSING_PREREQUISITE_LABEL} ...', "
+        f"'{NON_SELF_PROVISION_REASON_LABEL} ...', and "
+        f"'{OPERATOR_ACTION_LABEL} ...'. Additional unlabeled lines are allowed; "
+        "repeated labels are invalid.",
+    ),
 )
+
+
+@dataclass(frozen=True)
+class OperatorPrerequisiteDetails:
+    missing_prerequisite: str
+    non_self_provision_reason: str
+    operator_action: str
+
+
+def validate_builtin_stop_content(
+    rule_id: str,
+    rationale: str,
+) -> OperatorPrerequisiteDetails | None:
+    """Validate rule-specific content without inferring a rule from diagnostics."""
+    if rule_id != OPERATOR_PREREQUISITE_MISSING_RULE_ID:
+        return None
+    return _parse_operator_prerequisite_rationale(rationale)
+
+
+def _parse_operator_prerequisite_rationale(
+    rationale: str,
+) -> OperatorPrerequisiteDetails:
+    fields = (
+        ("missing prerequisite", MISSING_PREREQUISITE_LABEL),
+        ("reason it cannot be self-provided", NON_SELF_PROVISION_REASON_LABEL),
+        ("operator action", OPERATOR_ACTION_LABEL),
+    )
+    values: dict[str, str] = {}
+    for line in rationale.splitlines():
+        matching = tuple(
+            (field_name, label)
+            for field_name, label in fields
+            if line.startswith(label)
+        )
+        if not matching:
+            continue
+        if len(matching) != 1:
+            raise ValueError(
+                "operator prerequisite stop has an ambiguous labeled line"
+            )
+        field_name, label = matching[0]
+        if field_name in values:
+            raise ValueError(
+                f"operator prerequisite stop has duplicate {field_name}"
+            )
+        values[field_name] = line[len(label) :].strip()
+
+    for field_name, _label in fields:
+        if not values.get(field_name):
+            raise ValueError(
+                f"operator prerequisite stop requires {field_name}"
+            )
+
+    return OperatorPrerequisiteDetails(
+        missing_prerequisite=values["missing prerequisite"],
+        non_self_provision_reason=values["reason it cannot be self-provided"],
+        operator_action=values["operator action"],
+    )
 
 
 @dataclass(frozen=True)

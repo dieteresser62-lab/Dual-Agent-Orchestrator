@@ -32,7 +32,11 @@ from finding_responsibility import (
     parse_responsibility,
     responsibility_json_schema,
 )
-from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN
+from gates import (
+    BUILTIN_STOP_RULES,
+    STOP_RULE_ID_PATTERN,
+    validate_builtin_stop_content,
+)
 import native_finding_decisions
 from native_finding_decisions import (
     NativeRejectionReason,
@@ -546,6 +550,7 @@ def native_codex_response_to_contract_result(
     prior = context.previous_findings
     if isinstance(response, NativeCodexStopResult):
         try:
+            validate_builtin_stop_content(response.rule_id, response.rationale)
             stop = StopRequest(
                 response.rule_id,
                 response.rationale,

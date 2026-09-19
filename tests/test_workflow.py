@@ -54,7 +54,12 @@ from contracts import (
     apply_finding_response,
     apply_reviewer_finding_update,
 )
-from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
+from gates import (
+    OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+    PathClasses,
+    StopRule,
+    TestChangeEvidence as GateTestChangeEvidence,
+)
 from finding_reducer import project_open_set
 from native_codex_contract import (
     NativeCodexContractError,
@@ -5374,6 +5379,42 @@ def test_unknown_stop_rule_is_rejected_instead_of_becoming_a_gate() -> None:
 
     assert len(driver.codex_calls) == 1
     assert not hasattr(driver, "repair_review_contract")
+
+
+def test_operator_prerequisite_stop_uses_existing_policy_gate_with_full_diagnostic() -> None:
+    rationale = (
+        "Missing prerequisite: app/public/assets/fonts/Brand-Regular.woff2\n"
+        "Why it cannot be self-provided: the licensed binary requires an operator decision\n"
+        "Operator action: provide app/public/assets/fonts/Brand-Regular.woff2"
+    )
+
+    halted = WorkflowEngine._halt_for_stop_request(
+        _slice_state(),
+        _context(),
+        StopRequest(OPERATOR_PREREQUISITE_MISSING_RULE_ID, rationale),
+    )
+
+    assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert halted.current_work_unit.gate.detail == (
+        f"{OPERATOR_PREREQUISITE_MISSING_RULE_ID} | {rationale}"
+    )
+    assert "Brand-Regular.woff2" in halted.current_work_unit.gate.detail
+    assert "licensed binary" in halted.current_work_unit.gate.detail
+    assert "provide app/public/assets/fonts" in halted.current_work_unit.gate.detail
+
+
+def test_operator_prerequisite_stop_cannot_bypass_content_validation() -> None:
+    with pytest.raises(WorkflowExecutionError, match="requires operator action"):
+        WorkflowEngine._halt_for_stop_request(
+            _slice_state(),
+            _context(),
+            StopRequest(
+                OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+                "Missing prerequisite: jsdom\n"
+                "Why it cannot be self-provided: package installation is forbidden",
+            ),
+        )
 
 
 def test_discovery_output_limit_is_a_dedicated_branch_discovery_stop(
