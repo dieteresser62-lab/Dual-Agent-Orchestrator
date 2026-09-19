@@ -1,0 +1,71 @@
+{
+  "artifact_sha256": "cfc087e23b3c5ce17171c72f51b254baa21e366c510e9e648a5f5633132d593e",
+  "bundle_sha256": "16a07c2f072747749568bbfeb170d13e45e7779095f562e4450b93898d43405d",
+  "reducer_version": "structured-v2-schema-2-state-v3-v1",
+  "runtime": {
+    "implementation": "CPython",
+    "maximum_exclusive": "3.15",
+    "minimum": "3.11",
+    "stdlib_only": true
+  },
+  "schema_version": "legacy-verifier-artifact-v1",
+  "source_commit": "4ca7482bf1d60726e1750c1d6d7d62960403054b",
+  "sources": [
+    {
+      "path": "src/acceptance_criteria.py",
+      "sha256": "d987c7b9f7ccf27fc22d1be41a06c64603cf78e58c581cae7286fff96c857109"
+    },
+    {
+      "path": "src/schema_validation.py",
+      "sha256": "b41af2de8560342094492df32d856fd5f04c8cf8db5fef277822c56e9d0b2216"
+    },
+    {
+      "path": "src/finding_order.py",
+      "sha256": "eab8e7d732b0a6f6c8f65cca929544400f697e0e46dde264599009f323ceb1d4"
+    },
+    {
+      "path": "src/finding_reducer.py",
+      "sha256": "89f9e04e81db389aba1a5a692882ac1b1f230d45d9d49f075353ec61735706ff"
+    },
+    {
+      "path": "src/finding_responsibility.py",
+      "sha256": "a09b12e6902a0157ec6af7090f10346c500ef4411e7c045b6c28b34091c9d95a"
+    },
+    {
+      "path": "src/orchestrator_diagnostics.py",
+      "sha256": "947f0f6b1dcee8dfabe37f7937a36ac5c37f7a15e91c8079b81a5c53ebc3c22e"
+    },
+    {
+      "path": "src/native_finding_decisions.py",
+      "sha256": "21defe17e221f5f6ca4c6b1b724f88906af324b11b7681ff4f4ddf1d638a6abb"
+    },
+    {
+      "path": "src/contracts.py",
+      "sha256": "520140e5e9104ecf96eef83f87fefa16fa83dcd9c5a72e4d1d36290e8d1b4105"
+    },
+    {
+      "path": "src/content_authority.py",
+      "sha256": "75bc7b7e765ce4ad1835c0c9f2eb59e5c6fb8b9c51c1b7bb104440cd0bfa2aa9"
+    },
+    {
+      "path": "src/finding_signature.py",
+      "sha256": "feab82211470a93402eff8cb97915141b1cfdef8b6155b42e9eb5379cd52830f"
+    },
+    {
+      "path": "src/artifact_models.py",
+      "sha256": "6fd2495bfa05fa18fd88cf2041954804ce6cfbf67dde2b3687ddb0c882372424"
+    },
+    {
+      "path": "src/artifact_replay.py",
+      "sha256": "b4a9ffb9dd43bd997aa7216b14fe6972b11f5c53dc162ed0e263f76743a1fe37"
+    },
+    {
+      "path": "src/workflow_state.py",
+      "sha256": "4a4c9e5463c2185a4bc396b4bf4b815e0782cd781ba8b414ba3a7e9d8f046034"
+    },
+    {
+      "path": "schemas/orchestrator-artifact-v2.schema.json",
+      "sha256": "bee8adb9d1cfd32c6b3c77a34bcd3b68dd3b1aac95fb1b6dafa0a4c8af6cc528"
+    }
+  ]
+}
