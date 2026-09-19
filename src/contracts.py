@@ -424,6 +424,7 @@ class ContractResult:
     red_state_followup_slice: str | None = None
     delivery_kind: str = "review"
     occurrences: tuple[FindingOccurrence, ...] = ()
+    scan_complete: bool | None = None
 
     def __post_init__(self) -> None:
         if self.delivery_kind not in {"review", "branch_discovery_completed"}:
@@ -437,12 +438,20 @@ class ContractResult:
                 raise ValueError(
                     "branch discovery completion requires evidence and pre_mortem"
                 )
+            if self.scan_complete is not True:
+                raise ValueError(
+                    "branch discovery completion requires scan_complete=true"
+                )
             occurrence_ids = tuple(item.finding_id for item in self.occurrences)
             if occurrence_ids != sorted_finding_ids(occurrence_ids):
                 raise ValueError(
                     "branch discovery occurrences must be sorted and unique"
                 )
         else:
+            if self.scan_complete is not None:
+                raise ValueError(
+                    "ordinary reviews and stops cannot carry scan_complete"
+                )
             if self.occurrences:
                 raise ValueError("ordinary reviews cannot carry discovery occurrences")
             if not self.stopped and self.approval is None:

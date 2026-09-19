@@ -251,6 +251,7 @@ def _discovery_edge(monkeypatch: pytest.MonkeyPatch) -> _DiscoveryEdge:
             transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "d" * 64,
             response_sha256="e" * 64,
+            scan_complete=True,
         ),
     )
     before_export = _replay(records, run_id)

@@ -346,8 +346,10 @@ def _render_branch_discovery_completed_record(
         f"- Größtes Restrisiko: {_prose(payload.review_evidence.largest_residual_risk)}",
         f"- Realistische Bruchbedingung: {_prose(payload.review_evidence.break_condition)}",
         f"- Pre-Mortem: {_prose(payload.pre_mortem)}",
-        "",
     ))
+    if payload.scan_complete is not None:
+        output.append(f"- Scan vollständig: `{'yes' if payload.scan_complete else 'no'}`")
+    output.append("")
 
 
 def _render_review_anchor_record(

@@ -62,6 +62,7 @@ from native_codex_contract import (
     NativeCodexRequestKind,
 )
 from native_review_contract import (
+    DISCOVERY_OUTPUT_LIMIT_RULE_ID,
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewDispositionLimit,
@@ -6091,6 +6092,45 @@ def test_unknown_stop_rule_is_rejected_instead_of_becoming_a_gate() -> None:
 
     assert len(driver.codex_calls) == 1
     assert not hasattr(driver, "repair_review_contract")
+
+
+def test_discovery_output_limit_is_a_dedicated_branch_discovery_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    state = init_workflow_state(
+        run_id="run-discovery-output-limit",
+        task_file="/repo/discovery.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        first_slice_start_commit=START_COMMIT,
+        slice_count=1,
+        execution_mode="BRANCH_DISCOVERY",
+    )
+    stop_request = StopRequest(
+        DISCOVERY_OUTPUT_LIMIT_RULE_ID,
+        "the request-bound discovery capacity was reached",
+    )
+
+    halted = WorkflowEngine._halt_for_stop_request(state, _context(), stop_request)
+
+    assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert halted.current_work_unit.gate.detail == (
+        "DISCOVERY_OUTPUT_LIMIT | the request-bound discovery capacity was reached"
+    )
+
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        False,
+    )
+    with pytest.raises(WorkflowExecutionError, match="unknown rule"):
+        WorkflowEngine._halt_for_stop_request(state, _context(), stop_request)
 
 
 def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:

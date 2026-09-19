@@ -252,7 +252,8 @@
         "reviewed_head_commit": {"$ref": "#/$defs/git_sha"},
         "transport_schema": {"$ref": "#/$defs/review/properties/transport_schema"},
         "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"},
-        "response_sha256": {"$ref": "#/$defs/sha256"}
+        "response_sha256": {"$ref": "#/$defs/sha256"},
+        "scan_complete": {"type": "boolean"}
       }
     },
     "review_stop_request": {

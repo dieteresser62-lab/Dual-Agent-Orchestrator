@@ -29,6 +29,7 @@ from finding_responsibility import (
 )
 from gates import detect_anchor_changes
 from native_review_contract import (
+    DISCOVERY_OUTPUT_LIMIT_RULE_ID,
     NativeFinding,
     NativeProseAcceptance,
     NativeReclassification,
@@ -186,6 +187,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
         "result_type": "branch_discovery_completed",
         "request_id": context.request_id,
         "reviewer": "claude",
+        "scan_complete": True,
         "new_findings": [
             {
                 "finding_id": "C-02",
@@ -235,6 +237,77 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
         )
     with pytest.raises(NativeReviewContractError, match="cannot use approved"):
         parse_native_contract_result(ordinary_review, context)
+
+
+def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(
+        _context(anchor_origin=None),
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        slice_id="FINAL",
+        max_new_findings=1,
+    )
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "branch_discovery_completed",
+        "request_id": context.request_id,
+        "reviewer": "claude",
+        "scan_complete": True,
+        "new_findings": [
+            {
+                "finding_id": "C-01",
+                "finding_class": "BLOCKER",
+                "summary": "The discovery capacity has been reached.",
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": "Increase capacity only through a new explicit product decision.",
+                },
+            }
+        ],
+        "occurrences": [],
+        "review_evidence": {
+            "dimensions": "correctness and completeness",
+            "largest_residual_risk": "More findings remain undiscovered.",
+            "break_condition": "A capacity-sized partial set becomes authoritative.",
+        },
+        "pre_mortem": "The result could look complete at the exact limit.",
+    }
+
+    stopped = parse_native_contract_result(document, context)
+
+    assert stopped.stopped is True
+    assert stopped.stop_request is not None
+    assert stopped.stop_request.rule_id == DISCOVERY_OUTPUT_LIMIT_RULE_ID
+    assert stopped.findings == context.previous_findings
+
+    overflow = deepcopy(document)
+    overflow["new_findings"].append(
+        {
+            "finding_id": "C-02",
+            "finding_class": "OBSERVATION",
+            "summary": "A second finding exceeds the request-bound capacity.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Reject the whole result instead of slicing the list.",
+            },
+        }
+    )
+    with pytest.raises(NativeReviewContractError, match="exceeds request-bound"):
+        parse_native_contract_result(overflow, context)
+
+    missing_scan = deepcopy(document)
+    del missing_scan["scan_complete"]
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(missing_scan, context)
+    assert raised.value.code is NativeReviewErrorCode.SCHEMA_INVALID
+
+    incomplete = deepcopy(document)
+    incomplete["new_findings"] = []
+    incomplete["scan_complete"] = False
+    with pytest.raises(NativeReviewContractError, match="scan_complete=true"):
+        parse_native_contract_result(incomplete, context)
 
 
 @pytest.mark.parametrize(

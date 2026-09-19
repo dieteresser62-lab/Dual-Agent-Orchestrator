@@ -29,7 +29,7 @@ class SchemaMismatch(Exception):
 _SCHEMA_ANNOTATIONS = {"$schema", "$id", "title", "description"}
 _SCHEMA_KEYWORDS = {
     "$ref", "$defs", "type", "enum", "const", "pattern", "format",
-    "minLength", "maxLength", "minimum", "required", "properties",
+    "minLength", "maxLength", "minimum", "maximum", "required", "properties",
     "additionalProperties", "items", "minItems", "maxItems", "uniqueItems",
     "allOf", "anyOf", "oneOf", "if", "then", "else",
 }
@@ -210,6 +210,8 @@ def _validate_schema_node(
     if isinstance(value, int) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             raise SchemaMismatch(path, f"must be at least {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise SchemaMismatch(path, f"must be at most {schema['maximum']}")
 
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):

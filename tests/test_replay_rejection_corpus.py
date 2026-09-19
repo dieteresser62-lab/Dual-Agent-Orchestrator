@@ -626,6 +626,7 @@ def _branch_export_prefix(
                 transport_schema="native-claude-review-v2",
                 request_id="native-review-request-" + "c" * 64,
                 response_sha256=RESPONSE_SHA,
+                scan_complete=True,
             )
         ),
         logical_id="review-claude-discovery-1",
@@ -945,6 +946,7 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                     transport_schema="native-claude-review-v2",
                     request_id="native-review-request-" + "c" * 64,
                     response_sha256=RESPONSE_SHA,
+                    scan_complete=True,
                 )
             ),
         )

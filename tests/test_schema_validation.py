@@ -43,6 +43,18 @@ def test_public_schema_validator_enforces_writer_max_length() -> None:
     assert raised.value.message == "must contain at most 3 character(s)"
 
 
+def test_public_schema_validator_enforces_integer_maximum() -> None:
+    schema = {"type": "integer", "minimum": 1, "maximum": 512}
+    check_schema(schema)
+    validate_schema_document(512, schema)
+
+    with pytest.raises(SchemaMismatch) as raised:
+        validate_schema_document(513, schema)
+
+    assert raised.value.path == ()
+    assert raised.value.message == "must be at most 512"
+
+
 @pytest.mark.parametrize(
     ("value", "valid"),
     (("2026-08-22T10:00:00+02:00", True), ("2026-08-22T10:00:00", False)),

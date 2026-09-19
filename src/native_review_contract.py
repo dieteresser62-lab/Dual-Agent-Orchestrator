@@ -69,6 +69,9 @@ from native_finding_decisions import (
 
 SCHEMA_VERSION = "native-agent-review-result-v2"
 MAX_NATIVE_REVIEW_DISPOSITIONS = 32
+DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS = 128
+MAX_BRANCH_DISCOVERY_NEW_FINDINGS = 512
+DISCOVERY_OUTPUT_LIMIT_RULE_ID = "DISCOVERY_OUTPUT_LIMIT"
 NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
 NONBLANK_LINE_PATTERN = (
     "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
@@ -378,6 +381,7 @@ class NativeBranchDiscoveryCompleted:
 
     request_id: str
     reviewer: AgentRole
+    scan_complete: bool
     new_findings: tuple[NativeFinding, ...]
     occurrences: tuple[NativeFindingOccurrence, ...]
     evidence: ReviewEvidence
@@ -396,6 +400,41 @@ class NativeStopResult:
 NativeReviewResponse: TypeAlias = (
     NativeReviewResult | NativeBranchDiscoveryCompleted | NativeStopResult
 )
+
+
+def _validated_branch_discovery_capacity(
+    approval_marker: ApprovalMarker,
+    capacity: int | None,
+) -> int | None:
+    if approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+        if capacity is not None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "max_new_findings is valid only for a branch discovery review",
+            )
+        return None
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "branch discovery review requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        )
+    normalized = (
+        DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS
+        if capacity is None
+        else capacity
+    )
+    if (
+        isinstance(normalized, bool)
+        or not isinstance(normalized, int)
+        or normalized < 1
+        or normalized > MAX_BRANCH_DISCOVERY_NEW_FINDINGS
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "branch discovery max_new_findings must be an integer from 1 to "
+            f"{MAX_BRANCH_DISCOVERY_NEW_FINDINGS}",
+        )
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,18 +459,18 @@ class NativeReviewContext:
     red_state_followup_slice: str | None = None
     plan_artifact_path: str | None = None
     final_review_pending_count: int | None = None
+    max_new_findings: int | None = None
     implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
     planned_slices: tuple[PlannedSlice, ...] = ()
 
     def __post_init__(self) -> None:
-        if (
-            self.approval_marker is ApprovalMarker.BRANCH_DISCOVERY
-            and not native_finding_decisions.native_finding_decisions_enabled()
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                "branch discovery review requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-            )
+        object.__setattr__(
+            self,
+            "max_new_findings",
+            _validated_branch_discovery_capacity(
+                self.approval_marker, self.max_new_findings
+            ),
+        )
         for label, value in (
             ("run_id", self.run_id),
             ("work_unit_id", self.work_unit_id),
@@ -765,9 +804,10 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                         "pattern": "^native-review-request-[0-9a-f]{64}$",
                     },
                     "reviewer": {"const": "claude"},  # allowlist:provider -- canonical reviewer role
+                    "scan_complete": {"type": "boolean"},
                     "new_findings": {
                         "type": "array",
-                        "maxItems": 32,
+                        "maxItems": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
                         "items": {"$ref": "#/$defs/finding"},
                     },
                     "occurrences": {
@@ -789,6 +829,7 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                     "result_type",
                     "request_id",
                     "reviewer",
+                    "scan_complete",
                     "new_findings",
                     "occurrences",
                     "review_evidence",
@@ -818,7 +859,10 @@ def _branch_discovery_provider_response_schema(
             NativeReviewErrorCode.CONTEXT_INVALID,
             "branch discovery writer requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
         )
-    finding_ids = _native_finding_id_window(context, size=32)
+    assert context.max_new_findings is not None
+    finding_ids = _native_finding_id_window(
+        context, size=context.max_new_findings
+    )
     finding = _bound_review_definition(
         definitions["finding"], finding_ids=finding_ids
     )
@@ -848,6 +892,13 @@ def _branch_discovery_provider_response_schema(
         "type": "string",
         "const": context.reviewer.value,
     }
+    completed["properties"]["scan_complete"] = {
+        "type": "boolean",
+        "const": True,
+    }
+    completed["properties"]["new_findings"]["maxItems"] = (
+        context.max_new_findings
+    )
     completed["properties"]["new_findings"]["items"] = {
         "$ref": "#/$defs/bound_branch_discovery_finding"
     }
@@ -864,6 +915,10 @@ def _branch_discovery_provider_response_schema(
     )
     stop["properties"]["rationale"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
+    )
+    stop["properties"]["rule_id"]["description"] = (
+        f"Use {DISCOVERY_OUTPUT_LIMIT_RULE_ID} when the scan reaches the "
+        "request-bound max_new_findings capacity; no partial result is authoritative."
     )
     definitions["bound_branch_discovery_stop"] = stop
     return {
@@ -1352,6 +1407,7 @@ def _parse_native_review_response(
         discovery = NativeBranchDiscoveryCompleted(
             request_id=document["request_id"],
             reviewer=reviewer,
+            scan_complete=document["scan_complete"],
             new_findings=tuple(
                 _parse_native_finding(item) for item in document["new_findings"]
             ),
@@ -1362,6 +1418,18 @@ def _parse_native_review_response(
             evidence=discovery_evidence,
             pre_mortem=document["pre_mortem"],
         )
+        assert context.max_new_findings is not None
+        if len(discovery.new_findings) == context.max_new_findings:
+            return NativeStopResult(
+                request_id=document["request_id"],
+                reviewer=reviewer,
+                rule_id=DISCOVERY_OUTPUT_LIMIT_RULE_ID,
+                rationale=(
+                    "Branch discovery reached the request-bound max_new_findings "
+                    f"capacity of {context.max_new_findings}; the partial finding "
+                    "set is not authoritative and automatic continuation is forbidden."
+                ),
+            )
         _validate_branch_discovery_completed(discovery, context)
         return discovery
 
@@ -1507,6 +1575,7 @@ def _native_response_to_contract_result(
                 FindingOccurrence(item.finding_id, item.rationale)
                 for item in response.occurrences
             ),
+            scan_complete=response.scan_complete,
         )
 
     response = _coalesce_known_finding_occurrences(response, context)
@@ -2002,6 +2071,26 @@ def _validate_branch_discovery_completed(
             NativeReviewErrorCode.APPROVAL_INVALID,
             "BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker",
         )
+    if response.scan_complete is not True:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "branch discovery completion requires scan_complete=true",
+        )
+    assert context.max_new_findings is not None
+    finding_count = len(response.new_findings)
+    if finding_count > context.max_new_findings:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            "branch discovery new finding count "
+            f"{finding_count} exceeds request-bound max_new_findings "
+            f"{context.max_new_findings}",
+        )
+    if finding_count == context.max_new_findings:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            f"{DISCOVERY_OUTPUT_LIMIT_RULE_ID}: a capacity-sized discovery result "
+            "must stop without making the partial finding set authoritative",
+        )
     _require_native_text(
         response.pre_mortem,
         "branch discovery pre_mortem",
@@ -2423,6 +2512,8 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         binding["plan_artifact_path"] = context.plan_artifact_path
     if context.approval_marker is ApprovalMarker.FINAL:
         binding["final_review_pending_count"] = context.final_review_pending_count
+    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
+        binding["max_new_findings"] = context.max_new_findings
     if native_finding_decisions.native_finding_decisions_enabled():
         binding["implementer_responsibility_proposals"] = [
             {

@@ -26,6 +26,8 @@ from contracts import (
 )
 from native_review_contract import (
     BoundNativeReviewContext,
+    DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS,
+    MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
@@ -266,6 +268,118 @@ def test_plan_disposition_overflow_stops_before_request_construction(
 
     with pytest.raises(NativeReviewRequestError, match="PLAN_DISPOSITION_LIMIT"):
         build_native_review_request(spec)
+
+
+def test_branch_discovery_request_binds_default_and_hard_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    context = replace(
+        _context(),
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        anchor_origin=None,
+    )
+    spec = replace(
+        _spec(),
+        context=context,
+        review_kind=NativeReviewKind.BRANCH_DISCOVERY,
+    )
+
+    default_bundle = build_native_review_request(spec)
+
+    assert context.max_new_findings == DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS
+    assert default_bundle.document["review_contract"]["max_new_findings"] == 128
+    completed = default_bundle.provider_response_schema["$defs"][
+        "bound_branch_discovery_completed"
+    ]
+    assert completed["properties"]["new_findings"]["maxItems"] == 128
+    assert completed["properties"]["scan_complete"] == {
+        "type": "boolean",
+        "const": True,
+    }
+    assert "scan_complete" in completed["required"]
+
+    maximum = replace(context, max_new_findings=MAX_BRANCH_DISCOVERY_NEW_FINDINGS)
+    maximum_bundle = build_native_review_request(replace(spec, context=maximum))
+    assert maximum_bundle.document["review_contract"]["max_new_findings"] == 512
+    assert maximum_bundle.provider_response_schema["$defs"][
+        "bound_branch_discovery_completed"
+    ]["properties"]["new_findings"]["maxItems"] == 512
+
+
+@pytest.mark.parametrize("capacity", (0, 513, True))
+def test_branch_discovery_request_rejects_capacity_outside_one_to_512(
+    monkeypatch: pytest.MonkeyPatch,
+    capacity: object,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    with pytest.raises(NativeReviewContractError, match="from 1 to 512"):
+        replace(
+            _context(),
+            operation="claude_final_review",
+            approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+            anchor_origin=None,
+            max_new_findings=capacity,
+        )
+
+
+def test_branch_discovery_contract_has_no_pagination_or_cursor_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    context = replace(
+        _context(),
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        anchor_origin=None,
+    )
+    bundle = build_native_review_request(
+        replace(
+            _spec(),
+            context=context,
+            review_kind=NativeReviewKind.BRANCH_DISCOVERY,
+        )
+    )
+
+    property_names: set[str] = set()
+
+    def collect(node: object) -> None:
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                property_names.update(properties)
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    collect(bundle.document)
+    collect(bundle.provider_response_schema)
+    assert property_names.isdisjoint(
+        {
+            "cursor",
+            "next_cursor",
+            "page",
+            "page_size",
+            "pagination",
+            "continuation",
+            "continuation_token",
+        }
+    )
 
 
 def test_default_provider_schema_remains_anchor_capable() -> None:

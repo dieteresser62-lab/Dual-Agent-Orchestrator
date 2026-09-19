@@ -37,7 +37,10 @@ from finding_cleanup import (
     is_finding_cleanup_work_unit,
 )
 from finding_convergence import SliceConvergenceEvaluation
-from native_review_contract import find_native_review_disposition_limit_error
+from native_review_contract import (
+    DISCOVERY_OUTPUT_LIMIT_RULE_ID,
+    find_native_review_disposition_limit_error,
+)
 from finding_reducer import (
     merge_review_request_result,
     merge_request_result,
@@ -4050,7 +4053,15 @@ class WorkflowEngine:
         context: WorkflowContext,
         stop_request: StopRequest,
     ) -> WorkflowState:
-        if stop_request.rule_id not in context.known_stop_rule_ids:
+        discovery_output_limit = (
+            native_finding_decisions.native_finding_decisions_enabled()
+            and state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+            and stop_request.rule_id == DISCOVERY_OUTPUT_LIMIT_RULE_ID
+        )
+        if (
+            stop_request.rule_id not in context.known_stop_rule_ids
+            and not discovery_output_limit
+        ):
             raise WorkflowExecutionError(
                 f"STOP_REQUESTED references unknown rule {stop_request.rule_id!r}"
             )

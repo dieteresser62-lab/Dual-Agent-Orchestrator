@@ -1106,6 +1106,7 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
                 "red_state_followup_slice",
                 "delivery_kind",
                 "occurrences",
+                "scan_complete",
         },
         ("src/artifact_models.py", "ReviewPayload"): {
             "reviewer",

@@ -27,6 +27,7 @@ from native_codex_request import (
     build_native_codex_request,
 )
 from native_review_contract import (
+    DISCOVERY_OUTPUT_LIMIT_RULE_ID,
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     NativeReviewErrorCode,
@@ -273,6 +274,7 @@ def _native_review_acceptance_criteria(
     history: Any,
     contract: StepContract,
     review_kind: NativeReviewKind,
+    max_new_findings: int | None,
     plan_artifact_path: str | None,
     correction_goal: str | None,
     correction_criteria: tuple[str, ...],
@@ -323,6 +325,17 @@ def _native_review_acceptance_criteria(
         )
         else None
     )
+    discovery_capacity_criterion = (
+        "This branch discovery request binds max_new_findings="
+        f"{max_new_findings}. Return "
+        "BRANCH_DISCOVERY_COMPLETED only after a complete scan and set "
+        "scan_complete=true. If the scan reaches that capacity, return a stop_request "
+        f"with rule_id={DISCOVERY_OUTPUT_LIMIT_RULE_ID}; the partial finding set is "
+        "not authoritative, must not be truncated, and must not be continued through "
+        "pages, cursors, or another automatic provider call."
+        if review_kind is NativeReviewKind.BRANCH_DISCOVERY
+        else None
+    )
     return tuple(
         dict.fromkeys(
             criterion
@@ -331,6 +344,7 @@ def _native_review_acceptance_criteria(
                 artifact_criterion,
                 final_criterion,
                 correction_criterion,
+                discovery_capacity_criterion,
                 FINDING_SIGNATURE_REVIEW_CRITERION,
                 "The decision must satisfy the bound review contract and the "
                 "fingerprint-matching deterministic validation attestation.",
@@ -465,9 +479,7 @@ def native_review_request(
         test_changes_approved=contract.test_changes_approved,
         allow_new_observations=contract.allow_new_observations,
         anchor_origin=contract.anchor_origin,
-        validation_command_prefixes=(
-            context.validation_matrix.finding_command_prefixes
-        ),
+        validation_command_prefixes=context.validation_matrix.finding_command_prefixes,
         red_state_followup_slice=contract.red_state_followup_slice,
         plan_artifact_path=plan_artifact_path,
         final_review_pending_count=(
@@ -569,6 +581,7 @@ def native_review_request(
         history=history,
         contract=contract,
         review_kind=review_kind,
+        max_new_findings=native_context.max_new_findings,
         plan_artifact_path=plan_artifact_path,
         correction_goal=correction_goal,
         correction_criteria=correction_criteria,

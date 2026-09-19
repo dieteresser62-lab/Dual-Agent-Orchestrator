@@ -820,6 +820,7 @@ class BranchDiscoveryCompletedPayload:
     transport_schema: str
     request_id: str
     response_sha256: str
+    scan_complete: bool | None = None
     status: ClassVar[str] = "completed"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_COMPLETED
 
@@ -831,6 +832,10 @@ class BranchDiscoveryCompletedPayload:
         if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
             raise ArtifactValidationError(
                 "branch discovery completion reviewer must be claude"  # allowlist:provider -- diagnostic role
+            )
+        if self.scan_complete is not True:
+            raise ArtifactValidationError(
+                "branch discovery completion requires scan_complete=true"
             )
         _require_identifier(self.work_unit_id, "work_unit_id")
         new_ids = tuple(item.finding_id for item in self.new_findings)
@@ -2540,6 +2545,11 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("review_evidence", None)
         if payload.red_state_followup_slice is None:
             raw.pop("red_state_followup_slice", None)
+    if (
+        isinstance(payload, BranchDiscoveryCompletedPayload)
+        and payload.scan_complete is None
+    ):
+        raw.pop("scan_complete", None)
     if isinstance(payload, FindingTransitionPayload):
         if payload.responsibility is None:
             raw.pop("responsibility", None)
@@ -2976,6 +2986,7 @@ _PAYLOAD_READERS: dict[
             transport_schema=data["transport_schema"],
             request_id=data["request_id"],
             response_sha256=data["response_sha256"],
+            scan_complete=data.get("scan_complete"),
         ),
     RecordType.REVIEW_ANCHOR: lambda data: ReviewAnchorPayload(
             data["review_record_id"],

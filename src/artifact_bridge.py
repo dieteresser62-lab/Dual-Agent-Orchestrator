@@ -334,6 +334,7 @@ def branch_discovery_completed_payload(
         transport_schema=transport_schema,
         request_id=request_id,
         response_sha256=response_sha256,
+        scan_complete=result.scan_complete,
     )
 
 

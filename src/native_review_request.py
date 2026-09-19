@@ -15,6 +15,7 @@ from finding_responsibility import responsibility_json_schema
 import native_finding_decisions
 from native_review_contract import (
     BoundNativeReviewContext,
+    MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     NativeReviewErrorCode,
@@ -423,6 +424,17 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
             "final reviews alone must bind review_contract.disposition_budget",
         )
+    has_discovery_capacity = (
+        isinstance(review_contract, Mapping)
+        and "max_new_findings" in review_contract
+    )
+    if (
+        document.get("review_kind") == NativeReviewKind.BRANCH_DISCOVERY.value
+    ) != has_discovery_capacity:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.SCHEMA_INVALID,
+            "branch discovery reviews alone must bind review_contract.max_new_findings",
+        )
     if has_disposition_budget:
         assert isinstance(review_contract, Mapping)
         budget = review_contract["disposition_budget"]
@@ -623,6 +635,10 @@ def _review_context_request_projection(
             "eligible_finding_ids": list(eligible_ids),
             "pending_finding_count": context.final_review_pending_count,
         }
+    if review_kind == NativeReviewKind.BRANCH_DISCOVERY.value:
+        review_contract["max_new_findings"] = context_binding[
+            "max_new_findings"
+        ]
     if native_finding_decisions.native_finding_decisions_enabled():
         review_contract["implementer_responsibility_proposals"] = context_binding[
             "implementer_responsibility_proposals"
@@ -744,6 +760,11 @@ def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:
     contract["properties"]["approval_marker"]["enum"].append(
         ApprovalMarker.BRANCH_DISCOVERY.value
     )
+    contract["properties"]["max_new_findings"] = {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+    }
     request = definitions["review_request"]
     request["properties"]["review_kind"]["enum"].append(
         NativeReviewKind.BRANCH_DISCOVERY.value
