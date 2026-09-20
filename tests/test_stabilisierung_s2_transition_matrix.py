@@ -326,6 +326,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "status",
         "current_step",
         "round_number",
+        "request_sequence",
         "codex_return_count",
         "max_codex_returns",
         "gate",
@@ -342,6 +343,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "slice_id",
         "step",
         "round_number",
+        "request_sequence",
         "completed_side_effects",
     },
     "BootstrapCheckFact": {

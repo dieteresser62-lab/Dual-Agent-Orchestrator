@@ -157,6 +157,22 @@ def _positive_int(raw: object, label: str) -> int:
     return raw
 
 
+def _request_sequence(raw: Mapping[str, object], label: str) -> int:
+    """Read the B152 name while accepting the pre-B152 scenario spelling."""
+
+    present = tuple(
+        key for key in ("request_sequence", "round_number") if key in raw
+    )
+    if not present:
+        raise DryRunScenarioError(f"{label} is missing key 'request_sequence'")
+    if len(present) != 1:
+        raise DryRunScenarioError(
+            f"{label} must not contain both 'request_sequence' and 'round_number'"
+        )
+    key = present[0]
+    return _positive_int(raw[key], f"{label}.{key}")
+
+
 def _mapping(raw: object, label: str) -> Mapping[str, object]:
     if not isinstance(raw, dict):
         raise DryRunScenarioError(f"{label} must be an object")
@@ -255,7 +271,7 @@ class ScriptedFailure:
 class ScriptedAgentEvent:
     role: AgentRole
     work_unit_id: int
-    round_number: int
+    request_sequence: int
     step: WorkflowStep
     output: Mapping[str, object] | None = None
     failure: ScriptedFailure | None = None
@@ -263,7 +279,7 @@ class ScriptedAgentEvent:
     def __post_init__(self) -> None:
         if self.role not in {AgentRole.CODEX, AgentRole.CLAUDE}:
             raise ValueError("scripted event requires a workflow role")
-        if self.work_unit_id < 1 or self.round_number < 1:
+        if self.work_unit_id < 1 or self.request_sequence < 1:
             raise ValueError("scripted event identity must be 1-based")
         if (self.output is None) == (self.failure is None):
             raise ValueError("scripted event requires exactly one of output or failure")
@@ -273,8 +289,8 @@ class ScriptedAgentEvent:
         label = f"agent_events[{index}]"
         _require_exact_keys(
             raw,
-            {"role", "work_unit_id", "round_number", "step"},
-            {"output", "failure"},
+            {"role", "work_unit_id", "step"},
+            {"request_sequence", "round_number", "output", "failure"},
             label,
         )
         try:
@@ -295,7 +311,7 @@ class ScriptedAgentEvent:
             return cls(
                 role,
                 _positive_int(raw["work_unit_id"], f"{label}.work_unit_id"),
-                _positive_int(raw["round_number"], f"{label}.round_number"),
+                _request_sequence(raw, label),
                 step,
                 output,
                 failure,
@@ -307,7 +323,7 @@ class ScriptedAgentEvent:
 @dataclass(frozen=True)
 class ScriptedChange:
     work_unit_id: int
-    round_number: int
+    request_sequence: int
     start_commit: str
     fingerprint: str
     paths: tuple[str, ...]
@@ -329,13 +345,13 @@ class ScriptedChange:
         label = f"changes[{index}]"
         _require_exact_keys(
             raw,
-            {"work_unit_id", "round_number", "start_commit", "fingerprint", "paths", "full_diff"},
-            {"gate_paths"},
+            {"work_unit_id", "start_commit", "fingerprint", "paths", "full_diff"},
+            {"request_sequence", "round_number", "gate_paths"},
             label,
         )
         return cls(
             _positive_int(raw["work_unit_id"], f"{label}.work_unit_id"),
-            _positive_int(raw["round_number"], f"{label}.round_number"),
+            _request_sequence(raw, label),
             _string(raw["start_commit"], f"{label}.start_commit"),
             _string(raw["fingerprint"], f"{label}.fingerprint"),
             _string_tuple(raw["paths"], f"{label}.paths"),
@@ -932,7 +948,7 @@ class ScriptedWorkflowDriver:
         self.active_state = state
         self._active_identity = (
             state.current_work_unit_id,
-            state.current_work_unit.round_number,
+            state.current_work_unit.request_sequence,
         )
 
     def authoritative_native_findings(
@@ -1035,27 +1051,35 @@ class ScriptedWorkflowDriver:
         *,
         role: AgentRole,
         work_unit_id: int,
-        round_number: int,
+        request_sequence: int,
         step: WorkflowStep,
     ) -> Mapping[str, object]:
         if self._agent_index >= len(self.scenario.agent_events):
             raise DryRunScenarioError(
-                f"missing scripted response for {role.value}/{work_unit_id}/{round_number}/{step.value}"
+                "missing scripted response for "
+                f"{role.value}/{work_unit_id}/{request_sequence}/{step.value}"
             )
         event = self.scenario.agent_events[self._agent_index]
-        expected = (role, work_unit_id, round_number, step)
-        actual = (event.role, event.work_unit_id, event.round_number, event.step)
+        expected = (role, work_unit_id, request_sequence, step)
+        actual = (
+            event.role,
+            event.work_unit_id,
+            event.request_sequence,
+            event.step,
+        )
         if actual != expected:
             raise DryRunScenarioError(
                 "scripted role order mismatch: expected "
-                f"{role.value}/{work_unit_id}/{round_number}/{step.value}, got "
-                f"{event.role.value}/{event.work_unit_id}/{event.round_number}/{event.step.value}"
+                f"{role.value}/{work_unit_id}/{request_sequence}/{step.value}, got "
+                f"{event.role.value}/{event.work_unit_id}/"
+                f"{event.request_sequence}/{event.step.value}"
             )
         self._agent_index += 1
         if role is AgentRole.CODEX:
-            self._active_identity = (work_unit_id, round_number)
+            self._active_identity = (work_unit_id, request_sequence)
         self.calls.append(
-            f"agent:{role.value}:work-unit-{work_unit_id}:round-{round_number}:{step.value}"
+            f"agent:{role.value}:work-unit-{work_unit_id}:"
+            f"request-{request_sequence}:{step.value}"
         )
         if event.failure is not None:
             raise event.failure.to_exception(
@@ -1070,7 +1094,7 @@ class ScriptedWorkflowDriver:
         document = self._consume_agent(
             role=AgentRole.CODEX,
             work_unit_id=invocation.work_unit_id,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
             step=invocation.step,
         )
         if invocation.native_request is None:
@@ -1106,7 +1130,7 @@ class ScriptedWorkflowDriver:
         document = self._consume_agent(
             role=invocation.reviewer,
             work_unit_id=invocation.work_unit_id,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
             step=invocation.step,
         )
         if invocation.native_request is None:
@@ -1153,7 +1177,7 @@ class ScriptedWorkflowDriver:
         matches = tuple(
             item
             for item in self.scenario.changes
-            if (item.work_unit_id, item.round_number) == self._active_identity
+            if (item.work_unit_id, item.request_sequence) == self._active_identity
         )
         if not matches:
             raise DryRunScenarioError(
@@ -1167,7 +1191,9 @@ class ScriptedWorkflowDriver:
             raise DryRunScenarioError(
                 f"scripted start commit {match.start_commit} differs from {start_commit}"
             )
-        self.calls.append(f"changes:{match.work_unit_id}:round-{match.round_number}")
+        self.calls.append(
+            f"changes:{match.work_unit_id}:request-{match.request_sequence}"
+        )
         return match.workflow_changes
 
     def collect_correction_delta(
@@ -1182,7 +1208,8 @@ class ScriptedWorkflowDriver:
             (
                 item
                 for item in self.scenario.changes
-                if (item.work_unit_id, item.round_number) == self._active_identity
+                if (item.work_unit_id, item.request_sequence)
+                == self._active_identity
                 and item.fingerprint == current_fingerprint
             ),
             None,
@@ -1872,7 +1899,8 @@ def _run_scripted_workflow(
         change = next(
             item
             for item in scenario.changes
-            if item.work_unit_id == next_work_unit_id and item.round_number == 1
+            if item.work_unit_id == next_work_unit_id
+            and item.request_sequence == 1
         )
         state = state.start_work_unit(
             slice_id=planned.slice_id,
@@ -1909,7 +1937,7 @@ def _scripted_unified_diff(paths: tuple[str, ...], change: str) -> str:
 
 def _scripted_change(
     work_unit_id: int,
-    round_number: int,
+    request_sequence: int,
     start_commit: str,
     fingerprint: str,
     paths: tuple[str, ...],
@@ -1917,7 +1945,7 @@ def _scripted_change(
 ) -> ScriptedChange:
     return ScriptedChange(
         work_unit_id,
-        round_number,
+        request_sequence,
         start_commit,
         fingerprint,
         paths,
@@ -2130,7 +2158,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 ),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
                 review(approved=False, blockers=("C-02",), closed=("C-01",)),
             ),
             ScriptedAgentEvent(
@@ -2138,7 +2166,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 codex("correction_result", dispositions=("C-02",), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
                 review(approved=True, closed=("C-02",)),
             ),
         ),

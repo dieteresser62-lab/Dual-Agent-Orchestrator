@@ -40,7 +40,7 @@ def _scenario_document() -> dict[str, object]:
             {
                 "role": "codex",
                 "work_unit_id": 1,
-                "round_number": 1,
+                "request_sequence": 1,
                 "step": "codex_plan",
                 "output": _native_plan_result(),
             }
@@ -55,6 +55,16 @@ def test_scenario_accepts_only_native_json_agent_documents() -> None:
     assert event.output == _native_plan_result()
     assert event.role is AgentRole.CODEX
     assert event.step is WorkflowStep.CODEX_PLAN
+
+
+def test_scenario_accepts_legacy_round_spelling_as_request_sequence() -> None:
+    document = _scenario_document()
+    event = document["agent_events"][0]  # type: ignore[index]
+    event["round_number"] = event.pop("request_sequence")  # type: ignore[union-attr]
+
+    parsed = DryRunScenario.from_dict(document).agent_events[0]
+
+    assert parsed.request_sequence == 1
 
 
 def test_scenario_rejects_retired_marker_output() -> None:

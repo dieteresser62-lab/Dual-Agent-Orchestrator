@@ -982,6 +982,7 @@ class WorkUnitRecord:
     status: WorkUnitStatus
     current_step: WorkflowStep
     round_number: int = 1
+    request_sequence: int | None = None
     codex_return_count: int = 0
     max_codex_returns: int = DEFAULT_MAX_CODEX_RETURNS
     gate: GateRecord = GateRecord()
@@ -997,14 +998,17 @@ class WorkUnitRecord:
         _require_positive_int(self.work_unit_id, "work_unit_id")
         _require_positive_int(self.slice_id, "work unit slice_id")
         _require_positive_int(self.round_number, "round_number")
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        assert self.request_sequence is not None
+        _require_positive_int(self.request_sequence, "request_sequence")
         _require_positive_int(self.max_codex_returns, "max_codex_returns")
         if isinstance(self.codex_return_count, bool) or not isinstance(self.codex_return_count, int):
             raise WorkflowStateValidationError("codex_return_count must be an integer")
         if not 0 <= self.codex_return_count <= self.max_codex_returns:
             raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
-        # A workflow round is a semantic invocation identity, not a Codex-return
-        # budget counter.  Fingerprint-bound stop/resume transitions may advance
-        # the round without returning work to Codex, so only
+        # A workflow round is the accepted domain-review round, not a physical
+        # provider attempt or a recomposed-request identity. Only
         # ``codex_return_count`` is bounded by ``max_codex_returns``.
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
@@ -1117,6 +1121,7 @@ class WorkUnitRecord:
             "status": self.status.value,
             "current_step": self.current_step.value,
             "round_number": self.round_number,
+            "request_sequence": self.request_sequence,
             "codex_return_count": self.codex_return_count,
             "max_codex_returns": self.max_codex_returns,
             "gate": self.gate.to_dict(),
@@ -1152,8 +1157,9 @@ class WorkUnitRecord:
             "active_test_paths",
         }
         quota_keys = {*current_keys, "invocation_failures"}
+        request_sequence_keys = {*quota_keys, "request_sequence"}
         invocation_failures: tuple[InvocationFailureRecord, ...] = ()
-        shape_keys = set(raw) - {"invocation_failures"}
+        shape_keys = set(raw) - {"invocation_failures", "request_sequence"}
         if shape_keys == legacy_keys:
             gate_decisions: tuple[GateDecisionRecord, ...] = ()
             active_test_fingerprint = None
@@ -1188,7 +1194,11 @@ class WorkUnitRecord:
                 raw["active_test_paths"], "work_unit.active_test_paths"
             )
         else:
-            _require_exact_keys(raw, quota_keys, "work unit")
+            _require_exact_keys(
+                raw,
+                request_sequence_keys if "request_sequence" in raw else quota_keys,
+                "work unit",
+            )
         if "invocation_failures" in raw:
             raw_failures = _list(
                 raw["invocation_failures"], "work_unit.invocation_failures"
@@ -1207,6 +1217,10 @@ class WorkUnitRecord:
             status=_enum_value(WorkUnitStatus, raw["status"], "work_unit.status"),
             current_step=_enum_value(WorkflowStep, raw["current_step"], "work_unit.current_step"),
             round_number=_positive_int(raw["round_number"], "work_unit.round_number"),
+            request_sequence=_positive_int(
+                raw.get("request_sequence", raw["round_number"]),
+                "work_unit.request_sequence",
+            ),
             codex_return_count=_non_negative_int(
                 raw["codex_return_count"], "work_unit.codex_return_count"
             ),
@@ -1241,6 +1255,7 @@ class ResumeCursor:
     slice_id: int
     step: WorkflowStep
     round_number: int
+    request_sequence: int
     completed_side_effects: tuple[str, ...]
 
     def should_execute(self, side_effect_key: str) -> bool:
@@ -1665,6 +1680,7 @@ class WorkflowState:
             slice_id=current.slice_id,
             step=current.current_step,
             round_number=current.round_number,
+            request_sequence=current.request_sequence,
             completed_side_effects=current.completed_side_effects,
         )
 
@@ -2331,6 +2347,11 @@ class WorkflowState:
             status=(WorkUnitStatus.IN_PROGRESS if continue_rounds else WorkUnitStatus.COMPLETED),
             current_step=(return_step if continue_rounds else WorkflowStep.COMPLETED),
             round_number=(current.round_number + 1 if continue_rounds else current.round_number),
+            request_sequence=(
+                current.request_sequence + 1
+                if continue_rounds
+                else current.request_sequence
+            ),
             codex_return_count=next_count,
             max_codex_returns=next_max,
             gate=GateRecord(),
@@ -2588,17 +2609,19 @@ class WorkflowState:
             updated_unit, slices=slices, updated_at=updated_at
         )
 
-    def start_recomposed_request_round(
+    def start_recomposed_request(
         self, *, updated_at: str | None = None
     ) -> "WorkflowState":
-        """Advance only the round identity after local request recomposition."""
+        """Advance only request identity after local request recomposition."""
 
         current = self.current_work_unit
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             raise WorkflowStateValidationError(
                 "only an in-progress work unit can recompose its provider request"
             )
-        updated_unit = replace(current, round_number=current.round_number + 1)
+        updated_unit = replace(
+            current, request_sequence=current.request_sequence + 1
+        )
         return self._replace_current_unit(
             updated_unit,
             slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
@@ -2642,6 +2665,11 @@ class WorkflowState:
                 current.round_number + 1
                 if continuing_stop_request
                 else current.round_number
+            ),
+            request_sequence=(
+                current.request_sequence + 1
+                if continuing_stop_request
+                else current.request_sequence
             ),
             completed_side_effects=completed_side_effects,
             gate=GateRecord(),

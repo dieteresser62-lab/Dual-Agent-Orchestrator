@@ -136,17 +136,17 @@ def provider_content_idempotency_key(
     *,
     role: Role,
     work_unit_id: int,
-    round_number: int,
+    request_sequence: int,
     operation: str,
     request_id: str,
     response_sha256: str,
 ) -> str:
-    """Bind provider content to every semantic identity field compactly."""
+    """Bind provider content to one physical provider-request identity."""
     identity = json.dumps(
         (
             role.value,
             work_unit_id,
-            round_number,
+            request_sequence,
             operation,
             request_id,
             response_sha256,
@@ -156,6 +156,18 @@ def provider_content_idempotency_key(
     )
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return f"provider-content:{role.value}:{digest}"
+
+
+def workflow_policy_identity_key(unit: WorkUnitRecord, revision: int) -> str:
+    """Bind both logical counters without changing the policy payload schema."""
+
+    base = f"workflow-policy:{unit.work_unit_id}:{revision}"
+    if unit.round_number == 1 and unit.request_sequence == 1:
+        return base
+    return (
+        f"{base}:round:{unit.round_number}:"
+        f"request-sequence:{unit.request_sequence}"
+    )
 
 
 @dataclass(frozen=True)
@@ -184,11 +196,11 @@ class WorkflowPersistence:
         self._dependencies = dependencies
 
     @staticmethod
-    def is_recomposed_round_checkpoint(
+    def is_request_identity_checkpoint(
         active_state: WorkflowState | None,
         state: WorkflowState,
     ) -> bool:
-        """Recognize the sole same-step in-progress round advance."""
+        """Recognize an in-progress transition to the next provider request."""
 
         return (
             active_state is not None
@@ -196,9 +208,13 @@ class WorkflowPersistence:
             and active_state.current_work_unit_id == state.current_work_unit_id
             and active_state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
             and state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-            and active_state.current_step is state.current_step
+            and state.current_work_unit.request_sequence
+            == active_state.current_work_unit.request_sequence + 1
             and state.current_work_unit.round_number
-            == active_state.current_work_unit.round_number + 1
+            in {
+                active_state.current_work_unit.round_number,
+                active_state.current_work_unit.round_number + 1,
+            }
         )
 
     @property
@@ -407,19 +423,42 @@ class WorkflowPersistence:
                 state.task_digest,
             )
 
-        recorded_policies = {
-            item.work_unit_id: item for item in replay.workflow_policies
-        }
         for item in state.work_units:
             work_unit_id = str(item.work_unit_id)
             policy = WorkflowPolicyPayload(
                 work_unit_id,
                 *project_implementer_return_policy(item),
             )
-            if recorded_policies.get(work_unit_id) == policy:
-                continue
             chain = bridge.store.current_chain()
             logical_id = f"workflow-policy-{work_unit_id}"
+            prior = next(
+                (
+                    record
+                    for record in reversed(chain)
+                    if record.record_type is RecordType.WORKFLOW_POLICY
+                    and record.logical_id == logical_id
+                ),
+                None,
+            )
+            identity_suffix = (
+                f":round:{item.round_number}:"
+                f"request-sequence:{item.request_sequence}"
+            )
+            prior_has_identity = (
+                prior is not None
+                and (
+                    prior.idempotency_key.endswith(identity_suffix)
+                    or (
+                        item.round_number == 1
+                        and item.request_sequence == 1
+                        and ":round:" not in prior.idempotency_key
+                        and ":recomposed-request:" not in prior.idempotency_key
+                        and ":recomposed-round:" not in prior.idempotency_key
+                    )
+                )
+            )
+            if prior is not None and prior.payload == policy and prior_has_identity:
+                continue
             revision = 1 + max(
                 (
                     record.revision for record in chain
@@ -431,15 +470,15 @@ class WorkflowPersistence:
             bridge.append(
                 policy,
                 logical_id=logical_id,
-                idempotency_key=f"workflow-policy:{work_unit_id}:{revision}",
+                idempotency_key=workflow_policy_identity_key(item, revision),
                 fingerprint_sha256=state.task_digest,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
 
-    def _persist_recomposed_round_prerequisites(
+    def _persist_request_identity_prerequisites(
         self, state: WorkflowState
     ) -> None:
-        """Persist the R2 cursor and policy before its work-unit round revision."""
+        """Persist both counters before the redundant work-unit projection."""
 
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
@@ -448,7 +487,8 @@ class WorkflowPersistence:
         work_unit_id = str(unit.work_unit_id)
         idempotency_key = (
             f"workflow-policy:{work_unit_id}:"
-            f"recomposed-round:{unit.round_number}"
+            f"recomposed-request:{unit.request_sequence}:"
+            f"round:{unit.round_number}"
         )
         chain = bridge.store.current_chain()
         if any(record.idempotency_key == idempotency_key for record in chain):
@@ -801,7 +841,7 @@ class WorkflowPersistence:
         *,
         role: Role,
         work_unit_id: int,
-        round_number: int,
+        request_sequence: int,
         operation: str,
         request_id: str,
         canonical: str,
@@ -817,7 +857,9 @@ class WorkflowPersistence:
         payload = ProviderContentPayload(
             role=role,
             work_unit_id=str(work_unit_id),
-            round_number=round_number,
+            # The artifact field name is retained for structured-v2 wire
+            # compatibility; its value is the provider-request sequence.
+            round_number=request_sequence,
             operation=operation,
             request_id=request_id,
             response_sha256=blob.sha256,
@@ -834,7 +876,7 @@ class WorkflowPersistence:
             idempotency_key=provider_content_idempotency_key(
                 role=role,
                 work_unit_id=work_unit_id,
-                round_number=round_number,
+                request_sequence=request_sequence,
                 operation=operation,
                 request_id=request_id,
                 response_sha256=blob.sha256,
@@ -863,7 +905,10 @@ class WorkflowPersistence:
                 "native Codex persistence lacks its immutable transport binding"
             )
         unit = state.current_work_unit
-        logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
+        logical = (
+            f"agent-{unit.work_unit_id}-{state.current_step.value}-"
+            f"{unit.request_sequence}"
+        )
         payload = agent_result_payload(
             output.result,
             role=AgentRole.CODEX,
@@ -908,7 +953,7 @@ class WorkflowPersistence:
         content_record = self._persist_provider_content(
             role=Role.CODEX,
             work_unit_id=unit.work_unit_id,
-            round_number=unit.round_number,
+            request_sequence=unit.request_sequence,
             operation=state.current_step.value,
             request_id=output.request_id,
             canonical=output.canonical_json,
@@ -1091,6 +1136,7 @@ class WorkflowPersistence:
             or native_context.work_unit_id != str(unit.work_unit_id)
             or native_context.diff_fingerprint != fingerprint
             or native_context.round_number != round_number
+            or native_context.request_sequence != unit.request_sequence
             or native_context.reviewer is not output.result.reviewer
             or native_context.validation_attestation != output.result.validation
             or (
@@ -1130,7 +1176,7 @@ class WorkflowPersistence:
         content_record = self._persist_provider_content(
             role=Role(output.result.reviewer.value),
             work_unit_id=unit.work_unit_id,
-            round_number=round_number,
+            request_sequence=unit.request_sequence,
             operation=state.current_step.value,
             request_id=output.request_id,
             canonical=output.canonical_json,

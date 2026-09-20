@@ -273,6 +273,10 @@
           "type": "integer",
           "minimum": 1
         },
+        "request_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
         "next_finding_id": {
           "type": "string",
           "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
@@ -366,6 +370,7 @@
         "approval_marker",
         "slice_id",
         "round_number",
+        "request_sequence",
         "next_finding_id",
         "previous_findings",
         "known_open_finding_signatures",

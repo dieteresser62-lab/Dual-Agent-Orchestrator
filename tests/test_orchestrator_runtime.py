@@ -915,7 +915,7 @@ def test_removing_failure_log_attempt_suffix_recreates_the_open_intent(
         driver._reconcile_pending_side_effects(driver.active_state or state)
 
 
-def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stops(
+def test_recomposed_request_opens_new_sequence_and_operation_but_binding_drift_stops(
     tmp_path: Path,
 ) -> None:
     branch = "feature/request-recomposition"
@@ -977,7 +977,7 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
     first = driver._start_provider_attempt(
         first_measurement,
         first_bootstrap,
-        operation_instance="round:1",
+        operation_instance="request:1",
         durable_response_path=repository / ".orchestrator" / "first.json",
     )
     driver._finish_provider_attempt(first, 1.0, "runtime", None)
@@ -996,7 +996,7 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
         driver._start_provider_attempt(
             changed_binding_measurement,
             changed_binding_bootstrap,
-            operation_instance="round:1",
+            operation_instance="request:1",
             durable_response_path=repository / ".orchestrator" / "foreign.json",
         )
 
@@ -1008,7 +1008,7 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
         driver._start_provider_attempt(
             changed_request,
             changed_bootstrap,
-            operation_instance="round:1",
+            operation_instance="request:1",
             durable_response_path=repository / ".orchestrator" / "changed.json",
         )
     assert (
@@ -1018,14 +1018,15 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
     )
 
     # This is the durable tail left by a crash immediately before the work-unit
-    # round revision.  Its cursor and policy are safe to repeat, but replay must
-    # still expose round 1 until the authoritative work-unit fact is appended.
-    pending_round = active.start_recomposed_request_round()
-    driver._persist_recomposed_round_prerequisites(pending_round)
+    # request-sequence revision. The prerequisite policy record is itself the
+    # durable request identity, so replay already exposes sequence 2 even if a
+    # crash prevents the redundant work-unit projection revision.
+    pending_request = active.start_recomposed_request()
+    driver._persist_request_identity_prerequisites(pending_request)
     assert (
         resolve_resume_state(repository, state.run_id)
-        .state.current_work_unit.round_number
-        == 1
+        .state.current_work_unit.request_sequence
+        == 2
     )
 
     history = WorkflowHistory(active.current_work_unit_id)
@@ -1037,17 +1038,19 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
         lambda: driver._start_provider_attempt(
             changed_request,
             changed_bootstrap,
-            operation_instance="round:1",
+            operation_instance="request:1",
             durable_response_path=repository / ".orchestrator" / "changed.json",
         ),
     )
 
     assert output is None
-    assert advanced.current_work_unit.round_number == 2
+    assert advanced.current_work_unit.round_number == 1
+    assert advanced.current_work_unit.request_sequence == 2
     active = driver.active_state
-    assert active is not None and active.current_work_unit.round_number == 2
+    assert active is not None and active.current_work_unit.request_sequence == 2
     replayed = resolve_resume_state(repository, state.run_id).state
-    assert replayed.current_work_unit.round_number == 2
+    assert replayed.current_work_unit.round_number == 1
+    assert replayed.current_work_unit.request_sequence == 2
     chain = ArtifactStore(repository, state.run_id).load_chain()
     round_records = tuple(
         record
@@ -1055,22 +1058,37 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
         if isinstance(record.payload, WorkUnitPayload)
         and record.logical_id == f"work-unit-{state.current_work_unit_id}"
     )
-    assert tuple(record.payload.round_number for record in round_records) == (1, 2)
-    round_record_index = chain.index(round_records[-1])
-    transition, event, policy = chain[round_record_index - 3 : round_record_index]
+    assert tuple(record.payload.round_number for record in round_records) == (1,)
+    policy = next(
+        record
+        for record in chain
+        if record.idempotency_key.endswith("recomposed-request:2:round:1")
+    )
+    identity_policy = next(
+        record
+        for record in chain
+        if record.idempotency_key.endswith("round:1:request-sequence:2")
+    )
+    policy_index = chain.index(policy)
+    transition, event = chain[policy_index - 2 : policy_index]
     assert isinstance(transition.payload, WorkflowTransitionPayload)
     assert transition.payload.step == WorkflowStep.CODEX_IMPLEMENTATION.value
     assert isinstance(event.payload, WorkflowEventPayload)
     assert event.payload.record_refs == (transition.record_id,)
     assert isinstance(policy.payload, WorkflowPolicyPayload)
-    assert policy.idempotency_key.endswith("recomposed-round:2")
+    assert policy.idempotency_key.endswith("recomposed-request:2:round:1")
+    assert isinstance(identity_policy.payload, WorkflowPolicyPayload)
+    assert identity_policy.idempotency_key.endswith(
+        "round:1:request-sequence:2"
+    )
     assert sum(
-        record.idempotency_key.endswith("recomposed-round:2") for record in chain
+        record.idempotency_key.endswith("recomposed-request:2:round:1")
+        for record in chain
     ) == 1
     second = driver._start_provider_attempt(
         changed_request,
         changed_bootstrap,
-        operation_instance="round:2",
+        operation_instance="request:2",
         durable_response_path=repository / ".orchestrator" / "changed.json",
     )
     _require_provider_input_round((first[0], second[0]), changed_request)
@@ -1160,12 +1178,12 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
         / "artifacts"
         / state.run_id
         / "native-review-responses"
-        / "work-unit-0002-claude_slice_review-round-0001.json"
+        / "work-unit-0002-claude_slice_review-request-0001.json"
     )
     started = driver._start_provider_attempt(
         stale,
         stale_bootstrap,
-        operation_instance="round:1",
+        operation_instance="request:1",
         durable_response_path=response_path,
     )
     stored_response_path = started[2]
@@ -1186,14 +1204,15 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
         lambda: driver._start_provider_attempt(
             corrected,
             corrected_bootstrap,
-            operation_instance="round:1",
+            operation_instance="request:1",
             durable_response_path=response_path,
         ),
     )
 
     assert output is None
     assert advanced.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert advanced.current_work_unit.round_number == 2
+    assert advanced.current_work_unit.round_number == 1
+    assert advanced.current_work_unit.request_sequence == 2
     assert stored_response_path.read_text(encoding="utf-8") == (
         '{"new_findings":[{"finding_id":"C-01"}]}'
     )
@@ -1202,7 +1221,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
         record
         for record in chain
         if isinstance(record.payload, WorkflowPolicyPayload)
-        and record.idempotency_key.endswith("recomposed-round:2")
+        and record.idempotency_key.endswith("recomposed-request:2:round:1")
     )
     assert len(policies) == 1
     work_units = tuple(
@@ -1211,7 +1230,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
         if isinstance(record.payload, WorkUnitPayload)
         and record.logical_id == f"work-unit-{state.current_work_unit_id}"
     )
-    assert work_units[-1].payload.round_number == 2
+    assert work_units[-1].payload.round_number == 1
 
 
 def _review(role: AgentRole, marker: str) -> str:
@@ -3504,7 +3523,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     attempt = driver._start_provider_attempt(
         measurement,
         bootstrap,
-        operation_instance="round:1",
+        operation_instance="request:1",
         durable_response_path=raw_path,
     )
     driver._write_native_codex_raw_response(attempt[2], canonical)
@@ -3541,7 +3560,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     )
     request_path = driver._native_agent_request_path(invocation)
     persisted_request = request_path.read_text(encoding="utf-8")
-    later_invocation = replace(rebuilt_invocation, round_number=2)
+    later_invocation = replace(rebuilt_invocation, request_sequence=2)
     recovered_request = driver._load_native_agent_request_bundle(
         later_invocation,
         rebuilt_bundle,
@@ -3558,7 +3577,9 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         acceptance_test="Cross-round recovery preserves the exact offered subset.",
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
     )
-    historical_contract = replace(contract, round_number=3)
+    historical_contract = replace(
+        contract, round_number=3, request_sequence=3
+    )
     historical_bundle = build_native_codex_request(
         NativeCodexRequestSpec(
             context=replace(
@@ -3581,13 +3602,14 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     historical_invocation = replace(
         invocation,
         round_number=3,
+        request_sequence=3,
         native_request=historical_bundle,
     )
     driver._native_agent_request_path(historical_invocation).write_text(
         driver._native_agent_request_bundle_json(historical_bundle),
         encoding="utf-8",
     )
-    later_contract = replace(contract, round_number=4)
+    later_contract = replace(contract, round_number=4, request_sequence=4)
     later_bundle = build_native_codex_request(
         NativeCodexRequestSpec(
             context=replace(
@@ -3612,6 +3634,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         replace(
             invocation,
             round_number=4,
+            request_sequence=4,
             native_request=later_bundle,
         ),
         later_bundle,
@@ -4732,7 +4755,7 @@ def test_native_codex_plan_and_correction_recovery_are_raw_and_record_ahead_safe
     driver._persist_provider_content(
         role=Role.CODEX,
         work_unit_id=state.current_work_unit_id,
-        round_number=invocation.round_number,
+        request_sequence=invocation.request_sequence,
         operation=step.value,
         request_id=output.request_id,
         canonical=output.canonical_json,

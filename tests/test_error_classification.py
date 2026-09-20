@@ -162,6 +162,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         work_unit_id=state.current_work_unit_id,
         step=state.current_step,
         round_number=state.current_work_unit.round_number,
+        request_sequence=state.current_work_unit.request_sequence,
         native_request=SimpleNamespace(
             bound_context=SimpleNamespace(
                 context=SimpleNamespace(previous_findings=())
@@ -233,6 +234,7 @@ def _mismatched_persisted_request(tmp_path: Path) -> BaseException:
         work_unit_id=state.current_work_unit_id,
         step=state.current_step,
         round_number=state.current_work_unit.round_number,
+        request_sequence=state.current_work_unit.request_sequence,
         native_request=SimpleNamespace(
             canonical_json="{}",
             provider_response_schema_json="{}",

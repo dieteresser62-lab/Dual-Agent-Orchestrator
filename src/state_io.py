@@ -461,7 +461,7 @@ def write_workflow_projection_checkpoint(
         checkpoint_dir,
         work_unit_id=current.work_unit_id,
         slice_id=current.slice_id,
-        round_number=current.round_number,
+        request_sequence=current.request_sequence,
     )
     write_workflow_state_projection(path, resolution, allowed_roots=allowed_roots)
     return path.resolve()
@@ -508,18 +508,18 @@ def workflow_checkpoint_path(
     *,
     work_unit_id: int,
     slice_id: int,
-    round_number: int,
+    request_sequence: int,
 ) -> Path:
-    """Return the collision-free, 1-based v3 checkpoint name."""
+    """Return the collision-free checkpoint name for one physical request."""
     for value, label in (
         (work_unit_id, "work_unit_id"),
         (slice_id, "slice_id"),
-        (round_number, "round_number"),
+        (request_sequence, "request_sequence"),
     ):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise StateSchemaError(f"{label} must be a 1-based integer")
     return checkpoint_dir / (
-        f"work-unit-{work_unit_id:04d}-slice-{slice_id:04d}-round-{round_number:04d}.json"
+        f"work-unit-{work_unit_id:04d}-slice-{slice_id:04d}-round-{request_sequence:04d}.json"
     )
 
 
@@ -534,7 +534,7 @@ def write_workflow_checkpoint(
         checkpoint_dir,
         work_unit_id=current.work_unit_id,
         slice_id=current.slice_id,
-        round_number=current.round_number,
+        request_sequence=current.request_sequence,
     )
     save_workflow_state(path, state, allowed_roots=allowed_roots)
     return path.resolve()
@@ -545,7 +545,7 @@ def load_workflow_checkpoint(
     *,
     work_unit_id: int,
     slice_id: int,
-    round_number: int,
+    request_sequence: int,
     allowed_roots: tuple[Path, ...],
     expected_protocol_binding: ProtocolBinding | None | object = _UNSPECIFIED_PROTOCOL,
 ) -> WorkflowState | None:
@@ -553,7 +553,7 @@ def load_workflow_checkpoint(
         checkpoint_dir,
         work_unit_id=work_unit_id,
         slice_id=slice_id,
-        round_number=round_number,
+        request_sequence=request_sequence,
     )
     loaded = load_workflow_state(
         path,
@@ -565,8 +565,8 @@ def load_workflow_checkpoint(
     if isinstance(loaded, CompletedV2State):
         raise StateSchemaError("a version-3 checkpoint cannot contain version-2 state")
     current = loaded.current_work_unit
-    expected = (work_unit_id, slice_id, round_number)
-    actual = (current.work_unit_id, current.slice_id, current.round_number)
+    expected = (work_unit_id, slice_id, request_sequence)
+    actual = (current.work_unit_id, current.slice_id, current.request_sequence)
     if actual != expected:
         raise StateSchemaError(
             f"checkpoint identity mismatch: filename={expected}, state={actual}"

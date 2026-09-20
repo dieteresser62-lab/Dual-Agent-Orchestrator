@@ -226,7 +226,7 @@ class ContentTextReader(Protocol):
         *,
         role: Role,
         work_unit_id: int,
-        round_number: int,
+        request_sequence: int,
         operation: str,
         request_id: str | None = None,
         response_sha256: str | None = None,
@@ -301,7 +301,7 @@ class WorkflowRecovery:
         run_id: str,
         work_unit_id: int,
         operation: str,
-        round_number: int,
+        request_sequence: int,
     ) -> ArtifactRecord | None:
         """Locate the started attempt that produced one persisted response."""
 
@@ -313,7 +313,17 @@ class WorkflowRecovery:
                 provider=role,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
-                operation_instance=f"round:{round_number}",
+                operation_instance=f"request:{request_sequence}",
+            ),
+            # Compatibility for attempts written before request sequence was
+            # separated from the accepted domain round.
+            logical_provider_operation_id(
+                run_id=run_id,
+                work_unit_id=str(work_unit_id),
+                provider=role,
+                operation=operation,
+                binding_fingerprint=response_anchor.fingerprint.sha256,
+                operation_instance=f"round:{request_sequence}",
             ),
             # Compatibility for attempts written before rounds became part of
             # the provider-operation identity.
@@ -509,7 +519,7 @@ class WorkflowRecovery:
         chain: tuple[ArtifactRecord, ...],
         response_anchor: ArtifactRecord,
         state: WorkflowState,
-        round_number: int,
+        request_sequence: int,
     ) -> _RequestLedgerSnapshot:
         attempt = self._request_attempt(
             chain,
@@ -518,7 +528,7 @@ class WorkflowRecovery:
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
-            round_number=round_number,
+            request_sequence=request_sequence,
         )
         if attempt is not None:
             return self._request_ledger_snapshot(chain, attempt, state)
@@ -630,7 +640,7 @@ class WorkflowRecovery:
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
         )
         request_ledger = (
             None
@@ -1043,7 +1053,7 @@ class WorkflowRecovery:
             run_id=state.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
         )
         request_findings = None
         if attempt is not None:
@@ -1153,7 +1163,7 @@ class WorkflowRecovery:
             run_id=invocation.native_request.bound_context.context.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
         ) or original_attempt_record
         return (
             recovery_bundle,
@@ -1237,7 +1247,10 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 f"native agent raw-response recovery cannot replay records: {exc}"
             ) from exc
-        instance = f"round:{invocation.round_number}"
+        instances = {
+            f"request:{invocation.request_sequence}",
+            f"round:{invocation.request_sequence}",
+        }
         related_effects = tuple(
             item
             for item in replay.side_effects
@@ -1246,7 +1259,7 @@ class WorkflowRecovery:
             and len(item.operation) == 7
             and item.operation[0] == _IMPLEMENTER_ARTIFACT_ROLE.value
             and item.operation[1] == invocation.step.value
-            and item.operation[4] == instance
+            and item.operation[4] in instances
         )
         if not related_effects:
             return None
@@ -1338,7 +1351,7 @@ class WorkflowRecovery:
             provider=_IMPLEMENTER_ARTIFACT_ROLE,
             operation=invocation.step.value,
             binding_fingerprint=effect.operation[3],
-            operation_instance=instance,
+            operation_instance=effect.operation[4],
         )
         attempts = tuple(
             record
@@ -1435,7 +1448,7 @@ class WorkflowRecovery:
             return None
         logical = (
             f"agent-{invocation.work_unit_id}-{invocation.step.value}-"
-            f"{invocation.round_number}"
+            f"{invocation.request_sequence}"
         )
         chain = bridge.store.current_chain()
         candidates = tuple(
@@ -1448,7 +1461,7 @@ class WorkflowRecovery:
         persisted_content = self._dependencies.content_text(
             role=Role.CODEX,
             work_unit_id=invocation.work_unit_id,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
             operation=invocation.step.value,
             request_id=(None if candidate is None else candidate.payload.request_id),
             response_sha256=(
@@ -1681,6 +1694,7 @@ class WorkflowRecovery:
                 else f"{unit.slice_id:02d}"
             ),
             round_number=round_number,
+            request_sequence=unit.request_sequence,
             previous_findings=previous_findings,
             known_open_findings=(
                 project_open_set(finding_ledger).findings or None
@@ -1846,7 +1860,7 @@ class WorkflowRecovery:
         persisted_content = self._dependencies.content_text(
             role=payload.reviewer,
             work_unit_id=unit.work_unit_id,
-            round_number=round_number,
+            request_sequence=unit.request_sequence,
             operation=state.current_step.value,
             request_id=payload.request_id,
             response_sha256=payload.response_sha256,
@@ -1860,7 +1874,7 @@ class WorkflowRecovery:
             )
         canonical, _content_payload = persisted_content
         request_ledger = self._reviewer_request_ledger(
-            chain, record, state, round_number
+            chain, record, state, unit.request_sequence
         )
         request_replay = request_ledger.replay
         native_context = self._build_pending_native_reviewer_context(
@@ -2006,7 +2020,7 @@ class WorkflowRecovery:
         persisted_content = self._dependencies.content_text(
             role=Role(invocation.reviewer.value),
             work_unit_id=invocation.work_unit_id,
-            round_number=invocation.round_number,
+            request_sequence=invocation.request_sequence,
             operation=invocation.step.value,
             request_id=(None if payload is None else payload.request_id),
             response_sha256=(None if payload is None else payload.response_sha256),

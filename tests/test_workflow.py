@@ -118,9 +118,10 @@ TEST_FILE = "tests/test_workflow.py"
 START_COMMIT = "a" * 40
 
 
-def test_foreign_invocation_resume_does_not_advance_reviewer_round() -> None:
+def test_request_recomposition_does_not_advance_reviewer_round() -> None:
     unit = SimpleNamespace(
-        round_number=2,
+        round_number=1,
+        request_sequence=2,
         invocation_failures=(SimpleNamespace(role=AgentRole.CODEX.value),),
     )
 
@@ -947,7 +948,8 @@ def test_recomposed_request_round_builds_slice_packet_and_keeps_open_findings() 
     )
 
     assert result.completed
-    assert [call.round_number for call in driver.codex_calls] == [1, 2]
+    assert [call.round_number for call in driver.codex_calls] == [1, 1]
+    assert [call.request_sequence for call in driver.codex_calls] == [1, 2]
     assert result.state.current_work_unit.open_findings == (finding.finding_id,)
     review = driver.reviewer_calls[0]
     assert review.evidence_kind is EvidenceKind.FULL_SLICE
@@ -1286,7 +1288,8 @@ def test_recomposition_after_review_denial_keeps_correction_semantics() -> None:
     )
 
     assert result.completed
-    assert [call.round_number for call in driver.codex_calls] == [2, 3]
+    assert [call.round_number for call in driver.codex_calls] == [2, 2]
+    assert [call.request_sequence for call in driver.codex_calls] == [2, 3]
     review = driver.reviewer_calls[0]
     assert review.evidence_kind is EvidenceKind.CORRECTION_DELTA
     assert review.review_packet is not None
@@ -4660,6 +4663,10 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
         second.document["retry_feedback"]["correction_instruction"]
     )
     assert first.bound_context.request_id != second.bound_context.request_id
+    assert [call.round_number for call in driver.codex_calls] == [1, 1]
+    assert [call.request_sequence for call in driver.codex_calls] == [1, 2]
+    assert result.state.current_work_unit.round_number == 1
+    assert result.state.current_work_unit.request_sequence == 2
     assert "retry=scheduled" in caplog.text
 
 
@@ -4778,6 +4785,11 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
                 "review-schema-invalid-1",
                 received_at=now[0],
             ),
+            _native_review_contract_failure(
+                NativeReviewErrorCode.SCHEMA_INVALID,
+                "review-schema-invalid-2",
+                received_at=now[0],
+            ),
             None,
         ],
     )
@@ -4791,10 +4803,10 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
     ).run_current_work_unit(_slice_state(), _context())
 
     assert result.completed
-    assert len(driver.reviewer_calls) == 2
+    assert len(driver.reviewer_calls) == 3
     assert [event[0] for event in driver.structured_events].count(
         "invocation-failure"
-    ) == 1
+    ) == 2
     failure = driver.failure_payloads[0]
     assert failure.failure_class == "transient"
     assert failure.diagnostic_code == "NATIVE-REVIEW-FORM"
@@ -4804,7 +4816,8 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
     assert failure.native_review_rejection == "schema-invalid"
     first = driver.reviewer_calls[0].native_request
     second = driver.reviewer_calls[1].native_request
-    assert first is not None and second is not None
+    third = driver.reviewer_calls[2].native_request
+    assert first is not None and second is not None and third is not None
     assert "retry_feedback" not in first.document
     assert second.document["retry_feedback"] == {
         "prior_invocation_id": "review-schema-invalid-1",
@@ -4814,7 +4827,73 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
         ),
     }
     assert first.bound_context.request_id != second.bound_context.request_id
+    assert second.bound_context.request_id != third.bound_context.request_id
+    assert first.bound_context.request_id != third.bound_context.request_id
+    assert [call.round_number for call in driver.reviewer_calls] == [1, 1, 1]
+    assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2, 3]
+    assert result.state.current_work_unit.round_number == 1
+    assert result.state.current_work_unit.request_sequence == 3
     assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
+
+
+def test_rejected_first_review_then_two_findings_remains_discovery_round() -> None:
+    """Regression for B152's Slice-03 canary failure."""
+
+    now = [datetime(2026, 9, 20, 2, 30, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    denial = "\n".join(
+        (
+            f"REVIEWER: {AgentRole.CLAUDE.value}",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            "NEW_FINDING: C-01 | BLOCKER | first defect | cover first defect",
+            "NEW_FINDING: C-02 | BLOCKER | second defect | cover second defect",
+            "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready(), _codex_not_ready()],
+        reviewer_outputs=[denial],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.FINDING_ID_INVALID,
+                "review-invalid-finding-ids",
+                received_at=now[0],
+            ),
+            None,
+        ],
+        convergence_evaluations=[
+            SliceConvergenceEvaluation(
+                phase=SliceReviewPhase.DISCOVERY,
+                cohort_finding_ids=("C-01", "C-02"),
+                newly_opened_finding_ids=("C-01", "C-02"),
+                closed_local_finding_ids=(),
+                forwarded_local_finding_ids=(),
+                attested_remediation_finding_ids=(),
+                progress_made=True,
+                reason="the discovery round opened reviewer-owned findings",
+            )
+        ],
+    )
+
+    result = WorkflowEngine(
+        driver,
+        now_fn=lambda: now[0],
+        sleep_fn=lambda _seconds: None,
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert not result.completed
+    assert [call.round_number for call in driver.reviewer_calls] == [1, 1]
+    assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
+    assert driver.convergence_calls == [(result.state.current_work_unit_id, 1)]
+    assert tuple(item.finding_id for item in result.history.findings) == (
+        "C-01",
+        "C-02",
+    )
+    assert result.state.current_work_unit.round_number == 2
+    assert result.state.current_work_unit.request_sequence == 3
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
 
 
 def test_duplicate_review_rejection_logs_the_safe_exact_mapping(caplog) -> None:

@@ -369,7 +369,7 @@ def _invocation_retry_decision(
         automatic_implementer_feedback,
         diagnostic_code,
     )
-    next_round = state.current_work_unit.round_number + 1
+    next_request_sequence = state.current_work_unit.request_sequence + 1
     return _InvocationRetryDecision(
         key=key,
         matching_failures=matching_failures,
@@ -386,12 +386,12 @@ def _invocation_retry_decision(
         transient_delay=transient_delay,
         response_diagnostics=response_diagnostics,
         native_review_retry_round=(
-            next_round
+            next_request_sequence
             if response_diagnostics.persisted_rejection is not None
             else None
         ),
         native_implementer_retry_round=(
-            next_round
+            next_request_sequence
             if response_diagnostics.implementer_persisted_rejection is not None
             else None
         ),

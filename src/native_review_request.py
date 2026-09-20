@@ -596,6 +596,7 @@ def _review_context_request_projection(
         "approval_marker": context_binding["approval_marker"],
         "slice_id": context_binding["slice_id"],
         "round_number": context_binding["round_number"],
+        "request_sequence": context_binding["request_sequence"],
         "next_finding_id": next_native_finding_id(context),
         "previous_findings": context_binding["previous_findings"],
         "known_open_finding_signatures": context_binding[

@@ -16,8 +16,8 @@ import hashlib
 import json
 import re
 from typing import Callable, Sequence
-
 from finding_order import replay_compatible_finding_ids
+from request_identity import workflow_policy_counter_candidates
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
@@ -792,8 +792,8 @@ def _project_work_unit_round_and_kind(
         for previous, current in zip(gate_history, gate_history[1:])
     )
     round_candidates.append(resumed_gate_round)
-    if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)):
-        round_candidates.append(definition.round_number)
+    round_candidates += [definition.round_number] if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)) else []
+    round_candidates.extend(round_number for round_number, _ in workflow_policy_counter_candidates(records, unit.work_unit_id))
     round_number = max(round_candidates, default=1)
     first_step = next(
         candidate.payload.step
@@ -968,6 +968,7 @@ def _project_work_unit_document(
         "status": projected_status,
         "current_step": unit.step,
         "round_number": round_number,
+        "request_sequence": max((round_number, *(sequence for _, sequence in workflow_policy_counter_candidates(records, unit.work_unit_id)))),
         "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
             0 if policy is None else policy.implementer_return_count
         ),
@@ -998,7 +999,6 @@ def _project_work_unit_document(
         "active_test_paths": () if gate is None else gate.active_test_paths,
         "invocation_failures": failures,
     }
-
 
 def _project_work_unit_documents(
     replay: ArtifactReplayResult,
@@ -2038,14 +2038,14 @@ def _validate_provider_decision_content(
         minimum_round = decision_unit.round_number if (
             isinstance(decision, AgentResultPayload) and decision_unit is not None
         ) else 1
-        # The decision logical ID is the durable authority for the invocation
-        # round. For implementers, a WorkUnitPayload additionally supplies the
-        # minimum round, while continuation can advance beyond that immutable
-        # boundary. Reviewer attempts have their own one-based round sequence.
-        # ProviderContentPayload stores either round separately, so comparison
-        # remains an independent cross-record check rather than deriving both
-        # values from the decision logical ID. This still rejects stale content
-        # from an earlier invocation round.
+        # Implementer logical IDs bind the physical request sequence, which is
+        # never below the WorkUnit's semantic round. Reviewer logical IDs retain
+        # that semantic round, while the collision-resistant request_id binds
+        # their exact physical request independently of ProviderContent's legacy
+        # field spelling. This rejects stale implementer content without
+        # conflating a retried reviewer request with a later domain round.
+        # Reviewer content may therefore carry a later request sequence and is
+        # matched through the exact request_id shared by the two records.
         round_suffix = decision_record.logical_id.rsplit("-", 1)[-1]
         if not round_suffix.isdigit() or int(round_suffix) < minimum_round:
             if not require_content_authority:
@@ -2062,7 +2062,7 @@ def _validate_provider_decision_content(
             if positions[content_record.record_id] < positions[decision_record.record_id]
             and content_record.payload.role is role
             and content_record.payload.work_unit_id == decision.work_unit_id
-            and content_record.payload.round_number == decision_round
+            and (not isinstance(decision, AgentResultPayload) or content_record.payload.round_number == decision_round)
             and content_record.payload.request_id == request_id
             and content_record.payload.response_sha256 == response_sha256
             and content_record.fingerprint == decision_record.fingerprint
@@ -2072,7 +2072,7 @@ def _validate_provider_decision_content(
                 continue
             _fail(
                 ReplayDiagnosticCode.RECORD_MISSING,
-                _provider_content_mismatch_detail(provider_content_records, decision_record, role, decision_round, positions),
+                _provider_content_mismatch_detail(provider_content_records, decision_record, role, decision_round if isinstance(decision, AgentResultPayload) else None, positions),
                 decision_record,
             )
         content_record = candidates[0]
@@ -3125,7 +3125,7 @@ def _provider_content_mismatch_detail(
     provider_records: tuple[ArtifactRecord, ...],
     decision_record: ArtifactRecord,
     role: Role,
-    decision_round: int,
+    decision_request_sequence: int | None,
     positions: dict[str, int],
 ) -> str:
     """Name the first failed immutable binding without exposing provider bytes."""
@@ -3152,7 +3152,7 @@ def _provider_content_mismatch_detail(
     comparisons = (
         ("role", role.value, lambda record: record.payload.role.value),
         ("work_unit_id", decision.work_unit_id, lambda record: record.payload.work_unit_id),
-        ("round_number", decision_round, lambda record: record.payload.round_number),
+        *(((("request_sequence", decision_request_sequence, lambda record: record.payload.round_number)),) if decision_request_sequence is not None else ()),
         ("response_sha256", decision.response_sha256, lambda record: record.payload.response_sha256),
         ("fingerprint", decision_record.fingerprint.sha256, lambda record: record.fingerprint.sha256),
     )

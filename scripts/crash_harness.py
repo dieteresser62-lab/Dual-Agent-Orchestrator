@@ -198,7 +198,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             item.fingerprint
             for item in self.scenario.changes
             if item.work_unit_id == state.current_work_unit_id
-            and item.round_number == state.current_work_unit.round_number
+            and item.request_sequence == state.current_work_unit.request_sequence
         )
         self._record_driver.persist_native_codex_contract(  # allowlist:provider
             output,

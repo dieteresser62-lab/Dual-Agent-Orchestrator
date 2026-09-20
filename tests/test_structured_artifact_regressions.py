@@ -448,14 +448,15 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
         / ".orchestrator"
         / "logs"
         / (
-            f"{state.run_id}.work-unit-{active.current_work_unit_id}."
-            "round-0001.attempt-0001.failure.json"
+                f"{state.run_id}.work-unit-{active.current_work_unit_id}."
+                "request-0001.attempt-0001.failure.json"
+            )
         )
-    )
     diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
     assert diagnostic["run_id"] == state.run_id
     assert diagnostic["work_unit_id"] == str(active.current_work_unit_id)
-    assert diagnostic["round_number"] == diagnostic["attempt_number"] == 1
+    assert diagnostic["round_number"] == diagnostic["request_sequence"] == 1
+    assert diagnostic["attempt_number"] == 1
     assert diagnostic["provider_text_sha256"] != diagnostic["technical_text_sha256"]
 
 

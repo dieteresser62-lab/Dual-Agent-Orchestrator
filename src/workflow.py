@@ -489,6 +489,13 @@ class CodexInvocation:
     prompt: str
     native_request: workflow_requests.NativeCodexRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
+    request_sequence: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        elif self.request_sequence < 1:
+            raise ValueError("Codex request sequence must be 1-based")
 
 
 def _merge_request_finding_subset(
@@ -535,8 +542,13 @@ class ReviewerInvocation:
     review_packet: ReviewPacket | None = None
     native_request: workflow_requests.NativeReviewRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
+    request_sequence: int | None = None
 
     def __post_init__(self) -> None:
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        elif self.request_sequence < 1:
+            raise ValueError("review request sequence must be 1-based")
         if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
             raise ValueError("native review requests are supported only for Claude")
 
@@ -1431,20 +1443,10 @@ def _review_round_number(
     history: WorkflowHistory,
     reviewer: AgentRole,
 ) -> int:
-    """Keep reviewer rounds independent from another role's resume rounds."""
+    """Return the accepted domain round, independent of request retries."""
 
-    completed_review_rounds = sum(
-        isinstance(event, ReviewAuditEvent)
-        and event.result.reviewer is reviewer
-        for event in history.events
-    )
-    foreign_invocation_rounds = sum(
-        failure.role != reviewer.value for failure in unit.invocation_failures
-    )
-    return max(
-        1 + completed_review_rounds,
-        unit.round_number - foreign_invocation_rounds,
-    )
+    _ = (history, reviewer)
+    return unit.round_number
 
 
 def _validate_plan_measurement_support(
@@ -1919,6 +1921,7 @@ class WorkflowEngine:
             readiness_marker=readiness,
             slice_id=f"{unit.slice_id:02d}",
             round_number=unit.round_number,
+            request_sequence=unit.request_sequence,
             require_test_files_record=not is_plan,
             expected_test_files=context.expected_test_files if not is_plan else (),
             # R-10 gates after implementation readiness and before review. Codex must be
@@ -1978,6 +1981,7 @@ class WorkflowEngine:
             state.current_step,
             unit.round_number,
             "",
+            request_sequence=unit.request_sequence,
             native_request=native_request,
             previous_findings=history.findings,
         )
@@ -2011,6 +2015,7 @@ class WorkflowEngine:
                     state.current_step,
                     unit.round_number,
                     "",
+                    request_sequence=unit.request_sequence,
                     native_request=native_request,
                     previous_findings=history.findings,
                 )
@@ -2565,6 +2570,7 @@ class WorkflowEngine:
             step=state.current_step,
             reviewer=reviewer,
             round_number=review_round,
+            request_sequence=unit.request_sequence,
             evidence_kind=evidence_kind,
             fingerprint=changes.fingerprint,
             paths=(
@@ -2850,6 +2856,7 @@ class WorkflowEngine:
                 "DISCOVERY" if is_branch_discovery else f"{unit.slice_id:02d}"
             ),
             round_number=review_round,
+            request_sequence=unit.request_sequence,
             review_fingerprint=changes.fingerprint,
             validation_attestation=attestation,
             expected_test_files=(expected_test_files if not is_plan_review else ()),
@@ -3194,16 +3201,16 @@ class WorkflowEngine:
             except ProviderRequestRoundRequired as changed:
                 logger.warning(
                     "Provider request composition changed with unchanged Slice binding; "
-                    "opening a new round: work_unit=%s round=%s->%s "
+                    "opening a new request sequence: work_unit=%s request=%s->%s "
                     "binding_fingerprint=%s previous_input=%s current_input=%s",
                     state.current_work_unit_id,
-                    state.current_work_unit.round_number,
-                    state.current_work_unit.round_number + 1,
+                    state.current_work_unit.request_sequence,
+                    state.current_work_unit.request_sequence + 1,
                     changed.binding_fingerprint,
                     changed.previous_input_digest,
                     changed.current_input_digest,
                 )
-                state = state.start_recomposed_request_round()
+                state = state.start_recomposed_request()
                 self.driver.checkpoint(state, history)
                 return state, None
             except AgentInvocationError as error:
@@ -3280,13 +3287,13 @@ class WorkflowEngine:
                 if disposition_limit_failure is not None:
                     logger.warning(
                         "Rejected over-budget review result; recomposing a "
-                        "smaller request: work_unit=%s round=%s actual=%s maximum=%s",
+                        "smaller request: work_unit=%s request=%s actual=%s maximum=%s",
                         state.current_work_unit_id,
-                        state.current_work_unit.round_number,
+                        state.current_work_unit.request_sequence,
                         disposition_limit_failure.actual_items,
                         disposition_limit_failure.maximum_items,
                     )
-                    state = state.start_recomposed_request_round()
+                    state = state.start_recomposed_request()
                     self.driver.checkpoint(state, history)
                     return state, None
                 native_rejection = (
@@ -3302,14 +3309,14 @@ class WorkflowEngine:
                     logger.warning(
                         "Rejected native %s response; recomposing the retry "
                         "request with corrective feedback: work_unit=%s "
-                        "round=%s->%s rejection=%s",
+                        "request=%s->%s rejection=%s",
                         role_label,
                         state.current_work_unit_id,
-                        state.current_work_unit.round_number,
-                        state.current_work_unit.round_number + 1,
+                        state.current_work_unit.request_sequence,
+                        state.current_work_unit.request_sequence + 1,
                         native_rejection,
                     )
-                    state = state.start_recomposed_request_round()
+                    state = state.start_recomposed_request()
                     self.driver.checkpoint(state, history)
                     return state, None
 

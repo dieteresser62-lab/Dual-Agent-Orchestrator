@@ -490,6 +490,7 @@ def _contract_document(context: NativeCodexContext) -> dict[str, Any]:
         "readiness_kind": readiness_kind,
         "slice_id": contract.slice_id,
         "round_number": contract.round_number,
+        "request_sequence": contract.request_sequence,
         "require_test_files_record": contract.require_test_files_record,
         "expected_test_files": list(contract.expected_test_files),
         "test_changes_approved": contract.test_changes_approved,

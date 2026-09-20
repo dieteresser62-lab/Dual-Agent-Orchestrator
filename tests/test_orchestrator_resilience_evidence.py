@@ -530,12 +530,12 @@ def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -
     assert result.state.current_work_unit.kind is WorkUnitKind.SLICE
     assert result.state.current_step is WorkflowStep.COMPLETED
     assert tuple(call for call in calls if call.startswith("agent:")) == (
-        "agent:codex:work-unit-1:round-1:codex_plan",
-        "agent:claude:work-unit-1:round-1:claude_plan_review",
-        "agent:codex:work-unit-2:round-1:codex_implementation",
-        "agent:claude:work-unit-2:round-1:claude_slice_review",
-        "agent:codex:work-unit-3:round-1:codex_implementation",
-        "agent:claude:work-unit-3:round-1:claude_slice_review",
+        "agent:codex:work-unit-1:request-1:codex_plan",
+        "agent:claude:work-unit-1:request-1:claude_plan_review",
+        "agent:codex:work-unit-2:request-1:codex_implementation",
+        "agent:claude:work-unit-2:request-1:claude_slice_review",
+        "agent:codex:work-unit-3:request-1:codex_implementation",
+        "agent:claude:work-unit-3:request-1:claude_slice_review",
     )
     assert sum(call.startswith("commit:") for call in calls) == 2
     assert sum(validations.values()) == 3
@@ -613,34 +613,34 @@ def _run_correction_journey(
     assert report.remaining_agent_events == 0
     expected_calls = {
         "slice-correction": (
-            "agent:codex:work-unit-2:round-1:codex_implementation",
-            "agent:claude:work-unit-2:round-1:claude_slice_review",
-            "agent:codex:work-unit-2:round-2:codex_correction",
-            "agent:claude:work-unit-2:round-2:claude_slice_review",
-            "agent:codex:work-unit-3:round-1:codex_final_review",
-            "agent:claude:work-unit-3:round-1:claude_final_review",
+            "agent:codex:work-unit-2:request-1:codex_implementation",
+            "agent:claude:work-unit-2:request-1:claude_slice_review",
+            "agent:codex:work-unit-2:request-2:codex_correction",
+            "agent:claude:work-unit-2:request-2:claude_slice_review",
+            "agent:codex:work-unit-3:request-1:codex_final_review",
+            "agent:claude:work-unit-3:request-1:claude_final_review",
         ),
         "final-correction": (
-            "agent:codex:work-unit-2:round-1:codex_implementation",
-            "agent:claude:work-unit-2:round-1:claude_slice_review",
-            "agent:codex:work-unit-3:round-1:codex_final_review",
-            "agent:claude:work-unit-3:round-1:claude_final_review",
-            "agent:codex:work-unit-4:round-1:codex_final_correction",
-            "agent:claude:work-unit-4:round-1:claude_slice_review",
-            "agent:codex:work-unit-5:round-1:codex_final_review",
-            "agent:claude:work-unit-5:round-1:claude_final_review",
+            "agent:codex:work-unit-2:request-1:codex_implementation",
+            "agent:claude:work-unit-2:request-1:claude_slice_review",
+            "agent:codex:work-unit-3:request-1:codex_final_review",
+            "agent:claude:work-unit-3:request-1:claude_final_review",
+            "agent:codex:work-unit-4:request-1:codex_final_correction",
+            "agent:claude:work-unit-4:request-1:claude_slice_review",
+            "agent:codex:work-unit-5:request-1:codex_final_review",
+            "agent:claude:work-unit-5:request-1:claude_final_review",
         ),
         "second-correction-new-blocker": (
-            "agent:codex:work-unit-2:round-1:codex_implementation",
-            "agent:claude:work-unit-2:round-1:claude_slice_review",
-            "agent:codex:work-unit-3:round-1:codex_final_review",
-            "agent:claude:work-unit-3:round-1:claude_final_review",
-            "agent:codex:work-unit-4:round-1:codex_final_correction",
-            "agent:claude:work-unit-4:round-1:claude_slice_review",
-            "agent:codex:work-unit-4:round-2:codex_final_correction",
-            "agent:claude:work-unit-4:round-2:claude_slice_review",
-            "agent:codex:work-unit-5:round-1:codex_final_review",
-            "agent:claude:work-unit-5:round-1:claude_final_review",
+            "agent:codex:work-unit-2:request-1:codex_implementation",
+            "agent:claude:work-unit-2:request-1:claude_slice_review",
+            "agent:codex:work-unit-3:request-1:codex_final_review",
+            "agent:claude:work-unit-3:request-1:claude_final_review",
+            "agent:codex:work-unit-4:request-1:codex_final_correction",
+            "agent:claude:work-unit-4:request-1:claude_slice_review",
+            "agent:codex:work-unit-4:request-2:codex_final_correction",
+            "agent:claude:work-unit-4:request-2:claude_slice_review",
+            "agent:codex:work-unit-5:request-1:codex_final_review",
+            "agent:claude:work-unit-5:request-1:claude_final_review",
         ),
     }[scenario_id]
     assert tuple(call for call in report.calls if call.startswith("agent:")) == expected_calls

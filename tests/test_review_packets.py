@@ -168,7 +168,7 @@ def test_s5_correction_diff_starts_with_marker_and_builds_review_packet() -> Non
     correction = next(
         item
         for item in scenario.changes
-        if (item.work_unit_id, item.round_number) == (3, 3)
+        if (item.work_unit_id, item.request_sequence) == (3, 3)
     )
     driver = ScriptedWorkflowDriver(scenario)
     driver.bind_work_unit(
@@ -176,6 +176,7 @@ def test_s5_correction_diff_starts_with_marker_and_builds_review_packet() -> Non
             current_work_unit_id=3,
             current_work_unit=SimpleNamespace(
                 round_number=3,
+                request_sequence=3,
                 kind=WorkUnitKind.SLICE,
             ),
         )

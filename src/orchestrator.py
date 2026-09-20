@@ -712,10 +712,10 @@ class ProductionWorkflowDriver:
     def _persist_workflow_snapshot(self, state: WorkflowState) -> None:
         self._persistence_boundary()._persist_workflow_snapshot(state)
 
-    def _persist_recomposed_round_prerequisites(
+    def _persist_request_identity_prerequisites(
         self, state: WorkflowState
     ) -> None:
-        self._persistence_boundary()._persist_recomposed_round_prerequisites(state)
+        self._persistence_boundary()._persist_request_identity_prerequisites(state)
 
     def _persist_slice_boundaries(self, state: WorkflowState) -> None:
         self._persistence_boundary()._persist_slice_boundaries(state)
@@ -1001,7 +1001,7 @@ class ProductionWorkflowDriver:
             checkpoint_root,
             work_unit_id=projected.current_work_unit_id,
             slice_id=projected.current_slice_id,
-            round_number=projected.current_work_unit.round_number,
+            request_sequence=projected.current_work_unit.request_sequence,
         )
         written = write_workflow_projection_checkpoint(
             checkpoint_root,
@@ -1054,7 +1054,7 @@ class ProductionWorkflowDriver:
                         start=lambda measurement, bootstrap: self._start_provider_attempt(
                             measurement,
                             bootstrap,
-                            operation_instance=f"round:{invocation.round_number}",
+                            operation_instance=f"request:{invocation.request_sequence}",
                             durable_response_path=raw_path,
                         ),
                         terminal=self._finish_provider_attempt,
@@ -1175,7 +1175,7 @@ class ProductionWorkflowDriver:
             / "native-codex-responses"
             / (
                 f"work-unit-{invocation.work_unit_id:04d}-"
-                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+                f"{invocation.step.value}-request-{invocation.request_sequence:04d}.json"
             )
         )
 
@@ -1191,7 +1191,7 @@ class ProductionWorkflowDriver:
             / "native-review-responses"
             / (
                 f"work-unit-{invocation.work_unit_id:04d}-"
-                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+                f"{invocation.step.value}-request-{invocation.request_sequence:04d}.json"
             )
         )
 
@@ -1207,7 +1207,7 @@ class ProductionWorkflowDriver:
             / "native-agent-requests"
             / (
                 f"work-unit-{invocation.work_unit_id:04d}-"
-                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+                f"{invocation.step.value}-request-{invocation.request_sequence:04d}.json"
             )
         )
 
@@ -1244,20 +1244,35 @@ class ProductionWorkflowDriver:
     ) -> object | None:
         path = self._native_agent_request_path(invocation)
         if request_id is not None:
-            prefix = (
+            prefixes = (
                 f"work-unit-{invocation.work_unit_id:04d}-"
-                f"{invocation.step.value}-round-"
+                f"{invocation.step.value}-request-",
+                # Compatibility with persisted requests created before B152.
+                f"work-unit-{invocation.work_unit_id:04d}-"
+                f"{invocation.step.value}-round-",
             )
             matches: list[Path] = []
             if path.parent.is_dir():
                 for candidate in sorted(path.parent.iterdir()):
-                    round_text = candidate.name.removeprefix(prefix).removesuffix(
-                        ".json"
+                    prefix = next(
+                        (
+                            item
+                            for item in prefixes
+                            if candidate.name.startswith(item)
+                        ),
+                        None,
+                    )
+                    sequence_text = (
+                        ""
+                        if prefix is None
+                        else candidate.name.removeprefix(prefix).removesuffix(
+                            ".json"
+                        )
                     )
                     if (
-                        not candidate.name.startswith(prefix)
+                        prefix is None
                         or not candidate.name.endswith(".json")
-                        or not round_text.isdigit()
+                        or not sequence_text.isdigit()
                         or not candidate.is_file()
                     ):
                         continue
@@ -1364,6 +1379,10 @@ class ProductionWorkflowDriver:
                     round_number=request_document["codex_contract"][  # allowlist:provider -- canonical field
                         "round_number"
                     ],
+                    request_sequence=request_document["codex_contract"].get(  # allowlist:provider -- canonical field
+                        "request_sequence",
+                        request_document["codex_contract"]["round_number"],  # allowlist:provider -- canonical field
+                    ),
                 ),
             )
             return type(rebuilt)(
@@ -1454,7 +1473,7 @@ class ProductionWorkflowDriver:
                 bundle=invocation.native_request,
                 log_prefix=(
                     f"work-unit-{invocation.work_unit_id:04d}-"
-                    f"{invocation.step.value}-round-{invocation.round_number:04d}"
+                    f"{invocation.step.value}-request-{invocation.request_sequence:04d}"
                 ),
                 config=self.config,
                 log_dir=self.log_dir,
@@ -1470,7 +1489,7 @@ class ProductionWorkflowDriver:
                         start=lambda measurement, bootstrap: self._start_provider_attempt(
                             measurement,
                             bootstrap,
-                            operation_instance=f"round:{invocation.round_number}",
+                            operation_instance=f"request:{invocation.request_sequence}",
                             durable_response_path=raw_response_path,
                         ),
                         terminal=self._finish_provider_attempt,
@@ -1521,7 +1540,7 @@ class ProductionWorkflowDriver:
         *,
         role: Role,
         work_unit_id: int,
-        round_number: int,
+        request_sequence: int,
         operation: str,
         request_id: str,
         canonical: str,
@@ -1532,7 +1551,7 @@ class ProductionWorkflowDriver:
         return self._persistence_boundary()._persist_provider_content(
             role=role,
             work_unit_id=work_unit_id,
-            round_number=round_number,
+            request_sequence=request_sequence,
             operation=operation,
             request_id=request_id,
             canonical=canonical,
@@ -1546,7 +1565,7 @@ class ProductionWorkflowDriver:
         *,
         role: Role,
         work_unit_id: int,
-        round_number: int,
+        request_sequence: int,
         operation: str,
         request_id: str | None = None,
         response_sha256: str | None = None,
@@ -1562,7 +1581,7 @@ class ProductionWorkflowDriver:
             if isinstance(record.payload, ProviderContentPayload)
             and record.payload.role is role
             and record.payload.work_unit_id == str(work_unit_id)
-            and record.payload.round_number == round_number
+            and record.payload.round_number == request_sequence
             and record.payload.operation == operation
             and (
                 fingerprint is None
@@ -1780,15 +1799,17 @@ class ProductionWorkflowDriver:
             )
         attempt = len(state.current_work_unit.invocation_failures) + 1
         round_number = state.current_work_unit.round_number
+        request_sequence = state.current_work_unit.request_sequence
         path = self.log_dir / (
             f"{state.run_id}.work-unit-{payload.work_unit_id}."
-            f"round-{round_number:04d}.attempt-{attempt:04d}.failure.json"
+            f"request-{request_sequence:04d}.attempt-{attempt:04d}.failure.json"
         )
         document = {
             "version": 1,
             "run_id": state.run_id,
             "work_unit_id": payload.work_unit_id,
             "round_number": round_number,
+            "request_sequence": request_sequence,
             "attempt_number": attempt,
             "invocation_id": payload.invocation_id,
             "role": payload.role.value,
@@ -2350,7 +2371,7 @@ class ProductionWorkflowDriver:
         # engine invocation.  Merge the driver-owned ledger before archiving the
         # completed unit, otherwise the audit can bind the new commit to an older
         # (possibly denying) reviewer result.
-        recomposed_round = WorkflowPersistence.is_recomposed_round_checkpoint(
+        new_request_identity = WorkflowPersistence.is_request_identity_checkpoint(
             self.active_state,
             state,
         )
@@ -2396,8 +2417,8 @@ class ProductionWorkflowDriver:
         )
         try:
             self._bind_artifact_store(persisted)
-            if recomposed_round:
-                self._persist_recomposed_round_prerequisites(persisted)
+            if new_request_identity:
+                self._persist_request_identity_prerequisites(persisted)
             self._persist_structured_baseline(persisted)
             self._project_audit(persisted, history)
         except Exception as exc:
@@ -2438,7 +2459,7 @@ class ProductionWorkflowDriver:
             checkpoint_root,
             work_unit_id=projected.current_work_unit_id,
             slice_id=projected.current_slice_id,
-            round_number=projected.current_work_unit.round_number,
+            request_sequence=projected.current_work_unit.request_sequence,
         )
         written = write_workflow_projection_checkpoint(
             checkpoint_root,

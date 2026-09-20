@@ -616,6 +616,31 @@ def test_review_denial_without_progress_completes_as_clear_terminal_verdict() ->
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
 
 
+def test_recomposition_advances_only_request_sequence_until_review_is_recorded() -> None:
+    initial = make_state()
+    second_request = initial.start_recomposed_request()
+    third_request = second_request.start_recomposed_request()
+
+    assert [
+        item.current_work_unit.round_number
+        for item in (initial, second_request, third_request)
+    ] == [1, 1, 1]
+    assert [
+        item.current_work_unit.request_sequence
+        for item in (initial, second_request, third_request)
+    ] == [1, 2, 3]
+
+    recorded = third_request.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-01",),
+        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        progress_made=True,
+    )
+
+    assert recorded.current_work_unit.round_number == 2
+    assert recorded.current_work_unit.request_sequence == 4
+
+
 def test_review_denial_safety_limit_completes_despite_continued_progress() -> None:
     base = make_state()
     current = replace(

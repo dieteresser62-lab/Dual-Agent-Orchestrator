@@ -548,6 +548,7 @@ class NativeReviewContext:
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
     closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
     pre_change_fingerprint: str | None = None
+    request_sequence: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -572,6 +573,13 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "round_number must be 1-based",
+            )
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        elif self.request_sequence < 1:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "request_sequence must be 1-based",
             )
         if self.reviewer is not AgentRole.CLAUDE:
             raise NativeReviewContractError(
@@ -3023,6 +3031,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "approval_marker": context.approval_marker.value,
         "slice_id": context.slice_id,
         "round_number": context.round_number,
+        "request_sequence": context.request_sequence,
         "previous_findings": [_finding_binding(item) for item in context.previous_findings],
         "known_open_finding_signatures": [
             {

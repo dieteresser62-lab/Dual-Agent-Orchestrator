@@ -446,6 +446,7 @@ class StepContract:
     anchor_origin: str | None = None
     existing_finding_ids: tuple[str, ...] = ()
     allow_new_observations: bool = True
+    request_sequence: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -456,6 +457,10 @@ class StepContract:
             raise ValueError("step contract requires a slice id")
         if self.round_number < 1:
             raise ValueError("step contract round must be 1-based")
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        elif self.request_sequence < 1:
+            raise ValueError("step contract request sequence must be 1-based")
         if self.approval_marker is ApprovalMarker.SLICE and not self.slice_id.strip():
             raise ValueError("slice approval requires a slice id")
         if self.review_fingerprint is not None:
@@ -656,6 +661,7 @@ class CodexStepContract:
     require_slice_plan: bool = False
     plan_artifact_path: str | None = None
     enforce_expected_test_files: bool = True
+    request_sequence: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -664,6 +670,10 @@ class CodexStepContract:
             raise ValueError("Codex step contract requires a slice id")
         if self.round_number < 1:
             raise ValueError("Codex step contract round must be 1-based")
+        if self.request_sequence is None:
+            object.__setattr__(self, "request_sequence", self.round_number)
+        elif self.request_sequence < 1:
+            raise ValueError("Codex request sequence must be 1-based")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
         object.__setattr__(self, "expected_test_files", normalized)
         if normalized and not self.require_test_files_record:

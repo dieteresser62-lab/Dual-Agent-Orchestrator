@@ -277,7 +277,7 @@ def _native_implementer_retry_feedback(
             for item in reversed(state.current_work_unit.invocation_failures)
             if item.step is state.current_step
             and item.native_implementer_rejection is not None
-            and item.native_implementer_retry_round == contract.round_number
+            and item.native_implementer_retry_round == contract.request_sequence
         ),
         None,
     )
@@ -403,7 +403,7 @@ def _native_review_retry_feedback(
             for item in reversed(state.current_work_unit.invocation_failures)
             if item.step is state.current_step
             and item.native_review_rejection is not None
-            and item.native_review_retry_round == contract.round_number
+            and item.native_review_retry_round == contract.request_sequence
         ),
         None,
     )
@@ -477,6 +477,7 @@ def native_review_request(
         approval_marker=contract.approval_marker,
         slice_id=contract.slice_id,
         round_number=contract.round_number,
+        request_sequence=contract.request_sequence,
         previous_findings=request_findings,
         known_open_findings=effective_known_open_findings or None,
         authoritative_finding_ids=contract.existing_finding_ids,

@@ -103,16 +103,16 @@ FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-80423d04315b2640618cd945cf5fed04dd49ee5605f18a6801e554ca7126162f"
+    "native-codex-request-979e6e7fdeb8d1a0b6c5d6295531524572dca857559aeee4dcf3e0331627d778"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-bb0f265344568b92ec4e8308c32e01d26f3f05972a4cad5f71cacc4242017ece"
+    "native-review-request-c461783db8fe46c8581b1a53c53ce0e5684b7ef621e8cc1b5b92a872f0699df3"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "f117c913060420c4f156bcae9c840f22cf99b9d94dae0983e2700f32c9002a1c"
+    "673f8fc3e06b44cf70d2e355126183a32ff7f229b5c2e65a8c4463b07392206b"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "a941935d2f9e56dc75dbc40262fe936e37646c1b8fac62fa01eb9a7dbcba4753"
+    "be747aace922385aaf5ffea9637db4c4298edb2e2a71ee660a9bb770ec784f0b"
 )
 
 RECOVERY_HELPERS = {
@@ -653,7 +653,7 @@ def _bound_content(
         for key in (
             "role",
             "work_unit_id",
-            "round_number",
+            "request_sequence",
             "operation",
             "request_id",
             "response_sha256",
@@ -668,7 +668,7 @@ def _bound_content(
     if (
         payload.role is not kwargs["role"]
         or payload.work_unit_id != str(kwargs["work_unit_id"])
-        or payload.round_number != kwargs["round_number"]
+        or payload.round_number != kwargs["request_sequence"]
         or payload.operation != kwargs["operation"]
         or (
             kwargs.get("request_id") is not None
@@ -1379,6 +1379,7 @@ def _reviewer_base() -> dict[str, object]:
     unit = SimpleNamespace(
         work_unit_id=1,
         round_number=1,
+        request_sequence=1,
         slice_id=1,
         kind=WorkUnitKind.SLICE,
         open_findings=(),
@@ -2187,7 +2188,7 @@ def test_successes_bind_the_adopted_record_and_resulting_state(
     assert implementer["state"]["content_binding"] == {
         "role": "codex",
         "work_unit_id": 1,
-        "round_number": 1,
+        "request_sequence": 1,
         "operation": "codex_implementation",
         "request_id": IMPLEMENTER_REQUEST_ID,
         "response_sha256": IMPLEMENTER_RESPONSE_SHA256,
@@ -2202,7 +2203,7 @@ def test_successes_bind_the_adopted_record_and_resulting_state(
         "content_binding": {
             "role": "claude",
             "work_unit_id": 1,
-            "round_number": 1,
+            "request_sequence": 1,
             "operation": "claude_slice_review",
             "request_id": REVIEW_REQUEST_ID,
             "response_sha256": REVIEW_RESPONSE_SHA256,

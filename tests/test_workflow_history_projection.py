@@ -1163,7 +1163,9 @@ def _independent_mirror_snapshots(
     # Approved reviews update history; the state mirror records a reviewer only
     # for denial/return transitions.
     snapshots[43] = _history_mirror(state, correction_history, archive)
-    round_two = replace(state.current_work_unit, round_number=2)
+    round_two = replace(
+        state.current_work_unit, round_number=2, request_sequence=2
+    )
     state = replace(state, work_units=(*state.work_units[:-1], round_two))
     snapshots[44] = _history_mirror(state, correction_history, archive)
     return snapshots

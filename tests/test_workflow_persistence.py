@@ -293,7 +293,7 @@ def test_missing_provider_content_authority_fails_closed() -> None:
         persistence._persist_provider_content(
             role=Role.CODEX,
             work_unit_id=1,
-            round_number=1,
+            request_sequence=1,
             operation="implementation",
             request_id="request-1",
             canonical='{"result":"ok"}',
@@ -329,7 +329,7 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     record = persistence._persist_provider_content(
         role=Role.CODEX,
         work_unit_id=2,
-        round_number=3,
+        request_sequence=3,
         operation="review",
         request_id="request-direct",
         canonical=canonical,
@@ -350,7 +350,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
     fields = {
         "role": Role.CODEX,
         "work_unit_id": 45,
-        "round_number": 1,
+        "request_sequence": 1,
         "operation": "codex_final_correction",
         "request_id": (
             "native-codex-request-"
@@ -367,7 +367,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
         fields,
         {**fields, "role": Role.CLAUDE},
         {**fields, "work_unit_id": 46},
-        {**fields, "round_number": 2},
+        {**fields, "request_sequence": 2},
         {**fields, "operation": "claude_slice_review"},
         {**fields, "request_id": "native-review-request-" + "b" * 64},
         {**fields, "response_sha256": "c" * 64},
@@ -392,7 +392,9 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
     persistence = WorkflowPersistence(_dependencies(bridge=bridge))
     sink_fields = {
         key: fields[key]
-        for key in ("role", "work_unit_id", "round_number", "operation", "request_id")
+        for key in (
+            "role", "work_unit_id", "request_sequence", "operation", "request_id"
+        )
     }
     persisted = persistence._persist_provider_content(
         **sink_fields,

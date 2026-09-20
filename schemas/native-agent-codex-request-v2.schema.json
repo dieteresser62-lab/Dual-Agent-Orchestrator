@@ -139,6 +139,7 @@
         "readiness_kind": { "enum": ["plan", "implementation", "final_report"] },
         "slice_id": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,100}$" },
         "round_number": { "type": "integer", "minimum": 1 },
+        "request_sequence": { "type": "integer", "minimum": 1 },
         "require_test_files_record": { "type": "boolean" },
         "expected_test_files": {
           "type": "array",
@@ -171,7 +172,7 @@
         "validation_attestation": { "$ref": "#/$defs/attestation" }
       },
       "required": [
-        "name", "readiness_kind", "slice_id", "round_number",
+        "name", "readiness_kind", "slice_id", "round_number", "request_sequence",
         "require_test_files_record", "expected_test_files",
         "test_changes_approved", "require_slice_plan", "plan_artifact_path",
         "enforce_expected_test_files", "review_fingerprint",

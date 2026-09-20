@@ -374,19 +374,21 @@ def test_workflow_checkpoint_name_contains_all_one_based_coordinates(tmp_path: P
         tmp_path,
         work_unit_id=2,
         slice_id=7,
-        round_number=3,
+        request_sequence=3,
     )
     other = workflow_checkpoint_path(
         tmp_path,
         work_unit_id=2,
         slice_id=8,
-        round_number=3,
+        request_sequence=3,
     )
 
     assert checkpoint.name == "work-unit-0002-slice-0007-round-0003.json"
     assert checkpoint != other
     with pytest.raises(StateSchemaError, match="1-based"):
-        workflow_checkpoint_path(tmp_path, work_unit_id=0, slice_id=7, round_number=3)
+        workflow_checkpoint_path(
+            tmp_path, work_unit_id=0, slice_id=7, request_sequence=3
+        )
 
 
 def test_workflow_checkpoint_roundtrip_and_missing(tmp_path: Path) -> None:
@@ -402,14 +404,14 @@ def test_workflow_checkpoint_roundtrip_and_missing(tmp_path: Path) -> None:
         checkpoint_dir,
         work_unit_id=1,
         slice_id=1,
-        round_number=1,
+        request_sequence=1,
         allowed_roots=(tmp_path,),
     )
     missing = load_workflow_checkpoint(
         checkpoint_dir,
         work_unit_id=1,
         slice_id=1,
-        round_number=2,
+        request_sequence=2,
         allowed_roots=(tmp_path,),
     )
 
@@ -442,7 +444,7 @@ def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path
             checkpoint_dir,
             work_unit_id=1,
             slice_id=1,
-            round_number=1,
+            request_sequence=1,
             allowed_roots=(tmp_path,),
             expected_protocol_binding=ProtocolBinding(
                 ProtocolMode.LEGACY_STATE_V3, "3", None, None
@@ -580,7 +582,7 @@ def test_checkpoint_rejects_identity_mismatch(tmp_path: Path) -> None:
         checkpoint_dir,
         work_unit_id=1,
         slice_id=1,
-        round_number=2,
+        request_sequence=2,
     )
     save_workflow_state(wrong_path, state, allowed_roots=(tmp_path,))
 
@@ -589,7 +591,7 @@ def test_checkpoint_rejects_identity_mismatch(tmp_path: Path) -> None:
             checkpoint_dir,
             work_unit_id=1,
             slice_id=1,
-            round_number=2,
+            request_sequence=2,
             allowed_roots=(tmp_path,),
         )
 

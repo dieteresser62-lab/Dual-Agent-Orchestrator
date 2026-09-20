@@ -301,7 +301,7 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
     record = driver._persist_provider_content(  # noqa: SLF001
         role=Role.CODEX,
         work_unit_id=1,
-        round_number=1,
+        request_sequence=1,
         operation="codex_final_review",
         request_id="native-codex-request-" + ("b" * 64),
         canonical=canonical,
@@ -428,7 +428,7 @@ def test_review_packet_fullscan_reads_each_blob_once_with_linear_byte_cost(
     assert exponent < 1.25
 
 
-def test_provider_content_recovery_is_bound_to_the_exact_round_without_decision(
+def test_provider_content_recovery_is_bound_to_the_exact_request_without_decision(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "provider-round-recovery")
@@ -436,11 +436,11 @@ def test_provider_content_recovery_is_bound_to_the_exact_round_without_decision(
     driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
     request_id = "native-codex-request-" + "b" * 64
     canonical = '{"request_id":"' + request_id + '","ready":true}'
-    for round_number in (1, 2):
+    for request_sequence in (1, 2):
         driver._persist_provider_content(  # noqa: SLF001
             role=Role.CODEX,
             work_unit_id=7,
-            round_number=round_number,
+            request_sequence=request_sequence,
             operation="codex_implementation",
             request_id=request_id,
             canonical=canonical,
@@ -451,7 +451,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_round_without_decision(
     recovered = driver._provider_content_text(  # noqa: SLF001
         role=Role.CODEX,
         work_unit_id=7,
-        round_number=2,
+        request_sequence=2,
         operation="codex_implementation",
     )
 
@@ -497,7 +497,7 @@ def test_implementer_pair_missing_or_ambiguous_content_is_rejected(
     assert "actual=" in str(raised.value)
 
 
-def test_agent_result_content_authority_uses_independent_work_unit_round(
+def test_agent_result_content_authority_uses_independent_request_sequence(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "stale-agent-round")
@@ -508,19 +508,19 @@ def test_agent_result_content_authority_uses_independent_work_unit_round(
             store.load_chain(), store.run_id, require_content_authority=True
         )
 
-    assert "feature=round_number expected=2 actual=1" in str(raised.value)
+    assert "feature=request_sequence expected=2 actual=1" in str(raised.value)
 
 
-def test_reviewer_round_remains_independent_from_work_unit_round(
+def test_reviewer_request_sequence_remains_independent_from_semantic_round(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "independent-review-round")
     _bind_store(store)
     bridge = ArtifactBridge(store)
     bridge.append(
-        WorkUnitPayload("1", 2, ("src/a.py",)),
+        WorkUnitPayload("1", 1, ("src/a.py",)),
         logical_id="work-unit-1",
-        idempotency_key="work-unit:1:round:2",
+        idempotency_key="work-unit:1:round:1:request-sequence:2",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -530,7 +530,7 @@ def test_reviewer_round_remains_independent_from_work_unit_round(
         ProviderContentPayload(
             Role.CLAUDE,
             "1",
-            1,
+            2,
             "claude_slice_review",
             request_id,
             blob.sha256,
@@ -565,7 +565,7 @@ def test_reviewer_round_remains_independent_from_work_unit_round(
         require_content_authority=True,
     )
 
-    assert provider_records[0].payload.round_number == 1
+    assert provider_records[0].payload.round_number == 2
     assert bound_records == {provider_records[0].record_id}
 
 
