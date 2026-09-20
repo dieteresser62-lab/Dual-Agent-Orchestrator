@@ -30,7 +30,7 @@
     "src/orchestrator.py": {"codex": 51, "claude": 11},
     "src/plan_handoff.py": {"claude": 1},
     "src/prompts.py": {"codex": 1, "claude": 1},
-    "src/provider_input_budget.py": {"codex": 7, "claude": 4},
+    "src/provider_input_budget.py": {"codex": 7, "claude": 5},
     "src/state_io.py": {"codex": 1, "claude": 2},
     "src/task_contract.py": {"codex": 2},
     "src/workflow.py": {"codex": 95, "claude": 68},

@@ -2274,7 +2274,11 @@ def classify_agent_failure(
     )
     orchestrator_diagnostic = getattr(exc, "orchestrator_diagnostic", None)
     if not isinstance(orchestrator_diagnostic, OrchestratorDiagnostic):
-        orchestrator_diagnostic = None
+        # Imported lazily because error_classification owns the complete
+        # project-exception inventory and imports this runtime module.
+        from error_classification import orchestrator_diagnostic_for_exception
+
+        orchestrator_diagnostic = orchestrator_diagnostic_for_exception(exc)
     raw_provider_data = getattr(exc, "provider_data", None)
     provider_data = _sanitize_provider_diagnostic(raw_provider_data)
     process_exit_code = getattr(exc, "exit_code", None)

@@ -40,6 +40,8 @@ from dry_run_scenarios import ScriptedInterruption
 from error_classification import (
     ERROR_CLASSIFICATIONS,
     FailureClass,
+    _HALT_DIAGNOSTIC_BY_CODE,
+    _assert_halt_diagnostic_coverage,
     classify_exception,
     enforce_record_start_boundary,
 )
@@ -386,6 +388,19 @@ def test_central_inventory_classifies_all_49_project_error_types_exactly_once() 
         isinstance(failure_class, FailureClass) and diagnostic_code
         for failure_class, diagnostic_code in ERROR_CLASSIFICATIONS.values()
     )
+
+
+def test_halt_diagnostic_inventory_rejects_a_missing_error_class_rule() -> None:
+    class FutureHaltError(RuntimeError):
+        pass
+
+    extended = {
+        **ERROR_CLASSIFICATIONS,
+        FutureHaltError: (FailureClass.RESUMABLE_HALT, "FUTURE-HALT"),
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_halt_diagnostic_coverage(extended, _HALT_DIAGNOSTIC_BY_CODE)
 
 
 def test_wrapped_typed_cause_keeps_its_transient_class() -> None:

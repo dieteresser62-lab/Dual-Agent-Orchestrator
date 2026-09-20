@@ -59,6 +59,7 @@
       "validation_declared": false,
       "source": null,
       "provider_input_budget": {"__type__": "ProviderInputBudgetPolicy", "rules": [
+        {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_branch_discovery", "max_chars": 4000000, "max_bytes": 16000000},
         {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_final_review", "max_chars": 4000000, "max_bytes": 16000000},
         {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_plan_review", "max_chars": 4000000, "max_bytes": 16000000},
         {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_slice_review", "max_chars": 4000000, "max_bytes": 16000000},
@@ -170,23 +171,23 @@
     {
       "scenario_id": "valid-explicit-quota-arguments", "description": "All quota integers use the explicit argument return path.",
       "arguments": ["--quota-safety-margin", "17", "--quota-max-wait", "120", "--quota-max-auto-resumes", "2", "--quota-heartbeat-interval", "15"], "environment": {}, "source_kind": "return", "source_ordinal": 1, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "252f68a0e165ed2083b45dc03f540d6109f38d3a12d41943ad5d6214a5026a17", "return_ordinals": [1, 1, 1, 1, 2, 2, 2, 4], "stderr": ""},
+      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "a06225c2061f9aa7d5d5f146c893340145b495c4545e6e60f098d97ae68ef96e", "return_ordinals": [1, 1, 1, 1, 2, 2, 2, 4], "stderr": ""},
       "namespace_patch": {"quota_heartbeat_interval": 15, "quota_max_auto_resumes": 2, "quota_max_wait": 120, "quota_safety_margin": 17, "quota_wait_policy": {"safety_margin_seconds": 17, "maximum_wait_seconds": 120, "maximum_auto_resumes": 2, "heartbeat_interval_seconds": 15}}
     },
     {
       "scenario_id": "valid-default-arguments", "description": "Absent quota and retry settings use their default return path.",
       "arguments": [], "environment": {}, "source_kind": "return", "source_ordinal": 2, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "94340109d36050c04623c838eefebb452b430ea9704a1cfe837bf41905cb0599", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {}
+      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "b7806a53648f3903e5a2f4d368f88a27784b5ee87c2efd5399f2f3d42997c696", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {}
     },
     {
       "scenario_id": "valid-quota-environment-integer", "description": "A valid quota environment value uses the parsed integer return path.",
       "arguments": [], "environment": {"RUN_TASK_QUOTA_SAFETY_MARGIN": "17"}, "source_kind": "return", "source_ordinal": 3, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "f43665d7b82e2133b5f9992db106827837048f49d8d0b501b1bf291e9f5ba824", "return_ordinals": [3, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"quota_wait_policy": {"safety_margin_seconds": 17}}
+      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "d60a85c000e3fcfd22eccf69c629872b310c52712d2e58ca14502e6b5294e795", "return_ordinals": [3, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"quota_wait_policy": {"safety_margin_seconds": 17}}
     },
     {
       "scenario_id": "valid-explicit-gate-decision", "description": "A complete gate decision reaches the outer Namespace return path.",
       "arguments": ["--resume", "--approve-gate", "--gate-rationale", "reviewed exact persisted evidence"], "environment": {}, "source_kind": "return", "source_ordinal": 4, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "a7810f6d7236b59915d51d6114d42ff967ac32b04e1c079f32fe25ba869c4f4a", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"approve_gate": true, "gate_decision": true, "gate_rationale": "reviewed exact persisted evidence", "resume": true, "resume_explicit": true}
+      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "e7fa9edf1b800b17c0501a8c86a6312def0bbdea80acb6404dbf5d3a77b6e6c8", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"approve_gate": true, "gate_decision": true, "gate_rationale": "reviewed exact persisted evidence", "resume": true, "resume_explicit": true}
     }
   ]
 }

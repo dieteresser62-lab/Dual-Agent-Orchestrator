@@ -14,6 +14,13 @@ STRUCTURED_OUTPUT_DIAGNOSTIC_CODE = "PROVIDER-STRUCTURED-OUTPUT"
 class OrchestratorDiagnostic(StrEnum):
     """Diagnostics whose complete rendered text is owned by this repository."""
 
+    CLASSIFIED_HALT_RULE = (
+        "classified-halt: a repository-owned error rule halted the run"
+    )
+    PROVIDER_BUDGET_CONFIG_RULE = (
+        "provider-budget-config: provider input budget configuration is incomplete or invalid"
+    )
+
     WORKFLOW_EXECUTION_RULE = (
         "workflow-execution: a deterministic workflow rule halted the run"
     )

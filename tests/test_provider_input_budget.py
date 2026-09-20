@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from provider_input_budget import (
+    PROVIDER_OPERATIONS,
     PreparedProviderInput,
     ProviderInputBudgetError,
     ProviderInputBudgetPolicy,
@@ -11,6 +12,8 @@ from provider_input_budget import (
     default_provider_input_budget_policy,
     measure_provider_input,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
+from workflow_state import WorkflowStep
 
 
 def _prepared(text: str) -> PreparedProviderInput:
@@ -33,6 +36,53 @@ def _policy(chars: int, bytes_: int) -> ProviderInputBudgetPolicy:
             for rule in defaults.rules
         )
     )
+
+
+def test_budget_table_covers_every_reachable_provider_operation() -> None:
+    reachable = {
+        provider: {
+            step.value
+            for step in WorkflowStep
+            if step.value.startswith(f"{provider}_")
+        }
+        for provider in ("codex", "claude")
+    }
+
+    assert reachable["codex"] <= PROVIDER_OPERATIONS["codex"]
+    assert reachable["claude"] <= PROVIDER_OPERATIONS["claude"]
+    assert PROVIDER_OPERATIONS["codex"] - reachable["codex"] == {
+        "codex_final_correction",
+        "codex_final_review",
+    }
+    assert PROVIDER_OPERATIONS["claude"] - reachable["claude"] == {
+        "claude_final_review"
+    }
+
+
+def test_branch_discovery_uses_the_slice_review_input_ceiling() -> None:
+    rules = {
+        rule.operation: rule
+        for rule in default_provider_input_budget_policy().rules
+        if rule.provider == "claude"
+    }
+
+    discovery = rules["claude_branch_discovery"]
+    slice_review = rules["claude_slice_review"]
+    assert (discovery.max_chars, discovery.max_bytes) == (4_000_000, 16_000_000)
+    assert (discovery.max_chars, discovery.max_bytes) == (
+        slice_review.max_chars,
+        slice_review.max_bytes,
+    )
+
+
+def test_budget_configuration_error_has_value_free_readable_diagnostic() -> None:
+    provider_value = "provider-secret-value"
+    error = ProviderInputBudgetError(f"unknown operation: {provider_value}")
+
+    assert error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.PROVIDER_BUDGET_CONFIG_RULE
+    )
+    assert provider_value not in error.orchestrator_diagnostic.text
 
 
 @pytest.mark.parametrize(

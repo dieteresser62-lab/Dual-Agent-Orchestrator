@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 
+from orchestrator_diagnostics import OrchestratorDiagnostic
+
 
 PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
     "codex": frozenset(
@@ -20,6 +22,7 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
     ),
     "claude": frozenset(
         {
+            "claude_branch_discovery",
             "claude_plan_review",
             "claude_slice_review",
             "claude_final_review",
@@ -42,6 +45,14 @@ INDEXED_COMPONENT_NAME = re.compile(
 
 class ProviderInputBudgetError(ValueError):
     """Raised for an invalid or incomplete provider-input budget policy."""
+
+    def __init__(self, detail: str) -> None:
+        # The detail may contain provider, operation, or measured values.  The
+        # operator channel therefore carries only this repository-owned rule.
+        self.orchestrator_diagnostic = (
+            OrchestratorDiagnostic.PROVIDER_BUDGET_CONFIG_RULE
+        )
+        super().__init__(detail)
 
 
 class ProviderInputBudgetExceeded(RuntimeError):
@@ -172,6 +183,10 @@ class ProviderInputBudgetPolicy:
 
 
 def default_provider_input_budget_policy() -> ProviderInputBudgetPolicy:
+    # Branch discovery reads the full branch from its read-only workspace; it
+    # does not serialize that branch into the provider request.  Its metered
+    # input has the same components as a Slice review, so the same generous
+    # safety ceiling remains appropriate for both operations.
     return ProviderInputBudgetPolicy(
         tuple(
             ProviderInputBudgetRule(provider, provider, operation, 4_000_000, 16_000_000)

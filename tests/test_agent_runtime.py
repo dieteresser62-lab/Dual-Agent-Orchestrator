@@ -905,13 +905,17 @@ def test_unregistered_adapter_is_denied_before_preparation_or_process() -> None:
     with pytest.raises(
         ProviderInputBudgetError,
         match="has no provider input budget registration",
-    ):
+    ) as raised:
         run_agent(
             UnregisteredAdapter(),  # type: ignore[arg-type]
             "prompt",
             config=OrchestratorConfig(dry_run=False),
             shorten=lambda text, limit: (text or "")[:limit],
         )
+
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.PROVIDER_BUDGET_CONFIG_RULE
+    )
 
 
 def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() -> None:
@@ -1053,6 +1057,20 @@ def test_compatibility_failure_preserves_detail_and_separates_diagnostic() -> No
         "AgentCompatibilityError: unsupported CLI version 9.9"
     )
     assert failure.provider_text != failure.technical_text
+
+
+def test_budget_configuration_failure_keeps_readable_diagnostic_when_wrapped() -> None:
+    provider_value = "unregistered-provider-value"
+    failure = classify_agent_failure(
+        "claude",
+        ProviderInputBudgetError(f"missing budget for {provider_value}"),
+        invocation_id="provider-budget-config-diagnostic",
+    )
+
+    assert failure.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.PROVIDER_BUDGET_CONFIG_RULE
+    )
+    assert provider_value not in failure.readable_orchestrator_diagnostic
 
 
 @pytest.mark.parametrize(

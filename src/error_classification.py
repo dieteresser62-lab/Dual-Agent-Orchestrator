@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Mapping
 
 from agent_adapters import AgentBudgetError, AgentOutputError, AgentPermissionError
 from agent_config import AgentConfigError
@@ -51,7 +52,10 @@ from native_review_contract import (
     is_retryable_native_review_response_error,
 )
 from native_review_request import NativeReviewRequestError
-from orchestrator_diagnostics import STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+from orchestrator_diagnostics import (
+    STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+    OrchestratorDiagnostic,
+)
 from path_policy import PathPolicyError
 from plan_handoff import PlanHandoffError
 from provider_input_budget import ProviderInputBudgetError, ProviderInputBudgetExceeded
@@ -176,6 +180,108 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     WorkflowContractError: _entry(_HALT, "WORKFLOW-CONTRACT"),
     ValidationExecutionError: _entry(_HALT, "VALIDATION-EXECUTION"),
 }
+
+
+_HALT_DIAGNOSTIC_CODES = frozenset(
+    {
+        "ACTIVE-V2-STATE",
+        "AGENT-BUDGET",
+        "AGENT-COMPATIBILITY",
+        "AGENT-CONFIG",
+        "AGENT-OUTPUT",
+        "AGENT-PERMISSION",
+        "ARTIFACT-BRIDGE",
+        "ARTIFACT-CONFLICT",
+        "ARTIFACT-CORRUPTION",
+        "ARTIFACT-PROJECTION",
+        "ARTIFACT-REPLAY",
+        "ARTIFACT-RESUME",
+        "ARTIFACT-STORE",
+        "ARTIFACT-VALIDATION",
+        "AUDIT-TRAIL",
+        "CLI-CONFIG",
+        "FINAL-REVIEW-PREFLIGHT-DENIED",
+        "GIT-TRANSACTION",
+        "NATIVE-IMPLEMENTER-CONTRACT",
+        "NATIVE-IMPLEMENTER-REQUEST",
+        "NATIVE-PROVIDER-SCHEMA",
+        "NATIVE-REVIEW-CONTRACT",
+        "NATIVE-REVIEW-REQUEST",
+        "NOT-GIT-REPOSITORY",
+        "NO-WORKFLOW-CHANGES",
+        "PATH-POLICY",
+        "PLAN-CONTRACT-VALIDATION",
+        "PLAN-HANDOFF",
+        "PROVIDER-BUDGET-CONFIG",
+        "PROVIDER-BUDGET-EXCEEDED",
+        "PROVIDER-INPUT-EFFICIENCY",
+        "PROVIDER-REQUEST-ROUND",
+        "REPOSITORY-CHANGE",
+        "REVIEW-PACKET",
+        "SCHEMA-DEFINITION",
+        "SCHEMA-MISMATCH",
+        "SCRIPTED-INTERRUPTION",
+        "SEMANTIC-MARKDOWN",
+        "SIDE-EFFECT-RECONCILIATION",
+        "STATE-PATH",
+        "STATE-SCHEMA",
+        "UNKNOWN-STATE-VERSION",
+        "VALIDATION-EXECUTION",
+        "VALIDATION-MATRIX",
+        "WORKFLOW-COMMIT-APPROVAL",
+        "WORKFLOW-COMPLETION-REJECTED",
+        "WORKFLOW-CONTRACT",
+        "WORKFLOW-DRIVER-CONTRACT",
+        "WORKFLOW-EXECUTION",
+        "WORKFLOW-STATE-VALIDATION",
+    }
+)
+_HALT_DIAGNOSTIC_BY_CODE: dict[str, OrchestratorDiagnostic] = {
+    code: OrchestratorDiagnostic.CLASSIFIED_HALT_RULE
+    for code in _HALT_DIAGNOSTIC_CODES
+}
+_HALT_DIAGNOSTIC_BY_CODE["PROVIDER-BUDGET-CONFIG"] = (
+    OrchestratorDiagnostic.PROVIDER_BUDGET_CONFIG_RULE
+)
+
+
+def _assert_halt_diagnostic_coverage(
+    classifications: Mapping[
+        type[BaseException], tuple[FailureClass, str]
+    ] = ERROR_CLASSIFICATIONS,
+    diagnostics: Mapping[
+        str, OrchestratorDiagnostic
+    ] = _HALT_DIAGNOSTIC_BY_CODE,
+) -> None:
+    """Require readable, provider-free guidance for every mapped halt."""
+
+    expected = {
+        diagnostic_code
+        for failure_class, diagnostic_code in classifications.values()
+        if failure_class is FailureClass.RESUMABLE_HALT
+    }
+    assert set(diagnostics) == expected
+    assert all(
+        isinstance(diagnostic, OrchestratorDiagnostic)
+        for diagnostic in diagnostics.values()
+    )
+
+
+_assert_halt_diagnostic_coverage()
+
+
+def orchestrator_diagnostic_for_exception(
+    error: BaseException,
+) -> OrchestratorDiagnostic | None:
+    """Return closed operator guidance without copying exception values."""
+
+    diagnostic = getattr(error, "orchestrator_diagnostic", None)
+    if isinstance(diagnostic, OrchestratorDiagnostic):
+        return diagnostic
+    assignment = ERROR_CLASSIFICATIONS.get(type(error))
+    if assignment is None or assignment[0] is not FailureClass.RESUMABLE_HALT:
+        return None
+    return _HALT_DIAGNOSTIC_BY_CODE[assignment[1]]
 
 
 def classify_exception(error: BaseException) -> ClassifiedFailure:
