@@ -1066,7 +1066,9 @@ class ProductionWorkflowDriver:
                 ),
                 accepted_output_callback=lambda accepted: (
                     self.persist_native_codex_contract(
-                        accepted, invocation.previous_findings
+                        accepted,
+                        invocation.request_sequence,
+                        invocation.previous_findings,
                     )
                 ),
         )
@@ -1504,6 +1506,7 @@ class ProductionWorkflowDriver:
                         output,
                         invocation.fingerprint,
                         invocation.round_number,
+                        invocation.request_sequence,
                         invocation.previous_findings,
                     )
                 ),
@@ -1711,12 +1714,14 @@ class ProductionWorkflowDriver:
     def persist_native_codex_contract(
         self,
         output: NativeAgentCodexOutput,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
         *,
         recovery_fingerprint: str | None = None,
     ) -> None:
         self._persistence_boundary().persist_native_implementer_contract(
             output,
+            request_sequence,
             previous_findings,
             recovery_fingerprint=recovery_fingerprint,
         )
@@ -1726,12 +1731,14 @@ class ProductionWorkflowDriver:
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         self._persistence_boundary().persist_native_review_contract(
             output,
             fingerprint,
             round_number,
+            request_sequence,
             previous_findings,
         )
 

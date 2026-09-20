@@ -1659,6 +1659,9 @@ def run_native_review_agent_checked(
                     "provider_text": failure.provider_text,
                     "provider_diagnostic": failure.provider_data,
                     "technical_text": failure.technical_text,
+                    "orchestrator_diagnostic": (
+                        failure.readable_orchestrator_diagnostic
+                    ),
                     "received_at": failure.received_at.isoformat(),
                     "process_exit_code": failure.process_exit_code,
                 },
@@ -1861,6 +1864,9 @@ def run_native_codex_agent_checked(
                         "provider_text": failure.provider_text,
                         "provider_diagnostic": failure.provider_data,
                         "technical_text": failure.technical_text,
+                        "orchestrator_diagnostic": (
+                            failure.readable_orchestrator_diagnostic
+                        ),
                         "received_at": failure.received_at.isoformat(),
                         "process_exit_code": failure.process_exit_code,
                     },

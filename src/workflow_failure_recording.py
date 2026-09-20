@@ -461,11 +461,7 @@ def _invocation_failure_documents(
         ),
         automatic_resume=decision.automatic,
         diff_fingerprint=fingerprint,
-        orchestrator_diagnostic=(
-            diagnostics.orchestrator
-            if diagnostics.implementer_persisted_rejection is not None
-            else None
-        ),
+        orchestrator_diagnostic=diagnostics.orchestrator,
         native_review_rejection=diagnostics.persisted_rejection,
         native_review_retry_round=decision.native_review_retry_round,
         native_implementer_rejection=diagnostics.implementer_persisted_rejection,

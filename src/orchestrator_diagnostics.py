@@ -14,6 +14,73 @@ STRUCTURED_OUTPUT_DIAGNOSTIC_CODE = "PROVIDER-STRUCTURED-OUTPUT"
 class OrchestratorDiagnostic(StrEnum):
     """Diagnostics whose complete rendered text is owned by this repository."""
 
+    WORKFLOW_EXECUTION_RULE = (
+        "workflow-execution: a deterministic workflow rule halted the run"
+    )
+    WORKFLOW_REVIEW_CONTEXT_MISSING = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=context"
+    )
+    WORKFLOW_REVIEW_CONTEXT_WORK_UNIT_ID = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=work_unit_id"
+    )
+    WORKFLOW_REVIEW_CONTEXT_DIFF_FINGERPRINT = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=diff_fingerprint"
+    )
+    WORKFLOW_REVIEW_CONTEXT_ROUND_NUMBER = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=round_number"
+    )
+    WORKFLOW_REVIEW_CONTEXT_REQUEST_SEQUENCE = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=request_sequence"
+    )
+    WORKFLOW_REVIEW_CONTEXT_REVIEWER = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=reviewer"
+    )
+    WORKFLOW_REVIEW_CONTEXT_VALIDATION_ATTESTATION = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=validation_attestation"
+    )
+    WORKFLOW_REVIEW_CONTEXT_TEST_FILES = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=test_files"
+    )
+    WORKFLOW_REVIEW_CONTEXT_RED_STATE_FOLLOWUP_SLICE = (
+        "workflow-execution: native review persistence differs from its exact review context: "
+        "field=red_state_followup_slice"
+    )
+    WORKFLOW_REVIEW_VALIDATION_ATTESTATION_MISSING = (
+        "workflow-execution: native review persistence lacks its validation attestation"
+    )
+    WORKFLOW_REVIEW_VALIDATION_RECORD_NOT_UNIQUE = (
+        "workflow-execution: native review persistence has no unique earlier validation record"
+    )
+    WORKFLOW_REVIEW_BINDING_MISSING = (
+        "workflow-execution: native review persistence lacks its immutable Claude binding"  # allowlist:provider -- closed static diagnostic
+    )
+    WORKFLOW_REVIEW_CONTENT_DIGEST_MISMATCH = (
+        "workflow-execution: native reviewer content digest differs from its review binding"
+    )
+    WORKFLOW_IMPLEMENTER_BINDING_MISSING = (
+        "workflow-execution: native Codex persistence lacks its immutable transport binding"  # allowlist:provider -- closed static diagnostic
+    )
+    WORKFLOW_IMPLEMENTER_LOGICAL_BINDING_MISMATCH = (
+        "workflow-execution: native agent result logical binding differs"
+    )
+    WORKFLOW_IMPLEMENTER_CONTENT_DIGEST_MISMATCH = (
+        "workflow-execution: native agent content digest differs from its result binding"
+    )
+    WORKFLOW_BRANCH_DISCOVERY_BINDING_MISSING = (
+        "workflow-execution: branch discovery completion lacks its dedicated run binding"
+    )
+    WORKFLOW_BRANCH_DISCOVERY_HEAD_MISSING = (
+        "workflow-execution: branch discovery completion lacks its reviewed HEAD"
+    )
+
     IMPLEMENTER_SCHEMA_INVALID = (
         "schema-invalid: native implementer output must satisfy its closed result schema"
     )

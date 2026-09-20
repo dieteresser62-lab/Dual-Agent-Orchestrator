@@ -717,22 +717,26 @@ def _dependencies(
 
     def persist_implementer(
         output: object,
+        request_sequence: int,
         _findings: tuple[object, ...],
         *,
         recovery_fingerprint: str | None = None,
     ) -> None:
         capture["implementer_output"] = output
+        capture["implementer_request_sequence"] = request_sequence
         capture["recovery_fingerprint"] = recovery_fingerprint
 
     def persist_review(
         output: object,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         _findings: tuple[object, ...],
     ) -> None:
         capture["review_output"] = output
         capture["review_fingerprint"] = fingerprint
         capture["review_round"] = round_number
+        capture["review_request_sequence"] = request_sequence
 
     return module.WorkflowRecoveryDependencies(
         root=ROOT,

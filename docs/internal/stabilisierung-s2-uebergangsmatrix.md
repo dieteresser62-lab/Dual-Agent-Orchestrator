@@ -1264,6 +1264,11 @@ Runtimebindungen ergänzen die dokumentierten Divergenzen
 `native reviewer content digest differs from its review binding`,
 `validation recovery result differs from its content` und
 `native review persistence differs from its exact review context`.
+Seit B154 benennt die letzte Grenze zusätzlich genau eines der acht geprüften
+Felder (`work_unit_id`, `diff_fingerprint`, `round_number`,
+`request_sequence`, `reviewer`, `validation_attestation`, `test_files` oder
+`red_state_followup_slice`); die verglichenen Werte bleiben redigiert. Ein
+fehlender Reviewkontext wird entsprechend als `field=context` ausgewiesen.
 Von den R7-Mirrorgrenzen bleiben nach R9
 `review contract projection is ambiguous`,
 `latest review mirror has no aggregate field` und

@@ -194,7 +194,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             fingerprint, expected_commands, attestation_id
         )
 
-    def persist_native_codex_contract(self, output, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
+    def persist_native_codex_contract(self, output, request_sequence, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
         state = self._record_driver.active_state
         if state is None:
             raise CrashHarnessError("scripted implementer result has no active record state")
@@ -206,18 +206,19 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
         )
         self._record_driver.persist_native_codex_contract(  # allowlist:provider
             output,
+            request_sequence,
             previous_findings,
             recovery_fingerprint=fingerprint,
         )
         super().persist_native_codex_contract(  # allowlist:provider
-            output, previous_findings
+            output, request_sequence, previous_findings
         )
 
     def persist_native_review_contract(  # type: ignore[no-untyped-def]
-        self, output, fingerprint, round_number, previous_findings
+        self, output, fingerprint, round_number, request_sequence, previous_findings
     ) -> None:
         self._record_driver.persist_native_review_contract(
-            output, fingerprint, round_number, previous_findings
+            output, fingerprint, round_number, request_sequence, previous_findings
         )
         state = self._record_driver.active_state
         bridge = self._record_driver._artifact_bridge  # noqa: SLF001
@@ -261,7 +262,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
                     fingerprint_sha256=fingerprint,
                 )
         super().persist_native_review_contract(
-            output, fingerprint, round_number, previous_findings
+            output, fingerprint, round_number, request_sequence, previous_findings
         )
 
     def persist_review_packet(self, packet) -> None:  # type: ignore[no-untyped-def]

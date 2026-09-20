@@ -107,6 +107,7 @@ from inbox_watcher import (
     watch_identity_path,
 )
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from review_packets import ReviewPacket, ReviewPacketManifest
 from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
 from workflow import (
@@ -3283,7 +3284,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     with monkeypatch.context() as child_patch:
         child_patch.setattr(ArtifactBridge, "append", interrupt_child_append)
         with pytest.raises(RuntimeError, match="simulated R7 child-record append crash"):
-            driver.persist_native_review_contract(output, fingerprint, 1, ())
+            driver.persist_native_review_contract(output, fingerprint, 1, 1, ())
 
     interrupted_chain = ArtifactStore(repository, state.run_id).load_chain()
     with pytest.raises(ArtifactReplayError) as strict_error:
@@ -3872,6 +3873,7 @@ def _finding_transition_driver(
             ProtocolMode.STRUCTURED_V2,
             "2",
             claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -3895,6 +3897,158 @@ def _finding_transition_driver(
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
     )
     return driver, state, finding
+
+
+def _request_time_review_persistence_case(
+    tmp_path: Path, run_id: str
+) -> tuple[
+    ProductionWorkflowDriver,
+    WorkflowState,
+    NativeAgentReviewOutput,
+    str,
+]:
+    driver, state, _finding = _finding_transition_driver(tmp_path, run_id)
+    fingerprint = "d" * 64
+    review_state = state.with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    driver.active_state = review_state
+    command = "python3 -m pytest tests/ -v"
+    capture = ValidationCapture(command, "pass", 0, "passed", "", "passed")
+    attestation = ValidationAttestation(
+        f"validation-{run_id}",
+        fingerprint,
+        (command,),
+        (ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
+        validation_output_digest((capture,)),
+        "passed",
+        command_specs=(
+            ValidationCommandSpec(argv=("python3", "-m", "pytest", "tests/", "-v")),
+        ),
+        content_captures=(capture,),
+    )
+    driver.persist_validation_attestation(attestation)
+    context = NativeReviewContext(
+        run_id=review_state.run_id,
+        work_unit_id=str(review_state.current_work_unit_id),
+        operation=WorkflowStep.CLAUDE_PLAN_REVIEW.value,
+        diff_fingerprint=fingerprint,
+        pre_change_fingerprint=None,
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.PLAN,
+        slice_id="01",
+        round_number=1,
+        request_sequence=1,
+        validation_attestation=attestation,
+        validation_command_prefixes=(("python3", "-m", "pytest"),),
+    )
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=attestation,
+        test_files=(),
+        pre_mortem="A future persistence change could reuse the live request cursor.",
+        evidence=ReviewEvidence(
+            "request-time persistence binding",
+            "a future caller omits the captured sequence",
+            "provider content is recorded under the live sequence",
+        ),
+        findings=(),
+        anchors=(),
+    )
+    output = NativeAgentReviewOutput(
+        result=result,
+        canonical_json='{"result_type":"review_result"}',
+        request_id=f"native-review-request-{'a' * 64}",
+        context=context,
+    )
+    return driver, review_state, output, fingerprint
+
+
+def test_recomposed_review_persistence_uses_request_time_sequence(
+    tmp_path: Path,
+) -> None:
+    driver, review_state, output, fingerprint = (
+        _request_time_review_persistence_case(tmp_path, "review-request-time")
+    )
+    driver.active_state = review_state.start_recomposed_request()
+
+    driver.persist_native_review_contract(output, fingerprint, 1, 1, ())
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    chain = bridge.store.load_chain()
+    content = next(
+        record.payload
+        for record in chain
+        if isinstance(record.payload, ProviderContentPayload)
+        and record.payload.content_kind == "review_result"
+    )
+    assert content.round_number == 1
+    assert driver.active_state.current_work_unit.request_sequence == 2
+
+
+def test_review_context_mismatch_names_only_the_request_sequence_field(
+    tmp_path: Path,
+) -> None:
+    driver, _review_state, output, fingerprint = (
+        _request_time_review_persistence_case(tmp_path, "review-context-mismatch")
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=r"exact review context: field=request_sequence$",
+    ) as raised:
+        driver.persist_native_review_contract(output, fingerprint, 1, 2, ())
+
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_REQUEST_SEQUENCE
+    )
+    assert "native-review-request" not in raised.value.orchestrator_diagnostic.text
+
+
+def test_recomposed_implementer_persistence_uses_request_time_sequence(
+    tmp_path: Path,
+) -> None:
+    driver, state, _finding = _finding_transition_driver(
+        tmp_path, "implementer-request-time"
+    )
+    implementation_state = state.with_current_step(
+        WorkflowStep.CODEX_IMPLEMENTATION
+    )
+    driver.active_state = implementation_state.start_recomposed_request()
+    canonical = '{"result_type":"implementation_result"}'
+    output = NativeAgentCodexOutput(
+        result=CodexContractResult(
+            ready=True,
+            stopped=False,
+            stop_request=None,
+            validation=None,
+            test_files=(),
+            findings=(),
+        ),
+        canonical_json=canonical,
+        request_id=f"native-codex-request-{'b' * 64}",
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+    driver.persist_native_codex_contract(output, 1, ())
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    chain = bridge.store.load_chain()
+    result_record = next(
+        record for record in chain if isinstance(record.payload, AgentResultPayload)
+    )
+    content = next(
+        record.payload
+        for record in chain
+        if isinstance(record.payload, ProviderContentPayload)
+        and record.payload.content_kind == "agent_result"
+    )
+    assert result_record.logical_id.endswith("-1")
+    assert content.round_number == 1
+    assert driver.active_state.current_work_unit.request_sequence == 2
 
 
 def _finding_review(finding: FindingRecord) -> ContractResult:
@@ -3943,6 +4097,7 @@ def test_invalid_review_subset_publishes_no_review_or_finding_fact(
         driver.persist_native_review_contract(
             output,
             "d" * 64,
+            1,
             1,
             (),
         )
@@ -4446,7 +4601,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
 
     monkeypatch.setattr(type(bridge), "append", append_with_mid_persistence_crash)
     with pytest.raises(RuntimeError, match="crash after AgentResult"):
-        driver.persist_native_codex_contract(output, (finding,))
+        driver.persist_native_codex_contract(output, 1, (finding,))
 
     incomplete = ArtifactStore(repository, state.run_id).load_chain()
     assert sum(
@@ -4468,7 +4623,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     (repository / "README.md").write_text(
         "recovered tree now has a different fingerprint\n", encoding="utf-8"
     )
-    driver.persist_native_codex_contract(recovered, (finding,))
+    driver.persist_native_codex_contract(recovered, 1, (finding,))
     after_engine_persistence = ArtifactStore(repository, state.run_id).load_chain()
     assert sum(
         isinstance(item.payload, AgentResultPayload)

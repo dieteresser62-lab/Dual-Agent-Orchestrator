@@ -1013,6 +1013,7 @@ class ScriptedWorkflowDriver:
     def persist_native_codex_contract(
         self,
         output: NativeAgentCodexOutput,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         """Emulate record replay by retaining lines absent from a narrowed request."""
@@ -1022,7 +1023,7 @@ class ScriptedWorkflowDriver:
             ledger[key] for key in sorted(ledger, key=finding_id_sort_key)
         )
         self.structured_events.append(
-            ("native-codex", (output, previous_findings))  # allowlist:provider
+            ("native-codex", (output, request_sequence, previous_findings))  # allowlist:provider
         )
 
     def persist_native_review_contract(
@@ -1030,10 +1031,11 @@ class ScriptedWorkflowDriver:
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         """Mirror the complete reviewer result as the scripted durable ledger."""
-        _ = (fingerprint, round_number)
+        _ = (fingerprint, round_number, request_sequence)
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
         ledger.update({item.finding_id: item for item in output.result.findings})
         self.durable_findings = tuple(
@@ -1042,7 +1044,13 @@ class ScriptedWorkflowDriver:
         self.structured_events.append(
             (
                 "native-review",
-                (output, fingerprint, round_number, previous_findings),
+                (
+                    output,
+                    fingerprint,
+                    round_number,
+                    request_sequence,
+                    previous_findings,
+                ),
             )
         )
 

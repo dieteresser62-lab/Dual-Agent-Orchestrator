@@ -45,6 +45,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_replay",
     "contracts",
     "finding_reducer",
+    "orchestrator_diagnostics",
     "review_packets",
     "slice_exit",
     "task_contract",

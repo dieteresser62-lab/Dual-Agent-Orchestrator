@@ -239,6 +239,7 @@ class PersistImplementerContract(Protocol):
     def __call__(
         self,
         output: NativeAgentImplementerOutput,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
         *,
         recovery_fingerprint: str | None = None,
@@ -251,6 +252,7 @@ class PersistReviewContract(Protocol):
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
 
@@ -1412,6 +1414,7 @@ class WorkflowRecovery:
         )
         self._dependencies.persist_implementer_contract(
             output,
+            recovery_bound.context.contract.request_sequence,
             recovery_bound.context.previous_findings,
             recovery_fingerprint=fingerprint,
         )
@@ -1567,6 +1570,7 @@ class WorkflowRecovery:
         if candidate is None:
             self._dependencies.persist_implementer_contract(
                 output,
+                recovery_bound.context.contract.request_sequence,
                 recovery_bound.context.previous_findings,
                 recovery_fingerprint=content_record.fingerprint.sha256,
             )
@@ -1608,6 +1612,7 @@ class WorkflowRecovery:
         # finding-disposition set look fully recovered.
         self._dependencies.persist_implementer_contract(
             output,
+            recovery_bound.context.contract.request_sequence,
             recovery_bound.context.previous_findings,
             recovery_fingerprint=record.fingerprint.sha256,
         )
@@ -1745,10 +1750,7 @@ class WorkflowRecovery:
         )
 
     def recover_pending_native_reviewer_before_policy(
-        self,
-        state: WorkflowState,
-        context: WorkflowContext,
-        history: WorkflowHistory,
+        self, state: WorkflowState, context: WorkflowContext, history: WorkflowHistory,
     ) -> PersistedNativeReviewerReplay | None:
         """Recover a native decision before current-worktree policy is evaluated.
 
@@ -1928,6 +1930,7 @@ class WorkflowRecovery:
             output,
             record.fingerprint.sha256,
             round_number,
+            native_context.request_sequence,
             native_context.previous_findings,
         )
         logger.warning(
@@ -2076,6 +2079,7 @@ class WorkflowRecovery:
             output,
             invocation.fingerprint,
             invocation.round_number,
+            native_context.request_sequence,
             native_context.previous_findings,
         )
         logger.warning(

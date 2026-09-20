@@ -39,6 +39,7 @@ from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
     find_native_review_disposition_limit_error,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from finding_reducer import (
     merge_review_request_result,
     merge_request_result,
@@ -144,6 +145,29 @@ AGENT_SANDBOX_VALIDATION_PATTERN = re.compile(
 
 class WorkflowExecutionError(RuntimeError):
     """Raised when the development workflow must stop without advancing a step."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+    ) -> None:
+        if orchestrator_diagnostic is not None and not isinstance(
+            orchestrator_diagnostic, OrchestratorDiagnostic
+        ):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
+        if orchestrator_diagnostic is None:
+            rendered = f"workflow-execution: {detail}"
+            try:
+                orchestrator_diagnostic = OrchestratorDiagnostic(rendered)
+            except ValueError:
+                # Dynamic WorkflowExecutionError details can include provider or
+                # repository values.  Keep only the repository-owned rule name.
+                orchestrator_diagnostic = (
+                    OrchestratorDiagnostic.WORKFLOW_EXECUTION_RULE
+                )
+        self.orchestrator_diagnostic = orchestrator_diagnostic
+        super().__init__(detail)
 
 
 class PlanContractFailureKind(str, Enum):
@@ -678,6 +702,7 @@ class WorkflowDriver(Protocol):
     def persist_native_codex_contract(  # allowlist:provider -- canonical capability
         self,
         output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
 
@@ -686,6 +711,7 @@ class WorkflowDriver(Protocol):
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
 
@@ -1538,8 +1564,14 @@ class WorkflowEngine:
         try:
             sink(*args)
         except Exception as exc:
+            diagnostic = (
+                exc.orchestrator_diagnostic
+                if isinstance(exc, WorkflowExecutionError)
+                else None
+            )
             raise WorkflowExecutionError(
-                f"structured dual-write failed before workflow decision: {exc}"
+                f"structured dual-write failed before workflow decision: {exc}",
+                orchestrator_diagnostic=diagnostic,
             ) from exc
 
     def _bind_context_to_current_unit(
@@ -2066,6 +2098,7 @@ class WorkflowEngine:
         self._persist_structured(
             self.driver.persist_native_codex_contract,  # allowlist:provider
             output,
+            invocation.request_sequence,
             history.findings,
         )
         assert invocation.native_request is not None
@@ -2636,6 +2669,7 @@ class WorkflowEngine:
             output,
             changes.fingerprint,
             review_round,
+            invocation.request_sequence,
             (
                 output.recovered_finding_comparison.offered_findings
                 if output.recovered_finding_comparison is not None

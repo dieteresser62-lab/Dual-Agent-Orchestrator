@@ -725,10 +725,11 @@ class FakeDriver:
     def persist_native_codex_contract(
         self,
         output: NativeAgentCodexOutput,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         self.structured_events.append(
-            ("native-codex", (output, previous_findings))
+            ("native-codex", (output, request_sequence, previous_findings))
         )
 
     def persist_native_review_contract(
@@ -736,12 +737,19 @@ class FakeDriver:
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         self.structured_events.append(
             (
                 "native-review",
-                (output, fingerprint, round_number, previous_findings),
+                (
+                    output,
+                    fingerprint,
+                    round_number,
+                    request_sequence,
+                    previous_findings,
+                ),
             )
         )
 
@@ -1773,6 +1781,78 @@ def test_mutated_orchestrator_diagnostic_cannot_expose_provider_text(caplog) -> 
     assert "orchestrator_diagnostic=none" in caplog.text
 
 
+def test_workflow_execution_halt_has_closed_value_free_diagnostic(caplog) -> None:
+    now = datetime(2026, 9, 20, 5, 0, tzinfo=timezone.utc)
+    static_error = WorkflowExecutionError(
+        "native review persistence lacks its validation attestation"
+    )
+    assert static_error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.WORKFLOW_REVIEW_VALIDATION_ATTESTATION_MISSING
+    )
+    assert static_error.orchestrator_diagnostic.text == (
+        "workflow-execution: "
+        "native review persistence lacks its validation attestation"
+    )
+    injected_provider_text = "provider-secret-context-value"
+    execution_error = WorkflowExecutionError(
+        f"native review persistence rejected before publication: "
+        f"{injected_provider_text}"
+    )
+    assert execution_error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.WORKFLOW_EXECUTION_RULE
+    )
+    error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        execution_error,
+        invocation_id="workflow-execution-diagnostic",
+        received_at=now,
+    )
+    error.__cause__ = execution_error
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    caplog.set_level("INFO", logger="workflow")
+
+    persisted, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert payload.diagnostic_code == "WORKFLOW-EXECUTION"
+    assert payload.orchestrator_diagnostic == (
+        OrchestratorDiagnostic.WORKFLOW_EXECUTION_RULE.text
+    )
+    assert failure.orchestrator_diagnostic == payload.orchestrator_diagnostic
+    assert persisted.current_work_unit.invocation_failures == (failure,)
+    assert injected_provider_text not in payload.orchestrator_diagnostic
+    assert injected_provider_text not in caplog.text
+
+    precise_error = WorkflowExecutionError(
+        "native review persistence differs from its exact review context: "
+        "field=request_sequence",
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_REQUEST_SEQUENCE
+        ),
+    )
+
+    def reject_persistence() -> None:
+        raise precise_error
+
+    with pytest.raises(WorkflowExecutionError) as wrapped:
+        WorkflowEngine(driver)._persist_structured(reject_persistence)
+    assert wrapped.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_REQUEST_SEQUENCE
+    )
+
+
 def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> None:
     now = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
     source = AgentOutputError(
@@ -2070,7 +2150,9 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
 
     @dataclass
     class NativeDriver(FakeDriver):
-        persisted_native: list[tuple[NativeAgentReviewOutput, str, int]] = field(
+        persisted_native: list[
+            tuple[NativeAgentReviewOutput, str, int, int]
+        ] = field(
             default_factory=list
         )
 
@@ -2112,10 +2194,13 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
             output: NativeAgentReviewOutput,
             fingerprint: str,
             round_number: int,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             assert previous_findings == ()
-            self.persisted_native.append((output, fingerprint, round_number))
+            self.persisted_native.append(
+                (output, fingerprint, round_number, request_sequence)
+            )
 
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
@@ -2222,8 +2307,10 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
+            assert request_sequence == 1
             assert previous_findings == previous_findings_expected
             self.persisted.append(output)
 
@@ -2314,9 +2401,11 @@ def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             _ = output
+            assert request_sequence == 1
             self.persisted_previous = previous_findings
 
     state = replace(
@@ -2495,8 +2584,10 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
+            assert request_sequence == 1
             assert previous_findings == ()
             self.persisted.append(output)
 
@@ -2753,6 +2844,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
             output: NativeAgentReviewOutput,
             _fingerprint: str,
             _round_number: int,
+            _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             self.persisted_reviews.append(output)
@@ -2760,6 +2852,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             self.persisted_codex.append(output)
@@ -2929,6 +3022,7 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
             output: NativeAgentReviewOutput,
             _fingerprint: str,
             _round_number: int,
+            _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             self.persisted_reviews.append(output)
@@ -2936,6 +3030,7 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             self.persisted_codex.append(output)
@@ -3066,6 +3161,7 @@ class BatchedFinalReviewDriver(FakeDriver):
         output: NativeAgentReviewOutput,
         _fingerprint: str,
         _round_number: int,
+        _request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         current = {item.finding_id: item for item in output.result.findings}
@@ -3454,8 +3550,10 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
         def persist_native_codex_contract(
             self,
             output: NativeAgentCodexOutput,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
+            assert request_sequence == 1
             assert previous_findings == (answered,)
             self.persisted.append(output)
 
@@ -3693,10 +3791,12 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
             output: NativeAgentReviewOutput,
             fingerprint: str,
             round_number: int,
+            request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
             assert fingerprint == changes.fingerprint
             assert round_number == 1
+            assert request_sequence == 1
             assert previous_findings == (offered,)
             self.persisted_native.append(output)
 

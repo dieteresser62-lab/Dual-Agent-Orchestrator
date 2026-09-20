@@ -81,6 +81,7 @@ from finding_reducer import (
     reduce_findings,
 )
 from review_packets import ReviewPacket
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from slice_exit import (
     UNOWNED_OPEN_FINDING_DIAGNOSTIC,
     unowned_open_finding_ids,
@@ -902,6 +903,7 @@ class WorkflowPersistence:
     def persist_native_implementer_contract(
         self,
         output: NativeAgentImplementerOutput,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
         *,
         recovery_fingerprint: str | None = None,
@@ -921,7 +923,7 @@ class WorkflowPersistence:
         unit = state.current_work_unit
         logical = (
             f"agent-{unit.work_unit_id}-{state.current_step.value}-"
-            f"{unit.request_sequence}"
+            f"{request_sequence}"
         )
         payload = agent_result_payload(
             output.result,
@@ -967,7 +969,7 @@ class WorkflowPersistence:
         content_record = self._persist_provider_content(
             role=Role.CODEX,
             work_unit_id=unit.work_unit_id,
-            request_sequence=unit.request_sequence,
+            request_sequence=request_sequence,
             operation=state.current_step.value,
             request_id=output.request_id,
             canonical=output.canonical_json,
@@ -1077,8 +1079,80 @@ class WorkflowPersistence:
         )
         return True
 
+    @staticmethod
+    def _review_context_mismatch(
+        output: NativeAgentReviewOutput,
+        unit: WorkUnitRecord,
+        fingerprint: str,
+        round_number: int,
+        request_sequence: int,
+    ) -> tuple[str, OrchestratorDiagnostic] | None:
+        native_context = output.context
+        if native_context is None:
+            return (
+                "context",
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_MISSING,
+            )
+        mismatches = (
+            (
+                "work_unit_id",
+                native_context.work_unit_id != str(unit.work_unit_id),
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_WORK_UNIT_ID,
+            ),
+            (
+                "diff_fingerprint",
+                native_context.diff_fingerprint != fingerprint,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_DIFF_FINGERPRINT,
+            ),
+            (
+                "round_number",
+                native_context.round_number != round_number,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_ROUND_NUMBER,
+            ),
+            (
+                "request_sequence",
+                native_context.request_sequence != request_sequence,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_REQUEST_SEQUENCE,
+            ),
+            (
+                "reviewer",
+                native_context.reviewer is not output.result.reviewer,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_REVIEWER,
+            ),
+            (
+                "validation_attestation",
+                native_context.validation_attestation != output.result.validation,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_VALIDATION_ATTESTATION,
+            ),
+            (
+                "test_files",
+                not output.result.stopped
+                and native_context.test_files != output.result.test_files,
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_TEST_FILES,
+            ),
+            (
+                "red_state_followup_slice",
+                output.result.red_state_followup_slice
+                != (
+                    native_context.red_state_followup_slice
+                    if output.result.approval is True
+                    else None
+                ),
+                OrchestratorDiagnostic.WORKFLOW_REVIEW_CONTEXT_RED_STATE_FOLLOWUP_SLICE,
+            ),
+        )
+        return next(
+            (
+                (field, diagnostic)
+                for field, differs, diagnostic in mismatches
+                if differs
+            ),
+            None,
+        )
+
     def persist_native_review_contract(
         self, output: NativeAgentReviewOutput, fingerprint: str, round_number: int,
+        request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         bridge = self._artifact_bridge
@@ -1144,29 +1218,20 @@ class WorkflowPersistence:
             previous_findings=previous_findings,
             round_number=round_number,
         )
-        native_context = output.context
-        if (
-            native_context is None
-            or native_context.work_unit_id != str(unit.work_unit_id)
-            or native_context.diff_fingerprint != fingerprint
-            or native_context.round_number != round_number
-            or native_context.request_sequence != unit.request_sequence
-            or native_context.reviewer is not output.result.reviewer
-            or native_context.validation_attestation != output.result.validation
-            or (
-                not output.result.stopped
-                and native_context.test_files != output.result.test_files
-            )
-            or output.result.red_state_followup_slice
-            != (
-                native_context.red_state_followup_slice
-                if output.result.approval is True
-                else None
-            )
-        ):
+        context_mismatch_rule = (
+            "native review persistence differs from its exact review context"
+        )
+        mismatch = self._review_context_mismatch(
+            output, unit, fingerprint, round_number, request_sequence
+        )
+        if mismatch is not None:
+            field, diagnostic = mismatch
             raise WorkflowExecutionError(
-                "native review persistence differs from its exact review context"
+                f"{context_mismatch_rule}: field={field}",
+                orchestrator_diagnostic=diagnostic,
             )
+        native_context = output.context
+        assert native_context is not None
         if output.result.validation is None:
             raise WorkflowExecutionError(
                 "native review persistence lacks its validation attestation"
@@ -1190,7 +1255,7 @@ class WorkflowPersistence:
         content_record = self._persist_provider_content(
             role=Role(output.result.reviewer.value),
             work_unit_id=unit.work_unit_id,
-            request_sequence=unit.request_sequence,
+            request_sequence=request_sequence,
             operation=state.current_step.value,
             request_id=output.request_id,
             canonical=output.canonical_json,
