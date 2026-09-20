@@ -390,315 +390,315 @@
       "case_id": "site-3001",
       "input": "branch discovery export changes its source predecessor binding",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2523,
+      "line": 2527,
       "message": "branch discovery export source or predecessor binding differs"
     },
     {
       "case_id": "site-3013",
       "input": "branch discovery export references a missing validation attestation",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2534,
+      "line": 2538,
       "message": "branch discovery export validation attestation is not present"
     },
     {
       "case_id": "site-3002",
       "input": "branch discovery export references a missing discovery review",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2546,
+      "line": 2550,
       "message": "branch discovery export completion is not present; approved is not scan completion"
     },
     {
       "case_id": "site-3003",
       "input": "branch discovery review and validation attestation fingerprints differ",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2552,
+      "line": 2556,
       "message": "branch discovery export completion and attestation fingerprints differ"
     },
     {
       "case_id": "site-3014",
       "input": "branch discovery handoff to discovery references a missing source completion",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2565,
+      "line": 2579,
       "message": "BRANCH_DISCOVERY family handoff source completion is not present"
     },
     {
       "case_id": "site-3004",
       "input": "branch discovery export carries a non-transitive transition digest",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2578,
+      "line": 2592,
       "message": "branch discovery export flattened transition history differs"
     },
     {
       "case_id": "site-3015",
       "input": "branch discovery handoff to discovery originates from a discovery run",
       "code": "RECORD-TYPE-MISMATCH",
-      "line": 2601,
+      "line": 2615,
       "message": "branch discovery handoff source and target run kinds are invalid"
     },
     {
       "case_id": "site-3005",
       "input": "branch discovery export family identity differs from its RunProfile",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2620,
+      "line": 2642,
       "message": "branch discovery export family identity differs from RunProfile"
     },
     {
       "case_id": "site-3006",
       "input": "branch discovery import targets another run identity",
       "code": "RECORD-RUN-MISMATCH",
-      "line": 2638,
+      "line": 2660,
       "message": "branch discovery import target run differs"
     },
     {
       "case_id": "site-3007",
       "input": "branch discovery import claims the target run as its source",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2644,
+      "line": 2666,
       "message": "branch discovery import must retain foreign provenance"
     },
     {
       "case_id": "site-3008",
       "input": "branch discovery import snapshot differs from its transition lifecycle",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2666,
+      "line": 2688,
       "message": "branch discovery import finding_snapshot differs from transitions"
     },
     {
       "case_id": "site-3009",
       "input": "branch discovery import family differs from the target RunProfile",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2699,
+      "line": 2721,
       "message": "branch discovery import family binding differs from RunProfile"
     },
     {
       "case_id": "site-3010",
       "input": "branch discovery import task digest differs from the target Task record",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2717,
+      "line": 2739,
       "message": "branch discovery import task bytes digest differs from Task record"
     },
     {
       "case_id": "site-3011",
       "input": "branch discovery import task path differs from the target RunIdentity",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2728,
+      "line": 2750,
       "message": "branch discovery import task path differs from RunIdentity"
     },
     {
       "case_id": "site-3016",
       "input": "branch discovery import execution mode differs from the target run",
       "code": "RECORD-TYPE-MISMATCH",
-      "line": 2734,
+      "line": 2756,
       "message": "branch discovery import target execution mode differs from RunIdentity"
     },
     {
       "case_id": "site-3012",
       "input": "branch discovery import is appended after the first provider dispatch",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2755,
+      "line": 2777,
       "message": "branch discovery import must precede the first dispatch"
     },
     {
       "case_id": "site-2177",
       "input": "work unit references a missing finding import",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2777,
+      "line": 2799,
       "message": "work unit finding import is not present"
     },
     {
       "case_id": "site-2199",
       "input": "work-unit open findings omit imported open finding",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2799,
+      "line": 2821,
       "message": "work unit open findings differ from its authoritative finding prefix"
     },
     {
       "case_id": "site-2228",
       "input": "diagnostic after first work unit references work unit 404",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2838,
+      "line": 2860,
       "message": "work unit '404' is not present"
     },
     {
       "case_id": "site-3017",
       "input": "branch discovery completion references a missing validation attestation",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2868,
+      "line": 2890,
       "message": "branch discovery completion validation attestation is not present"
     },
     {
       "case_id": "site-3018",
       "input": "branch discovery completion fingerprint differs from its attestation",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2873,
+      "line": 2895,
       "message": "referenced record 'ar1-148fb75603aa73e7831d8511ce2325b972ae8606cd186ebf298ac634e24ab7af' has another fingerprint"
     },
     {
       "case_id": "site-3019",
       "input": "branch discovery completion is recorded outside a discovery run",
       "code": "RECORD-TYPE-MISMATCH",
-      "line": 2879,
+      "line": 2901,
       "message": "branch discovery completion requires its own HEAD-bound BRANCH_DISCOVERY run"
     },
     {
       "case_id": "site-2240",
       "input": "commit binding references a missing validation attestation",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2891,
+      "line": 2913,
       "message": "validation attestation 'ar1-4444444444444444444444444444444444444444444444444444444444444444' is not present"
     },
     {
       "case_id": "site-2245",
       "input": "commit binding fingerprint differs from validation attestation",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2896,
+      "line": 2918,
       "message": "referenced record 'ar1-148fb75603aa73e7831d8511ce2325b972ae8606cd186ebf298ac634e24ab7af' has another fingerprint"
     },
     {
       "case_id": "site-2254",
       "input": "commit binding references a missing approval review",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2905,
+      "line": 2927,
       "message": "approved review 'ar1-4444444444444444444444444444444444444444444444444444444444444444' is not present"
     },
     {
       "case_id": "site-2259",
       "input": "commit binding fingerprint differs from approval review",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2910,
+      "line": 2932,
       "message": "referenced record 'ar1-4ab7dc576f6f2d401d6e0a2a4dc7e24d6ffb212904cabff83cd615ae43a5ead2' has another fingerprint"
     },
     {
       "case_id": "site-2267",
       "input": "workflow completion references a missing final binding",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2934,
+      "line": 2956,
       "message": "final binding 'ar1-4444444444444444444444444444444444444444444444444444444444444444' is not present"
     },
     {
       "case_id": "site-2272",
       "input": "workflow completion fingerprint differs from final binding",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2939,
+      "line": 2961,
       "message": "referenced record 'ar1-b20caa0dded29a43feab402c6437ab48e698a92c224b778823e48b66dece2f2a' has another fingerprint"
     },
     {
       "case_id": "site-2280",
       "input": "final preflight references a missing measurement",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2947,
+      "line": 2969,
       "message": "measurement 'missing-measurement' is not present"
     },
     {
       "case_id": "site-2285",
       "input": "final preflight fingerprint differs from its measurement",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2952,
+      "line": 2974,
       "message": "referenced record 'ar1-b7b1abab0ccfdbc5c67e56eeb4eb70dc2af998ae35373df24d2ed53734be62d1' has another fingerprint"
     },
     {
       "case_id": "site-2293",
       "input": "provider attempt references a measurement outside the chain",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2960,
+      "line": 2982,
       "message": "measurement 'ar1-317d18f244cda1027b519ec8ede7ed23ac6532b3baddcba2644659dc91f9615d' is not present"
     },
     {
       "case_id": "site-2298",
       "input": "provider attempt fingerprint differs from its measurement",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2965,
+      "line": 2987,
       "message": "referenced record 'ar1-b7b1abab0ccfdbc5c67e56eeb4eb70dc2af998ae35373df24d2ed53734be62d1' has another fingerprint"
     },
     {
       "case_id": "site-2307",
       "input": "provider attempt operation differs from bound measurement",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 2974,
+      "line": 2996,
       "message": "provider attempt differs from its bound measurement"
     },
     {
       "case_id": "site-2315",
       "input": "resume check expected head differs from immediate predecessor",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 2982,
+      "line": 3004,
       "message": "resume check is not bound to its immediate prior head"
     },
     {
       "case_id": "site-2331",
       "input": "provider attempt numbering starts at two",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 3026,
+      "line": 3048,
       "message": "provider attempts for 'provider-operation-1' are not contiguous"
     },
     {
       "case_id": "site-2340",
       "input": "provider attempt has three physical revisions",
       "code": "RECORD-DUPLICATE",
-      "line": 3035,
+      "line": 3057,
       "message": "provider attempt has too many revisions"
     },
     {
       "case_id": "site-2345",
       "input": "provider attempt begins with terminal phase",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 3040,
+      "line": 3062,
       "message": "provider attempt must begin with revision 1 started"
     },
     {
       "case_id": "site-2354",
       "input": "second provider attempt changes immutable operation",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 3049,
+      "line": 3071,
       "message": "provider attempt immutable binding changed"
     },
     {
       "case_id": "site-2360",
       "input": "second provider-attempt revision remains in started phase",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 3055,
+      "line": 3077,
       "message": "provider attempt terminal must be revision 2"
     },
     {
       "case_id": "site-2371",
       "input": "provider terminal revision changes its measurement and operation",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 3066,
+      "line": 3088,
       "message": "provider attempt terminal changed immutable fields"
     },
     {
       "case_id": "site-2379",
       "input": "side effect has three physical phases",
       "code": "RECORD-DUPLICATE",
-      "line": 3078,
+      "line": 3100,
       "message": "side effect has too many phases"
     },
     {
       "case_id": "site-2388",
       "input": "side effect begins with a result phase",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 3087,
+      "line": 3109,
       "message": "side effect must begin with revision 1 intent"
     },
     {
       "case_id": "site-2395",
       "input": "side-effect intent logical identity differs from its key",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 3094,
+      "line": 3116,
       "message": "side effect logical identity differs from its key"
     },
     {
       "case_id": "site-2405",
       "input": "second side-effect revision remains an intent",
       "code": "RECORD-REFERENCE-MISSING",
-      "line": 3104,
+      "line": 3126,
       "message": "side effect result must be revision 2 after intent"
     },
     {
       "case_id": "site-2418",
       "input": "side-effect result changes the intent logical identity",
       "code": "RECORD-FINGERPRINT-MISMATCH",
-      "line": 3117,
+      "line": 3139,
       "message": "side effect result changed its immutable intent binding"
     }
   ],

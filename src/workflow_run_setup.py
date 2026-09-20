@@ -20,6 +20,11 @@ from artifact_models import (
     FamilyBindingPayload,
     FindingHandoffExportPayload,
     FingerprintKind,
+    PlanPayload,
+    SliceBoundaryPayload,
+    TaskPayload,
+    WorkflowCompletionPayload,
+    build_family_authorized_change_set,
 )
 from artifact_replay import ArtifactReplayError, replay_artifacts
 from artifact_store import ArtifactStore
@@ -403,10 +408,6 @@ def _branch_discovery_family_binding(
             if source_replay.run_profile is None
             else source_replay.run_profile.family_binding
         )
-        if source_binding is None:
-            raise ArtifactBridgeError(
-                "branch discovery source has no RunProfile family binding"
-            )
         try:
             target_path = task_file.resolve().relative_to(
                 repository_root.resolve()
@@ -415,10 +416,28 @@ def _branch_discovery_family_binding(
             raise ArtifactBridgeError(
                 "branch discovery target task is outside the repository"
             ) from exc
-        if source_replay.head_record_id != export_record.record_id:
-            raise ArtifactBridgeError(
-                "branch discovery export is not the source run head"
+        if export.target_execution_mode == TaskMode.PLAN_ONLY.value:
+            if source_replay.head_record_id != export_record.record_id:
+                raise ArtifactBridgeError(
+                    "branch discovery export is not the source run head"
+                )
+        else:
+            completion = next(
+                (
+                    record
+                    for record in source_replay.records
+                    if record.record_id == export.source_completion_record_id
+                ),
+                None,
             )
+            if (
+                completion is None
+                or not isinstance(completion.payload, WorkflowCompletionPayload)
+                or completion.payload.outcome != "completed"
+            ):
+                raise ArtifactBridgeError(
+                    "BRANCH_DISCOVERY family handoff requires a completed source run"
+                )
         if export.target_execution_mode != task_contract.mode.value:
             raise ArtifactBridgeError(
                 "branch discovery export target mode differs from the target task"
@@ -435,19 +454,61 @@ def _branch_discovery_family_binding(
             raise ArtifactBridgeError(
                 "branch discovery target_task_sha256 differs from loaded task bytes"
             )
+        source_task = next(
+            (
+                record.payload
+                for record in source_replay.records
+                if isinstance(record.payload, TaskPayload)
+            ),
+            None,
+        )
+        source_boundaries = tuple(
+            record.payload
+            for record in source_replay.records
+            if isinstance(record.payload, SliceBoundaryPayload)
+        )
+        source_plan = next(
+            (
+                record.payload
+                for record in reversed(source_replay.records)
+                if isinstance(record.payload, PlanPayload)
+            ),
+            None,
+        )
+        authorized_change_set = build_family_authorized_change_set(
+            inherited_change_set=(
+                source_binding.family_authorized_change_set
+                if source_binding is not None
+                else (() if source_task is None else source_task.scope_paths)
+            ),
+            slice_boundaries=source_boundaries,
+            work_plan_paths=(
+                (source_task.work_plan_path,)
+                if source_task is not None and source_task.work_plan_path is not None
+                else ()
+            ),
+        )
+        if not authorized_change_set:
+            raise ArtifactBridgeError(
+                "branch discovery source has no authorized family change set"
+            )
         return FamilyBindingPayload(
             family_id=export.family_id,
             family_base_commit=export.family_base_commit,
-            family_authorized_change_set=(
-                source_binding.family_authorized_change_set
-            ),
+            family_authorized_change_set=authorized_change_set,
             predecessor_run_id=export.predecessor_run_id,
             predecessor_head_record_id=export.predecessor_head_record_id,
             cycle_number=export.cycle_number,
-            current_plan_commit=source_binding.current_plan_commit,
-            current_implementation_commit=(
-                source_binding.current_implementation_commit
+            current_plan_commit=(
+                source_binding.current_plan_commit
+                if source_binding is not None
+                else (
+                    None
+                    if source_plan is None
+                    else source_plan.approved_plan_commit
+                )
             ),
+            current_implementation_commit=export.reviewed_head_commit,
         )
     except (
         ArtifactBridgeError,

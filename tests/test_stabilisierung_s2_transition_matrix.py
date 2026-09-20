@@ -139,7 +139,7 @@ BRIDGE_ERROR_MARKERS = (
     "branch discovery import target_run_identity differs from target run",
     "branch discovery import family binding differs from target RunProfile",
     "family handoff does not reference a branch discovery export",
-    "branch discovery source has no RunProfile family binding",
+    "branch discovery source has no authorized family change set",
     "branch discovery export is not the source run head",
     "branch discovery target_task_sha256 differs from loaded task bytes",
     "branch discovery export requires its bound family target task",
@@ -203,6 +203,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "native review persistence differs from its exact review context": 1,
         "validation recovery result differs from its content": 1,
         "persisted finding handoff export differs from the prepared task": 1,
+        "persisted BRANCH_DISCOVERY export differs from its child task": 1,
         "file side-effect target differs before result completion": 1,
         "invocation failure work unit differs from the active workflow": 1,
         "structured audit dual-write mismatch: ": 2,
@@ -647,7 +648,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_replay.py:_validate_single_finding_import": 1,
     "src/artifact_replay.py:_validate_finding_handoff_record": 11,
     "src/artifact_replay.py:_validate_branch_discovery_handoff_record": 0,
-    "src/artifact_replay.py:_validate_branch_discovery_export": 24,
+    "src/artifact_replay.py:_validate_branch_discovery_export": 34,
     "src/artifact_replay.py:_validate_branch_discovery_import": 14,
     "src/artifact_replay.py:_validate_work_unit_finding_import": 4,
     "src/artifact_replay.py:_validate_work_unit_activity_reference": 4,
@@ -659,8 +660,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 9,
     "src/artifact_bridge.py:_finding_snapshot": 0,
-    "src/artifact_bridge.py:branch_discovery_handoff_export_payload": 16,
-    "src/artifact_bridge.py:branch_discovery_handoff_import_payload": 13,
+    "src/artifact_bridge.py:branch_discovery_handoff_export_payload": 18,
+    "src/artifact_bridge.py:branch_discovery_handoff_import_payload": 17,
     "src/artifact_bridge.py:review_payload_matches_result": 13,
     "src/artifact_bridge.py:ArtifactBridge.append": 3,
     "src/artifact_bridge.py:ArtifactBridge.record_side_effect_intent": 1,
@@ -680,7 +681,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:_load_bound_queue_terminal": 4,
     "src/orchestrator.py:run_pipeline": 16,
     "src/workflow_run_setup.py:_apply_resumed_agent_profiles": 3,
-    "src/workflow_run_setup.py:_branch_discovery_family_binding": 10,
+    "src/workflow_run_setup.py:_branch_discovery_family_binding": 19,
     "src/workflow_run_setup.py:_initialize_finding_handoff": 9,
     "src/artifact_resume.py:_validate_finding_handoff": 6,
     "src/workflow_production.py:_read_production_task": 2,
@@ -689,7 +690,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:_create_production_state": 0,
     "src/workflow_production.py:_recover_final_review_history": 2,
     "src/workflow_production.py:run_production_workflow": 4,
-    "src/workflow_production.py:_run_production_transition_loop": 21,
+    "src/workflow_production.py:_run_production_transition_loop": 22,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 22,
     "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 24,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 5,
@@ -1039,7 +1040,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 92
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 94
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1422,7 +1423,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         count
         for label, count in actual.items()
         if label.startswith("src/artifact_replay.py:")
-    ) == 233
+    ) == 243
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert (
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "

@@ -28,6 +28,7 @@ from agent_runtime import (
 )
 from artifact_bridge import (
     ArtifactBridge,
+    branch_discovery_handoff_export_payload,
     finding_payload as finding_payload,
     finding_handoff_export_payload,
 )
@@ -44,6 +45,8 @@ from artifact_models import (
     BlobReference, ProviderContentPayload,
     ProviderInputMeasurementPayload, canonical_json,
     ProviderAttemptPayload, ProviderUsagePayload,
+    BranchDiscoveryHandoffExportPayload,
+    FamilyBindingPayload,
     FindingHandoffExportPayload,
     flatten_finding_transition_history,
     SideEffectPayload,
@@ -82,8 +85,10 @@ from git_service import (
     GitTransactionError,
 )
 from plan_handoff import (
+    branch_discovery_task_path,
     extract_implementation_slices,
     implementation_task_path,
+    render_branch_discovery_task,
     render_implementation_task,
 )
 from repo_changes import (
@@ -196,6 +201,7 @@ from inbox_watcher import (
     QueueFinalizationDisposition,
     QueueSuccessEvidence,
     WatchTaskDisposition,
+    WatchTaskIdentity,
     WatchTaskResult,
     finalize_queue_success,
     load_queue_success_evidence,
@@ -349,6 +355,9 @@ class ProductionWorkflowDriver:
                 canonical_agent_result=self._canonical_native_agent_result,
                 prepare_completion_finding_handoff=(
                     self._prepare_completion_finding_handoff
+                ),
+                prepare_completion_branch_discovery_handoff=(
+                    self._prepare_completion_branch_discovery_handoff
                 ),
             )
         )
@@ -1976,6 +1985,233 @@ class ProductionWorkflowDriver:
             approved_plan_commit=state.approved_plan_commit or "",
             _state=state,
         )
+
+    def _branch_discovery_handoff_material(
+        self,
+        state: WorkflowState,
+        replay: ArtifactReplayResult,
+        source_completion_record_id: str,
+    ) -> tuple[Path, bytes, str, FamilyBindingPayload, BindingPayload, str]:
+        """Derive the immutable child identity, task bytes, and family edge."""
+
+        if state.execution_mode != TaskMode.IMPLEMENT.value:
+            raise WorkflowExecutionError(
+                "only an IMPLEMENT run may chain BRANCH_DISCOVERY"
+            )
+        final_binding_record = next(
+            (
+                record
+                for record in reversed(replay.records)
+                if isinstance(record.payload, BindingPayload)
+                and record.payload.binding_kind == "commit"
+            ),
+            None,
+        )
+        if final_binding_record is None:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff requires the final implementation binding"
+            )
+        final_binding = final_binding_record.payload
+        identity = replay.run_identity
+        if identity is None:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff requires the source RunIdentity"
+            )
+        source_binding = (
+            None
+            if replay.run_profile is None
+            else replay.run_profile.family_binding
+        )
+        scope_paths = tuple(
+            sorted(
+                {
+                    *(
+                        ()
+                        if source_binding is None
+                        else source_binding.family_authorized_change_set
+                    ),
+                    *state.branch_review_authorized_change_set,
+                }
+            )
+        )
+        if not scope_paths:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff requires an authorized change set"
+            )
+        family_id = (
+            source_binding.family_id
+            if source_binding is not None
+            else "family-"
+            + hashlib.sha256(
+                f"{state.run_id}:{identity.branch_base}".encode("utf-8")
+            ).hexdigest()[:32]
+        )
+        family_binding = FamilyBindingPayload(
+            family_id=family_id,
+            family_base_commit=(
+                source_binding.family_base_commit
+                if source_binding is not None
+                else identity.branch_base
+            ),
+            family_authorized_change_set=scope_paths,
+            predecessor_run_id=state.run_id,
+            predecessor_head_record_id=source_completion_record_id,
+            cycle_number=(
+                1 if source_binding is None else source_binding.cycle_number + 1
+            ),
+            current_plan_commit=(
+                state.approved_plan_commit
+                if state.approved_plan_commit is not None
+                else (
+                    None
+                    if source_binding is None
+                    else source_binding.current_plan_commit
+                )
+            ),
+            current_implementation_commit=final_binding.target,
+        )
+        source_task = Path(state.task_file).resolve()
+        try:
+            source_task.relative_to(self.root)
+        except ValueError:
+            source_task = self.root / "inbox" / source_task.name
+        target = branch_discovery_task_path(source_task)
+        try:
+            target_relative = target.relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff task must be inside the repository"
+            ) from exc
+        export_record_id = stable_record_id(
+            state.run_id,
+            RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT,
+            "branch-discovery-handoff-export",
+            1,
+        )
+        target_run_id = "branch-discovery-" + hashlib.sha256(
+            f"{state.run_id}:{source_completion_record_id}:{target_relative}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:32]
+        task_bytes = render_branch_discovery_task(
+            target_branch=state.target_branch or state.branch,
+            scope_paths=scope_paths,
+            finding_handoff=(state.run_id, export_record_id),
+        ).encode("utf-8")
+        return (
+            target,
+            task_bytes,
+            target_run_id,
+            family_binding,
+            final_binding,
+            final_binding_record.fingerprint.sha256,
+        )
+
+    def _prepare_completion_branch_discovery_handoff(
+        self,
+        state: WorkflowState,
+        source_completion_record_id: str,
+    ) -> BranchDiscoveryHandoffExportPayload:
+        """Prepare the IMPLEMENT child export for atomic pre-completion append."""
+
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff requires the artifact bridge"
+            )
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        (
+            target,
+            task_bytes,
+            target_run_id,
+            family_binding,
+            final_binding,
+            _,
+        ) = self._branch_discovery_handoff_material(
+            state,
+            replay,
+            source_completion_record_id,
+        )
+        try:
+            target_relative = target.relative_to(self.root).as_posix()
+        except ValueError as exc:  # pragma: no cover - guarded by material builder
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff task must be inside the repository"
+            ) from exc
+        return branch_discovery_handoff_export_payload(
+            replay,
+            discovery_review_record_id=None,
+            validation_attestation_record_id=final_binding.attestation_id,
+            reviewed_head_commit=final_binding.target,
+            family_binding=family_binding,
+            target_task_path=target_relative,
+            target_task_bytes=task_bytes,
+            target_run_identity=target_run_id,
+            target_execution_mode=TaskMode.BRANCH_DISCOVERY.value,
+            source_completion_record_id=source_completion_record_id,
+            allow_pending_source_completion=True,
+        )
+
+    def publish_branch_discovery_handoff(self, state: WorkflowState) -> Path:
+        """Publish the bound child identity and task through the side-effect ledger."""
+
+        if state.execution_mode != TaskMode.IMPLEMENT.value:
+            raise WorkflowExecutionError(
+                "only an IMPLEMENT run may publish BRANCH_DISCOVERY"
+            )
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError(
+                "BRANCH_DISCOVERY handoff requires the artifact bridge"
+            )
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        exports = tuple(
+            record
+            for record in replay.records
+            if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+            and record.payload.target_execution_mode
+            == TaskMode.BRANCH_DISCOVERY.value
+        )
+        if len(exports) != 1:
+            raise WorkflowExecutionError(
+                "completed IMPLEMENT run requires exactly one BRANCH_DISCOVERY export"
+            )
+        export_record = exports[0]
+        export = export_record.payload
+        assert export.source_completion_record_id is not None
+        target, task_bytes, target_run_id, _, _, fingerprint = (
+            self._branch_discovery_handoff_material(
+                state,
+                replay,
+                export.source_completion_record_id,
+            )
+        )
+        if (
+            target.relative_to(self.root).as_posix() != export.target_task_path
+            or hashlib.sha256(task_bytes).hexdigest() != export.target_task_sha256
+            or target_run_id != export.target_run_identity
+        ):
+            raise WorkflowExecutionError(
+                "persisted BRANCH_DISCOVERY export differs from its child task"
+            )
+        identity = WatchTaskIdentity(
+            run_id=target_run_id,
+            task_digest=export.target_task_sha256,
+        )
+        identity_content = json.dumps(identity.to_dict(), sort_keys=True) + "\n"
+        self._write_side_effect_file(
+            watch_identity_path(target),
+            identity_content,
+            normalized_text=False,
+            fingerprint=fingerprint,
+        )
+        self._write_side_effect_file(
+            target,
+            task_bytes.decode("utf-8"),
+            normalized_text=False,
+            fingerprint=fingerprint,
+        )
+        return target
 
     def _read_semantic_plan_artifact(self, candidate: Path) -> None:
         """Read and validate the plan operation protected by its two mitigations."""

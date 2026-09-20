@@ -37,6 +37,7 @@ from artifact_models import (
     _IDENTIFIER_RE,
     AgentResultPayload,
     BindingPayload,
+    BranchDiscoveryHandoffExportPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
     FindingHandoffExportPayload,
@@ -6331,9 +6332,141 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     assert result.exit_code == 4
     assert result.state.current_work_unit.gate.reason.value == "stop_request"
     assert "NO-IMPLEMENTATION-CHANGES" in result.state.current_work_unit.gate.detail
+    assert not (repository / "inbox" / "task-branch-discovery.md").exists()
+    assert not any(
+        isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        for record in ArtifactStore(repository, result.state.run_id).load_chain()
+    )
     args.force_overwrite_state = True
     args.resume = False
     assert run_pipeline(task, args, force_new=True) == 4
+
+
+def test_completed_implementation_chains_one_branch_discovery_task_before_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/implementation-discovery-handoff")
+    task = tmp_path / "task.md"
+    _write_task(
+        task,
+        "feature/implementation-discovery-handoff",
+        "src/one.py",
+    )
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            target = repository / "src" / "one.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("value = 0\n", encoding="utf-8")
+            return _native_plan_output(
+                invocation,
+                summary="add implementation",
+                scope_paths=("src/one.py",),
+            )
+        target = repository / "src" / "one.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("value = 1\n", encoding="utf-8")
+        return _native_implementation_output(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "invoke_reviewer",
+        lambda _driver, invocation: _native_review_approval(invocation),
+    )
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    chain = ArtifactStore(repository, result.state.run_id).load_chain()
+    exports = tuple(
+        (index, record)
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+    )
+    completions = tuple(
+        (index, record)
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, WorkflowCompletionPayload)
+    )
+    assert len(exports) == len(completions) == 1
+    assert exports[0][0] < completions[0][0]
+
+    export = exports[0][1].payload
+    child = repository / export.target_task_path
+    assert child == repository / "inbox" / "task-branch-discovery.md"
+    assert child.is_file()
+    assert hashlib.sha256(child.read_bytes()).hexdigest() == export.target_task_sha256
+    assert child.read_text(encoding="utf-8").count(
+        "ORCHESTRATOR_MODE: BRANCH_DISCOVERY"
+    ) == 1
+    identity = WatchTaskIdentity.from_dict(
+        json.loads(watch_identity_path(child).read_text(encoding="utf-8"))
+    )
+    assert identity.run_id == export.target_run_identity
+    assert identity.task_digest == export.target_task_sha256
+    child_contract = parse_task_contract(
+        child.read_text(encoding="utf-8"),
+        source_name=child.name,
+    )
+    child_state = orchestrator._fresh_state(
+        task_file=child,
+        run_id=identity.run_id,
+        repository_root=repository,
+        task_contract=child_contract,
+    )
+    assert child_state.execution_mode == "BRANCH_DISCOVERY"
+    assert child_state.family_binding is not None
+    assert child_state.family_binding.current_implementation_commit == result.commit_ref
+    file_results = tuple(
+        record.payload
+        for record in chain
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and record.payload.phase == "result"
+    )
+    assert sum(
+        payload.operation[0] == export.target_task_path
+        for payload in file_results
+    ) == 1
+
+    resumed = run_production_workflow(task, _args(repository, task))
+    resumed_chain = ArtifactStore(repository, resumed.state.run_id).load_chain()
+    assert resumed.workflow_completed
+    assert sum(
+        isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        for record in resumed_chain
+    ) == 1
+    assert sum(
+        isinstance(record.payload, WorkflowCompletionPayload)
+        for record in resumed_chain
+    ) == 1
+    assert len(list(child.parent.glob("task-branch-discovery.md"))) == 1
+
+
+def test_branch_discovery_run_is_terminal_and_cannot_publish_another_discovery(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/terminal-branch-discovery")
+    state = init_workflow_state(
+        run_id="terminal-branch-discovery",
+        task_file=str(repository / "inbox" / "discovery.md"),
+        branch="feature/terminal-branch-discovery",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        execution_mode="BRANCH_DISCOVERY",
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="only an IMPLEMENT run may publish BRANCH_DISCOVERY",
+    ):
+        driver.publish_branch_discovery_handoff(state)
 
 
 def test_internal_plan_validation_honors_exact_approved_hotfix_paths(

@@ -856,7 +856,7 @@ Familienbindung.
 | `branch discovery import target_run_identity differs from target run` | E2/E9; deterministische Kindidentität |
 | `branch discovery import family binding differs from target RunProfile` | E9-Replayregel 5 |
 | `family handoff does not reference a branch discovery export` | E1/E9; jede Folgekante liest denselben vorhandenen Familienhandoff |
-| `branch discovery source has no RunProfile family binding` | E2a/E9 |
+| `branch discovery source has no authorized family change set` | E2a/E9; ein initialer IMPLEMENT-Lauf leitet den Familienumfang aus seinen autoritativen Task- und Slicegrenzen ab |
 | `branch discovery export is not the source run head` | E9-Replayregel 2 |
 | `branch discovery target_task_sha256 differs from loaded task bytes` | E9-Replayregel 4 |
 | `branch discovery export requires its bound family target task` | E1/E9; der Handoff autorisiert exakt den gebundenen Folgelauf |
@@ -892,6 +892,7 @@ Familienbindung.
 | `pre-policy native reviewer result differs from its decision record` | B06 |
 | `native agent result logical binding differs` | B05 |
 | `persisted finding handoff export differs from the prepared task` | B08 |
+| `persisted BRANCH_DISCOVERY export differs from its child task` | E1/E9; Wiederaufnahme darf nur exakt die exportgebundene Aufgabe veroeffentlichen |
 | `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
 | `structured audit dual-write mismatch` | B09 |
 | `workflow history review packet cache differs from canonical bytes` | B06/B09 |

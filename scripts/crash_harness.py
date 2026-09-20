@@ -36,6 +36,7 @@ from artifact_models import (
     SIDE_EFFECT_CLASSES,
     BindingPayload,
     BranchDiscoveryCompletedPayload,
+    BranchDiscoveryHandoffExportPayload,
     FamilyBindingPayload,
     FingerprintKind,
     FindingSeverity,
@@ -43,7 +44,6 @@ from artifact_models import (
     ReviewPayload,
     Role,
     ValidationAttestationPayload,
-    WorkflowCompletionPayload,
     canonical_json,
     technical_text_evidence,
 )
@@ -1315,7 +1315,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         build_s5_long_run_scenario,
         run_scripted_workflow_resumable,
     )
-    from plan_handoff import write_implementation_handoff
+    from plan_handoff import render_branch_discovery_task, write_implementation_handoff
     from task_contract import parse_task_contract
     from workflow_state import WorkflowStep
 
@@ -1417,63 +1417,45 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     implementation_replay = replay_artifacts(
         long_store.load_chain(), f"dry-{long_scenario.name}"
     )
-    implementation_attestation = next(
+    implementation_export_record = next(
         record
-        for record in reversed(implementation_replay.records)
-        if isinstance(record.payload, ValidationAttestationPayload)
+        for record in implementation_replay.records
+        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        and record.payload.target_execution_mode == "BRANCH_DISCOVERY"
     )
-    implementation_completion = next(
-        record
-        for record in reversed(implementation_replay.records)
-        if isinstance(record.payload, WorkflowCompletionPayload)
-    )
-    discovery_task = journey_root / "s5-branch-discovery.md"
-    discovery_task_bytes = (
-        "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
-        "TARGET_BRANCH: feature/dry-run\n"
-        "FINDING_HANDOFF_SOURCE_RUN: dry-s5-long-run-v1\n"
+    implementation_export = implementation_export_record.payload
+    discovery_task = journey_root / implementation_export.target_task_path
+    discovery_task_bytes = render_branch_discovery_task(
+        target_branch=long.result.state.target_branch or long.result.state.branch,
+        scope_paths=source_family.family_authorized_change_set,
+        finding_handoff=(
+            implementation_replay.expected_run_id,
+            implementation_export_record.record_id,
+        ),
     ).encode("utf-8")
+    if hashlib.sha256(discovery_task_bytes).hexdigest() != (
+        implementation_export.target_task_sha256
+    ):
+        raise CrashHarnessError(
+            "IMPLEMENT completion export differs from its discovery task bytes"
+        )
     discovery_task.write_bytes(discovery_task_bytes)
-    discovery_run_id = "dry-joint-branch-discovery-v1"
+    discovery_run_id = implementation_export.target_run_identity
     discovery_family = FamilyBindingPayload(
-        family_id=source_family.family_id,
-        family_base_commit=source_family.family_base_commit,
+        family_id=implementation_export.family_id,
+        family_base_commit=implementation_export.family_base_commit,
         family_authorized_change_set=source_family.family_authorized_change_set,
-        predecessor_run_id=implementation_replay.expected_run_id,
-        predecessor_head_record_id=implementation_replay.head_record_id,
-        cycle_number=2,
+        predecessor_run_id=implementation_export.predecessor_run_id,
+        predecessor_head_record_id=implementation_export.predecessor_head_record_id,
+        cycle_number=implementation_export.cycle_number,
         current_plan_commit=plan_commit,
-        current_implementation_commit="d" * 40,
-    )
-    implementation_export = branch_discovery_handoff_export_payload(
-        implementation_replay,
-        discovery_review_record_id=None,
-        validation_attestation_record_id=implementation_attestation.record_id,
-        reviewed_head_commit="d" * 40,
-        family_binding=discovery_family,
-        target_task_path="s5-branch-discovery.md",
-        target_task_bytes=discovery_task_bytes,
-        target_run_identity=discovery_run_id,
-        target_execution_mode="BRANCH_DISCOVERY",
-        source_completion_record_id=implementation_completion.record_id,
-    )
-    implementation_export_record = ArtifactBridge(
-        long_store, now=lambda: FIXED_TIME
-    ).append(
-        implementation_export,
-        logical_id="branch-discovery-handoff-export",
-        idempotency_key="branch-discovery-handoff-export",
-        fingerprint_sha256=implementation_attestation.fingerprint.sha256,
-        fingerprint_kind=implementation_attestation.fingerprint.kind,
-    )
-    implementation_replay = replay_artifacts(
-        long_store.load_chain(), f"dry-{long_scenario.name}"
+        current_implementation_commit=implementation_export.reviewed_head_commit,
     )
     discovery_import = branch_discovery_handoff_import_payload(
         implementation_replay,
         implementation_export_record,
         target_run_id=discovery_run_id,
-        target_task_path="s5-branch-discovery.md",
+        target_task_path=implementation_export.target_task_path,
         target_task_bytes=discovery_task_bytes,
         target_family_binding=discovery_family,
     )
@@ -1492,6 +1474,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         scenario=discovery_scenario,
         task_file=discovery_task,
         driver_factory=driver_factory,
+        run_id=discovery_run_id,
     )
 
     discovery_store = ArtifactStore(journey_root, discovery_run_id)

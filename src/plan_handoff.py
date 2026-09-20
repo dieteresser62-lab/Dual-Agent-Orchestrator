@@ -342,6 +342,42 @@ def implementation_task_path(plan_task_path: Path) -> Path:
     return plan_task_path.with_name(stem + plan_task_path.suffix)
 
 
+def branch_discovery_task_path(source_task_path: Path) -> Path:
+    """Return the one deterministic queue path for a linked discovery run."""
+
+    stem = source_task_path.stem
+    if stem.lower().endswith("-implement"):
+        stem = stem[:-10] + "-branch-discovery"
+    else:
+        stem += "-branch-discovery"
+    return source_task_path.with_name(stem + source_task_path.suffix)
+
+
+def render_branch_discovery_task(
+    *,
+    target_branch: str,
+    scope_paths: tuple[str, ...],
+    finding_handoff: tuple[str, str],
+) -> str:
+    """Render the slice-free child task consumed by BRANCH_DISCOVERY."""
+
+    if not scope_paths:
+        raise PlanHandoffError("branch discovery handoff requires a non-empty scope")
+    source_run_id, export_record_id = finding_handoff
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
+        raise PlanHandoffError("finding handoff source run is invalid")
+    if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
+        raise PlanHandoffError("finding handoff export is invalid")
+    return (
+        "Pruefe den vollstaendigen Branchstand im verknuepften Entdeckungslauf.\n\n"
+        "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
+        f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
+        f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
+        f"TARGET_BRANCH: {target_branch}\n"
+        f"TASK_SCOPE: {', '.join(scope_paths)}\n"
+    )
+
+
 def render_implementation_task(
     *,
     work_plan_path: str,

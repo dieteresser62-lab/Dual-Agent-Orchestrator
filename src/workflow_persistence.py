@@ -35,6 +35,7 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     BranchDiscoveryCompletedPayload,
+    BranchDiscoveryHandoffExportPayload,
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
@@ -197,6 +198,9 @@ class WorkflowPersistenceDependencies:
     ]
     prepare_completion_finding_handoff: Callable[
         [WorkflowState], tuple[str, str] | None
+    ]
+    prepare_completion_branch_discovery_handoff: Callable[
+        [WorkflowState, str], BranchDiscoveryHandoffExportPayload
     ]
 
 
@@ -774,11 +778,69 @@ class WorkflowPersistence:
                 raise WorkflowExecutionError(
                     "structured completion requires its authoritative final binding"
                 )
+            completion_payload = WorkflowCompletionPayload(
+                outcome="completed",
+                final_binding_id=final_binding.record_id,
+            )
+            completion_record_id = stable_record_id(
+                state.run_id,
+                RecordType.WORKFLOW_COMPLETION,
+                "workflow-completion",
+                1,
+            )
+            if state.execution_mode == TaskMode.IMPLEMENT.value:
+                existing_completion = next(
+                    (
+                        record
+                        for record in chain
+                        if record.record_id == completion_record_id
+                    ),
+                    None,
+                )
+                if existing_completion is not None:
+                    if not any(
+                        isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+                        for record in chain[: chain.index(existing_completion)]
+                    ):
+                        raise WorkflowExecutionError(
+                            "completed IMPLEMENT run lacks its earlier "
+                            "BRANCH_DISCOVERY handoff export"
+                        )
+                    bridge.append(
+                        completion_payload,
+                        logical_id="workflow-completion",
+                        idempotency_key="workflow-completion:completed",
+                        fingerprint_sha256=final_binding.fingerprint.sha256,
+                        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+                    )
+                    return
+                handoff_payload = (
+                    self._dependencies.prepare_completion_branch_discovery_handoff(
+                        state,
+                        completion_record_id,
+                    )
+                )
+                bridge.append_batch(
+                    (
+                        (
+                            handoff_payload,
+                            "branch-discovery-handoff-export",
+                            "branch-discovery-handoff-export:completed",
+                            final_binding.fingerprint.sha256,
+                            FingerprintKind.IMPLEMENTATION,
+                        ),
+                        (
+                            completion_payload,
+                            "workflow-completion",
+                            "workflow-completion:completed",
+                            final_binding.fingerprint.sha256,
+                            FingerprintKind.IMPLEMENTATION,
+                        ),
+                    )
+                )
+                return
             bridge.append(
-                WorkflowCompletionPayload(
-                    outcome="completed",
-                    final_binding_id=final_binding.record_id,
-                ),
+                completion_payload,
                 logical_id="workflow-completion",
                 idempotency_key="workflow-completion:completed",
                 fingerprint_sha256=final_binding.fingerprint.sha256,

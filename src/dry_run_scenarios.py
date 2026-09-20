@@ -1846,6 +1846,7 @@ def run_scripted_workflow_resumable(
     scenario: DryRunScenario,
     task_file: Path,
     driver_factory: Callable[[DryRunScenario], ScriptedWorkflowDriver] | None = None,
+    run_id: str | None = None,
 ) -> ScriptedRunReport:
     """Run one full journey and automatically resume scripted crash checkpoints.
 
@@ -1859,6 +1860,7 @@ def run_scripted_workflow_resumable(
         task_file=task_file,
         resume_scripted_interruptions=True,
         driver_factory=driver_factory,
+        run_id=run_id,
     )
 
 
@@ -1868,10 +1870,13 @@ def _run_scripted_workflow(
     task_file: Path,
     resume_scripted_interruptions: bool,
     driver_factory: Callable[[DryRunScenario], ScriptedWorkflowDriver] | None = None,
+    run_id: str | None = None,
 ) -> ScriptedRunReport:
     session = ScriptedWorkflowSession(scenario, driver_factory)
     context = build_scenario_context(scenario)
     state = build_scenario_state(scenario, task_file=task_file)
+    if run_id is not None:
+        state = replace(state, run_id=run_id)
 
     def run_unit(
         current: WorkflowState, history: WorkflowHistory | None = None

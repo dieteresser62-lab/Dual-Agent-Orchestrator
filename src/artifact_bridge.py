@@ -771,6 +771,7 @@ def branch_discovery_handoff_export_payload(
     target_execution_mode: str = "PLAN_ONLY",
     source_completion_record_id: str | None = None,
     remediation_cohort_checkpoint_record_id: str | None = None,
+    allow_pending_source_completion: bool = False,
 ) -> BranchDiscoveryHandoffExportPayload:
     """Build the one family handoff used on every E1/E9 edge."""
 
@@ -849,7 +850,9 @@ def branch_discovery_handoff_export_payload(
             ),
             None,
         )
-        if completion is None or not isinstance(
+        if completion is None and allow_pending_source_completion:
+            pass
+        elif completion is None or not isinstance(
             completion.payload, WorkflowCompletionPayload
         ) or completion.payload.outcome != "completed":
             raise ArtifactBridgeError(
@@ -866,9 +869,14 @@ def branch_discovery_handoff_export_payload(
         raise ArtifactBridgeError(
             "branch discovery handoff export requires at least one source transition"
         )
+    expected_predecessor_head = (
+        source_completion_record_id
+        if target_execution_mode == "BRANCH_DISCOVERY"
+        else replay.head_record_id
+    )
     if (
         family_binding.predecessor_run_id != replay.expected_run_id
-        or family_binding.predecessor_head_record_id != replay.head_record_id
+        or family_binding.predecessor_head_record_id != expected_predecessor_head
     ):
         raise ArtifactBridgeError(
             "branch discovery target family predecessor differs from the source head"
@@ -935,10 +943,28 @@ def branch_discovery_handoff_import_payload(
         raise ArtifactBridgeError(
             "branch discovery export record is not resolvable in the source run"
         )
-    if source_replay.head_record_id != export_record.record_id:
-        raise ArtifactBridgeError(
-            "branch discovery export must be the accepted source replay head"
+    if export.target_execution_mode == "PLAN_ONLY":
+        if source_replay.head_record_id != export_record.record_id:
+            raise ArtifactBridgeError(
+                "branch discovery export must be the accepted source replay head"
+            )
+    else:
+        completion = next(
+            (
+                record
+                for record in source_replay.records
+                if record.record_id == export.source_completion_record_id
+            ),
+            None,
         )
+        if (
+            completion is None
+            or not isinstance(completion.payload, WorkflowCompletionPayload)
+            or completion.payload.outcome != "completed"
+        ):
+            raise ArtifactBridgeError(
+                "BRANCH_DISCOVERY family handoff requires a completed source run"
+            )
     if (
         export_record.run_id != source_replay.expected_run_id
         or export.source_run_id != source_replay.expected_run_id
@@ -948,7 +974,8 @@ def branch_discovery_handoff_import_payload(
         raise ArtifactBridgeError(
             "branch discovery export source run or bound source head differs"
         )
-    source_prefix = source_replay.records[:-1]
+    export_position = source_replay.records.index(export_record)
+    source_prefix = source_replay.records[:export_position]
     transitions = flatten_finding_transition_history(source_prefix)
     if (
         export.finding_transition_record_ids

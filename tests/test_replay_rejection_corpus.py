@@ -830,6 +830,11 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 "ar1-" + "9" * 64 if line == 3014 else None
             ),
         )
+        if line == 3014:
+            payload = replace(
+                payload,
+                predecessor_head_record_id="ar1-" + "9" * 64,
+            )
         _append(records, payload)
     elif line in {3006, 3007, 3008, 3009, 3010, 3011, 3012, 3016}:
         payload = _branch_import_payload(

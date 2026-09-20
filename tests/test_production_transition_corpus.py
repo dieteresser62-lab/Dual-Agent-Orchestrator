@@ -600,6 +600,9 @@ class _CorpusDriver:
     def persist_implementation_handoff(self, *_args) -> None:
         pass
 
+    def publish_branch_discovery_handoff(self, _state: WorkflowState) -> Path:
+        return Path("inbox/branch-discovery.md")
+
     def _write_side_effect_file(self, *_args, **_kwargs) -> None:
         pass
 
@@ -818,7 +821,7 @@ def test_pre_b48_transition_anchor_is_bound_to_git_and_logical_loop() -> None:
     assert anchored_blob == baseline["source_blob"]
     facts = _static_facts(SOURCE_TREE)
     assert _canonical_sha256(facts) == baseline["facts_sha256"]
-    assert len(facts["decisions"]) == 24
+    assert len(facts["decisions"]) == 25
     assert len(facts["catchers"]) == 2
     assert len(facts["checkpoints"]) == 10
 

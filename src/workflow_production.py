@@ -88,6 +88,8 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
         self, handoff_path: Path, approved_plan_commit: str
     ) -> None: ...
 
+    def publish_branch_discovery_handoff(self, state: WorkflowState) -> Path: ...
+
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
     ) -> None: ...
@@ -100,6 +102,7 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "finalize_audit",
         "persist_implementation_handoff",
         "prepare_finding_handoff",
+        "publish_branch_discovery_handoff",
     }
 )
 
@@ -783,6 +786,9 @@ def _run_production_transition_loop(
             state = driver.active_state or state
             continue
 
+        if state.execution_mode == TaskMode.IMPLEMENT.value:
+            handoff = driver.publish_branch_discovery_handoff(state)
+            logger.info("Branch-discovery handoff ready: %s", handoff)
         return WorkflowRunResult(state, history, state.current_slice.commit_ref)
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")

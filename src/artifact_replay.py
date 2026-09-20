@@ -2518,7 +2518,11 @@ def _validate_branch_discovery_export(
         or not record.predecessor_ids
         or payload.source_head_record_id != record.predecessor_ids[0]
         or payload.predecessor_run_id != payload.source_run_id
-        or payload.predecessor_head_record_id != payload.source_head_record_id
+        or payload.predecessor_head_record_id != (
+            payload.source_completion_record_id
+            if payload.target_execution_mode == "BRANCH_DISCOVERY"
+            else payload.source_head_record_id
+        )
     ):
         _fail(
             ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
@@ -2560,7 +2564,17 @@ def _validate_branch_discovery_export(
             completion is None
             or not isinstance(completion.payload, WorkflowCompletionPayload)
             or completion.payload.outcome != "completed"
-            or positions[completion.record_id] >= positions[record.record_id]
+            or not (
+                (
+                    payload.source_head_record_id == completion.record_id
+                    and positions[completion.record_id] < positions[record.record_id]
+                )
+                or (
+                    payload.source_head_record_id != completion.record_id
+                    and positions[completion.record_id]
+                    == positions[record.record_id] + 1
+                )
+            )
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
@@ -2612,7 +2626,15 @@ def _validate_branch_discovery_export(
         None,
     )
     binding = None if profile is None else profile.family_binding
-    if (
+    initial_implementation_family = (
+        binding is None
+        and identity is not None
+        and identity.execution_mode == "IMPLEMENT"
+        and payload.target_execution_mode == "BRANCH_DISCOVERY"
+        and payload.cycle_number == 1
+        and payload.family_base_commit == identity.branch_base
+    )
+    if not initial_implementation_family and (
         binding is None
         or binding.family_id != payload.family_id
         or binding.family_base_commit != payload.family_base_commit

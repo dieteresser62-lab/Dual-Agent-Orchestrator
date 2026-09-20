@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from contracts import PlannedSlice
 from plan_handoff import (
     PlanHandoffError,
+    branch_discovery_task_path,
     extract_implementation_slices,
     extract_slice_requirements,
+    render_branch_discovery_task,
     render_implementation_task,
 )
 
@@ -181,3 +185,20 @@ def test_render_implementation_task_binds_finding_export_without_finding_prose()
     assert "FINDING_HANDOFF_SOURCE_RUN: source-run\n" in rendered
     assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
     assert "C-01" not in rendered
+
+
+def test_render_branch_discovery_task_is_slice_free_and_uses_counterpart_path() -> None:
+    source = branch_discovery_task_path(Path("inbox/doing/change-implement.md"))
+
+    rendered = render_branch_discovery_task(
+        target_branch="feature/finding-handoff",
+        scope_paths=("src/core.py", "tests/test_core.py"),
+        finding_handoff=("source-run", "ar1-" + "b" * 64),
+    )
+
+    assert source == Path("inbox/doing/change-branch-discovery.md")
+    assert "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n" in rendered
+    assert "FINDING_HANDOFF_SOURCE_RUN: source-run\n" in rendered
+    assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
+    assert "TASK_SCOPE: src/core.py, tests/test_core.py\n" in rendered
+    assert "SLICE_PLAN" not in rendered
