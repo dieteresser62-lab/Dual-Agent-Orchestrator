@@ -3248,7 +3248,14 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
                 },
             }
         ],
-        "status_changes": [],
+        "status_changes": [
+            {
+                "finding_id": "C-01",
+                "status": "CLOSED",
+                "rationale": "The recovery evidence decides the finding.",
+                "closure": {"kind": "fixed"},
+            }
+        ],
         "reclassifications": [],
         "responsibility_routes": [],
         "plan_treatment_decisions": [],
@@ -3374,8 +3381,10 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         if isinstance(item.payload, FindingTransitionPayload)
         and item.payload.finding_id == "C-01"
     )
-    assert len(finding_transitions) == 1
-    assert finding_transitions[0].payload.action == "opened"
+    assert tuple(item.payload.action for item in finding_transitions) == (
+        "opened",
+        "status_changed",
+    )
     assert replay_artifacts(completed_chain, state.run_id).pending_review_record_id is None
 
     pre_policy = driver.recover_pending_native_reviewer_before_policy(

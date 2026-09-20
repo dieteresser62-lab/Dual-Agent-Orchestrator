@@ -1143,9 +1143,22 @@ class ScriptedWorkflowDriver:
         )
         if invocation.native_request is None:
             raise DryRunScenarioError("scripted reviewer event has no native request")
-        document = dict(document)
+        document = json.loads(json.dumps(document))
         if document.get("request_id") == "$BOUND_REQUEST_ID":
             document["request_id"] = invocation.native_request.bound_context.request_id
+        routes = document.get("responsibility_routes")
+        if isinstance(routes, list):
+            for route in routes:
+                if not isinstance(route, dict):
+                    continue
+                responsibility = route.get("responsibility")
+                if (
+                    isinstance(responsibility, dict)
+                    and responsibility.get("target_run_id") == "$BOUND_RUN_ID"
+                ):
+                    responsibility["target_run_id"] = (
+                        invocation.native_request.bound_context.context.run_id
+                    )
         validate_native_review_provider_response(document, invocation.native_request)
         canonical = canonical_native_review_json(document)
         return NativeAgentReviewOutput(
@@ -2078,6 +2091,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         observations: tuple[str, ...] = (),
         blockers: tuple[str, ...] = (),
         closed: tuple[str, ...] = (),
+        routed: tuple[str, ...] = (),
     ) -> dict[str, object]:
         findings = [
             {
@@ -2112,7 +2126,19 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 for finding_id in closed
             ],
             "reclassifications": [],
-            "responsibility_routes": [],
+            "responsibility_routes": [
+                {
+                    "finding_id": finding_id,
+                    "responsibility": {
+                        "responsibility_kind": "SLICE",
+                        "target_run_id": "$BOUND_RUN_ID",
+                        "approved_plan_commit": base,
+                        "slice_id": "2",
+                    },
+                    "rationale": "The second planned Slice owns this finding.",
+                }
+                for finding_id in routed
+            ],
             "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
@@ -2153,7 +2179,11 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=True, observations=("C-01",)),
+                review(
+                    approved=True,
+                    observations=("C-01",),
+                    routed=("C-01",),
+                ),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider

@@ -738,9 +738,29 @@ def project_reviewer_persistence_transitions(
         if prior is None:
             result.append(
                 FindingPersistenceTransition(
-                    finding, "opened", finding.summary, "opened"
+                    (
+                        replace(
+                            finding,
+                            status=FindingStatus.OPEN,
+                            status_rationale=None,
+                        )
+                        if is_closed_finding_status(finding.status)
+                        else finding
+                    ),
+                    "opened",
+                    finding.summary,
+                    "opened",
                 )
             )
+            if is_closed_finding_status(finding.status):
+                result.append(
+                    FindingPersistenceTransition(
+                        finding,
+                        "status_changed",
+                        finding.status_rationale or finding.summary,
+                        "status_changed",
+                    )
+                )
             continue
         class_changed = prior.finding_class is not finding.finding_class
         rationale_changed = prior.status_rationale != finding.status_rationale

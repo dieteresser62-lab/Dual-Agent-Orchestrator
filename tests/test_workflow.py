@@ -4936,6 +4936,50 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
     assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
 
 
+def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
+    now = datetime(2026, 9, 20, 16, 30, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    detail = (
+        "approval leaves open findings assigned to the current Slice: C-01; "
+        "close them, reject them with named evidence, or route them to a named "
+        "later Slice or to branch planning"
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.APPROVAL_INVALID,
+                "review-open-finding-without-decision",
+                received_at=now,
+                detail=detail,
+            ),
+            None,
+        ],
+    )
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    retry = driver.reviewer_calls[1].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": "review-open-finding-without-decision",
+        "rejection_code": "approval-invalid",
+        "correction_instruction": (
+            "For every Finding ID named by the rejection, close it, reject it "
+            "with named evidence, or route it to a named later Slice or to "
+            "branch planning."
+        ),
+    }
+    assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+
+
 def test_rejected_first_review_then_two_findings_remains_discovery_round() -> None:
     """Regression for B152's Slice-03 canary failure."""
 

@@ -1398,7 +1398,11 @@ class WorkflowPersistence:
         }
         for transition in transitions:
             finding_id = transition.finding.finding_id
-            if finding_id not in opening_ids or finding_id not in assigned_ids:
+            if (
+                transition.action != "opened"
+                or finding_id not in opening_ids
+                or finding_id not in assigned_ids
+            ):
                 continue
             expected_payload = finding_payload(
                 transition.finding,

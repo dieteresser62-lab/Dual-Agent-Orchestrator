@@ -501,6 +501,106 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     assert project_open_set(result.findings).finding_ids == ("C-01",)
 
 
+def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    document = _review(context, approved=True)
+    document["new_findings"] = [
+        {
+            "finding_id": finding_id,
+            "finding_class": "OBSERVATION",
+            "summary": f"{finding_id} remains undecided in this Slice.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": f"Decide {finding_id} before approving the Slice.",
+            },
+        }
+        for finding_id in ("C-01", "C-02")
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    assert "C-01, C-02" in raised.value.detail
+    assert "close them" in raised.value.detail
+    assert "reject them with named evidence" in raised.value.detail
+    assert "named later Slice or to branch planning" in raised.value.detail
+
+
+def test_slice_approval_accepts_finding_opened_and_closed_in_same_response(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    document = _review(context, approved=True)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "summary": "The reviewed diff may omit the bounded guard.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "The bounded guard is present in the reviewed diff.",
+            },
+        }
+    ]
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "The bound evidence shows the guard is present.",
+            "closure": {"kind": "fixed"},
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_contract_result(document, context)
+    transitions = project_reviewer_persistence_transitions(
+        (), result.findings, work_unit_id="work-unit-1"
+    )
+
+    assert result.approval is True
+    assert result.findings[0].status is FindingStatus.CLOSED
+    assert tuple(item.action for item in transitions) == (
+        "opened",
+        "status_changed",
+    )
+    assert transitions[0].finding.status is FindingStatus.OPEN
+    assert transitions[1].finding.status is FindingStatus.CLOSED
+
+
+def test_slice_denial_allows_new_undecided_finding(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "The Slice still violates its contract.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Correct the contract violation and review again.",
+            },
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is False
+    assert project_open_set(result.findings).finding_ids == ("C-01",)
+
+
 def test_review_writer_limits_slice_routes_to_plan_slice_ids(
     active_finding_decisions: None,
 ) -> None:
@@ -522,7 +622,7 @@ def test_review_writer_limits_slice_routes_to_plan_slice_ids(
 
     assert target_schema == {
         "type": "string",
-        "enum": ["1", "2", "3", "4", "5", "6"],
+        "enum": ["2", "3", "4", "5", "6"],
     }
     assert "const" not in target_schema
 
@@ -998,7 +1098,7 @@ def test_new_finding_id_must_belong_to_claude() -> None:
     _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
 
 
-def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -> None:
+def test_slice_denial_preserves_omitted_open_finding_but_approval_rejects_it() -> None:
     blocker = _finding("C-01", AgentRole.CLAUDE)
     denied_context = _context(previous=(blocker,))
 
@@ -1015,9 +1115,10 @@ def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -
     context = _context(previous=(observation,))
 
     approved = _review(context, approved=True)
-    result = parse_native_contract_result(approved, context)
-    assert result.approval is True
-    assert result.findings[0].status is FindingStatus.OPEN
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(approved, context)
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    assert "C-01" in raised.value.detail
 
     updated = _review(denied_context, approved=False)
     updated["status_changes"] = [
@@ -1179,7 +1280,18 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
         finding_class=FindingClass.OBSERVATION,
     )
     context = _context(previous=(existing,))
-    document = _review(context, approved=True)
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "BLOCKER",
+            "summary": "The additional occurrence still needs correction.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Correct the additional occurrence before approval.",
+            },
+        }
+    ]
     document["status_changes"] = [
         {
             "finding_id": "C-01",
@@ -1188,7 +1300,6 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
             "closure": None,
         }
     ]
-
     result = parse_native_contract_result(document, context)
     transitions = project_reviewer_persistence_transitions(
         context.previous_findings,
@@ -1198,9 +1309,12 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
 
     assert result.findings[0].status is FindingStatus.OPEN
     assert result.findings[0].status_rationale == "Also occurs at src/second_site.py."
-    assert len(transitions) == 1
-    assert transitions[0].action == "status_changed"
-    assert transitions[0].rationale == "Also occurs at src/second_site.py."
+    occurrence = tuple(
+        item for item in transitions if item.finding.finding_id == "C-01"
+    )
+    assert len(occurrence) == 1
+    assert occurrence[0].action == "status_changed"
+    assert occurrence[0].rationale == "Also occurs at src/second_site.py."
 
 
 def test_existing_id_rejects_an_invisible_open_to_open_noop() -> None:
@@ -1226,7 +1340,7 @@ def test_existing_id_rejects_an_invisible_open_to_open_noop() -> None:
     assert raised.value.code is NativeReviewErrorCode.FINDING_EVENT_CONFLICT
 
 
-def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() -> None:
+def test_slice_writer_exposes_sparse_approval_but_local_contract_rejects_it() -> None:
     previous = tuple(
         _finding(
             f"C-{number:02d}",
@@ -1251,18 +1365,13 @@ def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() ->
 
     writer = native_review_provider_response_schema(context)
     validate_schema_document({"result": document}, writer)
-    result = parse_native_contract_result(document, context)
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
 
-    assert tuple(item.finding_id for item in result.findings) == tuple(
-        f"C-{number:02d}" for number in range(1, 12)
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    assert all(
+        f"C-{number:02d}" in raised.value.detail for number in range(1, 12)
     )
-    transitions = project_reviewer_persistence_transitions(
-        previous,
-        result.findings,
-        work_unit_id="2",
-    )
-    assert tuple(item.finding.finding_id for item in transitions) == ("C-11",)
-    assert tuple(item.action for item in transitions) == ("opened",)
 
 
 @pytest.mark.parametrize(

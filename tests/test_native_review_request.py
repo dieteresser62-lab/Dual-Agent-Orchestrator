@@ -164,12 +164,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "0d3c6bcf07253136bde2202bc2a3b8e503f81fde94155a2dd108cbd36639a9ea"
+        "ae53fb5204df741a6fe4c266b8a6b01b7b35015ce1f3c0261ed810bd5f3ca993"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "bcdf3d7941163ba453388ff02ae10759038bf309ef71fe3d29946dabe427abd5"
+        "131f80995ac2f01b79e04b5e29bf3ac0ed6096bbc7f64f9a1fa210878887bdda"
     )
 
 
@@ -555,7 +555,7 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
     validate_schema_document({"result": approved}, schema)
 
 
-def test_initial_slice_approval_can_reclassify_blocker_and_omit_observation() -> None:
+def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them() -> None:
     blocker = _prior_finding("C-01")
     observation = _prior_finding(
         "C-02", finding_class=FindingClass.OBSERVATION
@@ -585,31 +585,21 @@ def test_initial_slice_approval_can_reclassify_blocker_and_omit_observation() ->
     validate_schema_document(
         {"result": approved}, bundle.provider_response_schema
     )
-    result = parse_bound_native_contract_result(
-        approved, bundle.bound_context
-    )
-    assert result.approval is True
-    assert tuple(
-        (item.finding_id, item.finding_class, item.status)
-        for item in result.findings
-    ) == (
-        ("C-01", FindingClass.OBSERVATION, FindingStatus.OPEN),
-        ("C-02", FindingClass.OBSERVATION, FindingStatus.OPEN),
-    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_bound_native_contract_result(approved, bundle.bound_context)
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    assert "C-01, C-02" in raised.value.detail
 
     sparse_disposition = json.loads(json.dumps(approved))
     sparse_disposition["status_changes"] = []
     validate_schema_document(
         {"result": sparse_disposition}, bundle.provider_response_schema
     )
-    sparse_result = parse_bound_native_contract_result(
-        sparse_disposition, bundle.bound_context
-    )
-    assert sparse_result.approval is True
-    assert tuple(item.finding_id for item in sparse_result.findings) == (
-        "C-01",
-        "C-02",
-    )
+    with pytest.raises(NativeReviewContractError) as sparse_raised:
+        parse_bound_native_contract_result(
+            sparse_disposition, bundle.bound_context
+        )
+    assert sparse_raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
     convergence_context = replace(
         context, round_number=2, allow_new_observations=False

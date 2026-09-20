@@ -199,7 +199,7 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
             scopes.add("plan_open")
     elif marker is ApprovalMarker.SLICE:
         scopes.add("slice_initial" if slice_initial else "slice_convergence")
-        if own_open:
+        if own_open or context.allow_new_observations:
             scopes.add(
                 "slice_initial_open" if slice_initial else "slice_convergence_open"
             )
