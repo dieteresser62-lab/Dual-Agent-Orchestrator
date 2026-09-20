@@ -10,7 +10,7 @@
     {
       "record_type": "run_profile",
       "expected_class": "RunProfilePayload",
-      "input": {"implementer": {"model": "gpt-5.6-sol", "effort": "max"}, "reviewer": {"model": "opus", "effort": "max"}, "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"}
+      "input": {"implementer": {"model": "gpt-5.6-sol", "effort": "max"}, "reviewer": {"model": "opus", "effort": "max"}, "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1"}
     },
     {
       "record_type": "workflow_transition",
@@ -80,7 +80,7 @@
     {
       "record_type": "finding_transition",
       "expected_class": "FindingTransitionPayload",
-      "input": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null}
+      "input": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null, "affected_paths": []}
     },
     {
       "record_type": "finding_handoff_export",
@@ -90,7 +90,7 @@
     {
       "record_type": "finding_handoff_import",
       "expected_class": "FindingHandoffImportPayload",
-      "input": {"source_run_id": "source-run", "source_head_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444", "approved_plan_commit": "5555555555555555555555555555555555555555", "approval_review_record_id": "ar1-6666666666666666666666666666666666666666666666666666666666666666", "export_record_id": "ar1-7777777777777777777777777777777777777777777777777777777777777777", "target_run_id": "target-run", "target_task_sha256": "8888888888888888888888888888888888888888888888888888888888888888", "finding_transitions_sha256": "1ce512944e3b9b926e64165009ceadd9174e1fddcc6436ced20d4702d5bc3e70", "transitions": [{"record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333", "payload": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null}}], "authority": "orchestrator"}
+      "input": {"source_run_id": "source-run", "source_head_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444", "approved_plan_commit": "5555555555555555555555555555555555555555", "approval_review_record_id": "ar1-6666666666666666666666666666666666666666666666666666666666666666", "export_record_id": "ar1-7777777777777777777777777777777777777777777777777777777777777777", "target_run_id": "target-run", "target_task_sha256": "8888888888888888888888888888888888888888888888888888888888888888", "finding_transitions_sha256": "d3f5e388e35686cabbaede2f48ed413ae798f21d81299983f83f32f17898302a", "transitions": [{"record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333", "payload": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null, "affected_paths": []}}], "authority": "orchestrator"}
     },
     {
       "record_type": "validation_request",

@@ -241,6 +241,9 @@ def _review_result(
                     if finding_id in new_observations
                     else "BLOCKER"
                 ),
+                "affected_paths": [
+                    "tests/test_orchestrator_resilience_evidence.py"
+                ],
                 "summary": f"Bound defect {finding_id} remains actionable.",
                 "acceptance_test": {
                     "kind": "prose",

@@ -564,6 +564,7 @@ def _native_review_approval(
                 {
                     "finding_id": observation_id,
                     "finding_class": "OBSERVATION",
+                    "affected_paths": [],
                     "summary": "Carry the approved-plan follow-up into implementation.",
                     "acceptance_test": {
                         "kind": "prose",
@@ -3242,6 +3243,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
             {
                 "finding_id": "C-01",
                 "finding_class": "OBSERVATION",
+                "affected_paths": ["src/runtime.py"],
                 "summary": "Keep recovery transaction completeness visible.",
                 "acceptance_test": {
                     "kind": "prose",

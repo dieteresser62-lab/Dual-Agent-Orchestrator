@@ -2102,6 +2102,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             {
                 "finding_id": finding_id,
                 "finding_class": finding_class,
+                "affected_paths": ["src/orchestrator.py"],
                 "summary": f"Provider-free finding {finding_id}.",
                 "acceptance_test": {
                     "kind": "prose",
@@ -2302,6 +2303,7 @@ def build_joint_branch_discovery_scenario(
                         {
                             "finding_id": "C-03",
                             "finding_class": "OBSERVATION",
+                            "affected_paths": ["src/orchestrator.py"],
                             "summary": (
                                 "The linked discovery run found a remediation item."
                             ),
@@ -2398,6 +2400,7 @@ def build_progressive_correction_scenario(
                 {
                     "finding_id": finding_id,
                     "finding_class": "BLOCKER",
+                    "affected_paths": ["src/orchestrator.py"],
                     "summary": f"Scripted correction finding {finding_id}.",
                     "acceptance_test": {
                         "kind": "prose",

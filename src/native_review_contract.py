@@ -420,6 +420,7 @@ class NativeFinding:
     acceptance_test: NativeAcceptance
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
+    affected_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2036,6 +2037,7 @@ def _parse_native_finding(item: Mapping[str, Any]) -> NativeFinding:
         acceptance_test=parsed_acceptance,
         predecessor_finding_ref=item.get("predecessor_finding_ref"),
         evidence_anchor_sha256=item.get("evidence_anchor_sha256"),
+        affected_paths=tuple(item["affected_paths"]),
     )
 
 
@@ -3020,6 +3022,7 @@ def _merge_findings(
                     ),
                     predecessor_finding_ref=native.predecessor_finding_ref,
                     evidence_anchor_sha256=native.evidence_anchor_sha256,
+                    affected_paths=native.affected_paths,
                 ),
             )
         except ValueError as exc:
@@ -3353,6 +3356,7 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
         "status": finding.status.value,
         "summary": finding.summary,
         "acceptance_test": finding.acceptance_test,
+        "affected_paths": list(finding.affected_paths),
         "origin": {
             "slice_id": finding.origin.slice_id,
             "round_number": finding.origin.round_number,

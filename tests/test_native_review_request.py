@@ -164,12 +164,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "ae53fb5204df741a6fe4c266b8a6b01b7b35015ce1f3c0261ed810bd5f3ca993"
+        "d9e2969316e550acb17140bbe576e7be1f9c16a7e6011475834decbb9a75df2d"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "131f80995ac2f01b79e04b5e29bf3ac0ed6096bbc7f64f9a1fa210878887bdda"
+        "6c55644f3d903726d1a7b7b79e6bf88c4ed589c29fc9a4eddbd58eb1c75ba8b8"
     )
 
 
@@ -395,6 +395,15 @@ def test_default_provider_schema_remains_anchor_capable() -> None:
     ]["maxItems"] == 64
 
 
+def test_generated_review_schema_requires_typed_paths_and_passes_provider_projection() -> None:
+    schema = native_review_provider_response_schema(_context())
+
+    finding = schema["$defs"]["finding"]
+    assert "affected_paths" in finding["required"]
+    assert finding["properties"]["affected_paths"]["type"] == "array"
+    assert finding["additionalProperties"] is False
+
+
 def _prior_finding(
     finding_id: str = "C-01",
     *,
@@ -532,6 +541,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observati
             "finding_class": "OBSERVATION",
             "summary": "Late non-blocking idea",
             "acceptance_test": {"kind": "prose", "text": "Follow up later"},
+            "affected_paths": [],
         }
     ]
     with pytest.raises(SchemaMismatch):
@@ -549,6 +559,7 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
             "finding_class": "OBSERVATION",
             "summary": "Cross-cutting follow-up",
             "acceptance_test": {"kind": "prose", "text": "Address in a later Slice"},
+            "affected_paths": [],
         }
     ]
 
@@ -631,6 +642,7 @@ def test_denied_writer_response_may_include_nonblank_pre_mortem() -> None:
                 "kind": "prose",
                 "text": "Correct the defect and repeat the focused review.",
             },
+            "affected_paths": [],
         }
     ]
     denied["pre_mortem"] = "The same defect could recur after a provider update."
@@ -665,6 +677,7 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
                 "kind": "prose",
                 "text": "Retain the follow-up for a later Slice.",
             },
+            "affected_paths": [],
         }
     ]
 
@@ -709,6 +722,7 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
                 "kind": "prose",
                 "text": "Keep the resulting-blocker fold fail-closed.",
             },
+            "affected_paths": [],
         }
     ]
     validate_schema_document(
@@ -855,6 +869,7 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
                 "kind": "validation_command",
                 "argv": ["outside", "configured", "family"],
             },
+            "affected_paths": [],
         }
     ]
     contexts_and_responses.append((_context(), invalid_command))
@@ -903,6 +918,7 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
                 "kind": "prose",
                 "text": "Preserve valid data in src/repeated.py.",
             },
+            "affected_paths": ["src/repeated.py"],
         }
         for finding_id in ("C-02", "C-03")
     ]
@@ -915,6 +931,7 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
             "finding_class": "BLOCKER",
             "summary": "Ordered finding",
             "acceptance_test": {"kind": "prose", "text": "Focused regression"},
+            "affected_paths": [],
         }
         for finding_id in ("C-02", "C-01")
     ]

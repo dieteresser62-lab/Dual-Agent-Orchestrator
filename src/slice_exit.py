@@ -34,7 +34,6 @@ from finding_responsibility import (
     SliceResponsibility,
     responsibility_document,
 )
-from finding_signature import mentioned_repository_paths
 
 
 CONDITION_4_ACCEPTANCE_UNDECIDABLE = (
@@ -645,14 +644,13 @@ def _slice_route_errors(
             f"Slice routing for {finding_id} targets already completed Slice {target}",
         )
     target_spec = plan_specs[target]
-    mentioned_paths = mentioned_repository_paths(head.summary, head.acceptance_test)
-    if not mentioned_paths:
+    if not head.affected_paths:
         return (
             f"Slice routing for {finding_id} has no record-bound remediation path "
             "with which to check target scope",
         )
     uncovered = tuple(
-        path for path in mentioned_paths if not _scope_covers(target_spec, path)
+        path for path in head.affected_paths if not _scope_covers(target_spec, path)
     )
     if uncovered:
         return (

@@ -95,11 +95,57 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1",
         "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
     assert "family_binding" not in _record(profile).to_dict()["payload"]
+
+
+def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
+    assert artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION == (
+        "structured-v2-schema-2-state-v3-joint-67-68-v1"
+    )
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+    ):
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            reducer_version=artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION,
+        )
+
+
+def test_finding_opening_roundtrips_record_bound_affected_paths() -> None:
+    payload = FindingTransitionPayload(
+        finding_id="C-01",
+        reporter=Role.CLAUDE,
+        actor=Role.CLAUDE,
+        action="opened",
+        severity=FindingSeverity.BLOCKER,
+        finding_status="open",
+        rationale="The typed path owns the remediation scope.",
+        work_unit_id="1",
+        summary="A defect affects src/fix.py.",
+        acceptance_test="The defect is repaired.",
+        origin_slice_id="1",
+        origin_round_number=1,
+        affected_paths=("src/fix.py",),
+    )
+    record = _record(payload)
+
+    assert record.to_dict()["payload"]["affected_paths"] == ["src/fix.py"]
+    assert ArtifactRecord.from_dict(record.to_dict()).payload == payload
+
+    missing = record.to_dict()
+    del missing["payload"]["affected_paths"]
+    with pytest.raises(ArtifactValidationError, match="affected_paths.*required"):
+        ArtifactRecord.from_dict(missing)
+
+    with pytest.raises(ArtifactValidationError, match="canonical repository-relative"):
+        replace(payload, affected_paths=("../outside.py",))
 
 
 def test_family_binding_roundtrips_and_missing_required_field_is_named() -> None:

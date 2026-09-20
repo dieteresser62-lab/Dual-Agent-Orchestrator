@@ -273,6 +273,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
                     "kind": "prose",
                     "text": "A later ordinary plan must address the defect.",
                 },
+                "affected_paths": [],
             }
         ],
         "occurrences": [
@@ -341,6 +342,7 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
                     "kind": "prose",
                     "text": "Increase capacity only through a new explicit product decision.",
                 },
+                "affected_paths": [],
             }
         ],
         "occurrences": [],
@@ -369,6 +371,7 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
                 "kind": "prose",
                 "text": "Reject the whole result instead of slicing the list.",
             },
+            "affected_paths": [],
         }
     )
     with pytest.raises(NativeReviewContractError, match="exceeds request-bound"):
@@ -474,6 +477,7 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
                 "kind": "prose",
                 "text": "The later Slice repairs src/future.py.",
             },
+            "affected_paths": ["src/future.py"],
         }
     ]
     document["responsibility_routes"] = [
@@ -499,6 +503,7 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     )
     assert result.responsibility_routes == response.responsibility_routes
     assert project_open_set(result.findings).finding_ids == ("C-01",)
+    assert result.findings[0].affected_paths == ("src/future.py",)
 
 
 def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
@@ -515,6 +520,7 @@ def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
                 "kind": "prose",
                 "text": f"Decide {finding_id} before approving the Slice.",
             },
+            "affected_paths": [],
         }
         for finding_id in ("C-01", "C-02")
     ]
@@ -546,6 +552,7 @@ def test_slice_approval_accepts_finding_opened_and_closed_in_same_response(
                 "kind": "prose",
                 "text": "The bounded guard is present in the reviewed diff.",
             },
+            "affected_paths": [],
         }
     ]
     document["status_changes"] = [
@@ -589,6 +596,7 @@ def test_slice_denial_allows_new_undecided_finding(
                 "kind": "prose",
                 "text": "Correct the contract violation and review again.",
             },
+            "affected_paths": [],
         }
     ]
 
@@ -1009,6 +1017,7 @@ def test_new_blocker_uses_exact_context_origin_and_denies() -> None:
             "finding_class": "BLOCKER",
             "summary": "Native response may be misbound",
             "acceptance_test": {"kind": "prose", "text": "Reject wrong request id"},
+            "affected_paths": [],
         }
     ]
     result = parse_native_contract_result(document, context)
@@ -1029,6 +1038,7 @@ def test_new_findings_must_start_at_next_reviewer_id_and_remain_contiguous() -> 
             "finding_class": "BLOCKER",
             "summary": "Skipped the next id",
             "acceptance_test": {"kind": "prose", "text": "Use C-02 first"},
+            "affected_paths": [],
         }
     ]
     _assert_error(document, context, NativeReviewErrorCode.FINDING_ID_INVALID)
@@ -1047,6 +1057,7 @@ def test_validation_command_reaches_existing_matrix_as_identical_argv() -> None:
                 "kind": "validation_command",
                 "argv": list(argv),
             },
+            "affected_paths": ["tests/test_native_review_contract.py"],
         }
     ]
     result = parse_native_contract_result(document, context)
@@ -1079,6 +1090,7 @@ def test_observation_cannot_carry_validation_command() -> None:
                 "kind": "validation_command",
                 "argv": ["python3", "-m", "pytest", "tests/", "-v"],
             },
+            "affected_paths": [],
         }
     ]
     _assert_error(document, context, NativeReviewErrorCode.ACCEPTANCE_INVALID)
@@ -1093,6 +1105,7 @@ def test_new_finding_id_must_belong_to_claude() -> None:
             "finding_class": "BLOCKER",
             "summary": "Wrong owner",
             "acceptance_test": {"kind": "prose", "text": "Use the correct prefix"},
+            "affected_paths": [],
         }
     ]
     _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
@@ -1147,6 +1160,7 @@ def test_repeated_finding_becomes_an_occurrence_of_the_existing_identifier() -> 
                 "kind": "prose",
                 "text": "Reject stale entries in src/cache.py.",
             },
+            "affected_paths": ["src/cache.py"],
         }
     ]
 
@@ -1202,6 +1216,7 @@ def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
                     "app/public/assets/data.json to non-executable 100644."
                 ),
             },
+            "affected_paths": ["app/public/assets/data.json"],
         },
         {
             "finding_id": "C-03",
@@ -1211,6 +1226,7 @@ def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
                 "kind": "prose",
                 "text": "Preserve valid entries in src/cache.py.",
             },
+            "affected_paths": ["src/cache.py"],
         },
     ]
 
@@ -1243,6 +1259,7 @@ def test_contradictory_repeated_finding_is_still_rejected() -> None:
                 "kind": "prose",
                 "text": "Reject stale entries in src/cache.py.",
             },
+            "affected_paths": ["src/cache.py"],
         }
     ]
 
@@ -1266,6 +1283,7 @@ def test_genuine_new_problem_on_the_same_path_is_opened() -> None:
                 "kind": "prose",
                 "text": "Preserve valid entries in src/cache.py.",
             },
+            "affected_paths": ["src/cache.py"],
         }
     ]
 
@@ -1290,6 +1308,7 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
                 "kind": "prose",
                 "text": "Correct the additional occurrence before approval.",
             },
+            "affected_paths": [],
         }
     ]
     document["status_changes"] = [
@@ -1360,6 +1379,7 @@ def test_slice_writer_exposes_sparse_approval_but_local_contract_rejects_it() ->
                 "kind": "prose",
                 "text": "Address the follow-up in a later slice.",
             },
+            "affected_paths": [],
         }
     ]
 
@@ -1698,6 +1718,7 @@ def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker()
                 "kind": "prose",
                 "text": "Consider this in a later slice",
             },
+            "affected_paths": [],
         }
     ]
     document["status_changes"] = [
@@ -1770,6 +1791,7 @@ def test_test_change_and_observation_convergence_guards() -> None:
             "finding_class": "OBSERVATION",
             "summary": "Future idea",
             "acceptance_test": {"kind": "prose", "text": "Consider later"},
+            "affected_paths": [],
         }
     ]
     _assert_error(observation, convergence, NativeReviewErrorCode.APPROVAL_INVALID)

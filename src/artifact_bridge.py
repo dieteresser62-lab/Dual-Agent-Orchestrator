@@ -364,12 +364,13 @@ def branch_discovery_completed_payload(
         )
     new_findings = tuple(
         BranchDiscoveryFindingPayload(
-            finding.finding_id,
-            FindingSeverity(finding.finding_class.value),
-            finding.summary,
-            finding.acceptance_test,
-            finding.predecessor_finding_ref,
-            finding.evidence_anchor_sha256,
+            finding_id=finding.finding_id,
+            severity=FindingSeverity(finding.finding_class.value),
+            summary=finding.summary,
+            acceptance_test=finding.acceptance_test,
+            predecessor_finding_ref=finding.predecessor_finding_ref,
+            evidence_anchor_sha256=finding.evidence_anchor_sha256,
+            affected_paths=finding.affected_paths,
         )
         for finding in result.findings
         if finding.finding_id not in previous
@@ -547,6 +548,7 @@ def finding_payload(
             if structured and action == "opened"
             else None
         ),
+        affected_paths=(finding.affected_paths if action == "opened" else ()),
     )
 
 

@@ -21,6 +21,10 @@
       },
       "required": ["schema_version", "result_type", "request_id", "reviewer"]
     },
+    "safe_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n\\\\]{1,1000}$"
+    },
     "prose_acceptance": {
       "type": "object",
       "properties": {
@@ -62,9 +66,15 @@
         },
         "finding_class": { "enum": ["BLOCKER", "OBSERVATION"] },
         "summary": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" },
-        "acceptance_test": { "$ref": "#/$defs/acceptance_test" }
+        "acceptance_test": { "$ref": "#/$defs/acceptance_test" },
+        "affected_paths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safe_path" }
+        }
       },
-      "required": ["finding_id", "finding_class", "summary", "acceptance_test"],
+      "required": ["finding_id", "finding_class", "summary", "acceptance_test", "affected_paths"],
       "additionalProperties": false
     },
     "status_change": {

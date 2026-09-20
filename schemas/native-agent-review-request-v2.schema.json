@@ -63,6 +63,14 @@
         "acceptance_test": {
           "$ref": "#/$defs/safe_text"
         },
+        "affected_paths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safe_path"
+          }
+        },
         "origin": {
           "type": "object",
           "properties": {
@@ -117,6 +125,7 @@
         "status",
         "summary",
         "acceptance_test",
+        "affected_paths",
         "origin",
         "responses",
         "status_rationale",

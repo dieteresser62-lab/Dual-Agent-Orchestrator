@@ -128,7 +128,7 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-v1"},
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1"},
         "family_binding": {"$ref": "#/$defs/family_binding"}
       }
     },
@@ -234,8 +234,8 @@
     },
     "branch_discovery_finding": {
       "type": "object", "additionalProperties": false,
-      "required": ["finding_id", "severity", "summary", "acceptance_test"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}}
+      "required": ["finding_id", "severity", "summary", "acceptance_test", "affected_paths"],
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}}
     },
     "branch_discovery_occurrence": {
       "type": "object", "additionalProperties": false,
@@ -289,7 +289,8 @@
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified", "routed", "acceptance_measured"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "responsibility": {"$ref": "#/$defs/finding_responsibility"}, "closure_kind": {"enum": ["fixed", "partial", "rejected"]}, "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "closure_evidence": {"$ref": "#/$defs/non_empty"}, "remaining_work": {"$ref": "#/$defs/non_empty"}, "acceptance_command": {"$ref": "#/$defs/command"}, "acceptance_outcome": {"enum": ["pass", "fail"]}, "acceptance_exit_code": {"type": "integer"}, "acceptance_output_sha256": {"$ref": "#/$defs/sha256"}, "acceptance_attestation_id": {"$ref": "#/$defs/identifier"}, "acceptance_fingerprint": {"$ref": "#/$defs/sha256"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}}
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified", "routed", "acceptance_measured"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "responsibility": {"$ref": "#/$defs/finding_responsibility"}, "closure_kind": {"enum": ["fixed", "partial", "rejected"]}, "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "closure_evidence": {"$ref": "#/$defs/non_empty"}, "remaining_work": {"$ref": "#/$defs/non_empty"}, "acceptance_command": {"$ref": "#/$defs/command"}, "acceptance_outcome": {"enum": ["pass", "fail"]}, "acceptance_exit_code": {"type": "integer"}, "acceptance_output_sha256": {"$ref": "#/$defs/sha256"}, "acceptance_attestation_id": {"$ref": "#/$defs/identifier"}, "acceptance_fingerprint": {"$ref": "#/$defs/sha256"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}},
+      "allOf": [{"if": {"properties": {"action": {"const": "opened"}}, "required": ["action"]}, "then": {"required": ["affected_paths"]}}]
     },
     "imported_finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["record_id", "payload"],

@@ -237,6 +237,7 @@ def test_first_slice_review_can_open_and_route_observation_before_commit(
                 NativeProseAcceptance(
                     "src/fix.py passes its regression test"
                 ),
+                affected_paths=("src/fix.py",),
             ),
         ),
         status_changes=(),
@@ -681,6 +682,114 @@ def test_resolvable_condition_satisfies_condition_4_without_text_matching() -> N
     assert result.commit_eligible
 
 
+def test_record_bound_covered_path_routes_and_allows_commit() -> None:
+    criterion_text = "The recorded target condition exists."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
+        affected_paths=("src/fix.py",),
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
+
+
+def test_record_bound_uncovered_path_blocks_route() -> None:
+    criterion_text = "The recorded target condition exists."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
+        affected_paths=("src/outside.py",),
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.VIOLATED
+    assert "scope does not cover src/outside.py" in result.condition(4).reasons[0]
+    assert not result.commit_eligible
+
+
+def test_prose_path_prep_cook_rest_does_not_affect_route_scope() -> None:
+    criterion_text = "The recorded target condition exists."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
+        affected_paths=("src/fix.py",),
+        summary="prep/cook/rest",
+        acceptance_test="prep/cook/rest",
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
+
+
+def test_missing_record_bound_paths_keeps_existing_route_failure() -> None:
+    criterion_text = "The recorded target condition exists."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
+        affected_paths=(),
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.VIOLATED
+    assert "no record-bound remediation path" in result.condition(4).reasons[0]
+    assert not result.commit_eligible
+
+
 def test_projection_or_markdown_only_decision_cannot_satisfy_condition_6() -> None:
     records = _slice_with_opening(responsibility=None)
     non_authoritative_projection = {"C-01": {"status": "closed"}}
@@ -906,6 +1015,7 @@ def _finding() -> FindingRecord:
         "Repair src/fix.py",
         "src/fix.py passes its regression test",
         FindingOrigin("6", 1, AgentRole.CLAUDE),
+        affected_paths=("src/fix.py",),
     )
 
 
@@ -961,6 +1071,9 @@ def _slice_with_opening(
     responsibility,
     target_acceptance_texts: tuple[str, ...] = (),
     family_binding: FamilyBindingPayload | None = None,
+    affected_paths: tuple[str, ...] = ("src/fix.py",),
+    summary: str = "Repair src/fix.py",
+    acceptance_test: str = "src/fix.py passes its regression test",
 ) -> list[ArtifactRecord]:
     records = _base_records(
         target_acceptance_texts=target_acceptance_texts,
@@ -977,7 +1090,15 @@ def _slice_with_opening(
     records.append(
         _record(
             len(records) + 1,
-            _opening("C-01", "6", responsibility, severity=severity),
+            _opening(
+                "C-01",
+                "6",
+                responsibility,
+                severity=severity,
+                affected_paths=affected_paths,
+                summary=summary,
+                acceptance_test=acceptance_test,
+            ),
             records,
         )
     )
@@ -990,6 +1111,9 @@ def _opening(
     responsibility,
     *,
     severity: FindingSeverity = FindingSeverity.OBSERVATION,
+    affected_paths: tuple[str, ...] = ("src/fix.py",),
+    summary: str = "Repair src/fix.py",
+    acceptance_test: str = "src/fix.py passes its regression test",
 ) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
@@ -1000,11 +1124,12 @@ def _opening(
         finding_status="open",
         rationale="Repair src/fix.py",
         work_unit_id=slice_id,
-        summary="Repair src/fix.py",
-        acceptance_test="src/fix.py passes its regression test",
+        summary=summary,
+        acceptance_test=acceptance_test,
         origin_slice_id=slice_id,
         origin_round_number=1,
         responsibility=responsibility,
+        affected_paths=affected_paths,
     )
 
 

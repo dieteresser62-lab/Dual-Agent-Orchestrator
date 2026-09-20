@@ -191,6 +191,7 @@ class SliceExitFindingHeadProjection:
     status: str
     summary: str
     acceptance_test: str
+    affected_paths: tuple[str, ...]
     responsibility: FindingResponsibility | None
     last_assignment: FindingTransitionProjection | None
     last_status_change: FindingTransitionProjection | None
@@ -228,6 +229,7 @@ class _MutableSliceExitFindingHead:
     status: str
     summary: str
     acceptance_test: str
+    affected_paths: tuple[str, ...]
     responsibility: FindingResponsibility | None
     last_assignment: FindingTransitionProjection | None
     last_status_change: FindingTransitionProjection | None = None
@@ -374,6 +376,7 @@ def project_slice_exit_findings(
                     status=payload.finding_status,
                     summary=payload.summary or payload.rationale,
                     acceptance_test=payload.acceptance_test or payload.rationale,
+                    affected_paths=payload.affected_paths or (),
                     responsibility=payload.responsibility,
                     last_assignment=(
                         event if payload.responsibility is not None else None
@@ -411,6 +414,7 @@ def project_slice_exit_findings(
                 status=head.status,
                 summary=head.summary,
                 acceptance_test=head.acceptance_test,
+                affected_paths=head.affected_paths,
                 responsibility=head.responsibility,
                 last_assignment=head.last_assignment,
                 last_status_change=head.last_status_change,
@@ -836,6 +840,7 @@ def merge_history_snapshots(
                     previous.origin != finding.origin
                     or previous.summary != finding.summary
                     or previous.acceptance_test != finding.acceptance_test
+                    or previous.affected_paths != finding.affected_paths
                     or previous.predecessor_finding_ref
                     != finding.predecessor_finding_ref
                     or previous.evidence_anchor_sha256
@@ -956,6 +961,7 @@ def _reduce_lineages(
                     ),
                     predecessor_finding_ref=payload.predecessor_finding_ref,
                     evidence_anchor_sha256=payload.evidence_anchor_sha256,
+                    affected_paths=payload.affected_paths or (),
                 )
             except ValueError as exc:
                 _fail(

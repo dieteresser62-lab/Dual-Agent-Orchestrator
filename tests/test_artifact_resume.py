@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+import artifact_models
 import artifact_resume
 import artifact_store as artifact_store_module
 import orchestrator as orchestrator_module
@@ -582,11 +583,16 @@ def test_record_chain_with_foreign_bound_reducer_is_rejected(
     )
     path = store.records_dir / f"{profile.record_id}.json"
     document = json.loads(path.read_text(encoding="utf-8"))
-    document["record"]["payload"]["reducer_version"] = "foreign-reducer"
+    document["record"]["payload"]["reducer_version"] = (
+        artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION
+    )
     document["content_sha256"] = hashlib.sha256(
         canonical_json(document["record"])
     ).hexdigest()
     path.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(ArtifactResumeError, match="reducer_version"):
+    with pytest.raises(
+        ArtifactResumeError,
+        match=r"reducer_version.*scripts/verify_legacy_chain\.py",
+    ):
         resolve_resume_state(tmp_path, locator.run_id)

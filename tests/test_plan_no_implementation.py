@@ -628,6 +628,7 @@ def test_changed_closed_signature_requires_a_new_generation() -> None:
         {
             "finding_id": "C-02",
             "finding_class": "BLOCKER",
+            "affected_paths": ["src/fix.py"],
             "summary": "The defect affects src/fix.py.",
             "acceptance_test": {
                 "kind": "prose",

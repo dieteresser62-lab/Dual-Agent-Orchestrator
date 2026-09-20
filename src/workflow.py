@@ -915,6 +915,7 @@ def _finding_to_dict(item: FindingRecord) -> dict[str, object]:
         "status": item.status.value,
         "summary": item.summary,
         "acceptance_test": item.acceptance_test,
+        "affected_paths": list(item.affected_paths),
         "origin": {
             "slice_id": item.origin.slice_id,
             "round_number": item.origin.round_number,
@@ -950,6 +951,9 @@ def _finding_from_dict(raw: object) -> FindingRecord:
         status=FindingStatus(str(raw["status"])),
         summary=str(raw["summary"]),
         acceptance_test=str(raw["acceptance_test"]),
+        affected_paths=tuple(
+            str(value) for value in _json_list(raw.get("affected_paths", []))
+        ),
         origin=FindingOrigin(
             slice_id=str(origin["slice_id"]),
             round_number=int(origin["round_number"]),

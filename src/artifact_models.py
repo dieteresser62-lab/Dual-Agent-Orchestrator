@@ -47,6 +47,9 @@ import native_finding_decisions
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1"
+)
+PRE_AFFECTED_PATHS_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-joint-67-68-v1"
 )
 PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
@@ -906,6 +909,7 @@ class BranchDiscoveryFindingPayload:
     acceptance_test: str
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
+    affected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "branch discovery finding_id")
@@ -917,6 +921,7 @@ class BranchDiscoveryFindingPayload:
         _require_text(
             self.acceptance_test, "branch discovery finding acceptance_test"
         )
+        _require_paths(self.affected_paths, allow_empty=True)
         if self.predecessor_finding_ref is not None:
             _require_finding_id(
                 self.predecessor_finding_ref,
@@ -1105,6 +1110,10 @@ class FindingTransitionPayload:
     acceptance_fingerprint: str | None = None
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
+    # ``None`` is retained only by the private reader for byte-exact inspection
+    # of pre-cut records. The active artifact schema requires this field on
+    # every opening, so such a payload cannot enter a current record chain.
+    affected_paths: tuple[str, ...] | None = ()
     status: ClassVar[str] = "recorded"
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
@@ -1184,6 +1193,12 @@ class FindingTransitionPayload:
         ):
             raise ArtifactValidationError(
                 "a responsibility-bearing opening requires complete review context metadata"
+            )
+        if self.action == "opened" and self.affected_paths is not None:
+            _require_paths(self.affected_paths, allow_empty=True)
+        elif self.affected_paths:
+            raise ArtifactValidationError(
+                "finding affected_paths are limited to opened transitions"
             )
         generation_fields = (
             self.predecessor_finding_ref,
@@ -3407,6 +3422,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         if payload.predecessor_finding_ref is None:
             raw.pop("predecessor_finding_ref", None)
             raw.pop("evidence_anchor_sha256", None)
+        if payload.action != "opened" or payload.affected_paths is None:
+            raw.pop("affected_paths", None)
     if isinstance(
         payload,
         (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
@@ -3672,6 +3689,17 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
     schema self-check rejects unknown keywords, preventing an unsupported
     extension from being accepted silently.
     """
+    payload = document.get("payload")
+    if (
+        document.get("record_type") == RecordType.RUN_PROFILE.value
+        and isinstance(payload, Mapping)
+        and isinstance(payload.get("reducer_version"), str)
+        and payload["reducer_version"] != STATE_PROJECTION_REDUCER_VERSION
+    ):
+        raise ArtifactValidationError(
+            "run profile reducer_version is unsupported for resume; "
+            f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
+        )
     schema = _validated_schema()
     try:
         validate_schema_document(document, schema)
@@ -3914,6 +3942,7 @@ _PAYLOAD_READERS: dict[
                     item["acceptance_test"],
                     item.get("predecessor_finding_ref"),
                     item.get("evidence_anchor_sha256"),
+                    tuple(item["affected_paths"]),
                 )
                 for item in data["new_findings"]
             ),
@@ -3996,6 +4025,11 @@ _PAYLOAD_READERS: dict[
             acceptance_fingerprint=data.get("acceptance_fingerprint"),
             predecessor_finding_ref=data.get("predecessor_finding_ref"),
             evidence_anchor_sha256=data.get("evidence_anchor_sha256"),
+            affected_paths=(
+                None
+                if data["action"] == "opened" and "affected_paths" not in data
+                else tuple(data.get("affected_paths", ()))
+            ),
         ),
     RecordType.FINDING_HANDOFF_EXPORT: lambda data: FindingHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],

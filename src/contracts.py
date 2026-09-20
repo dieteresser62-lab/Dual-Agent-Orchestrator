@@ -179,6 +179,7 @@ class FindingRecord:
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
     acceptance_measurements: tuple[FindingAcceptanceMeasurement, ...] = ()
+    affected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_finding_id(self.finding_id, self.origin.reporter)
@@ -186,6 +187,27 @@ class FindingRecord:
             raise ValueError("finding summary must not be empty")
         if not self.acceptance_test.strip():
             raise ValueError("finding acceptance test must not be empty")
+        if isinstance(self.affected_paths, (str, bytes)):
+            raise ValueError("finding affected paths must be a typed path tuple")
+        if len(self.affected_paths) != len(set(self.affected_paths)):
+            raise ValueError("finding affected paths must be unique")
+        for raw_path in self.affected_paths:
+            if not isinstance(raw_path, str):
+                raise ValueError(
+                    "finding affected paths must be canonical repository-relative POSIX paths"
+                )
+            path = PurePosixPath(raw_path)
+            if (
+                not raw_path
+                or path.is_absolute()
+                or "\\" in raw_path
+                or ".." in path.parts
+                or raw_path != path.as_posix()
+                or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                raise ValueError(
+                    "finding affected paths must be canonical repository-relative POSIX paths"
+                )
         if self.status is FindingStatus.CLOSED and not (self.status_rationale or "").strip():
             raise ValueError("closed finding requires a status rationale")
         if self.predecessor_finding_ref is not None:

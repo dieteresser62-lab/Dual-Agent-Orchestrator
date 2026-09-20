@@ -129,6 +129,7 @@ def test_schema_rejects_open_shell_string_and_empty_argv() -> None:
                 "kind": "validation_command",
                 "command": "pytest -q",
             },
+            "affected_paths": [],
         }
     ]
     _assert_schema_error(shell)
