@@ -33,6 +33,7 @@ from finding_responsibility import (
     SliceResponsibility,
     responsibility_document,
 )
+from route_scope import uncovered_route_paths
 
 
 CONDITION_4_ACCEPTANCE_UNDECIDABLE = (
@@ -562,9 +563,7 @@ def _slice_route_errors(
             f"Slice routing for {finding_id} has no record-bound remediation path "
             "with which to check target scope",
         )
-    uncovered = tuple(
-        path for path in head.affected_paths if not _scope_covers(target_spec, path)
-    )
+    uncovered = uncovered_route_paths(target_spec.paths, head.affected_paths)
     if uncovered:
         return (
             f"Slice routing for {finding_id} targets Slice {target}, whose approved "
@@ -593,13 +592,6 @@ def _slice_route_has_record_criteria(
 ) -> bool:
     target = plan_specs.get(responsibility.slice_id)
     return target is not None and bool(target.acceptance_criteria)
-
-
-def _scope_covers(spec: SliceSpec, path: str) -> bool:
-    return any(
-        path == scope or path.startswith(scope.rstrip("/") + "/")
-        for scope in spec.paths
-    )
 
 
 def _committed_slice_ids(

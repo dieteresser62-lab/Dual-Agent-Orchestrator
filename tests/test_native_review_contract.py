@@ -554,6 +554,161 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     assert result.findings[0].affected_paths == ("src/future.py",)
 
 
+@pytest.mark.parametrize("approved", (False, True))
+def test_slice_route_rejects_uncovered_typed_paths_with_actionable_guidance(
+    active_finding_decisions: None,
+    approved: bool,
+) -> None:
+    affected_paths = (
+        "docs/internal/kochdauer-und-aufwand-arbeitsplan.md",
+        "pipeline/schemas/recipe.schema.json",
+        "pipeline/src/validateRecipe.ts",
+    )
+    provider_prose = "provider prose must not enter deterministic feedback"
+    finding = replace(
+        _finding(
+            "C-01",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.BLOCKER,
+        ),
+        summary=provider_prose,
+        acceptance_test=provider_prose,
+        affected_paths=affected_paths,
+    )
+    context = replace(
+        _context(previous=(finding,)),
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(
+                2,
+                "Recipe implementation",
+                (
+                    "pipeline/schemas/recipe.schema.json",
+                    "pipeline/src/validateRecipe.ts",
+                ),
+            ),
+        ),
+    )
+    document = _review(context, approved=approved)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                SliceResponsibility(context.run_id, "b" * 40, "2")
+            ),
+            "rationale": provider_prose,
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    error = raised.value
+    assert error.code is NativeReviewErrorCode.APPROVAL_INVALID
+    assert error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID
+    )
+    assert error.detail == (
+        "route for finding C-01 cannot target Slice 2 because its approved "
+        "scope does not cover affected_paths: "
+        "docs/internal/kochdauer-und-aufwand-arbeitsplan.md; close C-01, "
+        "reject it with named evidence, route it to a named later Slice whose "
+        "approved scope covers every affected_path, or route it to branch planning"
+    )
+    assert "pipeline/schemas/recipe.schema.json" not in error.detail
+    assert "pipeline/src/validateRecipe.ts" not in error.detail
+    assert provider_prose not in error.detail
+    assert provider_prose not in error.orchestrator_diagnostic.text
+
+    retry_guidance = native_review_retry_guidance(
+        error.code, error.orchestrator_diagnostic, context
+    )
+    assert "C-01 -> Slice 2 is invalid" in retry_guidance
+    assert "docs/internal/kochdauer-und-aufwand-arbeitsplan.md" in retry_guidance
+    assert (
+        "Close the affected Finding, reject it with named evidence"
+        in retry_guidance
+    )
+    assert "approved scope covers every affected_path" in retry_guidance
+    assert "branch planning" in retry_guidance
+    assert provider_prose not in retry_guidance
+
+
+def test_slice_route_accepts_a_target_scope_covering_every_affected_path(
+    active_finding_decisions: None,
+) -> None:
+    finding = replace(
+        _finding(
+            "C-01",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        ),
+        affected_paths=("src/future/one.py", "src/future/two.py"),
+    )
+    context = replace(
+        _context(previous=(finding,)),
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(2, "Later", ("src/future",)),
+        ),
+    )
+    responsibility = SliceResponsibility(context.run_id, "b" * 40, "2")
+    document = _review(context, approved=True)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(responsibility),
+            "rationale": "The complete affected path set is in Slice 2.",
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is True
+    assert result.responsibility_routes == (
+        NativeResponsibilityRoute(
+            "C-01", responsibility, "The complete affected path set is in Slice 2."
+        ),
+    )
+
+
+def test_branch_planning_route_remains_the_scope_independent_fallback(
+    active_finding_decisions: None,
+) -> None:
+    finding = replace(
+        _finding(
+            "C-01",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        ),
+        affected_paths=("docs/internal/not-in-any-slice.md",),
+    )
+    context = replace(
+        _context(previous=(finding,)),
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(2, "Later", ("src/future.py",)),
+        ),
+    )
+    responsibility = BranchPlanningResponsibility("family-1", 1)
+    document = _review(context, approved=True)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(responsibility),
+            "rationale": "A later branch plan must create an owning Slice.",
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is True
+    assert result.responsibility_routes[0].responsibility == responsibility
+
+
 def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
     active_finding_decisions: None,
 ) -> None:

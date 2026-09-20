@@ -2102,7 +2102,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             {
                 "finding_id": finding_id,
                 "finding_class": finding_class,
-                "affected_paths": ["src/orchestrator.py"],
+                "affected_paths": ["src/second.py"],
                 "summary": f"Provider-free finding {finding_id}.",
                 "acceptance_test": {
                     "kind": "prose",

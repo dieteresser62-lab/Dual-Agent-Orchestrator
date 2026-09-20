@@ -396,7 +396,9 @@ def _review_request_finding_inputs(
 
 
 def _native_review_retry_feedback(
-    state: WorkflowState, contract: StepContract
+    state: WorkflowState,
+    contract: StepContract,
+    native_context: NativeReviewContext,
 ) -> NativeReviewRetryFeedback | None:
     failure = next(
         (
@@ -419,7 +421,9 @@ def _native_review_retry_feedback(
     return NativeReviewRetryFeedback(
         prior_invocation_id=failure.invocation_id,
         rejection_code=code,
-        correction_instruction=native_review_retry_guidance(code, diagnostic),
+        correction_instruction=native_review_retry_guidance(
+            code, diagnostic, native_context
+        ),
     )
 
 
@@ -598,7 +602,7 @@ def native_review_request(
             "request as complete diff evidence; deny with a BLOCKER when unavailable "
             "baseline content is required for a safe verdict.",
         )
-    retry_feedback = _native_review_retry_feedback(state, contract)
+    retry_feedback = _native_review_retry_feedback(state, contract, native_context)
     return build_native_review_request(
         NativeReviewRequestSpec(
             context=native_context,

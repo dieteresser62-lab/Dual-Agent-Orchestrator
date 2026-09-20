@@ -21,9 +21,12 @@ from contracts import (
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
+    PlannedSlice,
 )
+from artifact_models import technical_text_evidence
 from gates import StopRule
 from native_codex_contract import NativeCodexRequestKind
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     EvidenceKind,
     WorkflowChanges,
@@ -33,7 +36,13 @@ from workflow import (
 )
 import workflow_requests
 from task_contract import TaskMode, parse_task_contract
-from workflow_state import WorkflowStep, init_workflow_state
+from workflow_state import (
+    AgentFailureKind,
+    InvocationFailureRecord,
+    WorkflowState,
+    WorkflowStep,
+    init_workflow_state,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,8 +110,9 @@ def _review_bundle(
     evidence_kind: EvidenceKind = EvidenceKind.FULL_SLICE,
     findings: tuple[FindingRecord, ...] = (),
     bound_open_finding_ids: tuple[str, ...] = (),
+    state: WorkflowState | None = None,
 ) -> workflow_requests.NativeReviewRequestBundle:
-    state = init_workflow_state(
+    state = state or init_workflow_state(
         run_id="b31-request-review",
         task_file="/repo/inbox/backlog/00-b31.md",
         branch="feature/backlog-followups",
@@ -150,6 +160,7 @@ def _review_bundle(
         validation_attestation=attestation,
         test_changes_approved=True,
         existing_finding_ids=tuple(item.finding_id for item in findings),
+        request_sequence=state.current_work_unit.request_sequence,
     )
     return workflow_requests.native_review_request(
         state=state,
@@ -277,6 +288,87 @@ def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     assert populated.document["review_contract"][
         "slice_commit_decision_finding_ids"
     ] == ["C-01", "C-02"]
+
+
+def test_slice_route_scope_retry_request_names_uncovered_typed_paths() -> None:
+    uncovered = "docs/internal/kochdauer-und-aufwand-arbeitsplan.md"
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Provider-authored summary must not become retry feedback.",
+        acceptance_test="Provider-authored acceptance prose stays opaque.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        affected_paths=(
+            uncovered,
+            "pipeline/schemas/recipe.schema.json",
+            "pipeline/src/validateRecipe.ts",
+        ),
+    )
+    state = init_workflow_state(
+        run_id="b31-request-review",
+        task_file="/repo/inbox/backlog/00-b31.md",
+        branch="feature/backlog-followups",
+        branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=2,
+        timestamp="2026-09-02T10:00:00+00:00",
+    ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    state = replace(
+        state,
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(
+                2,
+                "Recipe implementation",
+                (
+                    "pipeline/schemas/recipe.schema.json",
+                    "pipeline/src/validateRecipe.ts",
+                ),
+            ),
+        ),
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="review-uncovered-scope-1",
+        idempotency_key="b31-request-review:1:claude_slice_review:claude",
+        role="claude",
+        failure_kind=AgentFailureKind.OUTPUT,
+        provider_text="[provider text redacted; sha256=" + "a" * 64 + "; utf8_bytes=1]",
+        received_at="2026-09-21T10:00:00+00:00",
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=technical_text_evidence("route rejected")[0],
+        resume_at_utc="2026-09-21T10:00:02+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID.text
+        ),
+        native_review_rejection="approval-invalid",
+        native_review_retry_round=2,
+    )
+    state = state.record_invocation_failure(
+        failure, wait_automatically=True
+    ).resume_after_invocation_halt(
+        updated_at="2026-09-21T10:00:02+00:00"
+    ).start_recomposed_request(
+        updated_at="2026-09-21T10:00:03+00:00"
+    )
+
+    bundle = _review_bundle(
+        findings=(finding,),
+        bound_open_finding_ids=("C-01",),
+        state=state,
+    )
+
+    feedback = bundle.document["retry_feedback"]
+    assert feedback["rejection_code"] == "approval-invalid"
+    assert uncovered in feedback["correction_instruction"]
+    assert "C-01 -> Slice 2 is invalid" in feedback["correction_instruction"]
+    assert "Provider-authored" not in feedback["correction_instruction"]
 
 
 def test_oversized_branch_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:

@@ -66,6 +66,7 @@ from validation_matrix import (
 )
 from native_provider_schema import defensive_provider_projection
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
+from route_scope import uncovered_route_paths
 import native_finding_decisions
 from native_finding_decisions import (
     ClosedFindingReviewBinding,
@@ -247,6 +248,7 @@ def is_retryable_native_review_response_error(error: BaseException) -> bool:
 def native_review_retry_guidance(
     code: NativeReviewErrorCode,
     diagnostic: OrchestratorDiagnostic | None = None,
+    context: NativeReviewContext | None = None,
 ) -> str:
     """Return bounded corrective guidance for one response-dependent rejection."""
 
@@ -254,6 +256,13 @@ def native_review_retry_guidance(
         fallback = _NATIVE_REVIEW_RETRY_GUIDANCE[code]
     except KeyError as exc:
         raise ValueError(f"native review rejection {code.value} is not retryable") from exc
+    if (
+        code is NativeReviewErrorCode.APPROVAL_INVALID
+        and diagnostic is OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID
+    ):
+        route_guidance = _slice_route_scope_retry_guidance(context)
+        if route_guidance is not None:
+            return route_guidance
     if diagnostic is _REVIEW_DIAGNOSTIC_BY_CODE[code]:
         diagnostic = None
     return closed_retry_guidance(code.value, fallback, diagnostic)
@@ -3125,6 +3134,7 @@ def _validate_decision(
         # These Findings remain open until their assigned Slice (or explicit
         # No-Code disposition) records the authoritative closure.
         own_open_blockers = ()
+    _validate_slice_route_scopes(response, context, findings)
     if not response.approved:
         if not own_open_blockers:
             raise NativeReviewContractError(
@@ -3200,6 +3210,89 @@ def _routes_beyond_current_slice(
         responsibility.target_run_id == context.run_id
         and responsibility.slice_id in _routable_planned_slice_ids(context)
     )
+
+
+def _validate_slice_route_scopes(
+    response: NativeReviewResult,
+    context: NativeReviewContext,
+    findings: tuple[FindingRecord, ...],
+) -> None:
+    """Reject a typed Slice route whose approved target scope cannot own it."""
+
+    if context.approval_marker is not ApprovalMarker.SLICE:
+        return
+    findings_by_id = {item.finding_id: item for item in findings}
+    planned_by_id = {str(item.slice_id): item for item in context.planned_slices}
+    for route in response.responsibility_routes:
+        responsibility = route.responsibility
+        if not isinstance(responsibility, SliceResponsibility):
+            continue
+        finding = findings_by_id.get(route.finding_id)
+        target = planned_by_id.get(responsibility.slice_id)
+        if finding is None or target is None:
+            continue
+        uncovered = uncovered_route_paths(
+            target.scope_paths, finding.affected_paths
+        )
+        if uncovered:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.APPROVAL_INVALID,
+                f"route for finding {route.finding_id} cannot target Slice "
+                f"{responsibility.slice_id} because its approved scope does not "
+                f"cover affected_paths: {', '.join(uncovered)}; close "
+                f"{route.finding_id}, reject it with named evidence, route it to a named "
+                "later Slice whose approved scope covers every affected_path, "
+                "or route it to branch planning",
+                orchestrator_diagnostic=OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID,
+            )
+
+
+def _slice_route_scope_retry_guidance(
+    context: NativeReviewContext | None,
+) -> str | None:
+    """Describe invalid target scopes using only request-bound typed facts."""
+
+    if context is None or context.approval_marker is not ApprovalMarker.SLICE:
+        return None
+    targets = {
+        str(item.slice_id): item
+        for item in context.planned_slices
+        if str(item.slice_id) in _routable_planned_slice_ids(context)
+    }
+    clauses: list[str] = []
+    for finding in project_open_set(context.previous_findings).findings:
+        if finding.origin.reporter is not context.reviewer:
+            continue
+        for target_id, target in targets.items():
+            uncovered = uncovered_route_paths(
+                target.scope_paths, finding.affected_paths
+            )
+            if uncovered:
+                clauses.append(
+                    f"{finding.finding_id} -> Slice {target_id} is invalid because "
+                    "its approved scope does not cover affected_paths: "
+                    + ", ".join(uncovered)
+                )
+    if not clauses:
+        return None
+    suffix = (
+        ". Close the affected Finding, reject it with named evidence, route it to "
+        "a named later Slice whose approved scope covers every affected_path, or "
+        "route it to branch planning."
+    )
+    prefix = "Correct the unfulfillable Slice route: "
+    maximum_body = 3000 - len(prefix) - len(suffix)
+    body: list[str] = []
+    body_length = 0
+    for clause in clauses:
+        added = len(clause) + (2 if body else 0)
+        if body_length + added > maximum_body:
+            break
+        body.append(clause)
+        body_length += added
+    if not body:
+        return None
+    return prefix + "; ".join(body) + suffix
 
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
