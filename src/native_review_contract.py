@@ -1317,7 +1317,13 @@ def native_review_provider_response_schema(
     definitions["bound_denied_finding"] = denied_finding
     definitions["bound_status_change"] = status
     definitions["bound_reclassification"] = reclassification
-    _bind_responsibility_route_definition(definitions, routable_ids)
+    _bind_responsibility_route_definition(
+        definitions,
+        routable_ids,
+        planned_slice_ids=tuple(
+            str(item.slice_id) for item in context.planned_slices
+        ),
+    )
 
     approved = _bound_review_result_definition(
         definitions,
@@ -1468,8 +1474,23 @@ def _native_finding_id_window(
 
 
 def _bind_responsibility_route_definition(
-    definitions: dict[str, Any], own_open_ids: tuple[str, ...]
+    definitions: dict[str, Any],
+    own_open_ids: tuple[str, ...],
+    *,
+    planned_slice_ids: tuple[str, ...],
 ) -> None:
+    responsibility = definitions["finding_responsibility"]
+    variants = responsibility["oneOf"]
+    slice_responsibility = variants[0]
+    if planned_slice_ids:
+        slice_responsibility["properties"]["slice_id"] = {
+            "type": "string",
+            "enum": list(planned_slice_ids),
+        }
+    else:
+        # Without a plan-bound target set, a SLICE route is not representable.
+        # The other responsibility kinds remain available.
+        responsibility["oneOf"] = variants[1:]
     route = _bound_review_definition(
         definitions["responsibility_route"], finding_ids=own_open_ids
     )

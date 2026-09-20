@@ -302,6 +302,12 @@ def _slice_cohort(
         event.payload.finding_id
         for event in events
         if event.payload.action == "routed"
+        and event.payload.work_unit_id in work_unit_ids
+    )
+    cohort.update(
+        event.payload.finding_id
+        for event in events
+        if event.payload.action == "routed"
         and isinstance(event.payload.responsibility, SliceResponsibility)
         and event.payload.responsibility.target_run_id == run_id
         and event.payload.responsibility.approved_plan_commit == approved_plan_commit

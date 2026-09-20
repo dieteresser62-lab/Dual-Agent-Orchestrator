@@ -273,6 +273,61 @@ def test_first_slice_review_can_open_and_route_observation_before_commit(
     assert result.commit_eligible
 
 
+def test_route_to_unknown_plan_slice_does_not_escape_current_slice_exit() -> None:
+    records: list[ArtifactRecord] = []
+    records.append(
+        _record(
+            1,
+            PlanPayload(
+                "docs/internal/plan.md",
+                PLAN_COMMIT,
+                tuple(
+                    SliceSpec(str(slice_id), f"Slice {slice_id}", ("src/fix.py",))
+                    for slice_id in range(1, 7)
+                ),
+            ),
+            records,
+        )
+    )
+    records.append(
+        _record(
+            2,
+            WorkUnitPayload("1", 1, ("src/fix.py",)),
+            records,
+            logical_id="work-unit-1",
+        )
+    )
+    records.append(
+        _record(3, _opening("C-01", "01", None), records)
+    )
+    records.append(
+        _record(
+            4,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "01"),
+                "1",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(
+        records,
+        run_id=RUN_ID,
+        slice_id="1",
+        approved_plan_commit=PLAN_COMMIT,
+    )
+
+    assert result.responsibility_finding_ids == ("C-01",)
+    assert result.condition(4).status is SliceExitStatus.VIOLATED
+    assert result.condition(4).reasons == (
+        "Slice routing for C-01 targets unknown planned Slice 01",
+    )
+    assert result.status is SliceExitStatus.VIOLATED
+    assert not result.commit_eligible
+
+
 def test_a_s_keeps_ever_routed_finding_after_slice_s_routes_it_onward() -> None:
     records = _base_records()
     records.extend(

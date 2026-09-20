@@ -17,6 +17,7 @@ from contracts import (
     FindingOrigin,
     FindingRecord,
     FindingStatus,
+    PlannedSlice,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
@@ -449,7 +450,14 @@ def test_first_review_writer_offers_new_finding_ids_for_responsibility_routes(
 def test_review_can_route_a_finding_opened_in_the_same_response(
     active_finding_decisions: None,
 ) -> None:
-    context = replace(_context(), round_number=1)
+    context = replace(
+        _context(),
+        round_number=1,
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(2, "Later", ("src/future.py",)),
+        ),
+    )
     responsibility = SliceResponsibility(
         context.run_id,
         "b" * 40,
@@ -491,6 +499,49 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     )
     assert result.responsibility_routes == response.responsibility_routes
     assert project_open_set(result.findings).finding_ids == ("C-01",)
+
+
+def test_review_writer_limits_slice_routes_to_plan_slice_ids(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(
+        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
+        planned_slices=tuple(
+            PlannedSlice(
+                slice_id,
+                f"Slice {slice_id}",
+                (f"src/slice_{slice_id}.py",),
+            )
+            for slice_id in range(1, 7)
+        ),
+    )
+    writer = native_review_provider_response_schema(context)
+    target_schema = writer["$defs"]["finding_responsibility"]["oneOf"][0][
+        "properties"
+    ]["slice_id"]
+
+    assert target_schema == {
+        "type": "string",
+        "enum": ["1", "2", "3", "4", "5", "6"],
+    }
+    assert "const" not in target_schema
+
+    document = _review(context, approved=False)
+    route = {
+        "finding_id": "C-01",
+        "responsibility": responsibility_document(
+            SliceResponsibility(context.run_id, "b" * 40, "2")
+        ),
+        "rationale": "The later planned Slice owns this observation.",
+    }
+    document["responsibility_routes"] = [route]
+    validate_schema_document({"result": document}, writer)
+
+    route["responsibility"] = responsibility_document(
+        SliceResponsibility(context.run_id, "b" * 40, "01")
+    )
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
 
 
 def test_route_in_new_id_window_must_name_a_finding_opened_in_the_response(
