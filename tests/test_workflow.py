@@ -5039,6 +5039,45 @@ def test_partial_review_retry_uses_precise_value_free_failure_diagnostic() -> No
     ]
 
 
+def test_evidence_anchor_retry_replaces_the_finding_numbering_guidance() -> None:
+    now = datetime(2026, 9, 20, 22, 30, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    detail = "evidence anchor digest requires a predecessor Finding reference"
+    diagnostic = OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.FINDING_ID_INVALID,
+                "review-anchor-without-predecessor",
+                received_at=now,
+                detail=detail,
+            ),
+            None,
+        ],
+    )
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert driver.failure_payloads[0].orchestrator_diagnostic == diagnostic.text
+    retry = driver.reviewer_calls[1].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": "review-anchor-without-predecessor",
+        "rejection_code": "finding-id-invalid",
+        "correction_instruction": diagnostic.text,
+    }
+    assert "next_finding_id" not in retry.document["retry_feedback"][
+        "correction_instruction"
+    ]
+
+
 def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     now = datetime(2026, 9, 20, 16, 30, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)

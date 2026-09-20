@@ -452,6 +452,9 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_RESPONSE_REVIEWER_MISMATCH = (
         "reviewer-mismatch: response reviewer does not match bound context"
     )
+    REVIEW_RESPONSE_REVIEWER_REQUEST_MISMATCH = (
+        "reviewer-mismatch: response reviewer does not match bound request"
+    )
     REVIEW_DISCOVERY_REQUEST_REQUIRED = (
         "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires a branch discovery request"
     )
@@ -466,6 +469,131 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_CONTEXT_LIVE_PARSING_BOUND = (
         "context-invalid: live native review parsing requires BoundNativeReviewContext"
+    )
+    REVIEW_FINDING_ORIGIN_SLICE_REQUIRED = (
+        "finding-id-invalid: finding origin requires a slice id"
+    )
+    REVIEW_FINDING_ORIGIN_ROUND_INVALID = (
+        "finding-id-invalid: finding origin round must be 1-based"
+    )
+    REVIEW_FINDING_REPORTER_INVALID = (
+        "finding-id-invalid: finding reporter must be clau"
+        "de"
+    )
+    REVIEW_FINDING_SUMMARY_REQUIRED = (
+        "finding-id-invalid: finding summary must not be empty"
+    )
+    REVIEW_FINDING_ACCEPTANCE_REQUIRED = (
+        "finding-id-invalid: finding acceptance test must not be empty"
+    )
+    REVIEW_FINDING_AFFECTED_PATHS_TYPED = (
+        "finding-id-invalid: finding affected paths must be a typed path tuple"
+    )
+    REVIEW_FINDING_AFFECTED_PATHS_UNIQUE = (
+        "finding-id-invalid: finding affected paths must be unique"
+    )
+    REVIEW_FINDING_AFFECTED_PATHS_CANONICAL = (
+        "finding-id-invalid: finding affected paths must be canonical "
+        "repository-relative POSIX paths"
+    )
+    REVIEW_CLOSED_FINDING_RATIONALE_REQUIRED = (
+        "finding-id-invalid: closed finding requires a status rationale"
+    )
+    REVIEW_PREDECESSOR_FINDING_REFERENCE_INVALID = (
+        "finding-id-invalid: predecessor finding reference is invalid"
+    )
+    REVIEW_SELF_PREDECESSOR_FORBIDDEN = (
+        "finding-id-invalid: finding cannot be its own predecessor"
+    )
+    REVIEW_NEW_GENERATION_ANCHOR_REQUIRED = (
+        "finding-id-invalid: new Finding generation requires its evidence anchor digest"
+    )
+    REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED = (
+        "finding-id-invalid: evidence anchor digest requires a predecessor Finding reference"
+    )
+    REVIEW_FINDING_ACCEPTANCE_MEASUREMENTS_TYPED = (
+        "finding-id-invalid: finding acceptance measurements must be typed"
+    )
+    REVIEW_FINDING_ACCEPTANCE_MEASUREMENTS_UNIQUE = (
+        "finding-id-invalid: finding acceptance measurements must be unique by "
+        "fingerprint and command"
+    )
+    REVIEW_EVIDENCE_DIMENSIONS_REQUIRED = (
+        "review-content-missing: review evidence requires checked dimensions"
+    )
+    REVIEW_EVIDENCE_RESIDUAL_RISK_REQUIRED = (
+        "review-content-missing: review evidence requires the largest residual risk"
+    )
+    REVIEW_EVIDENCE_BREAK_CONDITION_REQUIRED = (
+        "review-content-missing: review evidence requires a realistic break condition"
+    )
+    REVIEW_STOP_RULE_ID_REQUIRED = (
+        "stop-content-invalid: stop request requires a rule id"
+    )
+    REVIEW_STOP_RATIONALE_REQUIRED = (
+        "stop-content-invalid: stop request requires a rationale"
+    )
+    REVIEW_STOP_REMEDIATION_PATHS_SORTED = (
+        "stop-content-invalid: remediation paths must be sorted and unique"
+    )
+    REVIEW_STOP_REMEDIATION_PATHS_CANONICAL = (
+        "stop-content-invalid: remediation paths must be canonical repository-relative "
+        "POSIX paths outside .orchestrator"
+    )
+    REVIEW_ANCHOR_ORIGIN_CONTENT_REQUIRED = (
+        "anchor-invalid: anchor origin or rationale must not be empty"
+    )
+    REVIEW_ANCHOR_INPUT_REQUIRED = (
+        "anchor-invalid: anchor input or fixture must not be empty"
+    )
+    REVIEW_ANCHOR_EXPECTED_REQUIRED = (
+        "anchor-invalid: anchor expected value must not be empty"
+    )
+    REVIEW_ANCHOR_TOLERANCE_REQUIRED = (
+        "anchor-invalid: anchor tolerance or rounding rule must not be empty"
+    )
+    REVIEW_FINDING_REVIEWER_OWNERSHIP_REQUIRED = (
+        "finding-reference-unknown: only the reporting reviewer may update or close a finding"
+    )
+    REVIEW_CLOSED_FINDING_REOPEN_FORBIDDEN = (
+        "finding-reference-unknown: closed findings cannot be reopened; create a new "
+        "Finding generation"
+    )
+    REVIEW_FINDING_UPDATE_RATIONALE_REQUIRED = (
+        "finding-reference-unknown: finding update requires a rationale"
+    )
+    REVIEW_NEW_FINDING_REPORTER_MISMATCH = (
+        "finding-reference-unknown: new finding reporter differs from reviewer"
+    )
+    REVIEW_FINDING_LEDGER_IDS_UNIQUE = (
+        "finding-reference-unknown: finding ledger contains duplicate finding IDs"
+    )
+    REVIEW_PLAN_TREATMENTS_SORTED = (
+        "finding-content-invalid: plan treatments must be sorted and unique by signature"
+    )
+    REVIEW_PLAN_TREATMENT_DECISIONS_SORTED = (
+        "finding-content-invalid: plan treatment decisions must be sorted and unique "
+        "by signature"
+    )
+    REVIEW_RESPONSIBILITY_OBJECT_REQUIRED = (
+        "finding-content-invalid: responsibility route is invalid: responsibility must "
+        "be an object"
+    )
+    REVIEW_RESPONSIBILITY_KIND_REQUIRED = (
+        "finding-content-invalid: responsibility route is invalid: responsibility is "
+        "missing required field responsibility_kind"
+    )
+    REVIEW_SLICE_RESPONSIBILITY_COMMIT_INVALID = (
+        "finding-content-invalid: responsibility route is invalid: "
+        "SLICE.approved_plan_commit must be a lowercase 40-character Git SHA"
+    )
+    REVIEW_SLICE_RESPONSIBILITY_CRITERION_INVALID = (
+        "finding-content-invalid: responsibility route is invalid: "
+        "SLICE.acceptance_criterion_id must be ac- followed by a lowercase SHA-256 digest"
+    )
+    REVIEW_PLAN_REVISION_RESPONSIBILITY_DIGEST_INVALID = (
+        "finding-content-invalid: responsibility route is invalid: "
+        "PLAN_REVISION.plan_digest must be a lowercase SHA-256 digest"
     )
     REVIEW_REJECTED_CLOSURE_REASON_REQUIRED = (
         "finding-content-invalid: rejected closure is missing required field rejection_reason"

@@ -44,6 +44,7 @@ from native_review_contract import (
     NativeStatusChange,
     NativeStopResult,
     native_response_to_contract_result,
+    native_review_retry_guidance,
     native_review_provider_response_schema,
     parse_native_contract_result,
     validate_native_review_disposition_budget,
@@ -103,6 +104,39 @@ def test_review_contract_diagnostic_is_exact_or_value_free() -> None:
     ).orchestrator_diagnostic is (
         OrchestratorDiagnostic.REVIEW_CONTEXT_SLICE_COMMIT_DECISION_SET_MISMATCH
     )
+
+
+def test_evidence_anchor_without_predecessor_uses_precise_value_free_diagnostic() -> None:
+    context = _context()
+    provider_digest = "e" * 64
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "The evidence anchor has no predecessor binding.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Require a predecessor whenever the anchor digest is present.",
+            },
+            "evidence_anchor_sha256": provider_digest,
+            "affected_paths": [],
+        }
+    ]
+    response = parse_native_review_response(document, context)
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    error = raised.value
+    diagnostic = OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
+    assert error.code is NativeReviewErrorCode.FINDING_ID_INVALID
+    assert error.detail == (
+        "evidence anchor digest requires a predecessor Finding reference"
+    )
+    assert error.orchestrator_diagnostic is diagnostic
+    assert provider_digest not in diagnostic.text
+    assert native_review_retry_guidance(error.code, diagnostic) == diagnostic.text
 
 
 def _attestation() -> ValidationAttestation:
