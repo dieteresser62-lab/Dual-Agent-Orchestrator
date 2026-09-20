@@ -2960,7 +2960,10 @@ class InvocationFailurePayload:
         document: dict[str, object] = {}
         if (
             self.orchestrator_diagnostic is not None
-            and self.native_implementer_rejection is not None
+            and (
+                self.native_review_rejection is not None
+                or self.native_implementer_rejection is not None
+            )
         ):
             document["orchestrator_diagnostic"] = self.orchestrator_diagnostic
         if self.native_review_rejection is not None:

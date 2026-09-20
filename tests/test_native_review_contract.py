@@ -90,6 +90,20 @@ def test_review_contract_diagnostic_is_exact_or_value_free() -> None:
     )
     assert provider_value not in value_bearing.orchestrator_diagnostic.text
 
+    assert NativeReviewContractError(
+        NativeReviewErrorCode.CONTEXT_INVALID,
+        "request_sequence must be 1-based",
+    ).orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_CONTEXT_REQUEST_SEQUENCE_INVALID
+    )
+    assert NativeReviewContractError(
+        NativeReviewErrorCode.CONTEXT_INVALID,
+        "communicated Slice-commit decision Finding set differs from the "
+        "authoritative enforced set",
+    ).orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_CONTEXT_SLICE_COMMIT_DECISION_SET_MISMATCH
+    )
+
 
 def _attestation() -> ValidationAttestation:
     command = "python3 -m pytest tests/ -v"
@@ -879,6 +893,37 @@ def test_partial_finding_decision_records_evidence_and_keeps_blocker_open() -> N
     assert closure.kind is native_finding_decisions.NativeClosureKind.PARTIAL
     assert closure.evidence == "The bound route test reaches nine factories."
     assert closure.remaining == "Wire onboarding, backup, and ingredient guide."
+
+
+def test_partial_finding_decision_cannot_close_and_uses_value_free_diagnostic() -> None:
+    finding = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(previous=(finding,))
+    base = parse_native_review_response(_review(context, approved=False), context)
+    assert isinstance(base, NativeReviewResult)
+    response = replace(
+        base,
+        status_changes=(
+            NativeStatusChange(
+                "C-01",
+                FindingStatus.CLOSED,
+                "Some work remains.",
+                native_finding_decisions.NativeFindingClosure(
+                    kind=native_finding_decisions.NativeClosureKind.PARTIAL,
+                    evidence="The completed subset is covered.",
+                    remaining="Finish the outstanding subset.",
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_CONTENT_INVALID
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN
+    )
+    assert "C-01" not in raised.value.orchestrator_diagnostic.text
 
 
 @pytest.mark.parametrize(

@@ -57,7 +57,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
-from orchestrator_diagnostics import OrchestratorDiagnostic
+from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from native_provider_schema import (
     assert_projected_provider_schema,
     defensive_provider_projection,
@@ -169,14 +169,12 @@ def native_codex_retry_guidance(  # allowlist:provider -- public contract API
         raise ValueError(
             f"native implementer rejection {code.value} is not retryable"
         ) from exc
-    selected = fallback if diagnostic is None else diagnostic
-    if not isinstance(selected, OrchestratorDiagnostic) or not selected.value.startswith(
-        f"{code.value}: "
-    ):
+    try:
+        return closed_retry_guidance(code.value, fallback.text, diagnostic)
+    except ValueError as exc:
         raise ValueError(
             "native implementer retry diagnostic does not match its rejection code"
-        )
-    return selected.text
+        ) from exc
 
 
 class NativeCodexContractError(ValueError):

@@ -65,7 +65,7 @@ from validation_matrix import (
     matches_validation_family,
 )
 from native_provider_schema import defensive_provider_projection
-from orchestrator_diagnostics import OrchestratorDiagnostic
+from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 import native_finding_decisions
 from native_finding_decisions import (
     ClosedFindingReviewBinding,
@@ -244,13 +244,19 @@ def is_retryable_native_review_response_error(error: BaseException) -> bool:
     )
 
 
-def native_review_retry_guidance(code: NativeReviewErrorCode) -> str:
+def native_review_retry_guidance(
+    code: NativeReviewErrorCode,
+    diagnostic: OrchestratorDiagnostic | None = None,
+) -> str:
     """Return bounded corrective guidance for one response-dependent rejection."""
 
     try:
-        return _NATIVE_REVIEW_RETRY_GUIDANCE[code]
+        fallback = _NATIVE_REVIEW_RETRY_GUIDANCE[code]
     except KeyError as exc:
         raise ValueError(f"native review rejection {code.value} is not retryable") from exc
+    if diagnostic is _REVIEW_DIAGNOSTIC_BY_CODE[code]:
+        diagnostic = None
+    return closed_retry_guidance(code.value, fallback, diagnostic)
 
 
 class NativeReviewContractError(ValueError):
@@ -2653,6 +2659,9 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_CONTENT_INVALID,
                 f"partial finding decision for {update.finding_id} must remain OPEN",
+                orchestrator_diagnostic=(
+                    OrchestratorDiagnostic.REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN
+                ),
             )
         if update.closure is not None:
             _validate_native_closure(update.finding_id, update.closure)

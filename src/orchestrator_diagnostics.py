@@ -319,6 +319,9 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_ROUND_NUMBER_INVALID = (
         "context-invalid: round_number must be 1-based"
     )
+    REVIEW_CONTEXT_REQUEST_SEQUENCE_INVALID = (
+        "context-invalid: request_sequence must be 1-based"
+    )
     REVIEW_CONTEXT_REVIEWER_INVALID = (
         "context-invalid: reviewer must be clau"
         "de"
@@ -388,6 +391,10 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_CONTEXT_IMPLEMENTER_PROPOSALS_INVALID = (
         "context-invalid: implementer responsibility proposals must be typed, sorted, and unique"
+    )
+    REVIEW_CONTEXT_SLICE_COMMIT_DECISION_SET_MISMATCH = (
+        "context-invalid: communicated Slice-commit decision Finding set differs from the "
+        "authoritative enforced set"
     )
     REVIEW_CONTEXT_PLAN_TREATMENTS_TYPED = (
         "context-invalid: plan treatments must be typed"
@@ -468,6 +475,9 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_IMPLEMENTATION_TREATMENT_CLOSURE_FORBIDDEN = (
         "finding-content-invalid: implementation treatment cannot close its Finding in plan review"
+    )
+    REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN = (
+        "finding-content-invalid: partial finding decision must remain OPEN"
     )
     REVIEW_CONTENT_EVENT_OR_EVIDENCE_REQUIRED = (
         "review-content-missing: review requires at least one finding event or review evidence"
@@ -564,3 +574,19 @@ class OrchestratorDiagnostic(StrEnum):
 ORCHESTRATOR_DIAGNOSTIC_TEXTS = frozenset(
     item.value for item in OrchestratorDiagnostic
 )
+
+
+def closed_retry_guidance(
+    code: str,
+    fallback: str,
+    diagnostic: OrchestratorDiagnostic | None,
+) -> str:
+    """Select only code-matching repository-owned guidance for a retry."""
+
+    if diagnostic is None:
+        return fallback
+    if not isinstance(diagnostic, OrchestratorDiagnostic) or not diagnostic.value.startswith(
+        f"{code}: "
+    ):
+        raise ValueError("retry diagnostic does not match its rejection code")
+    return diagnostic.text

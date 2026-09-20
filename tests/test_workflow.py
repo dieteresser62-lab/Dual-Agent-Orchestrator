@@ -1417,13 +1417,18 @@ def _native_review_contract_failure(
     received_at: datetime,
     detail: str = "provider-authored review rejected",
     operator_detail: str | None = None,
+    diagnostic: OrchestratorDiagnostic | None = None,
 ) -> AgentInvocationError:
     contract_error = NativeReviewContractError(
-        code, detail, operator_detail=operator_detail
+        code,
+        detail,
+        operator_detail=operator_detail,
+        orchestrator_diagnostic=diagnostic,
     )
     output_error = AgentOutputError(
         "native review result violates its bound contract",
         technical_text=f"{code.value}: {contract_error.detail}",
+        orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
@@ -4934,6 +4939,51 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
     assert result.state.current_work_unit.round_number == 1
     assert result.state.current_work_unit.request_sequence == 3
     assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
+
+
+def test_partial_review_retry_uses_precise_value_free_failure_diagnostic() -> None:
+    now = datetime(2026, 9, 20, 19, 30, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    provider_finding_id = "C-77"
+    diagnostic = OrchestratorDiagnostic.REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "review-partial-closed",
+                received_at=now,
+                detail=(
+                    f"partial finding decision for {provider_finding_id} "
+                    "must remain OPEN"
+                ),
+                diagnostic=diagnostic,
+            ),
+            None,
+        ],
+    )
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    failure = driver.failure_payloads[0]
+    assert failure.orchestrator_diagnostic == diagnostic.text
+    assert provider_finding_id not in failure.orchestrator_diagnostic
+    retry = driver.reviewer_calls[1].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": "review-partial-closed",
+        "rejection_code": "finding-content-invalid",
+        "correction_instruction": diagnostic.text,
+    }
+    assert provider_finding_id not in retry.document["retry_feedback"][
+        "correction_instruction"
+    ]
 
 
 def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:

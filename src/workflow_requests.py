@@ -411,10 +411,15 @@ def _native_review_retry_feedback(
     if failure is None or failure.native_review_rejection is None:
         return None
     code = NativeReviewErrorCode(failure.native_review_rejection)
+    diagnostic = (
+        None
+        if failure.orchestrator_diagnostic is None
+        else OrchestratorDiagnostic(failure.orchestrator_diagnostic)
+    )
     return NativeReviewRetryFeedback(
         prior_invocation_id=failure.invocation_id,
         rejection_code=code,
-        correction_instruction=native_review_retry_guidance(code),
+        correction_instruction=native_review_retry_guidance(code, diagnostic),
     )
 
 

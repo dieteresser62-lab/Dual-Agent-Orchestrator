@@ -537,7 +537,19 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
         diff_fingerprint=DIGEST,
     )
 
+    payload = replace(
+        payload,
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID.text
+        ),
+        native_review_rejection="schema-invalid",
+        native_review_retry_round=2,
+    )
+
     assert payload.failure_kind == "output"
+    assert payload.native_response_feedback_document["orchestrator_diagnostic"] == (
+        OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID.text
+    )
     with pytest.raises(ArtifactValidationError):
         replace(payload, diagnostic_code="AGENT-OUTPUT")
     with pytest.raises(ArtifactValidationError):
