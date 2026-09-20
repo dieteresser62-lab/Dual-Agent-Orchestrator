@@ -10,17 +10,22 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     FamilyBindingPayload,
+    FindingHandoffExportPayload,
     FindingSeverity,
     FingerprintKind,
     PlanPayload,
+    ReviewPayload,
     RunProfilePayload,
     SliceSpec,
     WorkUnitPayload,
+    finding_transition_sequence_sha256,
+    flatten_finding_transition_history,
 )
 from finding_order import sorted_finding_ids
 from finding_reducer import (
     FindingTransitionProjection,
     SliceExitFindingHeadProjection,
+    SliceExitFindingProjection,
     project_slice_exit_findings,
 )
 from finding_responsibility import (
@@ -423,6 +428,9 @@ def workflow_completion_blocking_finding_ids(
         _work_unit_bound_finding_ids(run_records),
     )
     family_binding = _run_family_binding(run_records)
+    handed_off_finding_ids = _handoff_exported_finding_ids(
+        run_records, projection
+    )
     blocked: list[str] = []
     for finding_id in total_finding_ids:
         head = heads.get(finding_id)
@@ -432,6 +440,8 @@ def workflow_completion_blocking_finding_ids(
         if head.is_closed:
             if not head.has_complete_closure_record:
                 blocked.append(head.finding_id)
+            continue
+        if head.finding_id in handed_off_finding_ids:
             continue
         if isinstance(head.responsibility, BranchPlanningResponsibility):
             if not _branch_route_errors(
@@ -444,6 +454,71 @@ def workflow_completion_blocking_finding_ids(
                 continue
         blocked.append(head.finding_id)
     return sorted_finding_ids(blocked)
+
+
+def _handoff_exported_finding_ids(
+    records: Sequence[ArtifactRecord],
+    projection: SliceExitFindingProjection,
+) -> frozenset[str]:
+    """Return open Finding heads covered by one valid, recorded handoff export."""
+
+    events = projection.events
+    finding_event_ids: dict[str, tuple[str, ...]] = {
+        finding_id: tuple(
+            event.source_record_id
+            for event in events
+            if event.payload.finding_id == finding_id
+        )
+        for finding_id in {event.payload.finding_id for event in events}
+    }
+    exported: set[str] = set()
+    for position, record in enumerate(records):
+        payload = record.payload
+        if not isinstance(payload, FindingHandoffExportPayload):
+            continue
+        prefix = tuple(records[:position])
+        predecessor_id = prefix[-1].record_id if prefix else None
+        if (
+            payload.source_run_id != record.run_id
+            or payload.source_head_record_id != predecessor_id
+            or record.predecessor_ids != ((predecessor_id,) if predecessor_id else ())
+        ):
+            continue
+        approval = next(
+            (
+                candidate
+                for candidate in prefix
+                if candidate.record_id == payload.approval_review_record_id
+            ),
+            None,
+        )
+        if (
+            approval is None
+            or not isinstance(approval.payload, ReviewPayload)
+            or approval.payload.verdict != "approved"
+            or not any(
+                isinstance(candidate.payload, PlanPayload)
+                and candidate.payload.approved_plan_commit
+                == payload.approved_plan_commit
+                for candidate in prefix
+            )
+        ):
+            continue
+        transitions = flatten_finding_transition_history(prefix)
+        transition_ids = tuple(item.record_id for item in transitions)
+        if (
+            payload.finding_transition_record_ids != transition_ids
+            or payload.finding_transitions_sha256
+            != finding_transition_sequence_sha256(transitions)
+        ):
+            continue
+        covered = frozenset(transition_ids)
+        exported.update(
+            finding_id
+            for finding_id, event_ids in finding_event_ids.items()
+            if event_ids and all(event_id in covered for event_id in event_ids)
+        )
+    return frozenset(exported)
 
 
 def _total_finding_ids(

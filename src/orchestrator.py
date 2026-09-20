@@ -45,7 +45,7 @@ from artifact_models import (
     ProviderInputMeasurementPayload, canonical_json,
     ProviderAttemptPayload, ProviderUsagePayload,
     FindingHandoffExportPayload,
-    FindingTransitionPayload,
+    flatten_finding_transition_history,
     SideEffectPayload,
     WorkflowEventPayload, WorkflowTransitionPayload,
     RecordType, stable_record_id,
@@ -119,6 +119,7 @@ from workflow import (
     WorkflowCommitRequest,
     WorkflowContext,
     WorkflowEngine,
+    WorkflowCompletionRejected,
     WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
@@ -346,6 +347,9 @@ class ProductionWorkflowDriver:
                 ),
                 materialize_review_packet=self._materialize_review_packet,
                 canonical_agent_result=self._canonical_native_agent_result,
+                prepare_completion_finding_handoff=(
+                    self._prepare_completion_finding_handoff
+                ),
             )
         )
 
@@ -1865,18 +1869,16 @@ class ProductionWorkflowDriver:
         work_plan_path: str,
         target_branch: str,
         approved_plan_commit: str,
+        _state: WorkflowState | None = None,
     ) -> tuple[str, str] | None:
         """Append the export before publishing task bytes, or recover it exactly."""
         bridge = self._artifact_bridge
-        state = self.active_state
+        state = _state or self.active_state
         if bridge is None or state is None:
             return None
         chain = bridge.store.current_chain()
         replay = replay_artifacts(chain, state.run_id)
-        transitions = tuple(
-            record for record in replay.records
-            if isinstance(record.payload, FindingTransitionPayload)
-        )
+        transitions = flatten_finding_transition_history(replay.records)
         if not transitions:
             return None
         commit_binding = next(
@@ -1961,6 +1963,19 @@ class ProductionWorkflowDriver:
         if record.record_id != export_id:
             raise WorkflowExecutionError("finding handoff export identity is unstable")
         return state.run_id, export_id
+
+    def _prepare_completion_finding_handoff(
+        self, state: WorkflowState
+    ) -> tuple[str, str] | None:
+        """Record a linked IMPLEMENT handoff before PLAN_ONLY completion."""
+
+        return self.prepare_finding_handoff(
+            plan_task_path=Path(state.task_file),
+            work_plan_path=state.work_plan_path or "",
+            target_branch=state.target_branch or state.branch,
+            approved_plan_commit=state.approved_plan_commit or "",
+            _state=state,
+        )
 
     def _read_semantic_plan_artifact(self, candidate: Path) -> None:
         """Read and validate the plan operation protected by its two mitigations."""
@@ -2428,6 +2443,8 @@ class ProductionWorkflowDriver:
                 self._persist_request_identity_prerequisites(persisted)
             self._persist_structured_baseline(persisted)
             self._project_audit(persisted, history)
+        except WorkflowCompletionRejected:
+            raise
         except Exception as exc:
             if persisted.effective_protocol_mode is ProtocolMode.STRUCTURED_V2:
                 raise WorkflowExecutionError(

@@ -171,6 +171,10 @@ class WorkflowExecutionError(RuntimeError):
         super().__init__(detail)
 
 
+class WorkflowCompletionRejected(WorkflowExecutionError):
+    """Raised when authoritative completion policy deliberately rejects a run."""
+
+
 class PlanContractFailureKind(str, Enum):
     """Closed inventory of failures before a PLAN_ONLY artifact can be reviewed."""
 

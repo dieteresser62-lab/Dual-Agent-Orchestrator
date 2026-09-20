@@ -68,6 +68,7 @@ EXPECTED_DEPENDENCY_EDGES = {
     "materialize_review_packet",
     "native_agent_request_bundle_json",
     "native_agent_request_path",
+    "prepare_completion_finding_handoff",
 }
 
 EXPECTED_DRIVER_BINDINGS = {
@@ -82,6 +83,7 @@ EXPECTED_DRIVER_BINDINGS = {
     "materialize_review_packet": "self._materialize_review_packet",
     "native_agent_request_bundle_json": "self._native_agent_request_bundle_json",
     "native_agent_request_path": "self._native_agent_request_path",
+    "prepare_completion_finding_handoff": "self._prepare_completion_finding_handoff",
 }
 
 DRIVER_FACADES = {
@@ -182,6 +184,7 @@ def _dependencies(
         native_agent_request_bundle_json=_unexpected_dependency,
         materialize_review_packet=_unexpected_dependency,
         canonical_agent_result=_unexpected_dependency,
+        prepare_completion_finding_handoff=lambda _state: None,
     )
 
 

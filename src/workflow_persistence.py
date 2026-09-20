@@ -90,7 +90,7 @@ from slice_exit import (
     workflow_completion_blocking_finding_ids,
 )
 from task_contract import TaskMode
-from workflow import WorkflowExecutionError
+from workflow import WorkflowCompletionRejected, WorkflowExecutionError
 from workflow_state import (
     AgentFailureKind,
     GateDecisionRecord,
@@ -194,6 +194,9 @@ class WorkflowPersistenceDependencies:
     materialize_review_packet: Callable[[ReviewPacket], Path]
     canonical_agent_result: Callable[
         [tuple[ArtifactRecord, ...], str], ArtifactRecord | None
+    ]
+    prepare_completion_finding_handoff: Callable[
+        [WorkflowState], tuple[str, str] | None
     ]
 
 
@@ -705,10 +708,22 @@ class WorkflowPersistence:
                 fingerprint_sha256=contract_fingerprint,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
-        if (
+        completing = (
             state.current_step is WorkflowStep.COMPLETED
             and all(item.commit_ref is not None for item in state.slices)
+        )
+        if (
+            completing
+            and state.execution_mode == TaskMode.PLAN_ONLY.value
+            and state.current_work_unit.kind is WorkUnitKind.PLAN
+            and state.work_plan_path is not None
+            and state.approved_plan_commit is not None
         ):
+            # The linked-run handoff is a fourth authoritative Finding exit.
+            # Append it before testing completion: until the export exists, the
+            # transfer is only an intention and must not satisfy totality.
+            self._dependencies.prepare_completion_finding_handoff(state)
+        if completing:
             chain = bridge.store.current_chain()
             blocking_finding_ids = workflow_completion_blocking_finding_ids(
                 chain,
@@ -719,13 +734,13 @@ class WorkflowPersistence:
                     chain,
                     run_id=state.run_id,
                 )
-                if blocking_finding_ids == unowned_finding_ids:
-                    raise WorkflowExecutionError(
+                if set(blocking_finding_ids).issubset(unowned_finding_ids):
+                    raise WorkflowCompletionRejected(
                         f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: workflow completion "
                         "rejected; open findings without valid responsibility: "
                         + ", ".join(blocking_finding_ids)
                     )
-                raise WorkflowExecutionError(
+                raise WorkflowCompletionRejected(
                     f"{UNDECIDED_FINDING_DIAGNOSTIC}: workflow completion "
                     "rejected; findings without a valid terminal outcome: "
                     + ", ".join(blocking_finding_ids)

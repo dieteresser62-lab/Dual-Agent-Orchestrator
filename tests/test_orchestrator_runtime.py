@@ -7148,7 +7148,7 @@ def test_plan_only_repairs_handoff_contract_before_review(
     assert task.with_name("task-implement.md").is_file()
 
 
-def test_plan_only_unowned_observation_halts_after_plan_before_finding_export(
+def test_plan_only_unowned_observation_is_exported_before_workflow_completion(
     tmp_path: Path, monkeypatch
 ) -> None:
     repository = _repository(tmp_path, "feature/plan-finding-export")
@@ -7198,15 +7198,9 @@ def test_plan_only_unowned_observation_halts_after_plan_before_finding_export(
     )
     monkeypatch.chdir(repository)
 
-    with pytest.raises(
-        WorkflowExecutionError,
-        match=(
-            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
-            "open findings without valid responsibility: C-01"
-        ),
-    ):
-        run_production_workflow(task, _args(repository, task))
+    result = run_production_workflow(task, _args(repository, task))
 
+    assert result.workflow_completed
     persisted = orchestrator.load_workflow_state(
         repository / ".orchestrator" / "state.json",
         allowed_roots=(repository,),
@@ -7214,15 +7208,18 @@ def test_plan_only_unowned_observation_halts_after_plan_before_finding_export(
     assert isinstance(persisted, WorkflowState)
     chain = ArtifactStore(repository, persisted.run_id).load_chain()
     assert any(isinstance(record.payload, PlanPayload) for record in chain)
-    assert not any(
-        isinstance(record.payload, WorkflowCompletionPayload)
-        for record in chain
+    export_position = next(
+        index
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, FindingHandoffExportPayload)
     )
-    assert not any(
-        isinstance(record.payload, FindingHandoffExportPayload)
-        for record in chain
+    completion_position = next(
+        index
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, WorkflowCompletionPayload)
     )
-    assert not task.with_name("plan-implement.md").exists()
+    assert export_position < completion_position
+    assert task.with_name("plan-implement.md").is_file()
 
 
 def test_unowned_plan_observation_resume_stays_halted_without_agents(
@@ -7296,8 +7293,9 @@ def test_unowned_plan_observation_resume_stays_halted_without_agents(
             "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
             "open findings without valid responsibility: C-01"
         ),
-    ):
+    ) as rejected:
         run_production_workflow(task, args)
+    assert "dual-write mismatch" not in str(rejected.value)
 
     persisted = orchestrator.load_workflow_state(
         repository / ".orchestrator" / "state.json",

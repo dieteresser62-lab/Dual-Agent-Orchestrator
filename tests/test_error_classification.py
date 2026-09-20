@@ -61,6 +61,7 @@ from provider_input_budget import ProviderInputBudgetExceeded
 from task_contract import TaskContractError, parse_task_contract
 from workflow import (
     WorkflowCommitApprovalRequired,
+    WorkflowCompletionRejected,
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
@@ -375,6 +376,7 @@ def test_central_inventory_classifies_all_49_project_error_types_exactly_once() 
     assert project_exceptions - named_errors == {
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",
         f"{WorkflowCommitApprovalRequired.__module__}.WorkflowCommitApprovalRequired",
+        f"{WorkflowCompletionRejected.__module__}.WorkflowCompletionRejected",
         f"{ProviderInputBudgetExceeded.__module__}.ProviderInputBudgetExceeded",
         f"{ProviderRequestRoundRequired.__module__}.ProviderRequestRoundRequired",
         f"{ScriptedInterruption.__module__}.ScriptedInterruption",
