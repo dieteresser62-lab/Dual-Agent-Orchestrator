@@ -59,6 +59,7 @@ from review_packets import (
     ReviewPacketError,
     derive_correction_requirements,
 )
+from slice_exit import slice_commit_decision_finding_ids
 from workflow_state import (
     WorkflowState,
     WorkUnitKind,
@@ -468,6 +469,10 @@ def native_review_request(
         known_open_by_id[finding_id]
         for finding_id in sorted_finding_ids(known_open_by_id)
     )
+    authoritative_finding_ids = slice_commit_decision_finding_ids(
+        contract.existing_finding_ids,
+        state.current_work_unit.open_findings,
+    )
     native_context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -480,7 +485,7 @@ def native_review_request(
         request_sequence=contract.request_sequence,
         previous_findings=request_findings,
         known_open_findings=effective_known_open_findings or None,
-        authoritative_finding_ids=contract.existing_finding_ids,
+        authoritative_finding_ids=authoritative_finding_ids,
         validation_attestation=contract.validation_attestation,
         test_files=expected_test_files,
         test_changes_approved=contract.test_changes_approved,

@@ -12,6 +12,10 @@ from contracts import (
     AgentRole,
     ApprovalMarker,
     CodexStepContract,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
     ReadinessMarker,
     StepContract,
     ValidationAttestation,
@@ -38,7 +42,7 @@ PRE_CUT_CODEX_REQUEST_SHA256 = (
     "7b8f451d51ce1ce7484f635e624c932d06aba4a464d9ac1f9bd7f79d5dc315d8"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "b05ea430cafafbbb703e394ae470bf81128b0ce74c5a39358db775d7a8199bde"
+    "867991ed3fcae6e63f494d9f357b8f213e1f4e3591e2b828d5de20cbc2e1eefe"
 )
 
 
@@ -95,6 +99,8 @@ def _review_bundle(
     context: WorkflowContext | None = None,
     review_diff: str | None = None,
     evidence_kind: EvidenceKind = EvidenceKind.FULL_SLICE,
+    findings: tuple[FindingRecord, ...] = (),
+    bound_open_finding_ids: tuple[str, ...] = (),
 ) -> workflow_requests.NativeReviewRequestBundle:
     state = init_workflow_state(
         run_id="b31-request-review",
@@ -105,6 +111,16 @@ def _review_bundle(
         slice_count=1,
         timestamp="2026-09-02T10:00:00+00:00",
     ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    if bound_open_finding_ids:
+        state = replace(
+            state,
+            work_units=tuple(
+                replace(item, open_findings=bound_open_finding_ids)
+                if item.work_unit_id == state.current_work_unit_id
+                else item
+                for item in state.work_units
+            ),
+        )
     changes = WorkflowChanges(
         start_commit="a" * 40,
         fingerprint="c" * 64,
@@ -133,11 +149,12 @@ def _review_bundle(
         review_fingerprint=changes.fingerprint,
         validation_attestation=attestation,
         test_changes_approved=True,
+        existing_finding_ids=tuple(item.finding_id for item in findings),
     )
     return workflow_requests.native_review_request(
         state=state,
         context=_context() if context is None else context,
-        history=WorkflowHistory(state.current_work_unit_id),
+        history=WorkflowHistory(state.current_work_unit_id, findings=findings),
         contract=contract,
         changes=changes,
         evidence_kind=evidence_kind,
@@ -236,6 +253,30 @@ def test_canonical_requests_match_the_cutover_bytes() -> None:
     assert _canonical_digest(_review_bundle().canonical_json) == (
         PRE_CUT_REVIEW_REQUEST_SHA256
     )
+
+
+def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Current Slice finding",
+        acceptance_test="The finding receives a valid exit decision.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+
+    empty = _review_bundle()
+    populated = _review_bundle(
+        findings=(finding,),
+        bound_open_finding_ids=("C-01", "C-02"),
+    )
+
+    assert empty.document["review_contract"][
+        "slice_commit_decision_finding_ids"
+    ] == []
+    assert populated.document["review_contract"][
+        "slice_commit_decision_finding_ids"
+    ] == ["C-01", "C-02"]
 
 
 def test_oversized_branch_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:

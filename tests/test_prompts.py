@@ -22,3 +22,10 @@ def test_claude_policy_sets_a_soft_budget_without_weakening_required_content() -
     assert "never omit" in NATIVE_CLAUDE_SYSTEM_POLICY
     for required in ("finding", "disposition", "review evidence", "pre-mortem"):
         assert required in NATIVE_CLAUDE_SYSTEM_POLICY
+
+
+def test_claude_policy_announces_the_slice_commit_decision_duty() -> None:
+    assert "Before a Slice commit" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "reject it with named evidence" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "route it to a named later Slice" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "slice_commit_decision_finding_ids" in NATIVE_CLAUDE_SYSTEM_POLICY

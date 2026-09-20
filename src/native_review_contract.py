@@ -7,7 +7,7 @@ converts it to the existing :class:`contracts.ContractResult` domain model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import hashlib
 import json
@@ -534,6 +534,9 @@ class NativeReviewContext:
     previous_findings: tuple[FindingRecord, ...] = ()
     known_open_findings: tuple[FindingRecord, ...] | None = None
     authoritative_finding_ids: tuple[str, ...] = ()
+    slice_commit_decision_finding_ids: tuple[str, ...] = field(
+        init=False, default=()
+    )
     validation_attestation: ValidationAttestation | None = None
     test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
@@ -638,6 +641,7 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "offered findings must belong to the authoritative finding set",
             )
+        _initialize_slice_commit_decision_scope(self, authoritative_ids)
         offered_open = project_open_set(self.previous_findings).findings
         known_open = (
             offered_open
@@ -3078,6 +3082,11 @@ def _validate_decision(
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
     """Return the canonical provider-independent domain-context binding."""
+    authoritative_ids = (
+        context.authoritative_finding_ids
+        or tuple(item.finding_id for item in context.previous_findings)
+    )
+    _validate_slice_commit_decision_scope(context, authoritative_ids)
     binding = {
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
@@ -3096,9 +3105,11 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
             }
             for item in context.effective_known_open_findings
         ],
+        "slice_commit_decision_finding_ids": list(
+            context.slice_commit_decision_finding_ids
+        ),
         "authoritative_finding_ids": list(
-            context.authoritative_finding_ids
-            or tuple(item.finding_id for item in context.previous_findings)
+            authoritative_ids
         ),
         "validation_attestation": _attestation_binding(
             context.validation_attestation
@@ -3171,6 +3182,43 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
             for item in context.closed_finding_bindings
     ]
     return binding
+
+
+def _required_slice_commit_decision_finding_ids(
+    context: NativeReviewContext,
+    authoritative_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    return (
+        authoritative_ids
+        if context.approval_marker is ApprovalMarker.SLICE
+        else ()
+    )
+
+
+def _initialize_slice_commit_decision_scope(
+    context: NativeReviewContext,
+    authoritative_ids: tuple[str, ...],
+) -> None:
+    object.__setattr__(
+        context,
+        "slice_commit_decision_finding_ids",
+        _required_slice_commit_decision_finding_ids(context, authoritative_ids),
+    )
+
+
+def _validate_slice_commit_decision_scope(
+    context: NativeReviewContext,
+    authoritative_ids: tuple[str, ...],
+) -> None:
+    expected = _required_slice_commit_decision_finding_ids(
+        context, authoritative_ids
+    )
+    if context.slice_commit_decision_finding_ids != expected:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "communicated Slice-commit decision Finding set differs from the "
+            "authoritative enforced set",
+        )
 
 
 def _native_finding_acceptance_text(finding: NativeFinding) -> str:

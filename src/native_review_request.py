@@ -602,6 +602,9 @@ def _review_context_request_projection(
         "known_open_finding_signatures": context_binding[
             "known_open_finding_signatures"
         ],
+        "slice_commit_decision_finding_ids": context_binding[
+            "slice_commit_decision_finding_ids"
+        ],
         "validation_attestation": context_binding["validation_attestation"],
         "test_files": context_binding["test_files"],
         "test_changes_approved": context_binding["test_changes_approved"],
@@ -815,6 +818,15 @@ def _enable_native_review_request_finding_decision_schema(
         "additionalProperties": False,
     }
     contract = definitions["review_contract"]
+    contract["properties"]["slice_commit_decision_finding_ids"] = {
+        "type": "array",
+        "maxItems": 10000,
+        "items": {
+            "type": "string",
+            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+        },
+    }
+    contract["required"].append("slice_commit_decision_finding_ids")
     contract["properties"]["pre_change_fingerprint"] = {
         "oneOf": [
             {"$ref": "#/$defs/sha256"},

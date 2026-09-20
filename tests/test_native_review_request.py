@@ -164,7 +164,7 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "3ce54059043d39621794e2110d1ea09c19c7bc580929f4efc892c811cd48678a"
+        "0d3c6bcf07253136bde2202bc2a3b8e503f81fde94155a2dd108cbd36639a9ea"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
@@ -1033,7 +1033,31 @@ def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None
     assert first.bound_context.request_id == first.document["request_id"]
     assert first.bound_context.request_id != first.bound_context.context.request_id
     assert first.document["review_contract"]["next_finding_id"] == "C-01"
+    assert first.document["review_contract"][
+        "slice_commit_decision_finding_ids"
+    ] == []
     assert first.evidence_assets == ()
+
+
+def test_slice_commit_decision_finding_ids_are_typed_and_complete() -> None:
+    finding = _prior_finding()
+    context = replace(
+        _context(),
+        previous_findings=(finding,),
+        authoritative_finding_ids=(finding.finding_id,),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert bundle.document["review_contract"][
+        "slice_commit_decision_finding_ids"
+    ] == ["C-01"]
+    object.__setattr__(context, "slice_commit_decision_finding_ids", ())
+    with pytest.raises(
+        NativeReviewContractError,
+        match="communicated Slice-commit decision Finding set differs",
+    ):
+        build_native_review_request(replace(_spec(), context=context))
 
 
 @pytest.mark.parametrize(

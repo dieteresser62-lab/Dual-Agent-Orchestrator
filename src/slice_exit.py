@@ -118,8 +118,8 @@ def evaluate_slice_exit(
     # preserves the existing fail-closed case where a bound Finding has no
     # opening record; no responsibility, route, or origin predicate may remove
     # a projected Finding from this evaluation.
-    cohort_ids = _total_finding_ids(
-        finding_projection.heads,
+    cohort_ids = slice_commit_decision_finding_ids(
+        tuple(item.finding_id for item in finding_projection.heads),
         _work_unit_bound_finding_ids(run_records),
     )
     plan_positions = (
@@ -423,8 +423,8 @@ def workflow_completion_blocking_finding_ids(
     run_records = tuple(record for record in records if record.run_id == run_id)
     projection = project_slice_exit_findings(run_records)
     heads = {item.finding_id: item for item in projection.heads}
-    total_finding_ids = _total_finding_ids(
-        projection.heads,
+    total_finding_ids = slice_commit_decision_finding_ids(
+        tuple(item.finding_id for item in projection.heads),
         _work_unit_bound_finding_ids(run_records),
     )
     family_binding = _run_family_binding(run_records)
@@ -521,13 +521,15 @@ def _handoff_exported_finding_ids(
     return frozenset(exported)
 
 
-def _total_finding_ids(
-    heads: Sequence[SliceExitFindingHeadProjection],
+def slice_commit_decision_finding_ids(
+    finding_ids: Sequence[str],
     bound_finding_ids: Sequence[str],
 ) -> tuple[str, ...]:
+    """Return the exact Finding set quantified by the Slice exit conditions."""
+
     return sorted_finding_ids(
         (
-            *(item.finding_id for item in heads),
+            *finding_ids,
             *bound_finding_ids,
         )
     )
@@ -753,6 +755,7 @@ __all__ = [
     "SliceExitEvaluation",
     "SliceExitStatus",
     "evaluate_slice_exit",
+    "slice_commit_decision_finding_ids",
     "slice_cohort_finding_ids",
     "unowned_open_finding_ids",
     "workflow_completion_blocking_finding_ids",
