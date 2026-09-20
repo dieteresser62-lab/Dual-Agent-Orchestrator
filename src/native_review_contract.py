@@ -45,7 +45,7 @@ from finding_reducer import (
     is_closed_finding_status,
     project_open_set,
 )
-from finding_order import sorted_finding_ids
+from finding_order import finding_id_sort_key, sorted_finding_ids
 from finding_responsibility import (
     parse_responsibility,
     responsibility_document,
@@ -357,9 +357,10 @@ def validate_native_review_disposition_budget(
         + len(routes)
         + len(plan_decisions)
     )
+    new_finding_capacity = len(_native_finding_id_window(context, size=32))
     maximum_items = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS,
-        native_review_disposition_capacity(context),
+        native_review_disposition_capacity(context) + new_finding_capacity,
     )
     if actual_items > maximum_items:
         diagnostic = (
@@ -1236,13 +1237,17 @@ def native_review_provider_response_schema(
     )
     own_open = project_open_set(own_findings).findings
     own_open_ids = tuple(item.finding_id for item in own_open)
-    disposition_max = min(MAX_NATIVE_REVIEW_DISPOSITIONS, len(own_open_ids))
     own_open_blockers = tuple(
         item
         for item in own_open
         if item.finding_class is FindingClass.BLOCKER
     )
     new_ids = _native_finding_id_window(context, size=32)
+    routable_ids = sorted_finding_ids((*own_open_ids, *new_ids))
+    own_disposition_max = min(
+        MAX_NATIVE_REVIEW_DISPOSITIONS, len(own_open_ids)
+    )
+    disposition_max = min(MAX_NATIVE_REVIEW_DISPOSITIONS, len(routable_ids))
     branch = {
         ApprovalMarker.PLAN: "plan",
         ApprovalMarker.SLICE: (
@@ -1312,7 +1317,7 @@ def native_review_provider_response_schema(
     definitions["bound_denied_finding"] = denied_finding
     definitions["bound_status_change"] = status
     definitions["bound_reclassification"] = reclassification
-    _bind_responsibility_route_definition(definitions, own_open_ids)
+    _bind_responsibility_route_definition(definitions, routable_ids)
 
     approved = _bound_review_result_definition(
         definitions,
@@ -1326,7 +1331,7 @@ def native_review_provider_response_schema(
     )
     approved["properties"]["status_changes"].update(
         minItems=0,
-        maxItems=disposition_max,
+        maxItems=own_disposition_max,
         items={"$ref": "#/$defs/bound_status_change"},
     )
     if own_open_ids:
@@ -1362,11 +1367,11 @@ def native_review_provider_response_schema(
         )
         approved["properties"]["status_changes"].update(
             minItems=0,
-            maxItems=disposition_max,
+            maxItems=own_disposition_max,
         )
         approved["properties"]["reclassifications"].update(
             minItems=0,
-            maxItems=disposition_max,
+            maxItems=own_disposition_max,
             items={"$ref": "#/$defs/bound_approved_reclassification"},
         )
     approved["properties"]["review_evidence"] = {
@@ -1394,11 +1399,11 @@ def native_review_provider_response_schema(
         items={"$ref": "#/$defs/bound_denied_finding"},
     )
     denied["properties"]["status_changes"].update(
-        maxItems=disposition_max,
+        maxItems=own_disposition_max,
         items={"$ref": "#/$defs/bound_status_change"},
     )
     denied["properties"]["reclassifications"].update(
-        maxItems=disposition_max,
+        maxItems=own_disposition_max,
         items={"$ref": "#/$defs/bound_reclassification"},
     )
     _bind_native_decision_collections(denied, context, disposition_max)
@@ -1876,6 +1881,12 @@ def _native_response_to_contract_result(
             for update in response.status_changes
             if update.closure is not None
         ),
+        responsibility_routes=tuple(
+            sorted(
+                response.responsibility_routes,
+                key=lambda route: finding_id_sort_key(route.finding_id),
+            )
+        ),
     )
 
 
@@ -2336,8 +2347,12 @@ def _validate_response_events(
     status_ids = [item.finding_id for item in response.status_changes]
     class_ids = [item.finding_id for item in response.reclassifications]
     route_ids = [item.finding_id for item in response.responsibility_routes]
-    all_ids = (*new_ids, *status_ids, *class_ids, *route_ids)
-    if len(set(all_ids)) != len(all_ids):
+    non_route_ids = (*new_ids, *status_ids, *class_ids)
+    if (
+        len(set(non_route_ids)) != len(non_route_ids)
+        or len(set(route_ids)) != len(route_ids)
+        or set(route_ids).intersection((*status_ids, *class_ids))
+    ):
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
             "finding id occurs in more than one event",
@@ -2347,7 +2362,27 @@ def _validate_response_events(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
             "new finding reuses a previous finding id",
         )
-    for finding_id in (*status_ids, *class_ids, *route_ids):
+    for finding_id in (*status_ids, *class_ids):
+        finding = previous.get(finding_id)
+        if finding is None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+                f"finding update references unknown id {finding_id}",
+            )
+        if finding.origin.reporter is not context.reviewer:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+                f"reviewer does not own finding {finding_id}",
+            )
+        if finding_id not in previous_open_ids:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
+                f"finding update references non-open id {finding_id}",
+            )
+    new_id_set = frozenset(new_ids)
+    for finding_id in route_ids:
+        if finding_id in new_id_set:
+            continue
         finding = previous.get(finding_id)
         if finding is None:
             raise NativeReviewContractError(

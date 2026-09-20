@@ -164,12 +164,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "aab20719b5130cbc38937eb46aff2d9139d1a175bb7c165332f15cbb54d472ab"
+        "fa463841e3f443dd3b0ed13e39baeaae856f90967676aab8f1587e6779137cf9"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "56416331f2ff00c982e1d2f0134acb1a8ab73cb49d0b3522fa70708734bb5c7a"
+        "6e3ca04ff873b907aaa53f98d32f6a589d214700f247304db0e02cacfdd4a41a"
     )
 
 

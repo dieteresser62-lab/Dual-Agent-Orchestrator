@@ -77,6 +77,7 @@ from contracts import (
 from finding_reducer import (
     merge_review_request_result,
     project_finding_response_delta,
+    project_open_set,
     project_reviewer_persistence_transitions,
     reduce_findings,
 )
@@ -1481,6 +1482,43 @@ class WorkflowPersistence:
                 payload,
                 logical_id=logical_id,
                 idempotency_key=idempotency_key,
+                fingerprint_sha256=fingerprint,
+            )
+        findings_by_id = {
+            finding.finding_id: finding for finding in result.findings
+        }
+        open_finding_ids = frozenset(
+            project_open_set(result.findings).finding_ids
+        )
+        for route in result.responsibility_routes:
+            finding = findings_by_id.get(route.finding_id)
+            if finding is None or route.finding_id not in open_finding_ids:
+                raise WorkflowExecutionError(
+                    "native review persistence cannot route a missing or closed "
+                    f"finding {route.finding_id}"
+                )
+            if work_unit_id is None:
+                raise WorkflowExecutionError(
+                    "native review responsibility routing requires a structured "
+                    "work unit"
+                )
+            bridge.append(
+                FindingTransitionPayload(
+                    finding_id=route.finding_id,
+                    reporter=Role(result.reviewer.value),
+                    actor=Role(result.reviewer.value),
+                    action="routed",
+                    severity=FindingSeverity(finding.finding_class.value),
+                    finding_status="open",
+                    rationale=route.rationale,
+                    work_unit_id=work_unit_id,
+                    responsibility=route.responsibility,
+                ),
+                logical_id=f"finding-{route.finding_id}",
+                idempotency_key=(
+                    f"finding:{route.finding_id}:routed:work_unit:"
+                    f"{work_unit_id}:{round_number}:{result.reviewer.value}"
+                ),
                 fingerprint_sha256=fingerprint,
             )
 

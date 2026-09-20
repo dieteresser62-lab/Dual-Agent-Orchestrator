@@ -34,6 +34,7 @@ from artifact_models import (
     InvocationFailurePayload,
 )
 from finding_order import sorted_finding_ids
+from finding_responsibility import parse_responsibility, responsibility_document
 from finding_convergence import SliceConvergenceEvaluation
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
@@ -1093,6 +1094,22 @@ def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
             for finding_id, closure in item.finding_closures
         ],
         **(
+            {
+                "responsibility_routes": [
+                    {
+                        "finding_id": route.finding_id,
+                        "responsibility": responsibility_document(
+                            route.responsibility
+                        ),
+                        "rationale": route.rationale,
+                    }
+                    for route in item.responsibility_routes
+                ]
+            }
+            if item.responsibility_routes
+            else {}
+        ),
+        **(
             {"delivery_kind": item.delivery_kind}
             if item.delivery_kind != "review"
             else {}
@@ -1194,6 +1211,16 @@ def _review_from_dict(raw: object) -> ContractResult | None:
             )
             for value in _json_list(raw.get("finding_closures", []))
             if isinstance(value, dict)
+        ),
+        responsibility_routes=tuple(
+            native_finding_decisions.NativeResponsibilityRoute(
+                finding_id=str(value["finding_id"]),
+                responsibility=parse_responsibility(value["responsibility"]),
+                rationale=str(value["rationale"]),
+            )
+            for value in _json_list(raw.get("responsibility_routes", []))
+            if isinstance(value, dict)
+            and isinstance(value.get("responsibility"), dict)
         ),
     )
 

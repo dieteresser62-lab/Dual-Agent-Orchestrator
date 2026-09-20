@@ -27,6 +27,7 @@ from finding_responsibility import (
     BranchPlanningResponsibility,
     PlanRevisionResponsibility,
     SliceResponsibility,
+    responsibility_document,
 )
 from gates import detect_anchor_changes
 from native_review_contract import (
@@ -422,6 +423,129 @@ def test_native_routes_roundtrip_through_shared_responsibility_types(
         ),
     )
     assert result.findings[0].status is FindingStatus.OPEN
+
+
+def test_first_review_writer_offers_new_finding_ids_for_responsibility_routes(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    writer = native_review_provider_response_schema(context)
+
+    new_finding_ids = writer["$defs"]["bound_approved_finding"]["properties"][
+        "finding_id"
+    ]["enum"]
+    route_ids = writer["$defs"]["bound_responsibility_route"]["properties"][
+        "finding_id"
+    ]["enum"]
+    route_limit = writer["$defs"]["bound_slice_initial_approved"]["properties"][
+        "responsibility_routes"
+    ]["maxItems"]
+
+    assert route_ids == new_finding_ids
+    assert route_ids[0] == "C-01"
+    assert route_limit == 32
+
+
+def test_review_can_route_a_finding_opened_in_the_same_response(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    responsibility = SliceResponsibility(
+        context.run_id,
+        "b" * 40,
+        "2",
+        "ac-" + "c" * 64,
+    )
+    document = _review(context, approved=True)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "summary": "src/future.py needs a later planned repair.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "The later Slice repairs src/future.py.",
+            },
+        }
+    ]
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(responsibility),
+            "rationale": "The later planned Slice owns this observation.",
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    response = parse_native_review_response(document, context)
+    result = native_response_to_contract_result(response, context)
+
+    assert response.responsibility_routes == (
+        NativeResponsibilityRoute(
+            "C-01",
+            responsibility,
+            "The later planned Slice owns this observation.",
+        ),
+    )
+    assert result.responsibility_routes == response.responsibility_routes
+    assert project_open_set(result.findings).finding_ids == ("C-01",)
+
+
+def test_route_in_new_id_window_must_name_a_finding_opened_in_the_response(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(_context(), round_number=1)
+    document = _review(context, approved=True)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-02",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("family-1", 1)
+            ),
+            "rationale": "A route cannot create the referenced finding.",
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_review_response(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN
+
+
+def test_route_cannot_name_an_unoffered_open_finding(
+    active_finding_decisions: None,
+) -> None:
+    offered = _finding("C-01", AgentRole.CLAUDE)
+    foreign = _finding("C-02", AgentRole.CLAUDE)
+    context = replace(
+        _context(previous=(offered,)),
+        known_open_findings=(offered, foreign),
+        authoritative_finding_ids=("C-01", "C-02"),
+    )
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-02",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("family-1", 1)
+            ),
+            "rationale": "The reviewer may only route an offered own finding.",
+        }
+    ]
+
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document(
+            {"result": document}, native_review_provider_response_schema(context)
+        )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_review_response(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN
 
 
 def test_native_route_names_a_missing_responsibility_field(

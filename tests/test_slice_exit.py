@@ -43,6 +43,8 @@ from native_finding_decisions import (
     NativeResponsibilityRoute,
 )
 from native_review_contract import (
+    NativeFinding,
+    NativeProseAcceptance,
     NativeReviewResult,
     NativeStatusChange,
 )
@@ -210,6 +212,65 @@ def test_decision_projection_is_unconditionally_active_after_cutover() -> None:
     )
     assert len(payloads) == 1
     assert payloads[0].action == "routed"
+
+
+def test_first_slice_review_can_open_and_route_observation_before_commit(
+    decisions_enabled: None,
+) -> None:
+    criterion_text = "The later Slice repairs src/fix.py."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    responsibility = SliceResponsibility(
+        RUN_ID, PLAN_COMMIT, "7", criterion_id
+    )
+    response = NativeReviewResult(
+        request_id="native-review-request-" + "d" * 64,
+        reviewer=AgentRole.CLAUDE,
+        approved=True,
+        new_findings=(
+            NativeFinding(
+                "C-01",
+                FindingClass.OBSERVATION,
+                "Repair src/fix.py",
+                NativeProseAcceptance(
+                    "src/fix.py passes its regression test"
+                ),
+            ),
+        ),
+        status_changes=(),
+        reclassifications=(),
+        responsibility_routes=(
+            NativeResponsibilityRoute(
+                "C-01",
+                responsibility,
+                "Slice 7 owns the newly opened observation.",
+            ),
+        ),
+        anchors=(),
+        evidence=None,
+        pre_mortem=None,
+    )
+    records = _base_records(target_acceptance_texts=(criterion_text,))
+    records.append(
+        _record(
+            len(records) + 1,
+            WorkUnitPayload("6", 1, ("src/fix.py",)),
+            records,
+            logical_id="work-unit-6",
+        )
+    )
+    records.append(
+        _record(len(records) + 1, _opening("C-01", "6", None), records)
+    )
+    route_payload, = project_native_review_decision_payloads(
+        response, (_finding(),), work_unit_id="6"
+    )
+    records.append(_record(len(records) + 1, route_payload, records))
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(2).status is SliceExitStatus.SATISFIED
+    assert result.condition(6).status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
 
 
 def test_a_s_keeps_ever_routed_finding_after_slice_s_routes_it_onward() -> None:
