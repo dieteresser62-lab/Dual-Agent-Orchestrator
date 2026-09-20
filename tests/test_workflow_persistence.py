@@ -19,12 +19,15 @@ from artifact_models import (
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
+    PlanPayload,
     ProviderContentPayload,
     Role,
+    SliceSpec,
     WorkUnitPayload,
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
+from finding_responsibility import SliceResponsibility
 from workflow import WorkflowExecutionError
 from workflow_persistence import (
     WorkflowPersistence,
@@ -400,6 +403,112 @@ def test_completed_workflow_rejects_canary_sequence_with_unowned_finding() -> No
             "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
             "open findings without valid responsibility: C-01"
         ),
+    ):
+        persistence._persist_structured_tail(cast(Any, state))
+
+    assert not any(
+        isinstance(payload, WorkflowCompletionPayload)
+        for payload in appended_payloads
+    )
+
+
+def test_completed_workflow_rejects_route_to_unknown_plan_slice() -> None:
+    run_id = "completion-unknown-slice"
+    plan_commit = "a" * 40
+    fingerprint = "b" * 64
+    records: list[ArtifactRecord] = []
+
+    def append_record(payload: object, logical_id: str) -> None:
+        records.append(
+            ArtifactRecord.create(
+                run_id=run_id,
+                logical_id=logical_id,
+                revision=1,
+                fingerprint=Fingerprint(
+                    FingerprintKind.IMPLEMENTATION, fingerprint
+                ),
+                predecessor_ids=(records[-1].record_id,) if records else (),
+                created_at=f"2026-09-20T04:{len(records):02d}:00+00:00",
+                idempotency_key=logical_id,
+                payload=payload,
+            )
+        )
+
+    append_record(
+        PlanPayload(
+            "docs/internal/plan.md",
+            plan_commit,
+            tuple(
+                SliceSpec(str(slice_id), f"Slice {slice_id}", ("src/fix.py",))
+                for slice_id in range(1, 7)
+            ),
+        ),
+        "approved-plan",
+    )
+    append_record(
+        WorkUnitPayload("1", 1, ("src/fix.py",)),
+        "work-unit-1",
+    )
+    append_record(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.OBSERVATION,
+            finding_status="open",
+            rationale="The finding needs a real target Slice",
+            work_unit_id="1",
+            summary="Repair src/fix.py",
+            acceptance_test="src/fix.py passes its regression test",
+            origin_slice_id="1",
+            origin_round_number=1,
+            responsibility=None,
+        ),
+        "finding-c-01-opened",
+    )
+    append_record(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="routed",
+            severity=FindingSeverity.OBSERVATION,
+            finding_status="open",
+            rationale="Route to the misspelled target",
+            work_unit_id="1",
+            responsibility=SliceResponsibility(
+                run_id, plan_commit, "01"
+            ),
+        ),
+        "finding-c-01-routed",
+    )
+    append_record(
+        BindingPayload("commit", "c" * 40, "attestation", ("approval",)),
+        "commit-6",
+    )
+
+    appended_payloads: list[object] = []
+    bridge = SimpleNamespace(
+        store=SimpleNamespace(current_chain=lambda: tuple(records)),
+        append=lambda payload, **_kwargs: appended_payloads.append(payload),
+    )
+    persistence = WorkflowPersistence(_dependencies(bridge=cast(Any, bridge)))
+    state = SimpleNamespace(
+        task_digest="d" * 64,
+        work_units=(),
+        work_plan_path=None,
+        planned_slices=(),
+        approved_plan_commit=None,
+        current_step=WorkflowStep.COMPLETED,
+        slices=(SimpleNamespace(commit_ref="c" * 40),),
+        execution_mode="IMPLEMENT",
+        run_id=run_id,
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="findings without a valid terminal outcome: C-01",
     ):
         persistence._persist_structured_tail(cast(Any, state))
 

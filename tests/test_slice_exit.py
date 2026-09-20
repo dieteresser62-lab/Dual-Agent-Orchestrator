@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import native_finding_decisions
+import slice_exit
 
 from acceptance_criteria import (
     MeasuredAgainst,
@@ -273,7 +276,9 @@ def test_first_slice_review_can_open_and_route_observation_before_commit(
     assert result.commit_eligible
 
 
-def test_route_to_unknown_plan_slice_does_not_escape_current_slice_exit() -> None:
+def test_fixture_80_unknown_plan_slice_blocks_from_total_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     records: list[ArtifactRecord] = []
     records.append(
         _record(
@@ -312,6 +317,7 @@ def test_route_to_unknown_plan_slice_does_not_escape_current_slice_exit() -> Non
         )
     )
 
+    _forbid_legacy_filter_branches(monkeypatch)
     result = evaluate_slice_exit(
         records,
         run_id=RUN_ID,
@@ -688,17 +694,31 @@ def test_projection_or_markdown_only_decision_cannot_satisfy_condition_6() -> No
     assert "no transition record" in result.condition(6).reasons[0]
 
 
-def test_open_unowned_finding_from_earlier_slice_blocks_current_slice_exit() -> None:
+def test_fixture_77_unowned_finding_across_work_units_blocks_from_total_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     records = _base_records()
     records.extend(
         (
             _record(
                 len(records) + 1,
+                WorkUnitPayload("3", 1, ("src/origin.py",)),
+                records,
+                logical_id="work-unit-3",
+            ),
+            _record(
+                len(records) + 2,
                 _opening("C-01", "3", None),
                 records,
             ),
             _record(
-                len(records) + 2,
+                len(records) + 3,
+                WorkUnitPayload("4", 1, ("src/origin.py",)),
+                records,
+                logical_id="work-unit-4",
+            ),
+            _record(
+                len(records) + 4,
                 WorkUnitPayload("6", 1, ("src/fix.py",)),
                 records,
                 logical_id="work-unit-6",
@@ -706,6 +726,7 @@ def test_open_unowned_finding_from_earlier_slice_blocks_current_slice_exit() -> 
         )
     )
 
+    _forbid_legacy_filter_branches(monkeypatch)
     result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
 
     assert result.responsibility_finding_ids == ("C-01",)
@@ -726,6 +747,12 @@ def test_open_finding_owned_by_later_slice_does_not_join_current_slice() -> None
         (
             _record(
                 len(records) + 1,
+                WorkUnitPayload("3", 1, ("src/origin.py",)),
+                records,
+                logical_id="work-unit-3",
+            ),
+            _record(
+                len(records) + 2,
                 _opening(
                     "C-01",
                     "3",
@@ -734,7 +761,7 @@ def test_open_finding_owned_by_later_slice_does_not_join_current_slice() -> None
                 records,
             ),
             _record(
-                len(records) + 2,
+                len(records) + 3,
                 _route(
                     "C-01",
                     SliceResponsibility(
@@ -745,7 +772,7 @@ def test_open_finding_owned_by_later_slice_does_not_join_current_slice() -> None
                 records,
             ),
             _record(
-                len(records) + 3,
+                len(records) + 4,
                 WorkUnitPayload("6", 1, ("src/fix.py",)),
                 records,
                 logical_id="work-unit-6",
@@ -755,7 +782,7 @@ def test_open_finding_owned_by_later_slice_does_not_join_current_slice() -> None
 
     result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
 
-    assert result.responsibility_finding_ids == ()
+    assert result.responsibility_finding_ids == ("C-01",)
     assert result.status is SliceExitStatus.SATISFIED
     assert result.commit_eligible
 
@@ -798,9 +825,58 @@ def test_closed_finding_without_responsibility_does_not_block() -> None:
     result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
 
     assert unowned_open_finding_ids(records, run_id=RUN_ID) == ()
-    assert result.responsibility_finding_ids == ()
+    assert result.responsibility_finding_ids == ("C-01",)
     assert result.status is SliceExitStatus.SATISFIED
     assert result.commit_eligible
+
+
+def test_unknown_future_responsibility_blocks_from_total_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FutureResponsibility:
+        responsibility_kind = "FUTURE_OWNER"
+
+    records = _base_records()
+    records.extend(
+        (
+            _record(
+                len(records) + 1,
+                _opening("C-01", "3", None),
+                records,
+            ),
+            _record(
+                len(records) + 2,
+                WorkUnitPayload("6", 1, ("src/fix.py",)),
+                records,
+                logical_id="work-unit-6",
+            ),
+        )
+    )
+    projection = slice_exit.project_slice_exit_findings(records)
+    future_head = replace(
+        projection.heads[0], responsibility=FutureResponsibility()
+    )
+    monkeypatch.setattr(
+        slice_exit,
+        "project_slice_exit_findings",
+        lambda _records: replace(projection, heads=(future_head,)),
+    )
+    _forbid_legacy_filter_branches(monkeypatch)
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.responsibility_finding_ids == ("C-01",)
+    assert result.condition(2).status is SliceExitStatus.VIOLATED
+    assert UNOWNED_OPEN_FINDING_DIAGNOSTIC in result.condition(2).reasons[0]
+    assert not result.commit_eligible
+
+
+def _forbid_legacy_filter_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args, **_kwargs):
+        pytest.fail("total exit evaluation consulted a legacy cohort filter")
+
+    monkeypatch.setattr(slice_exit, "_slice_cohort", fail)
+    monkeypatch.setattr(slice_exit, "_unowned_open_finding_ids", fail)
 
 
 def _review(

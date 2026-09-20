@@ -84,8 +84,10 @@ from finding_reducer import (
 from review_packets import ReviewPacket
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from slice_exit import (
+    UNDECIDED_FINDING_DIAGNOSTIC,
     UNOWNED_OPEN_FINDING_DIAGNOSTIC,
     unowned_open_finding_ids,
+    workflow_completion_blocking_finding_ids,
 )
 from task_contract import TaskMode
 from workflow import WorkflowExecutionError
@@ -708,14 +710,24 @@ class WorkflowPersistence:
             and all(item.commit_ref is not None for item in state.slices)
         ):
             chain = bridge.store.current_chain()
-            blocking_finding_ids = unowned_open_finding_ids(
+            blocking_finding_ids = workflow_completion_blocking_finding_ids(
                 chain,
                 run_id=state.run_id,
             )
             if blocking_finding_ids:
+                unowned_finding_ids = unowned_open_finding_ids(
+                    chain,
+                    run_id=state.run_id,
+                )
+                if blocking_finding_ids == unowned_finding_ids:
+                    raise WorkflowExecutionError(
+                        f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: workflow completion "
+                        "rejected; open findings without valid responsibility: "
+                        + ", ".join(blocking_finding_ids)
+                    )
                 raise WorkflowExecutionError(
-                    f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: workflow completion "
-                    "rejected; open findings without valid responsibility: "
+                    f"{UNDECIDED_FINDING_DIAGNOSTIC}: workflow completion "
+                    "rejected; findings without a valid terminal outcome: "
                     + ", ".join(blocking_finding_ids)
                 )
             branch_discovery = (

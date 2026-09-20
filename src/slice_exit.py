@@ -9,6 +9,7 @@ from typing import Sequence
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
+    FamilyBindingPayload,
     FindingSeverity,
     FingerprintKind,
     PlanPayload,
@@ -36,6 +37,7 @@ CONDITION_4_ACCEPTANCE_UNDECIDABLE = (
     "cannot be resolved from the record chain"
 )
 UNOWNED_OPEN_FINDING_DIAGNOSTIC = "OPEN-FINDING-WITHOUT-RESPONSIBILITY"
+UNDECIDED_FINDING_DIAGNOSTIC = "FINDING-WITHOUT-VALID-EXIT"
 
 
 class SliceExitStatus(StrEnum):
@@ -91,20 +93,40 @@ def evaluate_slice_exit(
         else "" if plan is None else plan.approved_plan_commit
     )
     finding_projection = project_slice_exit_findings(run_records)
-    events = finding_projection.events
     heads = {item.finding_id: item for item in finding_projection.heads}
-    # Responsibility is a prerequisite for Slice membership, not a membership
-    # filter.  Check it before deriving the Slice-specific cohort so an open
-    # Finding with no valid owner enters every active A_s evaluation.
-    unowned_open_ids = _unowned_open_finding_ids(finding_projection.heads)
-    cohort_ids, slice_work_unit_ids, boundary_reasons = _slice_cohort(
-        run_records,
-        events,
-        run_id=run_id,
-        approved_plan_commit=plan_commit,
-        slice_id=target_slice_id,
+    work_unit_slices = _work_unit_slices(run_records)
+    start_unit = next(
+        (
+            record.payload
+            for record in run_records
+            if isinstance(record.payload, WorkUnitPayload)
+            and record.payload.slice_id == target_slice_id
+        ),
+        None,
     )
-    cohort_ids = sorted_finding_ids((*cohort_ids, *unowned_open_ids))
+    boundary_reasons = (
+        ()
+        if start_unit is not None
+        else (f"Slice {target_slice_id} has no record-bound start Work Unit",)
+    )
+    # Exhaust the record-derived Finding set.  The Work Unit contribution
+    # preserves the existing fail-closed case where a bound Finding has no
+    # opening record; no responsibility, route, or origin predicate may remove
+    # a projected Finding from this evaluation.
+    cohort_ids = _total_finding_ids(
+        finding_projection.heads,
+        _work_unit_bound_finding_ids(run_records),
+    )
+    plan_positions = (
+        {} if plan is None else {
+            item.slice_id: index for index, item in enumerate(plan.slices)
+        }
+    )
+    plan_specs = {} if plan is None else {item.slice_id: item for item in plan.slices}
+    committed_slice_ids = _committed_slice_ids(
+        run_records, frozenset(plan_positions)
+    )
+    family_binding = _run_family_binding(run_records)
 
     condition_1_reasons: list[str] = []
     condition_2_reasons: list[str] = list(boundary_reasons)
@@ -130,11 +152,20 @@ def evaluate_slice_exit(
                 "without earlier record-bound evidence"
             )
 
-        if head.is_open and not _valid_responsibility(head.responsibility):
-            condition_2_reasons.append(
-                f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: open finding {finding_id} "
-                "has no valid responsibility assignment"
-            )
+        if head.is_open and not isinstance(
+            head.responsibility,
+            (SliceResponsibility, BranchPlanningResponsibility),
+        ):
+            if not _valid_responsibility(head.responsibility):
+                condition_2_reasons.append(
+                    f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: open finding {finding_id} "
+                    "has no valid responsibility assignment"
+                )
+            else:
+                condition_2_reasons.append(
+                    f"{UNDECIDED_FINDING_DIAGNOSTIC}: open finding {finding_id} "
+                    "has no responsibility target valid for Slice exit"
+                )
 
         if isinstance(head.responsibility, SliceResponsibility) and (
             head.responsibility.target_run_id == run_id
@@ -145,14 +176,6 @@ def evaluate_slice_exit(
                 f"{finding_id} still has responsibility slice:{target_slice_id} at exit"
             )
 
-        slice_routes = tuple(
-            event
-            for event in events
-            if event.payload.finding_id == finding_id
-            and event.payload.action == "routed"
-            and event.payload.work_unit_id in slice_work_unit_ids
-            and isinstance(event.payload.responsibility, SliceResponsibility)
-        )
         if (
             head.is_open
             and isinstance(head.responsibility, SliceResponsibility)
@@ -161,71 +184,56 @@ def evaluate_slice_exit(
                 and head.responsibility.approved_plan_commit == plan_commit
                 and head.responsibility.slice_id == target_slice_id
             )
-            and head.last_assignment not in slice_routes
         ):
-            condition_4_reasons.append(
-                f"Slice routing for {finding_id} is not recorded in a Work Unit "
-                f"bound to Slice {target_slice_id}"
+            route = head.last_assignment
+            source_slice_id = (
+                None
+                if route is None or route.payload.work_unit_id is None
+                else work_unit_slices.get(route.payload.work_unit_id)
             )
-        for route in slice_routes:
-            assert isinstance(route.payload.responsibility, SliceResponsibility)
-            route_errors = _slice_route_errors(
-                finding_id,
-                head,
-                responsibility=route.payload.responsibility,
-                run_id=run_id,
-                current_slice_id=target_slice_id,
-                plan=plan,
-                records=run_records,
-            )
-            if route_errors:
-                condition_4_reasons.extend(route_errors)
-            elif not _slice_route_has_record_criteria(
-                route.payload.responsibility, plan
+            if (
+                route is None
+                or route.payload.action != "routed"
+                or route.payload.responsibility != head.responsibility
+                or source_slice_id is None
             ):
-                condition_4_unknown.append(
-                    f"{finding_id}: {CONDITION_4_ACCEPTANCE_UNDECIDABLE}"
+                condition_4_reasons.append(
+                    f"Slice routing for {finding_id} is not recorded in a "
+                    "record-bound source Work Unit"
                 )
+            else:
+                route_errors = _slice_route_errors(
+                    finding_id,
+                    head,
+                    responsibility=head.responsibility,
+                    run_id=run_id,
+                    source_slice_id=source_slice_id,
+                    plan=plan,
+                    plan_positions=plan_positions,
+                    plan_specs=plan_specs,
+                    committed_slice_ids=committed_slice_ids,
+                )
+                if route_errors:
+                    condition_4_reasons.extend(route_errors)
+                elif not _slice_route_has_record_criteria(
+                    head.responsibility, plan_specs
+                ):
+                    condition_4_unknown.append(
+                        f"{finding_id}: {CONDITION_4_ACCEPTANCE_UNDECIDABLE}"
+                    )
 
         if head.is_open and isinstance(
             head.responsibility, BranchPlanningResponsibility
         ):
-            assignment = head.last_assignment
-            if (
-                assignment is None
-                or assignment.payload.action != "routed"
-                or assignment.payload.work_unit_id is None
-                or assignment.payload.work_unit_id not in slice_work_unit_ids
-                or assignment.payload.responsibility != head.responsibility
-                or assignment.record.fingerprint.kind is not FingerprintKind.IMPLEMENTATION
-            ):
-                condition_5_reasons.append(
-                    f"Branch routing for {finding_id} is not completely "
-                    "recorded and implementation-fingerprint-bound"
+            condition_5_reasons.extend(
+                _branch_route_errors(
+                    finding_id,
+                    head,
+                    work_unit_ids=frozenset(work_unit_slices),
+                    family_binding=family_binding,
+                    require_route=True,
                 )
-            else:
-                profile = next(
-                    (
-                        record.payload
-                        for record in run_records
-                        if isinstance(record.payload, RunProfilePayload)
-                    ),
-                    None,
-                )
-                binding = None if profile is None else profile.family_binding
-                if binding is None:
-                    condition_5_reasons.append(
-                        f"Branch routing for {finding_id} cannot be matched to a "
-                        "run-bound family identity before point 67"
-                    )
-                elif (
-                    head.responsibility.family_id != binding.family_id
-                    or head.responsibility.cycle_number != binding.cycle_number
-                ):
-                    condition_5_reasons.append(
-                        f"Branch routing for {finding_id} differs from the "
-                        "run-bound family identity"
-                    )
+            )
 
         if head.is_closed:
             if not head.has_complete_closure_record:
@@ -316,6 +324,38 @@ def _slice_cohort(
     return sorted_finding_ids(cohort), work_unit_ids, reasons
 
 
+def slice_cohort_finding_ids(
+    records: Sequence[ArtifactRecord],
+    *,
+    run_id: str,
+    slice_id: int | str,
+    approved_plan_commit: str | None = None,
+) -> tuple[str, ...]:
+    """Return historical ``A_s`` membership for E5 convergence only.
+
+    E4 deliberately does not consume this filtered set: its exit decision is
+    quantified over every Finding head in the run.
+    """
+
+    target_slice_id = str(slice_id)
+    run_records = tuple(record for record in records if record.run_id == run_id)
+    plan = _select_plan(run_records, approved_plan_commit)
+    plan_commit = (
+        approved_plan_commit
+        if approved_plan_commit is not None
+        else "" if plan is None else plan.approved_plan_commit
+    )
+    projection = project_slice_exit_findings(run_records)
+    cohort, _work_units, _reasons = _slice_cohort(
+        run_records,
+        projection.events,
+        run_id=run_id,
+        approved_plan_commit=plan_commit,
+        slice_id=target_slice_id,
+    )
+    return cohort
+
+
 def _select_plan(
     records: Sequence[ArtifactRecord], approved_plan_commit: str | None
 ) -> PlanPayload | None:
@@ -368,15 +408,142 @@ def unowned_open_finding_ids(
     )
 
 
+def workflow_completion_blocking_finding_ids(
+    records: Sequence[ArtifactRecord],
+    *,
+    run_id: str,
+) -> tuple[str, ...]:
+    """Return every totally-quantified Finding that forbids run completion."""
+
+    run_records = tuple(record for record in records if record.run_id == run_id)
+    projection = project_slice_exit_findings(run_records)
+    heads = {item.finding_id: item for item in projection.heads}
+    total_finding_ids = _total_finding_ids(
+        projection.heads,
+        _work_unit_bound_finding_ids(run_records),
+    )
+    family_binding = _run_family_binding(run_records)
+    blocked: list[str] = []
+    for finding_id in total_finding_ids:
+        head = heads.get(finding_id)
+        if head is None:
+            blocked.append(finding_id)
+            continue
+        if head.is_closed:
+            if not head.has_complete_closure_record:
+                blocked.append(head.finding_id)
+            continue
+        if isinstance(head.responsibility, BranchPlanningResponsibility):
+            if not _branch_route_errors(
+                head.finding_id,
+                head,
+                work_unit_ids=None,
+                family_binding=family_binding,
+                require_route=False,
+            ):
+                continue
+        blocked.append(head.finding_id)
+    return sorted_finding_ids(blocked)
+
+
+def _total_finding_ids(
+    heads: Sequence[SliceExitFindingHeadProjection],
+    bound_finding_ids: Sequence[str],
+) -> tuple[str, ...]:
+    return sorted_finding_ids(
+        (
+            *(item.finding_id for item in heads),
+            *bound_finding_ids,
+        )
+    )
+
+
+def _work_unit_bound_finding_ids(
+    records: Sequence[ArtifactRecord],
+) -> tuple[str, ...]:
+    return tuple(
+        finding_id
+        for record in records
+        if isinstance(record.payload, WorkUnitPayload)
+        for finding_id in record.payload.open_finding_ids
+    )
+
+
+def _work_unit_slices(records: Sequence[ArtifactRecord]) -> dict[str, str]:
+    return {
+        record.logical_id.removeprefix("work-unit-"): record.payload.slice_id
+        for record in records
+        if record.logical_id.startswith("work-unit-")
+        and isinstance(record.payload, WorkUnitPayload)
+    }
+
+
+def _run_family_binding(
+    records: Sequence[ArtifactRecord],
+) -> FamilyBindingPayload | None:
+    return next(
+        (
+            record.payload.family_binding
+            for record in records
+            if isinstance(record.payload, RunProfilePayload)
+        ),
+        None,
+    )
+
+
+def _branch_route_errors(
+    finding_id: str,
+    head: SliceExitFindingHeadProjection,
+    *,
+    work_unit_ids: frozenset[str] | None,
+    family_binding: FamilyBindingPayload | None,
+    require_route: bool,
+) -> tuple[str, ...]:
+    assignment = head.last_assignment
+    permitted_actions = {"routed"} if require_route else {"opened", "routed"}
+    if (
+        assignment is None
+        or assignment.payload.action not in permitted_actions
+        or assignment.payload.work_unit_id is None
+        or (
+            work_unit_ids is not None
+            and assignment.payload.work_unit_id not in work_unit_ids
+        )
+        or assignment.payload.responsibility != head.responsibility
+        or assignment.record.fingerprint.kind is not FingerprintKind.IMPLEMENTATION
+    ):
+        return (
+            f"Branch routing for {finding_id} is not completely recorded and "
+            "implementation-fingerprint-bound",
+        )
+    assert isinstance(head.responsibility, BranchPlanningResponsibility)
+    if family_binding is None:
+        return (
+            f"Branch routing for {finding_id} cannot be matched to a run-bound "
+            "family identity before point 67",
+        )
+    if (
+        head.responsibility.family_id != family_binding.family_id
+        or head.responsibility.cycle_number != family_binding.cycle_number
+    ):
+        return (
+            f"Branch routing for {finding_id} differs from the run-bound family "
+            "identity",
+        )
+    return ()
+
+
 def _slice_route_errors(
     finding_id: str,
     head: SliceExitFindingHeadProjection,
     *,
     responsibility: SliceResponsibility,
     run_id: str,
-    current_slice_id: str,
+    source_slice_id: str,
     plan: PlanPayload | None,
-    records: Sequence[ArtifactRecord],
+    plan_positions: dict[str, int],
+    plan_specs: dict[str, SliceSpec],
+    committed_slice_ids: frozenset[str],
 ) -> tuple[str, ...]:
     target = responsibility.slice_id
     if responsibility.target_run_id != run_id:
@@ -388,20 +555,19 @@ def _slice_route_errors(
         return (
             f"Slice routing for {finding_id} has no matching approved Plan record",
         )
-    positions = {item.slice_id: index for index, item in enumerate(plan.slices)}
-    if current_slice_id not in positions or target not in positions:
+    if source_slice_id not in plan_positions or target not in plan_positions:
         return (
             f"Slice routing for {finding_id} targets unknown planned Slice {target}",
         )
-    if positions[target] <= positions[current_slice_id]:
+    if plan_positions[target] <= plan_positions[source_slice_id]:
         return (
             f"Slice routing for {finding_id} does not target a later planned Slice",
         )
-    if _slice_is_committed(records, target):
+    if target in committed_slice_ids:
         return (
             f"Slice routing for {finding_id} targets already completed Slice {target}",
         )
-    target_spec = next(item for item in plan.slices if item.slice_id == target)
+    target_spec = plan_specs[target]
     mentioned_paths = mentioned_repository_paths(head.summary, head.acceptance_test)
     if not mentioned_paths:
         return (
@@ -435,14 +601,9 @@ def _slice_route_errors(
 
 
 def _slice_route_has_record_criteria(
-    responsibility: SliceResponsibility, plan: PlanPayload | None
+    responsibility: SliceResponsibility, plan_specs: dict[str, SliceSpec]
 ) -> bool:
-    if plan is None:
-        return False
-    target = next(
-        (item for item in plan.slices if item.slice_id == responsibility.slice_id),
-        None,
-    )
+    target = plan_specs.get(responsibility.slice_id)
     return target is not None and bool(target.acceptance_criteria)
 
 
@@ -453,17 +614,42 @@ def _scope_covers(spec: SliceSpec, path: str) -> bool:
     )
 
 
-def _slice_is_committed(records: Sequence[ArtifactRecord], slice_id: str) -> bool:
-    prefix = f"commit-{slice_id}"
-    return any(
-        isinstance(record.payload, BindingPayload)
-        and record.payload.binding_kind == "commit"
-        and (
-            record.logical_id == prefix
-            or record.logical_id.startswith(prefix + "-")
-        )
-        for record in records
-    )
+def _committed_slice_ids(
+    records: Sequence[ArtifactRecord], plan_slice_ids: frozenset[str]
+) -> frozenset[str]:
+    prefixes: dict[str, object] = {}
+    terminal = object()
+    for slice_id in plan_slice_ids:
+        node = prefixes
+        for character in slice_id:
+            node = node.setdefault(character, {})  # type: ignore[assignment]
+        node[""] = terminal
+
+    committed: set[str] = set()
+    for record in records:
+        if (
+            not isinstance(record.payload, BindingPayload)
+            or record.payload.binding_kind != "commit"
+            or not record.logical_id.startswith("commit-")
+        ):
+            continue
+        suffix = record.logical_id.removeprefix("commit-")
+        node = prefixes
+        matched: str | None = None
+        consumed: list[str] = []
+        for character in suffix:
+            child = node.get(character)
+            if not isinstance(child, dict):
+                break
+            consumed.append(character)
+            node = child
+            if node.get("") is terminal and (
+                len(consumed) == len(suffix) or suffix[len(consumed)] == "-"
+            ):
+                matched = "".join(consumed)
+        if matched is not None:
+            committed.add(matched)
+    return frozenset(committed)
 
 
 def _condition(
@@ -486,10 +672,13 @@ def _condition(
 
 __all__ = [
     "CONDITION_4_ACCEPTANCE_UNDECIDABLE",
+    "UNDECIDED_FINDING_DIAGNOSTIC",
     "UNOWNED_OPEN_FINDING_DIAGNOSTIC",
     "SliceExitCondition",
     "SliceExitEvaluation",
     "SliceExitStatus",
     "evaluate_slice_exit",
+    "slice_cohort_finding_ids",
     "unowned_open_finding_ids",
+    "workflow_completion_blocking_finding_ids",
 ]
