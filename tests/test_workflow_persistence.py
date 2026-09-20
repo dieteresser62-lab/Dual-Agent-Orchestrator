@@ -13,9 +13,15 @@ from agent_runtime import ProviderRequestRoundRequired
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
     _IDENTIFIER_RE,
+    ArtifactRecord,
+    BindingPayload,
+    Fingerprint,
     FingerprintKind,
+    FindingSeverity,
+    FindingTransitionPayload,
     ProviderContentPayload,
     Role,
+    WorkUnitPayload,
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
@@ -40,6 +46,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "contracts",
     "finding_reducer",
     "review_packets",
+    "slice_exit",
     "task_contract",
     "workflow",
     "workflow_state",
@@ -317,6 +324,88 @@ def test_required_workflow_event_omission_fails_closed() -> None:
             round_number=1,
             domain_record=cast(Any, object()),
         )
+
+
+def test_completed_workflow_rejects_canary_sequence_with_unowned_finding() -> None:
+    run_id = "canary-unowned-finding"
+    fingerprint = "b" * 64
+    records: list[ArtifactRecord] = []
+
+    def append_record(payload: object, logical_id: str) -> None:
+        records.append(
+            ArtifactRecord.create(
+                run_id=run_id,
+                logical_id=logical_id,
+                revision=1,
+                fingerprint=Fingerprint(
+                    FingerprintKind.IMPLEMENTATION, fingerprint
+                ),
+                predecessor_ids=(records[-1].record_id,) if records else (),
+                created_at=f"2026-09-20T04:0{len(records)}:00+00:00",
+                idempotency_key=logical_id,
+                payload=payload,
+            )
+        )
+
+    append_record(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.OBSERVATION,
+            finding_status="open",
+            rationale="Canary finding remained undecided",
+            work_unit_id="2",
+            summary="Canary finding remained undecided",
+            acceptance_test="The canary finding receives a decision",
+            origin_slice_id="2",
+            origin_round_number=1,
+            responsibility=None,
+        ),
+        "finding-c-01-opened",
+    )
+    for work_unit_id in ("2", "3", "4"):
+        append_record(
+            WorkUnitPayload(work_unit_id, 1, ("src/fix.py",)),
+            f"work-unit-{work_unit_id}",
+        )
+    append_record(
+        BindingPayload("commit", "c" * 40, "attestation", ("approval",)),
+        "commit-4",
+    )
+
+    appended_payloads: list[object] = []
+    bridge = SimpleNamespace(
+        store=SimpleNamespace(current_chain=lambda: tuple(records)),
+        append=lambda payload, **_kwargs: appended_payloads.append(payload),
+    )
+    persistence = WorkflowPersistence(_dependencies(bridge=cast(Any, bridge)))
+    state = SimpleNamespace(
+        task_digest="d" * 64,
+        work_units=(),
+        work_plan_path=None,
+        planned_slices=(),
+        approved_plan_commit=None,
+        current_step=WorkflowStep.COMPLETED,
+        slices=(SimpleNamespace(commit_ref="c" * 40),),
+        execution_mode="IMPLEMENT",
+        run_id=run_id,
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=(
+            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
+            "open findings without valid responsibility: C-01"
+        ),
+    ):
+        persistence._persist_structured_tail(cast(Any, state))
+
+    assert not any(
+        isinstance(payload, WorkflowCompletionPayload)
+        for payload in appended_payloads
+    )
 
 
 def test_provider_content_sink_directly_externalizes_canonical_bytes(

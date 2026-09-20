@@ -35,6 +35,7 @@ CONDITION_4_ACCEPTANCE_UNDECIDABLE = (
     "target Slice has no record-bound acceptance criteria, so its named condition "
     "cannot be resolved from the record chain"
 )
+UNOWNED_OPEN_FINDING_DIAGNOSTIC = "OPEN-FINDING-WITHOUT-RESPONSIBILITY"
 
 
 class SliceExitStatus(StrEnum):
@@ -92,6 +93,10 @@ def evaluate_slice_exit(
     finding_projection = project_slice_exit_findings(run_records)
     events = finding_projection.events
     heads = {item.finding_id: item for item in finding_projection.heads}
+    # Responsibility is a prerequisite for Slice membership, not a membership
+    # filter.  Check it before deriving the Slice-specific cohort so an open
+    # Finding with no valid owner enters every active A_s evaluation.
+    unowned_open_ids = _unowned_open_finding_ids(finding_projection.heads)
     cohort_ids, slice_work_unit_ids, boundary_reasons = _slice_cohort(
         run_records,
         events,
@@ -99,6 +104,7 @@ def evaluate_slice_exit(
         approved_plan_commit=plan_commit,
         slice_id=target_slice_id,
     )
+    cohort_ids = sorted_finding_ids((*cohort_ids, *unowned_open_ids))
 
     condition_1_reasons: list[str] = []
     condition_2_reasons: list[str] = list(boundary_reasons)
@@ -126,7 +132,8 @@ def evaluate_slice_exit(
 
         if head.is_open and not _valid_responsibility(head.responsibility):
             condition_2_reasons.append(
-                f"open finding {finding_id} has no valid responsibility assignment"
+                f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: open finding {finding_id} "
+                "has no valid responsibility assignment"
             )
 
         if isinstance(head.responsibility, SliceResponsibility) and (
@@ -332,6 +339,29 @@ def _valid_responsibility(
     return True
 
 
+def _unowned_open_finding_ids(
+    heads: Sequence[SliceExitFindingHeadProjection],
+) -> tuple[str, ...]:
+    return sorted_finding_ids(
+        item.finding_id
+        for item in heads
+        if item.is_open and not _valid_responsibility(item.responsibility)
+    )
+
+
+def unowned_open_finding_ids(
+    records: Sequence[ArtifactRecord],
+    *,
+    run_id: str,
+) -> tuple[str, ...]:
+    """Return every open Finding that has no valid responsibility assignment."""
+
+    run_records = tuple(record for record in records if record.run_id == run_id)
+    return _unowned_open_finding_ids(
+        project_slice_exit_findings(run_records).heads
+    )
+
+
 def _slice_route_errors(
     finding_id: str,
     head: SliceExitFindingHeadProjection,
@@ -450,8 +480,10 @@ def _condition(
 
 __all__ = [
     "CONDITION_4_ACCEPTANCE_UNDECIDABLE",
+    "UNOWNED_OPEN_FINDING_DIAGNOSTIC",
     "SliceExitCondition",
     "SliceExitEvaluation",
     "SliceExitStatus",
     "evaluate_slice_exit",
+    "unowned_open_finding_ids",
 ]

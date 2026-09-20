@@ -38,7 +38,10 @@ from artifact_models import (
     BranchDiscoveryCompletedPayload,
     FamilyBindingPayload,
     FingerprintKind,
+    FindingSeverity,
+    FindingTransitionPayload,
     ReviewPayload,
+    Role,
     ValidationAttestationPayload,
     WorkflowCompletionPayload,
     canonical_json,
@@ -51,6 +54,7 @@ from dry_run_scenarios import (
     ScriptedInterruption as InjectedCrash,
     ScriptedWorkflowDriver,
 )
+from finding_responsibility import BranchPlanningResponsibility
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
 from side_effects import (
@@ -215,6 +219,47 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
         self._record_driver.persist_native_review_contract(
             output, fingerprint, round_number, previous_findings
         )
+        state = self._record_driver.active_state
+        bridge = self._record_driver._artifact_bridge  # noqa: SLF001
+        if (
+            state is not None
+            and bridge is not None
+            and state.execution_mode == "BRANCH_DISCOVERY"
+        ):
+            family_binding = state.active_family_binding
+            if family_binding is None:  # pragma: no cover - harness invariant
+                raise CrashHarnessError(
+                    "scripted branch discovery has no family binding"
+                )
+            previous_ids = {item.finding_id for item in previous_findings}
+            for finding in output.result.findings:
+                if finding.finding_id in previous_ids or finding.status.value != "OPEN":
+                    continue
+                bridge.append(
+                    FindingTransitionPayload(
+                        finding_id=finding.finding_id,
+                        reporter=Role.CLAUDE,  # allowlist:provider -- reviewer authority
+                        actor=Role.CLAUDE,  # allowlist:provider -- reviewer authority
+                        action="routed",
+                        severity=FindingSeverity(finding.finding_class.value),
+                        finding_status="open",
+                        rationale=(
+                            "The scripted branch-discovery reviewer routes the "
+                            "new finding to the bound remediation planning cycle."
+                        ),
+                        work_unit_id=str(state.current_work_unit_id),
+                        responsibility=BranchPlanningResponsibility(
+                            family_binding.family_id,
+                            family_binding.cycle_number,
+                        ),
+                    ),
+                    logical_id=f"finding-{finding.finding_id}",
+                    idempotency_key=(
+                        f"finding:{finding.finding_id}:routed:work_unit:"
+                        f"{state.current_work_unit_id}:{round_number}:claude"  # allowlist:provider -- stable reviewer identity
+                    ),
+                    fingerprint_sha256=fingerprint,
+                )
         super().persist_native_review_contract(
             output, fingerprint, round_number, previous_findings
         )

@@ -48,8 +48,10 @@ from native_review_contract import (
 )
 from slice_exit import (
     CONDITION_4_ACCEPTANCE_UNDECIDABLE,
+    UNOWNED_OPEN_FINDING_DIAGNOSTIC,
     SliceExitStatus,
     evaluate_slice_exit,
+    unowned_open_finding_ids,
 )
 
 
@@ -568,6 +570,121 @@ def test_projection_or_markdown_only_decision_cannot_satisfy_condition_6() -> No
     assert "fixed" in non_authoritative_markdown
     assert result.condition(6).status is SliceExitStatus.VIOLATED
     assert "no transition record" in result.condition(6).reasons[0]
+
+
+def test_open_unowned_finding_from_earlier_slice_blocks_current_slice_exit() -> None:
+    records = _base_records()
+    records.extend(
+        (
+            _record(
+                len(records) + 1,
+                _opening("C-01", "3", None),
+                records,
+            ),
+            _record(
+                len(records) + 2,
+                WorkUnitPayload("6", 1, ("src/fix.py",)),
+                records,
+                logical_id="work-unit-6",
+            ),
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.responsibility_finding_ids == ("C-01",)
+    assert result.condition(2).status is SliceExitStatus.VIOLATED
+    assert UNOWNED_OPEN_FINDING_DIAGNOSTIC in result.condition(2).reasons[0]
+    assert "C-01" in result.condition(2).reasons[0]
+    assert not result.commit_eligible
+
+
+def test_open_finding_owned_by_later_slice_does_not_join_current_slice() -> None:
+    records = _base_records(
+        target_acceptance_texts=("The recorded target condition exists.",)
+    )
+    criterion_id = acceptance_criterion_id(
+        "7", "The recorded target condition exists."
+    )
+    records.extend(
+        (
+            _record(
+                len(records) + 1,
+                _opening(
+                    "C-01",
+                    "3",
+                    SliceResponsibility(RUN_ID, PLAN_COMMIT, "3"),
+                ),
+                records,
+            ),
+            _record(
+                len(records) + 2,
+                _route(
+                    "C-01",
+                    SliceResponsibility(
+                        RUN_ID, PLAN_COMMIT, "7", criterion_id
+                    ),
+                    "3",
+                ),
+                records,
+            ),
+            _record(
+                len(records) + 3,
+                WorkUnitPayload("6", 1, ("src/fix.py",)),
+                records,
+                logical_id="work-unit-6",
+            ),
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.responsibility_finding_ids == ()
+    assert result.status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
+
+
+def test_closed_finding_without_responsibility_does_not_block() -> None:
+    records = _base_records()
+    records.extend(
+        (
+            _record(
+                len(records) + 1,
+                _opening("C-01", "3", None),
+                records,
+            ),
+            _record(
+                len(records) + 2,
+                FindingTransitionPayload(
+                    finding_id="C-01",
+                    reporter=Role.CLAUDE,
+                    actor=Role.CLAUDE,
+                    action="status_changed",
+                    severity=FindingSeverity.OBSERVATION,
+                    finding_status="closed",
+                    rationale="The finding was evidentially rejected",
+                    work_unit_id="3",
+                    closure_kind="rejected",
+                    rejection_reason="no_defect",
+                    closure_evidence="The named evidence disproves the finding",
+                ),
+                records,
+            ),
+            _record(
+                len(records) + 3,
+                WorkUnitPayload("6", 1, ("src/fix.py",)),
+                records,
+                logical_id="work-unit-6",
+            ),
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert unowned_open_finding_ids(records, run_id=RUN_ID) == ()
+    assert result.responsibility_finding_ids == ()
+    assert result.status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
 
 
 def _review(

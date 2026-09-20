@@ -6993,7 +6993,7 @@ def test_plan_only_repairs_handoff_contract_before_review(
     assert task.with_name("task-implement.md").is_file()
 
 
-def test_plan_only_approval_with_observation_persists_plan_before_finding_export(
+def test_plan_only_unowned_observation_halts_after_plan_before_finding_export(
     tmp_path: Path, monkeypatch
 ) -> None:
     repository = _repository(tmp_path, "feature/plan-finding-export")
@@ -7043,33 +7043,34 @@ def test_plan_only_approval_with_observation_persists_plan_before_finding_export
     )
     monkeypatch.chdir(repository)
 
-    result = run_production_workflow(task, _args(repository, task))
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=(
+            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
+            "open findings without valid responsibility: C-01"
+        ),
+    ):
+        run_production_workflow(task, _args(repository, task))
 
-    assert result.workflow_completed
-    assert result.commit_ref is not None
-    assert result.state.approved_plan_commit == result.commit_ref
-    handoff = task.with_name("plan-implement.md")
-    contract = parse_task_contract(handoff.read_text(encoding="utf-8"))
-    assert contract.approved_plan_commit == result.commit_ref
-    assert contract.finding_handoff_source_run_id == result.state.run_id
-    assert contract.finding_handoff_export_record_id is not None
-    chain = ArtifactStore(repository, result.state.run_id).load_chain()
-    plan_position = next(
-        index for index, record in enumerate(chain)
-        if isinstance(record.payload, PlanPayload)
+    persisted = orchestrator.load_workflow_state(
+        repository / ".orchestrator" / "state.json",
+        allowed_roots=(repository,),
     )
-    completion_position = next(
-        index for index, record in enumerate(chain)
-        if isinstance(record.payload, WorkflowCompletionPayload)
+    assert isinstance(persisted, WorkflowState)
+    chain = ArtifactStore(repository, persisted.run_id).load_chain()
+    assert any(isinstance(record.payload, PlanPayload) for record in chain)
+    assert not any(
+        isinstance(record.payload, WorkflowCompletionPayload)
+        for record in chain
     )
-    export_position = next(
-        index for index, record in enumerate(chain)
-        if isinstance(record.payload, FindingHandoffExportPayload)
+    assert not any(
+        isinstance(record.payload, FindingHandoffExportPayload)
+        for record in chain
     )
-    assert plan_position < completion_position < export_position
+    assert not task.with_name("plan-implement.md").exists()
 
 
-def test_completed_plan_with_observation_backfills_plan_record_without_agents(
+def test_unowned_plan_observation_resume_stays_halted_without_agents(
     tmp_path: Path, monkeypatch
 ) -> None:
     repository = _repository(tmp_path, "feature/legacy-plan-finding-export")
@@ -7136,7 +7137,10 @@ def test_completed_plan_with_observation_backfills_plan_record_without_agents(
 
     with pytest.raises(
         WorkflowExecutionError,
-        match="finding export plan commit is not present in accepted replay",
+        match=(
+            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
+            "open findings without valid responsibility: C-01"
+        ),
     ):
         run_production_workflow(task, args)
 
@@ -7147,7 +7151,7 @@ def test_completed_plan_with_observation_backfills_plan_record_without_agents(
     assert isinstance(persisted, WorkflowState)
     assert persisted.approved_plan_commit is None
     before_resume = ArtifactStore(repository, persisted.run_id).load_chain()
-    assert any(
+    assert not any(
         isinstance(record.payload, WorkflowCompletionPayload)
         for record in before_resume
     )
@@ -7156,18 +7160,27 @@ def test_completed_plan_with_observation_backfills_plan_record_without_agents(
 
     suppress_binding = False
     args.resume = True
-    resumed = run_production_workflow(task, args)
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=(
+            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
+            "open findings without valid responsibility: C-01"
+        ),
+    ):
+        run_production_workflow(task, args)
 
-    assert resumed.workflow_completed
     assert tuple(agent_steps) == steps_before_resume
-    assert resumed.state.approved_plan_commit == resumed.commit_ref
-    assert task.with_name("plan-implement.md").is_file()
-    after_resume = ArtifactStore(repository, resumed.state.run_id).load_chain()
-    assert sum(isinstance(record.payload, PlanPayload) for record in after_resume) == 1
-    assert sum(
+    assert not task.with_name("plan-implement.md").exists()
+    after_resume = ArtifactStore(repository, persisted.run_id).load_chain()
+    assert not any(isinstance(record.payload, PlanPayload) for record in after_resume)
+    assert not any(
         isinstance(record.payload, FindingHandoffExportPayload)
         for record in after_resume
-    ) == 1
+    )
+    assert not any(
+        isinstance(record.payload, WorkflowCompletionPayload)
+        for record in after_resume
+    )
 
 
 def test_completed_plan_resume_retries_failed_handoff_without_agents(
