@@ -984,7 +984,8 @@ def _forbid_legacy_filter_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*_args, **_kwargs):
         pytest.fail("total exit evaluation consulted a legacy cohort filter")
 
-    monkeypatch.setattr(slice_exit, "_slice_cohort", fail)
+    if hasattr(slice_exit, "_slice_cohort"):
+        monkeypatch.setattr(slice_exit, "_slice_cohort", fail)
     monkeypatch.setattr(slice_exit, "_unowned_open_finding_ids", fail)
 
 

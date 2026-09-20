@@ -1143,6 +1143,46 @@ def test_cutover_convergence_stall_ends_gate_free_without_slice_commit(
     )
 
 
+def test_discovery_stall_rejection_detail_names_the_discovery_phase() -> None:
+    finding = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Unassigned discovery blocker",
+        "The discovery blocker is assigned or closed.",
+        FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    state = _combined_native_slice_state().with_current_step(
+        WorkflowStep.CLAUDE_SLICE_REVIEW
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        convergence_evaluations=[_negative_discovery()],
+    )
+
+    next_state, history = WorkflowEngine(driver)._apply_review_result(
+        state=state,
+        context=_context(),
+        history=WorkflowHistory(state.current_work_unit_id),
+        reviewer=AgentRole.CLAUDE,
+        result=_denied_review_result((finding,)),
+        fingerprint="d" * 64,
+        round_number=1,
+        is_plan_review=False,
+        is_final_review=False,
+        finding_ledger=(),
+    )
+    run_result = WorkflowRunResult(next_state, history)
+
+    assert driver.convergence_calls == [(state.current_work_unit_id, 1)]
+    assert run_result.workflow_rejected
+    assert run_result.rejection_detail is not None
+    assert "the discovery round opened no findings" in run_result.rejection_detail
+    assert "the convergence round" not in run_result.rejection_detail
+
+
 def _second_slice_review_state(finding_id: str) -> WorkflowState:
     state = _combined_native_slice_state().with_current_step(
         WorkflowStep.CLAUDE_SLICE_REVIEW
@@ -1169,6 +1209,19 @@ def _negative_convergence() -> SliceConvergenceEvaluation:
             "the convergence round closed or forwarded no previously local "
             "finding and recorded no attested fingerprint-changing remediation"
         ),
+    )
+
+
+def _negative_discovery() -> SliceConvergenceEvaluation:
+    return SliceConvergenceEvaluation(
+        phase=SliceReviewPhase.DISCOVERY,
+        cohort_finding_ids=(),
+        newly_opened_finding_ids=(),
+        closed_local_finding_ids=(),
+        forwarded_local_finding_ids=(),
+        attested_remediation_finding_ids=(),
+        progress_made=False,
+        reason="the discovery round opened no findings",
     )
 
 

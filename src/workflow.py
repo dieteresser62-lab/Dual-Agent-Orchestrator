@@ -1393,7 +1393,12 @@ class WorkflowRunResult:
                 "disposition progress"
                 if safety_limit_reached
                 else (
-                    (
+                    "the discovery round opened no findings"
+                    if (
+                        self.state.current_work_unit.kind is WorkUnitKind.SLICE
+                        and self.state.current_work_unit.round_number == 1
+                    )
+                    else (
                         "the convergence round closed or forwarded no previously "
                         "local finding and recorded no attested fingerprint-changing "
                         "remediation"

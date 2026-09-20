@@ -23,7 +23,6 @@ from artifact_models import (
 )
 from finding_order import sorted_finding_ids
 from finding_reducer import (
-    FindingTransitionProjection,
     SliceExitFindingHeadProjection,
     SliceExitFindingProjection,
     project_slice_exit_findings,
@@ -272,92 +271,6 @@ def evaluate_slice_exit(
         conditions=conditions,
         status=status,
     )
-
-
-def _slice_cohort(
-    records: Sequence[ArtifactRecord],
-    events: Sequence[FindingTransitionProjection],
-    *,
-    run_id: str,
-    approved_plan_commit: str,
-    slice_id: str,
-) -> tuple[tuple[str, ...], frozenset[str], tuple[str, ...]]:
-    start_unit = next(
-        (
-            record.payload
-            for record in records
-            if isinstance(record.payload, WorkUnitPayload)
-            and record.payload.slice_id == slice_id
-        ),
-        None,
-    )
-    work_unit_ids = frozenset(
-        record.logical_id.removeprefix("work-unit-")
-        for record in records
-        if record.logical_id.startswith("work-unit-")
-        and isinstance(record.payload, WorkUnitPayload)
-        and record.payload.slice_id == slice_id
-    )
-    cohort: set[str] = set()
-    reasons: tuple[str, ...] = ()
-    if isinstance(start_unit, WorkUnitPayload):
-        cohort.update(start_unit.open_finding_ids)
-    else:
-        reasons = (f"Slice {slice_id} has no record-bound start Work Unit",)
-    cohort.update(
-        event.payload.finding_id
-        for event in events
-        if event.payload.action == "opened"
-        and event.payload.origin_slice_id == slice_id
-    )
-    cohort.update(
-        event.payload.finding_id
-        for event in events
-        if event.payload.action == "routed"
-        and event.payload.work_unit_id in work_unit_ids
-    )
-    cohort.update(
-        event.payload.finding_id
-        for event in events
-        if event.payload.action == "routed"
-        and isinstance(event.payload.responsibility, SliceResponsibility)
-        and event.payload.responsibility.target_run_id == run_id
-        and event.payload.responsibility.approved_plan_commit == approved_plan_commit
-        and event.payload.responsibility.slice_id == slice_id
-    )
-    return sorted_finding_ids(cohort), work_unit_ids, reasons
-
-
-def slice_cohort_finding_ids(
-    records: Sequence[ArtifactRecord],
-    *,
-    run_id: str,
-    slice_id: int | str,
-    approved_plan_commit: str | None = None,
-) -> tuple[str, ...]:
-    """Return historical ``A_s`` membership for E5 convergence only.
-
-    E4 deliberately does not consume this filtered set: its exit decision is
-    quantified over every Finding head in the run.
-    """
-
-    target_slice_id = str(slice_id)
-    run_records = tuple(record for record in records if record.run_id == run_id)
-    plan = _select_plan(run_records, approved_plan_commit)
-    plan_commit = (
-        approved_plan_commit
-        if approved_plan_commit is not None
-        else "" if plan is None else plan.approved_plan_commit
-    )
-    projection = project_slice_exit_findings(run_records)
-    cohort, _work_units, _reasons = _slice_cohort(
-        run_records,
-        projection.events,
-        run_id=run_id,
-        approved_plan_commit=plan_commit,
-        slice_id=target_slice_id,
-    )
-    return cohort
 
 
 def _select_plan(
@@ -754,7 +667,6 @@ __all__ = [
     "SliceExitStatus",
     "evaluate_slice_exit",
     "slice_commit_decision_finding_ids",
-    "slice_cohort_finding_ids",
     "unowned_open_finding_ids",
     "workflow_completion_blocking_finding_ids",
 ]

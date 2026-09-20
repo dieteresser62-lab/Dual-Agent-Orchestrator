@@ -49,6 +49,29 @@ def test_discovery_round_treats_new_findings_as_progress() -> None:
     assert result.progress_made
 
 
+def test_discovery_round_counts_two_unowned_findings_from_the_round() -> None:
+    """Regression for Canary 17: record openings exhaust the decision set."""
+
+    chain = _base_chain()
+    _append_review_round(
+        chain,
+        round_number=1,
+        fingerprint=OLD_FINGERPRINT,
+        transitions=(
+            _unowned_opening("C-01", FindingSeverity.BLOCKER),
+            _unowned_opening("C-02", FindingSeverity.OBSERVATION),
+        ),
+        finding_ids=("C-01", "C-02"),
+    )
+
+    result = _evaluate(chain, round_number=1)
+
+    assert result.phase is SliceReviewPhase.DISCOVERY
+    assert result.cohort_finding_ids == ("C-01", "C-02")
+    assert result.newly_opened_finding_ids == ("C-01", "C-02")
+    assert result.progress_made
+
+
 def test_convergence_round_does_not_count_a_bare_new_opening() -> None:
     chain = _chain_after_discovery()
     _append_review_round(
@@ -206,6 +229,28 @@ def _opening(finding_id: str, *, round_number: int) -> FindingTransitionPayload:
         origin_slice_id=SLICE_ID,
         origin_round_number=round_number,
         responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, SLICE_ID),
+    )
+
+
+def _unowned_opening(
+    finding_id: str, severity: FindingSeverity
+) -> FindingTransitionPayload:
+    return FindingTransitionPayload(
+        finding_id=finding_id,
+        reporter=Role.CLAUDE,
+        actor=Role.CLAUDE,
+        action="opened",
+        severity=severity,
+        finding_status="open",
+        rationale="The discovery round opened this unassigned finding.",
+        work_unit_id=WORK_UNIT_ID,
+        summary=f"Repair {finding_id}",
+        acceptance_test=f"The regression for {finding_id} passes",
+        # Native review Slice IDs are display-padded while Work Units bind the
+        # numeric Slice ID.  Membership must not depend on that representation.
+        origin_slice_id=f"0{SLICE_ID}",
+        origin_round_number=1,
+        responsibility=None,
     )
 
 

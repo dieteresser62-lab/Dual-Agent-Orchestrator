@@ -22,7 +22,7 @@ from finding_reducer import (
     project_slice_exit_findings,
 )
 from finding_responsibility import SliceResponsibility
-from slice_exit import evaluate_slice_exit, slice_cohort_finding_ids
+from slice_exit import evaluate_slice_exit
 
 
 class SliceReviewPhase(StrEnum):
@@ -79,14 +79,10 @@ def evaluate_slice_convergence(
         slice_id=target_slice,
         approved_plan_commit=approved_plan_commit,
     )
-    cohort = frozenset(
-        slice_cohort_finding_ids(
-            run_records,
-            run_id=run_id,
-            slice_id=target_slice,
-            approved_plan_commit=approved_plan_commit,
-        )
-    )
+    # E4 and E5 deliberately quantify over the same exhausted, record-derived
+    # Finding set.  In particular, an opening cannot disappear merely because
+    # the reviewer has not assigned its responsibility yet.
+    cohort = frozenset(exit_evaluation.responsibility_finding_ids)
     review_position = run_records.index(review_record)
     prior_projection = project_slice_exit_findings(run_records[:review_position])
     prior_local = frozenset(
