@@ -4,17 +4,17 @@
     {
       "provider": "claude",
       "form": "convergence",
-      "sha256": "771dc04de90bf3f21b1df042293fec7629308d8e97889e29fd5c755393b0d8f3"
+      "sha256": "ec7634c2327df74853950f4d54e82315f6ba74352b6e25b14755302f30ce3786"
     },
     {
       "provider": "claude",
       "form": "initial_slice",
-      "sha256": "2d69fafdbdb36d7287da8895756b6732df6618e01397d3f02b2baf6ba63ae4ad"
+      "sha256": "acda19a1399b4e69eba09f6c54006a65664adfdb2f46c441818d61c4c5cd3348"
     },
     {
       "provider": "claude",
       "form": "plan",
-      "sha256": "8811a3093228f98e950774a9f277696b78724f4888d5d38208cac288e57772b2"
+      "sha256": "04b028ce1ff9ff249b7608a086396bc48a7bce1f9e0ccba51406bfa0c9e0c16d"
     },
     {
       "provider": "codex",
@@ -24,12 +24,12 @@
     {
       "provider": "codex",
       "form": "implementation",
-      "sha256": "7418b2405ea04cb2c7796266ba75c79b1b5af687aa067c71aa5879b2edb88155"
+      "sha256": "d8f86a80511191022fee41bb2599d9637ff04d5e27f17c7256a9569b9635e007"
     },
     {
       "provider": "codex",
       "form": "plan",
-      "sha256": "c88adcc80a643a68e182761f53ccaf12f09f6bc54a999f7ec9a00ed2beffa0f5"
+      "sha256": "a7f6a18e523f53e978330b5ec9120df824d718444f3d16c0a3b59c705622b15b"
     }
   ]
 }

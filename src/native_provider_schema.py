@@ -22,6 +22,7 @@ CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
 PROVIDER_VERSION_POLICY = "same-major-forward"
 OPENAI_PROVIDER = "co" + "dex"
+ANTHROPIC_PROVIDER = "clau" + "de"
 OPENAI_STRUCTURED_OUTPUT_KEYWORDS = frozenset(
     {
         "$defs",
@@ -277,70 +278,103 @@ def assert_projected_provider_schema(
     projected_schema: Mapping[str, Any], *, provider: str
 ) -> None:
     """Fail closed when a final writer schema violates provider rules."""
-    if provider != OPENAI_PROVIDER:
+    if provider not in {ANTHROPIC_PROVIDER, OPENAI_PROVIDER}:
         raise NativeProviderSchemaError(
-            f"no projected-schema acceptance guard for provider {provider}"
+            "no projected-schema acceptance guard for the requested provider"
         )
 
     violations: list[str] = []
-    if projected_schema.get("type") != "object":
-        violations.append("/type: root must have type object")
-    if "anyOf" in projected_schema:
-        violations.append("/anyOf: root must not use anyOf")
+    if provider == OPENAI_PROVIDER:
+        if projected_schema.get("type") != "object":
+            violations.append("/type: root must have type object")
+        if "anyOf" in projected_schema:
+            violations.append("/anyOf: root must not use anyOf")
 
     pending: list[tuple[str, Mapping[str, Any]]] = [("", projected_schema)]
     while pending:
         pointer, node = pending.pop()
-        unsupported = sorted(set(node) - OPENAI_STRUCTURED_OUTPUT_KEYWORDS)
-        for keyword in unsupported:
-            keyword_path = _schema_pointer(pointer, keyword)
-            rule = (
-                "is not permitted"
-                if keyword == "oneOf"
-                else "is not supported"
-                if keyword in OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS
-                else "is not a supported schema keyword"
-            )
-            violations.append(f"{keyword_path}: keyword {keyword!r} {rule}")
-        if "$ref" in node and set(node) != {"$ref"}:
-            siblings = sorted(set(node) - {"$ref"})
+        enum = node.get("enum")
+        if isinstance(enum, list) and not enum:
             violations.append(
-                f"{pointer or '/'}: $ref must not have sibling keys {siblings!r}"
+                f"{_schema_pointer(pointer, 'enum')}: must not be empty"
             )
         declared_types = node.get("type")
-        type_names = (
-            declared_types if isinstance(declared_types, list) else [declared_types]
-        )
-        unsupported_types = sorted(
-            repr(item)
-            for item in type_names
-            if item is not None
-            and (
-                not isinstance(item, str)
-                or item not in OPENAI_STRUCTURED_OUTPUT_TYPES
-            )
-        )
-        if unsupported_types:
+        if isinstance(declared_types, list) and not declared_types:
             violations.append(
-                f"{_schema_pointer(pointer, 'type')}: unsupported JSON type(s) "
-                f"{unsupported_types!r}"
+                f"{_schema_pointer(pointer, 'type')}: must not be empty"
             )
-        if node.get("type") == "object":
-            if node.get("additionalProperties") is not False:
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            branches = node.get(keyword)
+            if isinstance(branches, list) and not branches:
                 violations.append(
-                    f"{_schema_pointer(pointer, 'additionalProperties')}: "
-                    "object must set additionalProperties false"
+                    f"{_schema_pointer(pointer, keyword)}: must not be empty"
                 )
-            properties = node.get("properties")
-            required = node.get("required")
-            if isinstance(properties, dict) and (
-                not isinstance(required, list)
-                or set(required) != set(properties)
-            ):
+
+        properties = node.get("properties")
+        required = node.get("required")
+        if isinstance(properties, Mapping) and isinstance(required, list):
+            for name in required:
+                property_schema = properties.get(name)
+                if (
+                    isinstance(name, str)
+                    and isinstance(property_schema, Mapping)
+                    and property_schema.get("maxItems") == 0
+                ):
+                    violations.append(
+                        f"{_schema_pointer(pointer, 'properties', name, 'maxItems')}: "
+                        "required array property must not force an empty collection"
+                    )
+
+        if provider == OPENAI_PROVIDER:
+            unsupported = sorted(set(node) - OPENAI_STRUCTURED_OUTPUT_KEYWORDS)
+            for keyword in unsupported:
+                keyword_path = _schema_pointer(pointer, keyword)
+                rule = (
+                    "is not permitted"
+                    if keyword == "oneOf"
+                    else "is not supported"
+                    if keyword in OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS
+                    else "is not a supported schema keyword"
+                )
+                violations.append(f"{keyword_path}: keyword {keyword!r} {rule}")
+            if "$ref" in node and set(node) != {"$ref"}:
+                siblings = sorted(set(node) - {"$ref"})
                 violations.append(
-                    f"{_schema_pointer(pointer, 'required')}: every object "
-                    "property must be required"
+                    f"{pointer or '/'}: $ref must not have sibling keys {siblings!r}"
                 )
+            type_names = (
+                declared_types
+                if isinstance(declared_types, list)
+                else [declared_types]
+            )
+            unsupported_types = sorted(
+                repr(item)
+                for item in type_names
+                if item is not None
+                and (
+                    not isinstance(item, str)
+                    or item not in OPENAI_STRUCTURED_OUTPUT_TYPES
+                )
+            )
+            if unsupported_types:
+                violations.append(
+                    f"{_schema_pointer(pointer, 'type')}: unsupported JSON type(s) "
+                    f"{unsupported_types!r}"
+                )
+            if node.get("type") == "object":
+                if node.get("additionalProperties") is not False:
+                    violations.append(
+                        f"{_schema_pointer(pointer, 'additionalProperties')}: "
+                        "object must set additionalProperties false"
+                    )
+                if isinstance(properties, dict) and (
+                    not isinstance(required, list)
+                    or set(required) != set(properties)
+                ):
+                    violations.append(
+                        f"{_schema_pointer(pointer, 'required')}: every object "
+                        "property must be required"
+                    )
         for container in ("$defs", "properties"):
             children = node.get(container)
             if isinstance(children, Mapping):
@@ -352,17 +386,30 @@ def assert_projected_provider_schema(
         items = node.get("items")
         if isinstance(items, Mapping):
             pending.append((_schema_pointer(pointer, "items"), items))
-        branches = node.get("anyOf")
-        if isinstance(branches, list):
-            for index, child in enumerate(branches):
-                if isinstance(child, Mapping):
-                    pending.append(
-                        (_schema_pointer(pointer, "anyOf", str(index)), child)
-                    )
+        additional = node.get("additionalProperties")
+        if isinstance(additional, Mapping):
+            pending.append(
+                (_schema_pointer(pointer, "additionalProperties"), additional)
+            )
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            branches = node.get(keyword)
+            if isinstance(branches, list):
+                for index, child in enumerate(branches):
+                    if isinstance(child, Mapping):
+                        pending.append(
+                            (
+                                _schema_pointer(pointer, keyword, str(index)),
+                                child,
+                            )
+                        )
+        for keyword in ("if", "then", "else"):
+            child = node.get(keyword)
+            if isinstance(child, Mapping):
+                pending.append((_schema_pointer(pointer, keyword), child))
 
     if violations:
         raise NativeProviderSchemaError(
-            f"{provider} projected schema violates provider acceptance rules: "
+            "projected schema violates provider acceptance rules: "
             + "; ".join(sorted(violations))
         )
 

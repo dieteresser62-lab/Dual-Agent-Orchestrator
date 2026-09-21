@@ -252,3 +252,56 @@ def test_projected_schema_guard_enforces_other_codex_provider_rules(
 
     with pytest.raises(NativeProviderSchemaError, match=message):
         assert_projected_provider_schema(schema, provider="codex")
+
+
+@pytest.mark.parametrize("provider", ("claude", "codex"))
+@pytest.mark.parametrize(
+    ("property_schema", "message"),
+    (
+        ({"type": "string", "enum": []}, "/properties/value/enum: must not be empty"),
+        (
+            {"type": "array", "maxItems": 0, "items": {"type": "string"}},
+            "/properties/value/maxItems: required array property must not force "
+            "an empty collection",
+        ),
+        ({"anyOf": []}, "/properties/value/anyOf: must not be empty"),
+        ({"oneOf": []}, "/properties/value/oneOf: must not be empty"),
+    ),
+)
+def test_projected_schema_guard_rejects_degenerate_bindings_for_both_providers(
+    provider: str,
+    property_schema: dict[str, object],
+    message: str,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": property_schema},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(NativeProviderSchemaError) as raised:
+        assert_projected_provider_schema(schema, provider=provider)
+
+    assert message in str(raised.value)
+    assert provider not in str(raised.value)
+
+
+@pytest.mark.parametrize("keyword", ("allOf", "type"))
+@pytest.mark.parametrize("provider", ("claude", "codex"))
+def test_projected_schema_guard_rejects_other_invalid_empty_schema_arrays(
+    keyword: str, provider: str
+) -> None:
+    property_schema: dict[str, object] = {keyword: []}
+    schema = {
+        "type": "object",
+        "properties": {"value": property_schema},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(NativeProviderSchemaError) as raised:
+        assert_projected_provider_schema(schema, provider=provider)
+
+    assert f"/properties/value/{keyword}: must not be empty" in str(raised.value)
+    assert provider not in str(raised.value)

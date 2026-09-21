@@ -613,6 +613,16 @@ def test_changed_closed_signature_requires_a_new_generation() -> None:
         evidence_digest="0" * 64,
     )
     context = _discovery_context(original, changed)
+    writer = native_review_provider_response_schema(context)
+    predecessor = writer["$defs"]["bound_branch_discovery_finding"][
+        "properties"
+    ]["predecessor_finding_ref"]
+    assert predecessor == {
+        "oneOf": [
+            {"type": "string", "enum": ["C-01"]},
+            {"type": "null"},
+        ]
+    }
     occurrence = _discovery_document(context)
     occurrence["occurrences"] = [
         {
@@ -641,7 +651,7 @@ def test_changed_closed_signature_requires_a_new_generation() -> None:
     ]
     validate_schema_document(
         {"result": generation},
-        native_review_provider_response_schema(context),
+        writer,
     )
     result = parse_native_contract_result(generation, context)
     assert tuple(item.status for item in result.findings) == (

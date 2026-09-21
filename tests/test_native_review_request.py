@@ -54,8 +54,11 @@ from native_review_request import (
     validate_native_review_request_document,
 )
 from review_packets import ReviewPacket, build_review_packet
-from schema_validation import SchemaMismatch, validate_schema_document
-from native_provider_schema import registered_exceptions
+from schema_validation import SchemaMismatch, check_schema, validate_schema_document
+from native_provider_schema import (
+    assert_projected_provider_schema,
+    registered_exceptions,
+)
 
 
 FINGERPRINT = "a" * 64
@@ -139,7 +142,8 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
         "bound_slice_initial_approved"
     ]["properties"]["anchors"]
 
-    assert anchors_without_origin["maxItems"] == 0
+    assert anchors_without_origin["const"] == []
+    assert "maxItems" not in anchors_without_origin
     assert anchors_with_origin["maxItems"] == 64
     assert without_origin.document["response_contract"]["schema_sha256"] == (
         hashlib.sha256(
@@ -164,12 +168,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "84701527080770b17e20f47b87b3f5294be2061c8d86dbd9e95acac12be977e3"
+        "2f8f81f6431d672a7c908521a4ad5c2a8354d8a92c61b347e0822afd6f24dae5"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "2d69fafdbdb36d7287da8895756b6732df6618e01397d3f02b2baf6ba63ae4ad"
+        "acda19a1399b4e69eba09f6c54006a65664adfdb2f46c441818d61c4c5cd3348"
     )
 
 
@@ -303,12 +307,22 @@ def test_branch_discovery_request_binds_default_and_hard_capacity(
     completed = default_bundle.provider_response_schema["$defs"][
         "bound_branch_discovery_completed"
     ]
+    predecessor = default_bundle.provider_response_schema["$defs"][
+        "bound_branch_discovery_finding"
+    ]["properties"]["predecessor_finding_ref"]
     assert completed["properties"]["new_findings"]["maxItems"] == 128
+    assert completed["properties"]["occurrences"]["const"] == []
+    assert predecessor == {"type": "null"}
     assert completed["properties"]["scan_complete"] == {
         "type": "boolean",
         "const": True,
     }
     assert "scan_complete" in completed["required"]
+    check_schema(default_bundle.provider_response_schema)
+    assert_projected_provider_schema(
+        default_bundle.provider_response_schema,
+        provider="claude",
+    )
 
     maximum = replace(context, max_new_findings=MAX_BRANCH_DISCOVERY_NEW_FINDINGS)
     maximum_bundle = build_native_review_request(replace(spec, context=maximum))

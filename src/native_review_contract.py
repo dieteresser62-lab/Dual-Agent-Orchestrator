@@ -67,7 +67,10 @@ from validation_matrix import (
     finding_validation_command,
     matches_validation_family,
 )
-from native_provider_schema import defensive_provider_projection
+from native_provider_schema import (
+    assert_projected_provider_schema,
+    defensive_provider_projection,
+)
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from route_scope import uncovered_route_paths
 import native_finding_decisions
@@ -1080,19 +1083,21 @@ def _branch_discovery_provider_response_schema(
     finding["properties"]["summary"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
     )
-    finding["properties"]["predecessor_finding_ref"] = {
-        "oneOf": [
-            {
-                "type": "string",
-                "enum": [
-                    item.finding_id
-                    for item in context.closed_finding_bindings
-                    if not item.anchor_unchanged
-                ],
-            },
-            {"type": "null"},
-        ]
-    }
+    predecessor_ids = tuple(
+        item.finding_id
+        for item in context.closed_finding_bindings
+        if not item.anchor_unchanged
+    )
+    finding["properties"]["predecessor_finding_ref"] = (
+        {
+            "oneOf": [
+                {"type": "string", "enum": list(predecessor_ids)},
+                {"type": "null"},
+            ]
+        }
+        if predecessor_ids
+        else {"type": "null"}
+    )
     finding["properties"]["evidence_anchor_sha256"] = {
         "oneOf": [
             {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -1173,10 +1178,13 @@ def _branch_discovery_provider_response_schema(
     completed["properties"]["new_findings"]["items"] = {
         "$ref": "#/$defs/bound_branch_discovery_finding"
     }
-    completed["properties"]["occurrences"].update(
-        maxItems=len(known_ids),
-        items={"$ref": "#/$defs/bound_branch_discovery_occurrence"},
-    )
+    if known_ids:
+        completed["properties"]["occurrences"].update(
+            maxItems=len(known_ids),
+            items={"$ref": "#/$defs/bound_branch_discovery_occurrence"},
+        )
+    else:
+        _bind_required_empty_array(completed["properties"]["occurrences"])
     completed["properties"]["responsibility_routes"].update(
         maxItems=len(finding_ids),
         items={"$ref": "#/$defs/bound_branch_discovery_responsibility_route"},
@@ -1245,9 +1253,6 @@ def native_review_provider_response_schema(
         "type": "string",
         "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
     }
-    definitions["review_result"]["allOf"][1]["properties"]["anchors"][
-        "maxItems"
-    ] = 64 if context.anchor_origin is not None else 0
     definitions["prose_acceptance"]["properties"]["text"]["pattern"] = (
         NONBLANK_TEXT_PATTERN
     )
@@ -1271,9 +1276,13 @@ def native_review_provider_response_schema(
     definitions["anchor"]["properties"]["expected"]["maxLength"] = 2000
     definitions["anchor"]["properties"]["tolerance"]["maxLength"] = 1000
     if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
-        return _branch_discovery_provider_response_schema(
+        projected_schema = _branch_discovery_provider_response_schema(
             context, definitions
         )
+        assert_projected_provider_schema(
+            projected_schema, provider=context.reviewer.value
+        )
+        return projected_schema
     own_findings = tuple(
         item
         for item in context.previous_findings
@@ -1379,17 +1388,19 @@ def native_review_provider_response_schema(
         decision="approved",
         anchor_count=64 if context.anchor_origin is not None else 0,
     )
-    approved["properties"]["new_findings"].update(
-        maxItems=approved_new_max,
-        items={"$ref": "#/$defs/bound_approved_finding"},
-    )
+    if approved_new_max:
+        approved["properties"]["new_findings"].update(
+            maxItems=approved_new_max,
+            items={"$ref": "#/$defs/bound_approved_finding"},
+        )
+    else:
+        _bind_required_empty_array(approved["properties"]["new_findings"])
     approved_status_max = _bind_approved_status_changes(
         approved,
         status,
         own_open,
         same_response_closure_ids,
     )
-    approved["properties"]["reclassifications"].update(maxItems=0)
     _bind_native_decision_collections(approved, context, disposition_max)
     if observations_allowed and own_open_ids:
         approved_reclassification = _bound_review_definition(
@@ -1411,6 +1422,10 @@ def native_review_provider_response_schema(
             minItems=0,
             maxItems=own_disposition_max,
             items={"$ref": "#/$defs/bound_approved_reclassification"},
+        )
+    else:
+        _bind_required_empty_array(
+            approved["properties"]["reclassifications"]
         )
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
@@ -1436,14 +1451,18 @@ def native_review_provider_response_schema(
         maxItems=len(new_ids),
         items={"$ref": "#/$defs/bound_denied_finding"},
     )
-    denied["properties"]["status_changes"].update(
-        maxItems=own_disposition_max,
-        items={"$ref": "#/$defs/bound_status_change"},
-    )
-    denied["properties"]["reclassifications"].update(
-        maxItems=own_disposition_max,
-        items={"$ref": "#/$defs/bound_reclassification"},
-    )
+    if own_disposition_max:
+        denied["properties"]["status_changes"].update(
+            maxItems=own_disposition_max,
+            items={"$ref": "#/$defs/bound_status_change"},
+        )
+        denied["properties"]["reclassifications"].update(
+            maxItems=own_disposition_max,
+            items={"$ref": "#/$defs/bound_reclassification"},
+        )
+    else:
+        _bind_required_empty_array(denied["properties"]["status_changes"])
+        _bind_required_empty_array(denied["properties"]["reclassifications"])
     _bind_native_decision_collections(denied, context, disposition_max)
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
@@ -1486,7 +1505,7 @@ def native_review_provider_response_schema(
             {"$ref": f"#/$defs/bound_{branch}_stop"},
         )
     )
-    return {
+    projected_schema = {
         "title": f"Native Claude {branch} writer projection",
         "type": "object",
         "properties": {"result": {"oneOf": result_refs}},
@@ -1494,6 +1513,10 @@ def native_review_provider_response_schema(
         "additionalProperties": False,
         "$defs": definitions,
     }
+    assert_projected_provider_schema(
+        projected_schema, provider=context.reviewer.value
+    )
+    return projected_schema
 
 
 def _native_finding_id_window(
@@ -1561,12 +1584,13 @@ def _bind_approved_status_changes(
         (*(item.finding_id for item in own_open), *same_response_closure_ids)
     )
     maximum = min(MAX_NATIVE_REVIEW_DISPOSITIONS, len(status_ids))
+    if not status_ids:
+        _bind_required_empty_array(approved["properties"]["status_changes"])
+        return maximum
     approved["properties"]["status_changes"].update(
         minItems=0,
         maxItems=maximum,
     )
-    if not status_ids:
-        return maximum
     options: list[dict[str, Any]] = []
     for finding in own_open:
         option = json.loads(json.dumps(status))
@@ -1620,7 +1644,7 @@ def _bind_plan_treatment_decision_collection(
     if not isinstance(decisions, dict):
         return
     if not context.plan_treatments:
-        decisions["maxItems"] = 0
+        _bind_required_empty_array(decisions)
         return
     options: list[dict[str, Any]] = []
     for treatment in context.plan_treatments:
@@ -1692,8 +1716,19 @@ def _bound_review_result_definition(
         "type": "string",
         "const": decision,
     }
-    projected["properties"]["anchors"]["maxItems"] = anchor_count
+    if anchor_count:
+        projected["properties"]["anchors"]["maxItems"] = anchor_count
+    else:
+        _bind_required_empty_array(projected["properties"]["anchors"])
     return projected
+
+
+def _bind_required_empty_array(schema: dict[str, Any]) -> None:
+    """Keep a required collection exact without a degenerate zero bound."""
+
+    schema.pop("minItems", None)
+    schema.pop("maxItems", None)
+    schema["const"] = []
 
 
 def _bound_stop_result_definition(

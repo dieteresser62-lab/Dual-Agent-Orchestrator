@@ -459,8 +459,11 @@ def native_codex_provider_response_schema(
         "correction_result",
     ):
         items = schema["$defs"][result_name]["properties"]["finding_dispositions"]
-        items["minItems"] = 0
-        items["maxItems"] = len(open_ids)
+        if open_ids:
+            items["minItems"] = 0
+            items["maxItems"] = len(open_ids)
+        else:
+            _bind_required_empty_array(items)
 
     contract = context.contract
     expected_result = {
@@ -483,17 +486,18 @@ def native_codex_provider_response_schema(
         work_result = schema["$defs"][expected_result]
         test_files = work_result["properties"]["test_files"]
         if not contract.require_test_files_record:
-            test_files["minItems"] = 0
-            test_files["maxItems"] = 0
+            _bind_required_empty_array(test_files)
         elif contract.enforce_expected_test_files:
             expected_tests = tuple(contract.expected_test_files)
-            test_files["minItems"] = len(expected_tests)
-            test_files["maxItems"] = len(expected_tests)
             if expected_tests:
+                test_files["minItems"] = len(expected_tests)
+                test_files["maxItems"] = len(expected_tests)
                 test_files["items"] = {
                     "type": "string",
                     "enum": list(expected_tests),
                 }
+            else:
+                _bind_required_empty_array(test_files)
         if not contract.test_changes_approved:
             ready_false_name = f"bound_{expected_result}_ready_false"
             ready_false = copy.deepcopy(work_result)
@@ -510,8 +514,9 @@ def native_codex_provider_response_schema(
                 ready_true_name = f"bound_{expected_result}_ready_true_no_tests"
                 ready_true = copy.deepcopy(work_result)
                 ready_true["properties"]["ready"]["const"] = True
-                ready_true["properties"]["test_files"]["minItems"] = 0
-                ready_true["properties"]["test_files"]["maxItems"] = 0
+                _bind_required_empty_array(
+                    ready_true["properties"]["test_files"]
+                )
                 schema["$defs"][ready_true_name] = ready_true
                 readiness_refs.append(
                     {"$ref": f"#/$defs/{ready_true_name}"}
@@ -529,6 +534,14 @@ def native_codex_provider_response_schema(
     }
     assert_projected_provider_schema(projected_schema, provider=provider)
     return projected_schema
+
+
+def _bind_required_empty_array(schema: dict[str, Any]) -> None:
+    """Keep a required collection exact without a degenerate zero bound."""
+
+    schema.pop("minItems", None)
+    schema.pop("maxItems", None)
+    schema["const"] = []
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:
