@@ -309,15 +309,16 @@ In der Planungsphase entsprechend: eine Runde ist Planer plus Reviewer.
 Die Grenze von 6 gilt **je Schleife**, also je Slice und je Planungsphase
 getrennt — nicht über alle Slices zusammengezählt.
 
-Der Abnahmezyklus zählt anders: dort ist eine Einheit ein **vollständiger
-Durchlauf** von Planung über alle Slices bis zum Abnahmereview.
+Der Abnahmezyklus zählt anders — dort gibt es kein Paar aus Implementierer und
+Reviewer, sondern nur das Urteil des Reviewers. Gezählt werden deshalb die
+**Abnahmereviews** selbst. Je vollständigem Durchlauf gibt es genau einen.
 
 Zwei unabhängige Grenzen, beide als Parameter mit Vorgabewert **6**:
 
 | Grenze | Wirkung bei Erreichen |
 |---|---|
 | Runden je Planungs- bzw. Slice-Schleife | Schleife endet negativ, kein Commit |
-| Zyklen Abnahmereview → neue Runde | kein weiterer Zyklus |
+| **Abnahmereviews** insgesamt | kein weiterer Durchlauf |
 
 Dazu bleibt die **Konvergenzregel** erhalten, in vereinfachter Form: Der erste
 Review entdeckt; jeder weitere abgelehnte Review muss einen bereits bekannten
