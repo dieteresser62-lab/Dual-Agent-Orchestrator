@@ -1596,8 +1596,11 @@ def run_native_review_agent_checked(
     accepted_output_callback: (
         Callable[[NativeAgentReviewOutput], None] | None
     ) = None,
+    pre_accept_output_callback: (
+        Callable[[NativeAgentReviewOutput], None] | None
+    ) = None,
 ) -> NativeAgentReviewOutput:
-    """Run and durably capture one native review attempt before validation."""
+    """Capture, pre-accept, and publish one native review attempt in order."""
     invocation_id = uuid.uuid4().hex
     attempt_invocation = (
         _ProviderAttemptInvocation(provider_attempt_lifecycle)
@@ -1624,6 +1627,8 @@ def run_native_review_agent_checked(
                 canonical,
             ),
         )
+        if pre_accept_output_callback is not None:
+            pre_accept_output_callback(output)
         actual_log_path = (
             attempt_invocation.response_path(response_path)
             if attempt_invocation is not None

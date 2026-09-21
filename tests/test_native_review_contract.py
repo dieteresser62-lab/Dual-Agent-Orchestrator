@@ -47,6 +47,7 @@ from native_review_contract import (
     native_review_retry_guidance,
     native_review_provider_response_schema,
     parse_native_contract_result,
+    reject_passing_typed_acceptance_binding,
     validate_native_review_disposition_budget,
     parse_native_review_response,
 )
@@ -1631,6 +1632,137 @@ def test_validation_command_reaches_existing_matrix_as_identical_argv() -> None:
         findings=result.findings,
     )
     assert request.commands[-1].argv == argv
+
+
+def _attestation_with_typed_acceptance(
+    status: ValidationStatus,
+    *,
+    fingerprint: str = FINGERPRINT,
+) -> ValidationAttestation:
+    default = ValidationCommand(argv=("python3", "-m", "pytest", "tests/", "-v"))
+    typed = ValidationCommand(argv=TYPED_ACCEPTANCE_ARGV)
+    return ValidationAttestation(
+        attestation_id=f"validation-typed-{fingerprint[:12]}-{status.value.lower()}",
+        diff_fingerprint=fingerprint,
+        expected_commands=(default.display, typed.display),
+        records=(
+            ValidationRecord(ValidationStatus.PASS, default.display, 0, "passed"),
+            ValidationRecord(
+                status,
+                typed.display,
+                0 if status is ValidationStatus.PASS else 1,
+                status.value.lower(),
+            ),
+        ),
+        output_digest=hashlib.sha256(
+            f"{fingerprint}:{status.value}".encode("utf-8")
+        ).hexdigest(),
+        summary=f"typed acceptance {status.value.lower()}",
+        command_specs=(
+            ValidationCommandSpec(argv=default.argv),
+            ValidationCommandSpec(argv=typed.argv),
+        ),
+    )
+
+
+def _new_typed_blocker_document(context: NativeReviewContext) -> dict[str, object]:
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "A focused regression exposes the defect.",
+            "acceptance_test": {
+                "kind": "validation_command",
+                "argv": list(TYPED_ACCEPTANCE_ARGV),
+            },
+            "affected_paths": ["tests/test_native_review_contract.py"],
+        }
+    ]
+    return document
+
+
+def test_new_typed_blocker_rejects_command_already_green_at_binding() -> None:
+    context = replace(
+        _context(),
+        validation_attestation=_attestation_with_typed_acceptance(
+            ValidationStatus.PASS
+        ),
+        validation_command_prefixes=(
+            ("python3", "-m", "pytest"),
+            ("npm", "test"),
+        ),
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(_new_typed_blocker_document(context), context)
+
+    error = raised.value
+    assert error.code is NativeReviewErrorCode.ACCEPTANCE_INVALID
+    assert error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
+    )
+    assert error.detail == (
+        "typed acceptance test for C-01 uses command "
+        '["python3","-m","pytest","tests/test_native_review_contract.py","-q"], '
+        f"which is already passing at the current fingerprint {FINGERPRINT}; "
+        "bind a command that fails now so a later PASS can prove the fix; "
+        "allowed command prefixes are: `python3 -m pytest`, `npm test`"
+    )
+
+
+def test_passing_typed_acceptance_with_no_prefixes_omits_guidance_suffix() -> None:
+    with pytest.raises(NativeReviewContractError) as raised:
+        reject_passing_typed_acceptance_binding(
+            "C-01",
+            TYPED_ACCEPTANCE_ARGV,
+            _attestation_with_typed_acceptance(ValidationStatus.PASS),
+            FINGERPRINT,
+            (),
+        )
+
+    assert raised.value.detail == (
+        "typed acceptance test for C-01 uses command "
+        '["python3","-m","pytest","tests/test_native_review_contract.py","-q"], '
+        f"which is already passing at the current fingerprint {FINGERPRINT}; "
+        "bind a command that fails now so a later PASS can prove the fix"
+    )
+
+
+def test_new_typed_blocker_accepts_red_binding_and_can_later_close_fixed() -> None:
+    opening_context = replace(
+        _context(),
+        validation_attestation=_attestation_with_typed_acceptance(
+            ValidationStatus.FAIL
+        ),
+    )
+    opened = parse_native_contract_result(
+        _new_typed_blocker_document(opening_context), opening_context
+    )
+    post_change_fingerprint = "c" * 64
+    measured = replace(
+        opened.findings[0],
+        acceptance_measurements=(
+            _typed_measurement(FINGERPRINT, ValidationStatus.FAIL),
+            _typed_measurement(post_change_fingerprint, ValidationStatus.PASS),
+        ),
+    )
+    closing_context = replace(
+        _context(previous=(measured,)),
+        diff_fingerprint=post_change_fingerprint,
+        validation_attestation=_attestation_with_typed_acceptance(
+            ValidationStatus.PASS,
+            fingerprint=post_change_fingerprint,
+        ),
+        pre_change_fingerprint=FINGERPRINT,
+    )
+
+    closed = parse_native_contract_result(
+        _fixed_document(closing_context), closing_context
+    )
+
+    assert closed.findings[0].status is FindingStatus.CLOSED
+    assert closed.finding_closures[0][1].kind.value == "fixed"
 
 
 def test_observation_cannot_carry_validation_command() -> None:

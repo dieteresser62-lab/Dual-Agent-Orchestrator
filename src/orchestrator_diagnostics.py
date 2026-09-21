@@ -155,6 +155,10 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_ACCEPTANCE_INVALID = (
         "acceptance-invalid: native review acceptance evidence must satisfy its bound contract"
     )
+    REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING = (
+        "acceptance-invalid: typed BLOCKER acceptance command already passes at the "
+        "current fingerprint; bind a command that fails now"
+    )
     REVIEW_ANCHOR_INVALID = (
         "anchor-invalid: native review anchors must satisfy their bound contract"
     )

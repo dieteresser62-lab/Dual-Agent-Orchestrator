@@ -828,6 +828,57 @@ def test_native_review_checked_preserves_schema_valid_domain_rejection(
     )
 
 
+def test_native_review_pre_accept_rejection_prevents_publication(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output = object()
+    events: list[str] = []
+    diagnostic = OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
+
+    monkeypatch.setattr(
+        agent_runtime,
+        "run_native_review_agent",
+        lambda *args, **kwargs: output,
+    )
+
+    class Adapter:
+        name = "claude"
+        metadata: dict[str, object] = {}
+
+    def reject(_output: object) -> None:
+        events.append("pre-accept")
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.ACCEPTANCE_INVALID,
+            "typed acceptance test for C-01 uses command [\"npm\",\"test\"], "
+            "which is already passing at the current fingerprint " + "a" * 64,
+            orchestrator_diagnostic=diagnostic,
+        )
+
+    with pytest.raises(AgentInvocationError) as raised:
+        run_native_review_agent_checked(
+            adapter=Adapter(),  # type: ignore[arg-type]
+            bundle=object(),  # type: ignore[arg-type]
+            log_prefix="native-review-pre-accept",
+            config=OrchestratorConfig(),
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(
+                content, encoding="utf-8"
+            ),
+            shorten=lambda value, _maximum: value or "",
+            reviewer_manifest_paths=None,
+            operation="claude_slice_review",
+            binding_fingerprint="a" * 64,
+            pre_start_callback=None,
+            provider_attempt_lifecycle=None,
+            pre_accept_output_callback=reject,
+            accepted_output_callback=lambda _output: events.append("accepted"),
+        )
+
+    assert events == ["pre-accept"]
+    assert raised.value.kind is AgentFailureKind.OUTPUT
+    assert raised.value.orchestrator_diagnostic is diagnostic
+
+
 def test_budget_denial_happens_after_preparation_but_before_capability_or_process(
     monkeypatch,
 ) -> None:

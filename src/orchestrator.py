@@ -1572,6 +1572,7 @@ class ProductionWorkflowDriver:
                         invocation.previous_findings,
                     )
                 ),
+                pre_accept_output_callback=invocation.pre_accept_output_callback,
         )
 
     def _materialize_review_packet(self, packet: ReviewPacket) -> Path:

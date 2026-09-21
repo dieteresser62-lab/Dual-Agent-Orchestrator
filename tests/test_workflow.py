@@ -474,6 +474,9 @@ class FakeDriver:
     validation_recovery_calls: list[
         tuple[str, tuple[str, ...], str]
     ] = field(default_factory=list)
+    validation_status_by_command: dict[str, ValidationStatus] = field(
+        default_factory=dict
+    )
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
@@ -594,7 +597,20 @@ class FakeDriver:
         attestation = _attestation(changes)
         if request.expected_commands != attestation.expected_commands:
             records = tuple(
-                ValidationRecord(ValidationStatus.PASS, command, 0)
+                ValidationRecord(
+                    self.validation_status_by_command.get(
+                        command, ValidationStatus.PASS
+                    ),
+                    command,
+                    (
+                        0
+                        if self.validation_status_by_command.get(
+                            command, ValidationStatus.PASS
+                        )
+                        is ValidationStatus.PASS
+                        else 1
+                    ),
+                )
                 for command in request.expected_commands
             )
             attestation = ValidationAttestation(
@@ -4062,6 +4078,9 @@ def test_new_typed_acceptance_requirement_is_measured_at_existing_fingerprint() 
         codex_outputs=[_codex_ready(), _codex_ready("C-01")],
         reviewer_outputs=[denial, _review_stop(AgentRole.CLAUDE, "CONTRACT-UNCLEAR")],
         deltas={(unchanged.fingerprint, unchanged.fingerprint): "no content change"},
+        validation_status_by_command={
+            "python3 -m pytest tests/test_focus.py -q": ValidationStatus.FAIL,
+        },
         convergence_evaluations=[_discovery_convergence()],
     )
 
@@ -4078,6 +4097,65 @@ def test_new_typed_acceptance_requirement_is_measured_at_existing_fingerprint() 
     finding = next(item for item in result.history.findings if item.finding_id == "C-01")
     assert len(finding.acceptance_measurements) == 1
     assert finding.acceptance_measurements[0].fingerprint == unchanged.fingerprint
+    assert finding.acceptance_measurements[0].status is ValidationStatus.FAIL
+
+
+def test_new_typed_acceptance_measured_green_rejects_opening_before_codex() -> None:
+    now = [datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)]
+    unchanged = _changes("1", "src/early.py", TEST_FILE)
+    matrix = ValidationMatrix(
+        default_command=ValidationCommand(argv=("npm", "test")),
+    )
+    denial = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            'NEW_FINDING: C-01 | BLOCKER | focused regression required | VALIDATE: ["npm","test","--","app/tests/shopping.test.ts"]',
+            "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[unchanged],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            denial,
+            _review_stop(AgentRole.CLAUDE, "CONTRACT-UNCLEAR"),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver,
+        now_fn=lambda: now[0],
+        sleep_fn=sleep,
+    ).run_current_work_unit(
+        _slice_state(), replace(_context(), validation_matrix=matrix)
+    )
+
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.codex_calls) == 1
+    assert len(driver.reviewer_calls) == 2
+    assert len(driver.validation_requests) == 2
+    assert result.history.findings == ()
+    assert driver.failure_payloads[0].orchestrator_diagnostic == (
+        OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING.text
+    )
+    retry = driver.reviewer_calls[1].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": driver.failure_payloads[0].invocation_id,
+        "rejection_code": "acceptance-invalid",
+        "correction_instruction": (
+            OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING.text
+            + "; allowed command prefixes are: `npm test`"
+        ),
+    }
+    assert [event[0] for event in driver.structured_events].count(
+        "finding-acceptance-measurement"
+    ) == 0
 
 
 def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -> None:

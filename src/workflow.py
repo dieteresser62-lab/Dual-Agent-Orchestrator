@@ -5,7 +5,8 @@ import inspect
 import logging
 import re
 import time
-from dataclasses import dataclass, replace
+import uuid
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
@@ -20,9 +21,11 @@ from agent_runtime import (
     QuotaWaitPolicy,
     RecoveredFindingComparison,
     TransientRetryPolicy,
+    classify_agent_failure,
     wait_until_quota_resume,
     wait_until_transient_retry,
 )
+from agent_adapters import AgentOutputError
 import workflow_requests
 import workflow_failure_recording
 import workflow_validation_evidence
@@ -40,7 +43,9 @@ from finding_responsibility import parse_responsibility, responsibility_document
 from finding_convergence import SliceConvergenceEvaluation
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
+    NativeReviewContractError,
     find_native_review_disposition_limit_error,
+    reject_passing_typed_acceptance_binding,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from finding_reducer import (
@@ -584,6 +589,9 @@ class ReviewerInvocation:
     native_request: workflow_requests.NativeReviewRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
     request_sequence: int | None = None
+    pre_accept_output_callback: (
+        Callable[[NativeAgentReviewOutput], None] | None
+    ) = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.request_sequence is None:
@@ -592,6 +600,15 @@ class ReviewerInvocation:
             raise ValueError("review request sequence must be 1-based")
         if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
             raise ValueError("native review requests are supported only for Claude")
+
+
+@dataclass
+class _ReviewAcceptanceBinding:
+    """Process-local state for pre-publication acceptance measurement."""
+
+    history: WorkflowHistory
+    callback: Callable[[NativeAgentReviewOutput], None] | None = None
+    called: bool = False
 
 
 @dataclass(frozen=True)
@@ -2678,6 +2695,127 @@ class WorkflowEngine:
             correction_findings=correction_findings,
         )
 
+    def _prepare_review_acceptance_binding(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        contract: StepContract,
+        changes: WorkflowChanges,
+        request_findings: tuple[FindingRecord, ...],
+    ) -> _ReviewAcceptanceBinding:
+        """Build the pre-publication hook for newly proposed typed BLOCKERs."""
+
+        binding = _ReviewAcceptanceBinding(history)
+        prior_finding_ids = frozenset(
+            item.finding_id for item in request_findings
+        )
+
+        def pre_accept_output(output: NativeAgentReviewOutput) -> None:
+            binding.called = True
+            newly_opened = tuple(
+                finding
+                for finding in output.result.findings
+                if finding.finding_id not in prior_finding_ids
+            )
+            candidate_findings = tuple(
+                finding
+                for finding in project_open_set(newly_opened).findings
+                if finding.finding_class is FindingClass.BLOCKER
+                and finding_validation_command(finding) is not None
+            )
+            if not candidate_findings:
+                return
+            _, measured_history, halted = self._ensure_typed_acceptance_measurements(
+                state,
+                binding.history,
+                context,
+                changes,
+                preferred_attestation=contract.validation_attestation,
+                verify_start_commit=(
+                    state.current_slice.start_commit or state.branch_base
+                ),
+                candidate_findings=candidate_findings,
+                persist_measurements=False,
+            )
+            binding.history = measured_history
+            if halted:
+                raise WorkflowExecutionError(
+                    "typed acceptance measurement halted before review publication"
+                )
+            for finding in candidate_findings:
+                command = finding_validation_command(finding)
+                assert command is not None
+                for attestation in reversed(measured_history.attestations):
+                    if attestation.diff_fingerprint != changes.fingerprint:
+                        continue
+                    reject_passing_typed_acceptance_binding(
+                        finding.finding_id,
+                        command.argv,
+                        attestation,
+                        changes.fingerprint,
+                        context.validation_matrix.finding_command_prefixes,
+                    )
+
+        binding.callback = pre_accept_output
+        return binding
+
+    def _invoke_reviewer_with_pre_acceptance(
+        self,
+        invocation: ReviewerInvocation,
+        reviewer: AgentRole,
+        binding: _ReviewAcceptanceBinding,
+    ) -> str | NativeAgentReviewOutput:
+        """Apply the hook for drivers that do not own the checked runtime edge."""
+
+        try:
+            candidate = self.driver.invoke_reviewer(invocation)
+            if isinstance(candidate, NativeAgentReviewOutput) and not binding.called:
+                assert binding.callback is not None
+                binding.callback(candidate)
+            return candidate
+        except (AgentOutputError, NativeReviewContractError) as exc:
+            raise classify_agent_failure(
+                reviewer.value,
+                exc,
+                invocation_id=uuid.uuid4().hex,
+                received_at=self.now_fn(),
+            ) from exc
+
+    def _attach_review_acceptance_measurements(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        contract: StepContract,
+        changes: WorkflowChanges,
+        result: ContractResult,
+    ) -> tuple[WorkflowHistory, ContractResult]:
+        """Publish pre-measured acceptance facts after the Finding opening."""
+
+        _, measured_history, halted = self._ensure_typed_acceptance_measurements(
+            state,
+            replace(history, findings=result.findings),
+            context,
+            changes,
+            preferred_attestation=next(
+                (
+                    item
+                    for item in reversed(history.attestations)
+                    if item.diff_fingerprint == changes.fingerprint
+                ),
+                contract.validation_attestation,
+            ),
+            verify_start_commit=(
+                state.current_slice.start_commit or state.branch_base
+            ),
+        )
+        if halted:
+            raise WorkflowExecutionError(
+                "typed acceptance publication unexpectedly halted after pre-acceptance"
+            )
+        return measured_history, replace(result, findings=measured_history.findings)
+
     def _dispatch_native_review(
         self,
         state: WorkflowState,
@@ -2720,6 +2858,10 @@ class WorkflowEngine:
             ),
         )
         native_request = build_request(contract=contract)
+        acceptance_binding = self._prepare_review_acceptance_binding(
+            state, history, context, contract, changes, request_findings
+        )
+
         invocation = ReviewerInvocation(
             work_unit_id=unit.work_unit_id,
             step=state.current_step,
@@ -2737,6 +2879,7 @@ class WorkflowEngine:
             review_packet=review_packet,
             native_request=native_request,
             previous_findings=request_findings,
+            pre_accept_output_callback=acceptance_binding.callback,
         )
         native_output = (
             self.driver.recover_pending_native_reviewer(
@@ -2759,6 +2902,7 @@ class WorkflowEngine:
             # Other still-unsent requests now refresh the complete ledger while
             # retaining their compact offered subset.
             history = self._rebind_unsent_request_history(state, history)
+            acceptance_binding.history = history
             finding_ledger = (
                 finding_ledger
                 if _uses_correction_finding_authority(state)
@@ -2779,8 +2923,11 @@ class WorkflowEngine:
                 history,
                 context,
                 reviewer,
-                lambda: self.driver.invoke_reviewer(invocation),
+                lambda: self._invoke_reviewer_with_pre_acceptance(
+                    invocation, reviewer, acceptance_binding
+                ),
             )
+            history = acceptance_binding.history
         if output is None:
             return state, history
         if not isinstance(output, NativeAgentReviewOutput):
@@ -2820,6 +2967,9 @@ class WorkflowEngine:
                     ),
                 ),
             )
+        history, result = self._attach_review_acceptance_measurements(
+            state, history, context, contract, changes, result
+        )
         requested_ids = tuple(item.finding_id for item in requested_findings)
         new_ids = tuple(
             item.finding_id
@@ -3624,6 +3774,8 @@ class WorkflowEngine:
         *,
         preferred_attestation: ValidationAttestation | None = None,
         verify_start_commit: str | None = None,
+        candidate_findings: tuple[FindingRecord, ...] | None = None,
+        persist_measurements: bool = True,
     ) -> tuple[WorkflowState, WorkflowHistory, bool]:
         """Measure every missing typed BLOCKER test at exactly ``target``."""
 
@@ -3641,7 +3793,12 @@ class WorkflowEngine:
 
         missing: list[tuple[FindingRecord, ValidationCommand]] = []
         try:
-            for finding in project_open_set(history.findings).findings:
+            measurement_candidates = (
+                project_open_set(history.findings).findings
+                if candidate_findings is None
+                else project_open_set(candidate_findings).findings
+            )
+            for finding in measurement_candidates:
                 command = finding_validation_command(finding)
                 if command is None:
                     continue
@@ -3737,6 +3894,8 @@ class WorkflowEngine:
                 ).hexdigest(),
                 attestation_id=attestation.attestation_id,
             )
+            if not persist_measurements:
+                continue
             self._persist_structured(
                 self.driver.persist_finding_acceptance_measurement,
                 finding,

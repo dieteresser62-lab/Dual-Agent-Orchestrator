@@ -63,6 +63,7 @@ from finding_signature import (
 )
 from validation_matrix import (
     FINDING_COMMAND_PREFIX,
+    ValidationCommand,
     ValidationMatrixError,
     finding_validation_command,
     matches_validation_family,
@@ -287,6 +288,13 @@ def native_review_retry_guidance(
         route_guidance = _slice_route_scope_retry_guidance(context)
         if route_guidance is not None:
             return route_guidance
+    if (
+        diagnostic
+        is OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
+    ):
+        return diagnostic.text + _allowed_command_prefixes_suffix(
+            () if context is None else context.validation_command_prefixes
+        )
     if diagnostic is _REVIEW_DIAGNOSTIC_BY_CODE[code]:
         diagnostic = None
     return closed_retry_guidance(code.value, fallback, diagnostic)
@@ -2499,6 +2507,54 @@ def _validate_fixed_acceptance_evidence(
         )
 
 
+def _allowed_command_prefixes_suffix(
+    allowed_prefixes: tuple[tuple[str, ...], ...],
+) -> str:
+    """Render configured Finding command families as bounded reviewer guidance."""
+
+    if not allowed_prefixes:
+        return ""
+    rendered = ", ".join(
+        f"`{ValidationCommand(argv=prefix).display}`" for prefix in allowed_prefixes
+    )
+    return f"; allowed command prefixes are: {rendered}"
+
+
+def reject_passing_typed_acceptance_binding(
+    finding_id: str,
+    argv: tuple[str, ...],
+    attestation: ValidationAttestation | None,
+    fingerprint: str,
+    allowed_prefixes: tuple[tuple[str, ...], ...],
+) -> None:
+    """Reject a typed BLOCKER command that cannot establish a red baseline."""
+
+    if attestation is None or attestation.diff_fingerprint != fingerprint:
+        return
+    command = ValidationCommand(argv=argv)
+    record = next(
+        (
+            item
+            for item in attestation.records
+            if item.command == command.display
+        ),
+        None,
+    )
+    if record is None or record.status is not ValidationStatus.PASS:
+        return
+    rendered_argv = json.dumps(list(argv), ensure_ascii=False, separators=(",", ":"))
+    raise NativeReviewContractError(
+        NativeReviewErrorCode.ACCEPTANCE_INVALID,
+        f"typed acceptance test for {finding_id} uses command {rendered_argv}, "
+        f"which is already passing at the current fingerprint {fingerprint}; "
+        "bind a command that fails now so a later PASS can prove the fix"
+        + _allowed_command_prefixes_suffix(allowed_prefixes),
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
+        ),
+    )
+
+
 def _absorb_redundant_route_status_changes(
     response: NativeReviewResult,
 ) -> NativeReviewResult:
@@ -2744,6 +2800,13 @@ def _validate_response_events(
                     NativeReviewErrorCode.ACCEPTANCE_INVALID,
                     "validation command is outside configured families",
                 )
+            reject_passing_typed_acceptance_binding(
+                finding.finding_id,
+                finding.acceptance_test.argv,
+                context.validation_attestation,
+                context.diff_fingerprint,
+                context.validation_command_prefixes,
+            )
     known_signatures: dict[str, list[str]] = {}
     for finding in context.effective_known_open_findings:
         known_signatures.setdefault(

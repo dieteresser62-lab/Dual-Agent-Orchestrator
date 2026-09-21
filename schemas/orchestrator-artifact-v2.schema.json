@@ -619,6 +619,7 @@
             "acceptance-invalid: OBSERVATION cannot request a validation command",
             "acceptance-invalid: native review acceptance evidence must satisfy its bound contract",
             "acceptance-invalid: prose acceptance must not use the reserved typed VALIDATE prefix",
+            "acceptance-invalid: typed BLOCKER acceptance command already passes at the current fingerprint; bind a command that fails now",
             "acceptance-invalid: validation command is outside configured families",
             "anchor-invalid: anchor expected value must not be empty",
             "anchor-invalid: anchor input or fixture must not be empty",
