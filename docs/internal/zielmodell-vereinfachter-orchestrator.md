@@ -141,6 +141,17 @@ Reviewer prüft das Ganze
 Der einzige Übergabeweg zwischen Runden ist eine **Datei in der Inbox** —
 derselbe Weg, den auch ein Mensch benutzt.
 
+**Nach einem negativen Abnahmereview beginnt der gesamte Prozess von vorne,
+mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage.**
+
+Das heißt: nicht ein Wiedereinstieg in die Implementierung, sondern der
+vollständige Zyklus ab der Planungsphase. Die Befunde des Abnahmereviews sind
+der Inhalt des neuen Arbeitsdokuments; der Planer schneidet daraus Slices wie
+aus jeder anderen Anforderung.
+
+Der Reviewer schreibt die Datei nicht selbst — er ist lesend. Der Orchestrator
+erzeugt sie aus den Befunden.
+
 ## Die Commitbedingung
 
 Nach jeder Reviewrunde ist per Konstruktion **kein Finding unentschieden** —
