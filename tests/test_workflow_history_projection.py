@@ -1733,7 +1733,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     cached = json.loads(state_file.read_text(encoding="utf-8"))
     assert cached["reducer_version"] == (
-        "structured-v2-schema-2-state-v3-family-from-entry-v1"
+        "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1"
     )
     assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
 

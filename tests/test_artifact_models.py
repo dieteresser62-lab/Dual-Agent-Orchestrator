@@ -98,7 +98,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-family-from-entry-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1",
         "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
@@ -150,6 +150,24 @@ def test_pre_family_from_entry_reducer_is_named_and_rejected_fail_closed() -> No
             RoleProfilePayload("implementer-model", "medium"),
             RoleProfilePayload("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION,
+        )
+
+
+def test_pre_target_finding_lifecycle_reducer_is_named_and_rejected_fail_closed() -> None:
+    assert artifact_models.PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION == (
+        "structured-v2-schema-2-state-v3-family-from-entry-v1"
+    )
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+    ):
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            reducer_version=(
+                artifact_models.PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION
+            ),
         )
 
 
@@ -926,6 +944,27 @@ def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> 
         FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
     with pytest.raises(ArtifactValidationError, match="cannot close"):
         FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
+
+
+def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
+    escalation = FindingTransitionPayload(
+        "C-01",
+        Role.CLAUDE,
+        Role.CLAUDE,
+        "escalated",
+        FindingSeverity.BLOCKER,
+        "open",
+        "The rejected Finding is now a Blocker.",
+    )
+    assert ArtifactRecord.from_dict(_record(escalation).to_dict()).payload == escalation
+
+    for mutation in (
+        lambda: replace(escalation, actor=Role.CODEX),
+        lambda: replace(escalation, severity=FindingSeverity.OBSERVATION),
+        lambda: replace(escalation, finding_status="closed"),
+    ):
+        with pytest.raises(ArtifactValidationError):
+            mutation()
 
 
 @pytest.mark.parametrize(

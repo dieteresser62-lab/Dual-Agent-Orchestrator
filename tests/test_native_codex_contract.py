@@ -24,6 +24,7 @@ from finding_reducer import project_finding_response_delta
 from finding_signature import finding_record_signature
 from finding_responsibility import SliceResponsibility
 from gates import (
+    CONTRACT_UNCLEAR_RULE_ID,
     OPERATOR_PREREQUISITE_MISSING_RULE_ID,
     SCOPE_EXTENSION_REQUESTED_RULE_ID,
     validate_builtin_stop_content,
@@ -512,7 +513,8 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
         {"result": {**base, "finding_dispositions": valid_dispositions}}, schema
     )
     validate_schema_document(
-        {"result": {**base, "finding_dispositions": valid_dispositions[:1]}}, schema
+        {"result": {**base, "finding_dispositions": valid_dispositions[:1]}},
+        schema,
     )
     for invalid in (
         [*valid_dispositions, valid_dispositions[-1]],
@@ -1063,7 +1065,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
     assert encountered <= registered
 
 
-def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
+def test_plan_revision_requires_every_open_finding_disposition() -> None:
     bound = _bound(NativeCodexRequestKind.PLAN, findings=(_finding(),))
     document = {
         **_base(bound, "plan_result"),
@@ -1089,8 +1091,10 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
     validate_schema_document(
         {"result": document}, native_codex_provider_response_schema(bound.context)
     )
-    unchanged = parse_bound_native_codex_contract_result(document, bound)
-    assert unchanged.findings == bound.context.previous_findings
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail.startswith("missing disposition for C-01")
 
     document["finding_dispositions"] = [
         {
@@ -1320,7 +1324,7 @@ def test_active_codex_contract_accepts_explicit_null_proposal() -> None:
     assert native_responsibility_proposals(parsed) == ()
 
 
-def test_implementation_disposition_records_do_not_scale_with_open_findings() -> None:
+def test_implementation_dispositions_cover_every_open_finding() -> None:
     findings = tuple(
         replace(_finding(), finding_id=f"C-{number:02d}")
         for number in range(1, 66)
@@ -1335,7 +1339,15 @@ def test_implementation_disposition_records_do_not_scale_with_open_findings() ->
         **_base(bound, "implementation_result"),
         "ready": True,
         "test_files": [],
-        "finding_dispositions": [],
+        "finding_dispositions": [
+            {
+                "finding_id": finding.finding_id,
+                "decision": "accepted",
+                "rationale": "The implementation answers this open finding.",
+                "responsibility_proposal": None,
+            }
+            for finding in findings
+        ],
     }
     writer = native_codex_provider_response_schema(bound.context)
 
@@ -1347,8 +1359,10 @@ def test_implementation_disposition_records_do_not_scale_with_open_findings() ->
     ]
     assert disposition_schema["minItems"] == 0
     assert disposition_schema["maxItems"] == 65
-    assert result.findings == findings
-    assert project_finding_response_delta(findings, result.findings) == ()
+    response_delta = project_finding_response_delta(findings, result.findings)
+    assert tuple(item.finding.finding_id for item in response_delta) == tuple(
+        finding.finding_id for finding in findings
+    )
 
     document["finding_dispositions"] = [
         {
@@ -1359,9 +1373,8 @@ def test_implementation_disposition_records_do_not_scale_with_open_findings() ->
         }
     ]
     validate_schema_document({"result": document}, writer)
-    answered = parse_bound_native_codex_contract_result(document, bound)
-    response_delta = project_finding_response_delta(findings, answered.findings)
-    assert tuple(item.finding.finding_id for item in response_delta) == ("C-65",)
+    with pytest.raises(NativeCodexContractError, match="missing disposition for C-01"):
+        parse_bound_native_codex_contract_result(document, bound)
 
 
 @pytest.mark.parametrize(
@@ -1397,7 +1410,7 @@ def test_native_result_rejects_wrong_request_or_result_kind(mutate, code) -> Non
     assert raised.value.code is code
 
 
-def test_native_result_accepts_missing_but_rejects_foreign_dispositions() -> None:
+def test_native_result_rejects_missing_and_foreign_dispositions() -> None:
     bound = _bound(
         NativeCodexRequestKind.CORRECTION,
         findings=(_finding(),),
@@ -1410,8 +1423,13 @@ def test_native_result_accepts_missing_but_rejects_foreign_dispositions() -> Non
         "test_files": [],
         "finding_dispositions": [],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
-    assert result.findings == bound.context.previous_findings
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "missing disposition for C-01 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
 
     document["finding_dispositions"] = [
         {
@@ -1497,7 +1515,7 @@ def test_native_result_rejects_unknown_finding_with_context() -> None:
     )
 
 
-def test_correction_without_dispositions_preserves_open_finding() -> None:
+def test_correction_without_dispositions_is_rejected_by_schema_and_domain() -> None:
     bound = _bound(
         NativeCodexRequestKind.CORRECTION,
         findings=(_finding(),),
@@ -1514,8 +1532,8 @@ def test_correction_without_dispositions_preserves_open_finding() -> None:
         {"result": native_document},
         native_codex_provider_response_schema(bound.context),
     )
-    result = parse_bound_native_codex_contract_result(native_document, bound)
-    assert result.findings == bound.context.previous_findings
+    with pytest.raises(NativeCodexContractError, match="missing disposition for C-01"):
+        parse_bound_native_codex_contract_result(native_document, bound)
 
 
 def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None:
@@ -1623,6 +1641,52 @@ def _operator_prerequisite_rationale() -> str:
         "Why it cannot be self-provided: network package installation is forbidden\n"
         "Operator action: run npm install --save-dev jsdom@27"
     )
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "rationale", "remediation_paths"),
+    (
+        (
+            CONTRACT_UNCLEAR_RULE_ID,
+            "The bound Finding contract admits two incompatible interpretations.",
+            [],
+        ),
+        (
+            OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+            _operator_prerequisite_rationale(),
+            [],
+        ),
+        (
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            (
+                "Required paths: src/runtime.py\n"
+                "Why required for current Slice: the repair crosses the bound scope"
+            ),
+            ["src/runtime.py"],
+        ),
+    ),
+)
+def test_stop_vents_remain_available_with_an_undisposed_blocker(
+    rule_id: str,
+    rationale: str,
+    remediation_paths: list[str],
+) -> None:
+    finding = _finding()
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=(finding,),
+    )
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": rule_id,
+        "rationale": rationale,
+        "remediation_paths": remediation_paths,
+    }
+
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    assert result.stopped is True
+    assert result.findings == (finding,)
 
 
 def test_operator_prerequisite_stop_requires_and_preserves_all_three_details() -> None:

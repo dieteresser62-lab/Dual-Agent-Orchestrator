@@ -1360,6 +1360,7 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
             opened=opened,
             status_changes=statuses,
             reclassifications=reclassifications,
+            escalate_unclosed_rejections=not probe.typed_response.approved,
         )
         closures = {
             item.finding_id: item.closure
@@ -1453,28 +1454,35 @@ def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
 def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     outcomes: list[ProbeOutcome] = []
 
-    # Sparse dispositions: call the same domain helper used by the native Codex  # allowlist:provider -- current contract
-    # result path, then observe that it accepts no answer for an open Finding.
+    # Complete dispositions: call the same domain helper used by the native
+    # Codex result path and observe whether it rejects an omitted open Finding.
     prior = (_finding(CurrentFindingClass.OBSERVATION),)
-    sparse = _apply_dispositions(
-        prior,
-        (),
-        work_unit_id=WORK_UNIT_ID,
-        round_number=1,
-        require_complete=False,
-    )
+    try:
+        _apply_dispositions(
+            prior,
+            (),
+            work_unit_id=WORK_UNIT_ID,
+            round_number=1,
+        )
+    except ValueError as exc:
+        complete_dispositions_enforced = True
+        contract_detail = f"native Codex domain path rejects omission: {exc}"
+        record_detail = "incomplete response batch emits no transition records"
+    else:
+        complete_dispositions_enforced = False
+        contract_detail = "native Codex domain path accepts an omitted disposition"
+        record_detail = "no response transition is emitted"
     outcomes.append(
         ProbeOutcome(
             "mandatory-implementer-disposition",
             "implementierung.finding.implementer",
             "JEDES-FINDING-DISPONIEREN",
             True,
-            False,
-            sparse == prior,
-            "native Codex domain path accepts an omitted disposition",  # allowlist:provider -- measured result
-            "no response transition is emitted",
+            complete_dispositions_enforced,
+            complete_dispositions_enforced,
+            contract_detail,
+            record_detail,
             ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
-            DeviationClass.FEHLEND,
         )
     )
 
@@ -1490,7 +1498,6 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         ),
         work_unit_id=WORK_UNIT_ID,
         round_number=1,
-        require_complete=False,
     )
     outcomes.append(
         ProbeOutcome(

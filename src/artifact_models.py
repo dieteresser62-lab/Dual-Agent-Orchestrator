@@ -53,6 +53,9 @@ from rejected_response_shape import (
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1"
+)
+PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-family-from-entry-v1"
 )
 PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION = (
@@ -1220,14 +1223,23 @@ class FindingTransitionPayload:
         if self.reporter is not Role.CLAUDE:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {
-            "opened", "responded", "status_changed", "reclassified", "routed",
+            "opened", "responded", "status_changed", "reclassified", "escalated", "routed",
             "acceptance_measured",
         }:
             raise ArtifactValidationError("finding action is invalid")
         if self.finding_status not in {"open", "closed"}:
             raise ArtifactValidationError("finding_status is invalid")
-        if self.action in {"opened", "status_changed", "reclassified"} and self.actor != self.reporter:
+        if self.action in {
+            "opened", "status_changed", "reclassified", "escalated"
+        } and self.actor != self.reporter:
             raise ArtifactValidationError("only the reporting reviewer may mutate a finding")
+        if self.action == "escalated" and (
+            self.severity is not FindingSeverity.BLOCKER
+            or self.finding_status != "open"
+        ):
+            raise ArtifactValidationError(
+                "finding escalation requires an open BLOCKER transition"
+            )
         if self.action == "acceptance_measured" and self.actor is not Role.ORCHESTRATOR:
             raise ArtifactValidationError(
                 "only the orchestrator may record a finding acceptance measurement"

@@ -3412,6 +3412,10 @@ def _merge_findings(
                 )
                 for update in response.reclassifications
             ),
+            # During the staged target-model cutover, approved legacy routing
+            # remains authoritative until its dedicated removal Slice. A denied
+            # review has only close-or-escalate semantics already in this Slice.
+            escalate_unclosed_rejections=not response.approved,
         )
     except ValueError as exc:
         raise NativeReviewContractError(

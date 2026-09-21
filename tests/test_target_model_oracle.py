@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import finding_reducer
 import native_review_contract
 
 from target_model_oracle import (
@@ -112,3 +113,31 @@ def test_mutation_102_route_plus_open_is_falsely_rejected(
             "route-plus-confirming-open", DeviationClass.UNEINIG
         )
     assert CONTRACT_SOURCE.read_bytes() == before
+
+
+def test_mutation_u1_automatic_rejection_escalation_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            finding_reducer,
+            "_escalate_unclosed_rejected_findings",
+            lambda findings, *, reviewer: dict(findings),
+        )
+        _assert_mutation_is_new(
+            "automatic-rejection-escalation", DeviationClass.FEHLEND
+        )
+
+
+def test_mutation_u1_incomplete_implementer_dispositions_are_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            finding_reducer,
+            "_missing_finding_response_ids",
+            lambda open_ids, response_ids: (),
+        )
+        _assert_mutation_is_new(
+            "mandatory-implementer-disposition", DeviationClass.FEHLEND
+        )

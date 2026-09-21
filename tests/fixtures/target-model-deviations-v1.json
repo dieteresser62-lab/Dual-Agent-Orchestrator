@@ -36,28 +36,6 @@
   },
   "abweichungen": [
     {
-      "id": "automatic-rejection-escalation",
-      "klasse": "FEHLEND",
-      "lage": "implementierung.finding.review.rejection_invalid.first_review",
-      "zug": "ZUM-BLOCKER-MACHEN",
-      "istzustand": "Vertrag: NativeReviewContractError: approval-invalid: denied review requires an open own BLOCKER; Recordschicht: record reduction accepted bytes but missed the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/finding_reducer.py"
-      ]
-    },
-    {
-      "id": "mandatory-implementer-disposition",
-      "klasse": "FEHLEND",
-      "lage": "implementierung.finding.implementer",
-      "zug": "JEDES-FINDING-DISPONIEREN",
-      "istzustand": "Vertrag: native Codex domain path accepts an omitted disposition; Recordschicht: no response transition is emitted",
-      "codestellen": [
-        "src/native_codex_contract.py",
-        "src/finding_reducer.py"
-      ]
-    },
-    {
       "id": "acceptance-cycle-beyond-six",
       "klasse": "UEBERZAEHLIG",
       "lage": "abnahme.findings.cycle-limit",

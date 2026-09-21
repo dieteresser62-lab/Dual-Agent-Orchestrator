@@ -169,6 +169,65 @@ def test_acceptance_measurement_transition_reduces_to_fingerprint_bound_fact() -
     assert measurement.command.argv[-1] == "tests/focus.py"
 
 
+def test_escalation_record_requires_and_replays_latest_rejected_response() -> None:
+    records = list(
+        _build_case(
+            {
+                "events": [
+                    {
+                        "op": "open",
+                        "finding_id": "C-01",
+                        "work_unit": "2",
+                        "class": "OBSERVATION",
+                    }
+                ]
+            }
+        )
+    )
+    revisions = {("finding_transition", "finding-C-01"): 1}
+    escalation = FindingTransitionPayload(
+        finding_id="C-01",
+        reporter=Role.CLAUDE,
+        actor=Role.CLAUDE,
+        action="escalated",
+        severity=FindingSeverity.BLOCKER,
+        finding_status="open",
+        rationale="The reviewer did not accept the implementer rejection.",
+        work_unit_id="2",
+    )
+    _append(records, revisions, "finding-C-01", escalation)
+
+    with pytest.raises(
+        ArtifactReplayError,
+        match="latest REJECTED implementer response",
+    ):
+        reduce_findings(replay_artifacts(records, RUN_ID))
+
+    records = records[:-1]
+    revisions[("finding_transition", "finding-C-01")] = 1
+    _append(
+        records,
+        revisions,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.OBSERVATION,
+            finding_status="open",
+            rationale="The implementer rejects this Finding with a reason.",
+            work_unit_id="2",
+            response_decision="rejected",
+        ),
+    )
+    _append(records, revisions, "finding-C-01", escalation)
+
+    finding = reduce_findings(replay_artifacts(records, RUN_ID)).ledger.findings[0]
+    assert finding.finding_class.value == "BLOCKER"
+    assert finding.status.value == "OPEN"
+
+
 def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
     records: list[ArtifactRecord] = []
     revisions: dict[tuple[str, str], int] = {}

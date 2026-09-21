@@ -16,12 +16,14 @@ from contracts import (
     FindingOccurrence,
     FindingOrigin,
     FindingRecord,
+    FindingResponseDecision,
     FindingStatus,
     PlannedSlice,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
+    apply_finding_response,
 )
 from finding_reducer import project_open_set, project_reviewer_persistence_transitions
 from finding_responsibility import (
@@ -255,6 +257,36 @@ def _typed_measurement(
         exit_code=0 if status is ValidationStatus.PASS else 1,
         output_sha256=hashlib.sha256(status.value.encode("utf-8")).hexdigest(),
         attestation_id=f"acceptance-{fingerprint[:12]}-{status.value.lower()}",
+    )
+
+
+def test_unclosed_implementer_rejection_is_record_bound_blocker_escalation() -> None:
+    finding = apply_finding_response(
+        _finding(
+            "C-01",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        ),
+        FindingResponseDecision.REJECTED,
+        "The implementation disputes the finding with a reason.",
+    )
+    context = _context(previous=(finding,))
+
+    result = parse_native_contract_result(_review(context, approved=False), context)
+    escalated = result.findings[0]
+    transitions = project_reviewer_persistence_transitions(
+        (finding,), result.findings, work_unit_id="work-unit-1"
+    )
+
+    assert escalated.finding_class is FindingClass.BLOCKER
+    assert escalated.status is FindingStatus.OPEN
+    assert escalated.class_history == (FindingClass.OBSERVATION,)
+    assert [(item.finding.finding_id, item.action) for item in transitions] == [
+        ("C-01", "escalated")
+    ]
+    assert transitions[0].rationale == (
+        "The implementer rejection was not accepted by the reviewer; "
+        "the Finding is escalated to BLOCKER."
     )
 
 

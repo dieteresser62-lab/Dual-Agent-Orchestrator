@@ -649,7 +649,14 @@ def test_native_codex_plan_transports_complete_signature_treatments(
                 }],
             }
         ],
-        "finding_dispositions": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "The plan assigns the repair to Slice 1.",
+                "responsibility_proposal": None,
+            }
+        ],
         "plan_treatments": [
             {
                 "signature": signature,

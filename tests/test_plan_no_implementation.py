@@ -303,7 +303,16 @@ def test_native_plan_can_finish_explicitly_without_an_implementation_slice() -> 
             "request_id": bound.request_id,
             "ready": True,
             "slice_plan": [],
-            "finding_dispositions": [],
+            "finding_dispositions": [
+                {
+                    "finding_id": "C-01",
+                    "decision": "rejected",
+                    "rationale": (
+                        "The fingerprint-bound evidence establishes that no defect exists."
+                    ),
+                    "responsibility_proposal": None,
+                }
+            ],
             "plan_treatments": [
                 {
                     "signature": signature,
