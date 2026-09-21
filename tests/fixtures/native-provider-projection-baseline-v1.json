@@ -19,17 +19,17 @@
     {
       "provider": "codex",
       "form": "correction",
-      "sha256": "1f99011eaae41f0e572904033dbf391a62dcf9c13c5665f637b0bde9adc4476c"
+      "sha256": "c7ef021624c002191801e99d0aad4c95d211bcf36ec319f4e4005878ea4ec723"
     },
     {
       "provider": "codex",
       "form": "implementation",
-      "sha256": "7418b2405ea04cb2c7796266ba75c79b1b5af687aa067c71aa5879b2edb88155"
+      "sha256": "6446b4a1b727c75e331e26c597c75dd5c003b52929d4ee7e69ed96e2e5a86652"
     },
     {
       "provider": "codex",
       "form": "plan",
-      "sha256": "c88adcc80a643a68e182761f53ccaf12f09f6bc54a999f7ec9a00ed2beffa0f5"
+      "sha256": "5aa5387a27c5e22e76999fb22b203732d7b740f175d8100ab6e7ca72e31f29b6"
     }
   ]
 }

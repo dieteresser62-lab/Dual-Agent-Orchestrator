@@ -39,6 +39,7 @@ from finding_responsibility import (
     parse_responsibility,
     responsibility_document,
 )
+from path_policy import PathClass
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -52,6 +53,9 @@ from rejected_response_shape import (
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1"
+)
+PRE_SCOPE_EXTENSION_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1"
 )
 PRE_AFFECTED_PATHS_REDUCER_VERSION = (
@@ -76,6 +80,7 @@ class RecordType(StrEnum):
     WORKFLOW_EVENT = "workflow_event"
     WORKFLOW_POLICY = "workflow_policy"
     SLICE_BOUNDARY = "slice_boundary"
+    SCOPE_EXTENSION = "scope_extension"
     TASK = "task"
     PLAN = "plan"
     WORK_UNIT = "work_unit"
@@ -507,6 +512,57 @@ class SliceBoundaryPayload:
                 "slice boundary scope_change_groups must partition unique paths"
             )
         _require_sha256(self.start_fingerprint, "slice boundary start_fingerprint")
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeExtensionPathPayload:
+    path: str
+    category: str
+
+    def __post_init__(self) -> None:
+        _require_paths((self.path,))
+        try:
+            PathClass(self.category)
+        except ValueError as exc:
+            raise ArtifactValidationError(
+                "scope extension path category is invalid"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeExtensionPayload:
+    work_unit_id: str
+    slice_id: str
+    source_request_id: str
+    stop_rule_id: str
+    rationale: str
+    additions: tuple[ScopeExtensionPathPayload, ...]
+    status: ClassVar[str] = "approved"
+    record_type: ClassVar[RecordType] = RecordType.SCOPE_EXTENSION
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.work_unit_id, "scope extension work_unit_id")
+        _require_identifier(self.slice_id, "scope extension slice_id")
+        if re.fullmatch(
+            r"native-[a-z-]+-request-[0-9a-f]{64}", self.source_request_id
+        ) is None:
+            raise ArtifactValidationError(
+                "scope extension source_request_id is invalid"
+            )
+        _require_identifier(self.stop_rule_id, "scope extension stop_rule_id")
+        _require_text(self.rationale, "scope extension rationale")
+        if not self.additions or any(
+            not isinstance(item, ScopeExtensionPathPayload)
+            for item in self.additions
+        ):
+            raise ArtifactValidationError(
+                "scope extension additions must be non-empty typed paths"
+            )
+        paths = tuple(item.path for item in self.additions)
+        if paths != tuple(sorted(set(paths))):
+            raise ArtifactValidationError(
+                "scope extension additions must be sorted and unique by path"
+            )
 
 
 def build_family_authorized_change_set(
@@ -3343,7 +3399,7 @@ class WorkflowCompletionPayload:
 ArtifactPayload: TypeAlias = (
     RunIdentityPayload | RunProfilePayload
     | WorkflowTransitionPayload | WorkflowEventPayload
-    | WorkflowPolicyPayload | SliceBoundaryPayload
+    | WorkflowPolicyPayload | SliceBoundaryPayload | ScopeExtensionPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload
     | BranchDiscoveryCompletedPayload
@@ -3884,6 +3940,17 @@ _PAYLOAD_READERS: dict[
             data["start_commit"],
             tuple(tuple(group) for group in data["scope_change_groups"]),
             data["start_fingerprint"],
+        ),
+    RecordType.SCOPE_EXTENSION: lambda data: ScopeExtensionPayload(
+            data["work_unit_id"],
+            data["slice_id"],
+            data["source_request_id"],
+            data["stop_rule_id"],
+            data["rationale"],
+            tuple(
+                ScopeExtensionPathPayload(item["path"], item["category"])
+                for item in data["additions"]
+            ),
         ),
     RecordType.TASK: lambda data: TaskPayload(
             data["target_branch"],

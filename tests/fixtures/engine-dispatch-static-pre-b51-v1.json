@@ -68,34 +68,49 @@
         },
         {
           "ordinal": 9,
-          "expression": "expanded is not None",
+          "expression": "scope_approval is not None",
           "read_names": [
-            "expanded"
+            "scope_approval"
           ]
         },
         {
           "ordinal": 10,
+          "expression": "scope_approval.additions",
+          "read_names": [
+            "scope_approval"
+          ]
+        },
+        {
+          "ordinal": 11,
           "expression": "added_paths",
           "read_names": [
             "added_paths"
           ]
         },
         {
-          "ordinal": 11,
+          "ordinal": 12,
+          "expression": "stop_request.rule_id == VALIDATION_UNAVAILABLE_RULE_ID",
+          "read_names": [
+            "VALIDATION_UNAVAILABLE_RULE_ID",
+            "stop_request"
+          ]
+        },
+        {
+          "ordinal": 13,
           "expression": "validation_handoff is not None",
           "read_names": [
             "validation_handoff"
           ]
         },
         {
-          "ordinal": 12,
+          "ordinal": 14,
           "expression": "result.ready is not True",
           "read_names": [
             "result"
           ]
         },
         {
-          "ordinal": 13,
+          "ordinal": 15,
           "expression": "is_plan and result.slice_plan",
           "read_names": [
             "is_plan",
@@ -103,21 +118,21 @@
           ]
         },
         {
-          "ordinal": 14,
+          "ordinal": 16,
           "expression": "unexpected_plan_paths",
           "read_names": [
             "unexpected_plan_paths"
           ]
         },
         {
-          "ordinal": 15,
+          "ordinal": 17,
           "expression": "context.plan_only",
           "read_names": [
             "context"
           ]
         },
         {
-          "ordinal": 16,
+          "ordinal": 18,
           "expression": "len(result.slice_plan) != 1",
           "read_names": [
             "len",
@@ -125,7 +140,7 @@
           ]
         },
         {
-          "ordinal": 17,
+          "ordinal": 19,
           "expression": "context.work_plan_path not in result.slice_plan[0].scope_paths",
           "read_names": [
             "context",
@@ -133,14 +148,14 @@
           ]
         },
         {
-          "ordinal": 18,
+          "ordinal": 20,
           "expression": "context.audit_report_path is not None and (not context.plan_only)",
           "read_names": [
             "context"
           ]
         },
         {
-          "ordinal": 19,
+          "ordinal": 21,
           "expression": "is_plan and context.plan_only",
           "read_names": [
             "context",
@@ -148,7 +163,7 @@
           ]
         },
         {
-          "ordinal": 20,
+          "ordinal": 22,
           "expression": "halted",
           "read_names": [
             "halted"
@@ -174,15 +189,20 @@
         {
           "ordinal": 4,
           "exception_type": "WorkflowExecutionError",
-          "message_expression": "f'TASK-SCOPE | SLICE_PLAN contains paths outside the declared task scope: {', '.join(unexpected_plan_paths)}'"
+          "message_expression": "f'STOP_REQUESTED has invalid content for {stop_request.rule_id!r}: {exc}'"
         },
         {
           "ordinal": 5,
           "exception_type": "WorkflowExecutionError",
-          "message_expression": "'PLAN_ONLY requires exactly one executable Slice for the plan artifact'"
+          "message_expression": "f'TASK-SCOPE | SLICE_PLAN contains paths outside the declared task scope: {', '.join(unexpected_plan_paths)}'"
         },
         {
           "ordinal": 6,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'PLAN_ONLY requires exactly one executable Slice for the plan artifact'"
+        },
+        {
+          "ordinal": 7,
           "exception_type": "WorkflowExecutionError",
           "message_expression": "'PLAN_ONLY Slice must include the declared WORK_PLAN_PATH'"
         }
@@ -217,14 +237,19 @@
           "expression": "(state, history)"
         }
       ],
-      "catchers": [],
+      "catchers": [
+        {
+          "ordinal": 1,
+          "exception_type": "ValueError"
+        }
+      ],
       "checkpoints": [
         {
           "ordinal": 1,
           "state_expression": "expanded",
           "history_expression": "history",
-          "statement_path": "body[23].body[2].body[0]",
-          "after_condition_count": 9,
+          "statement_path": "body[23].body[5].body[2]",
+          "after_condition_count": 10,
           "enclosing_condition_ordinals": [
             7,
             9
@@ -234,19 +259,19 @@
           "ordinal": 2,
           "state_expression": "validation_handoff",
           "history_expression": "history",
-          "statement_path": "body[23].body[4].body[0]",
-          "after_condition_count": 11,
+          "statement_path": "body[23].body[7].body[0]",
+          "after_condition_count": 13,
           "enclosing_condition_ordinals": [
             7,
-            11
+            13
           ]
         },
         {
           "ordinal": 3,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[23].body[6]",
-          "after_condition_count": 11,
+          "statement_path": "body[23].body[9]",
+          "after_condition_count": 13,
           "enclosing_condition_ordinals": [
             7
           ]
@@ -256,9 +281,9 @@
           "state_expression": "state",
           "history_expression": "history",
           "statement_path": "body[24].body[1]",
-          "after_condition_count": 12,
+          "after_condition_count": 14,
           "enclosing_condition_ordinals": [
-            12
+            14
           ]
         },
         {
@@ -266,7 +291,7 @@
           "state_expression": "state",
           "history_expression": "history",
           "statement_path": "body[29]",
-          "after_condition_count": 20,
+          "after_condition_count": 22,
           "enclosing_condition_ordinals": []
         }
       ]

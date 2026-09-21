@@ -201,6 +201,8 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "native agent content digest differs from its result binding": 1,
         "native reviewer content digest differs from its review binding": 1,
         "native review persistence differs from its exact review context": 1,
+        "scope extension payload differs from the active work unit": 1,
+        "scope extension record differs from the boundary additions": 1,
         "validation recovery result differs from its content": 1,
         "persisted finding handoff export differs from the prepared task": 1,
         "persisted BRANCH_DISCOVERY export differs from its child task": 1,

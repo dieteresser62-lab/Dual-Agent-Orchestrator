@@ -1241,6 +1241,10 @@ class ScriptedWorkflowDriver:
             )
         return match.full_diff
 
+    def path_exists_at_commit(self, commit: str, path: str) -> bool:
+        _ = (commit, path)
+        return False
+
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
     ) -> TestChangeEvidence | None:
@@ -1397,6 +1401,9 @@ class ScriptedWorkflowDriver:
         self, payload: InvocationFailurePayload
     ) -> None:
         self.structured_events.append(("invocation-failure", payload))
+
+    def persist_scope_extension(self, state, payload) -> None:
+        self.structured_events.append(("scope-extension", (state, payload)))
 
     def persist_review_packet(self, packet: ReviewPacket) -> None:
         self.structured_events.append(("review-packet", packet))

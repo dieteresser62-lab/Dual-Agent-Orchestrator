@@ -5,11 +5,11 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import PurePosixPath
 from typing import Iterable
 
 from contracts import AnchorChanges, AnchorRecord, compare_anchors
+from path_policy import PathClass
 from repo_changes import RepositoryChanges, fingerprint_change_subset
 
 
@@ -19,17 +19,13 @@ VALIDATION_UNAVAILABLE_RULE_ID = "VALIDATION-UNAVAILABLE"
 UNEXPECTED_PATH_RULE_ID = "UNEXPECTED-PATH"
 CONTRACT_UNCLEAR_RULE_ID = "CONTRACT-UNCLEAR"
 OPERATOR_PREREQUISITE_MISSING_RULE_ID = "OPERATOR-PREREQUISITE-MISSING"
+SCOPE_EXTENSION_REQUESTED_RULE_ID = "SCOPE-EXTENSION-REQUESTED"
 
 MISSING_PREREQUISITE_LABEL = "Missing prerequisite:"
 NON_SELF_PROVISION_REASON_LABEL = "Why it cannot be self-provided:"
 OPERATOR_ACTION_LABEL = "Operator action:"
-
-
-class PathClass(str, Enum):
-    PRODUCTIVE = "productive"
-    TEST = "test"
-    DOCUMENTATION = "documentation"
-    GENERATED = "generated"
+SCOPE_EXTENSION_PATHS_LABEL = "Required paths:"
+SCOPE_EXTENSION_REASON_LABEL = "Why required for current Slice:"
 
 
 @dataclass(frozen=True)
@@ -97,6 +93,15 @@ BUILTIN_STOP_RULES = (
         f"'{OPERATOR_ACTION_LABEL} ...'. Additional unlabeled lines are allowed; "
         "repeated labels are invalid.",
     ),
+    StopRule(
+        SCOPE_EXTENSION_REQUESTED_RULE_ID,
+        "The current Slice requires repository paths outside its persisted scope. "
+        "The rationale must contain one non-empty line for each of these labels: "
+        f"'{SCOPE_EXTENSION_PATHS_LABEL} ...' and "
+        f"'{SCOPE_EXTENSION_REASON_LABEL} ...'. The structured remediation_paths "
+        "carry the canonical path list. Additional unlabeled lines and blank lines "
+        "are allowed; repeated labels are invalid.",
+    ),
 )
 
 
@@ -107,14 +112,23 @@ class OperatorPrerequisiteDetails:
     operator_action: str
 
 
+@dataclass(frozen=True)
+class ScopeExtensionDetails:
+    required_paths: tuple[str, ...]
+    reason: str
+
+
 def validate_builtin_stop_content(
     rule_id: str,
     rationale: str,
-) -> OperatorPrerequisiteDetails | None:
+    remediation_paths: tuple[str, ...] = (),
+) -> OperatorPrerequisiteDetails | ScopeExtensionDetails | None:
     """Validate rule-specific content without inferring a rule from diagnostics."""
-    if rule_id != OPERATOR_PREREQUISITE_MISSING_RULE_ID:
-        return None
-    return _parse_operator_prerequisite_rationale(rationale)
+    if rule_id == OPERATOR_PREREQUISITE_MISSING_RULE_ID:
+        return _parse_operator_prerequisite_rationale(rationale)
+    if rule_id == SCOPE_EXTENSION_REQUESTED_RULE_ID:
+        return _parse_scope_extension_rationale(rationale, remediation_paths)
+    return None
 
 
 def _parse_operator_prerequisite_rationale(
@@ -156,6 +170,37 @@ def _parse_operator_prerequisite_rationale(
         non_self_provision_reason=values["reason it cannot be self-provided"],
         operator_action=values["operator action"],
     )
+
+
+def _parse_scope_extension_rationale(
+    rationale: str,
+    remediation_paths: tuple[str, ...],
+) -> ScopeExtensionDetails:
+    fields = (
+        ("required paths", SCOPE_EXTENSION_PATHS_LABEL),
+        ("reason", SCOPE_EXTENSION_REASON_LABEL),
+    )
+    values: dict[str, str] = {}
+    for line in rationale.splitlines():
+        matching = tuple(
+            (field_name, label)
+            for field_name, label in fields
+            if line.startswith(label)
+        )
+        if not matching:
+            continue
+        field_name, label = matching[0]
+        if field_name in values:
+            raise ValueError(f"scope extension stop has duplicate {field_name}")
+        values[field_name] = line[len(label) :].strip()
+
+    for field_name, _label in fields:
+        if not values.get(field_name):
+            raise ValueError(f"scope extension stop requires {field_name}")
+
+    if not remediation_paths:
+        raise ValueError("scope extension stop requires remediation_paths")
+    return ScopeExtensionDetails(remediation_paths, values["reason"])
 
 
 @dataclass(frozen=True)

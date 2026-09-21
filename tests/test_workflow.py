@@ -13,8 +13,13 @@ import workflow_requests
 import native_finding_decisions
 
 from agent_adapters import AgentOutputError
-from audit_trail import ReviewAuditEvent
-from artifact_models import InvocationFailurePayload, provider_text_evidence
+from audit_trail import ReviewAuditEvent, managed_slice_document_path
+from artifact_models import (
+    FamilyBindingPayload,
+    InvocationFailurePayload,
+    ScopeExtensionPayload,
+    provider_text_evidence,
+)
 from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from agent_runtime import (
     AgentInvocationError,
@@ -56,6 +61,7 @@ from contracts import (
 )
 from gates import (
     OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+    SCOPE_EXTENSION_REQUESTED_RULE_ID,
     PathClasses,
     StopRule,
     TestChangeEvidence as GateTestChangeEvidence,
@@ -306,6 +312,15 @@ def _codex_stop(rule_id: str) -> str:
     )
 
 
+def _scope_extension_rationale(path: str) -> str:
+    return (
+        f"Required paths: {path}\n\n"
+        "The implementation exposed a dependency not visible during planning.\n"
+        "Why required for current Slice: the current behavior cannot be completed "
+        "without this path"
+    )
+
+
 def _codex_not_ready(
     *finding_ids: str, plan: bool = False, slice_id: str = "01"
 ) -> str:
@@ -475,6 +490,7 @@ class FakeDriver:
         default_factory=list
     )
     convergence_calls: list[tuple[int, int]] = field(default_factory=list)
+    paths_existing_at_commits: set[tuple[str, str]] = field(default_factory=set)
     snapshot_index: int = -1
 
     def bind_work_unit(self, state: WorkflowState) -> None:
@@ -558,6 +574,9 @@ class FakeDriver:
         self, previous_fingerprint: str, current_fingerprint: str
     ) -> str:
         return self.deltas[(previous_fingerprint, current_fingerprint)]
+
+    def path_exists_at_commit(self, commit: str, path: str) -> bool:
+        return (commit, path) in self.paths_existing_at_commits
 
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
@@ -721,6 +740,9 @@ class FakeDriver:
         self.failure_persistence_events.append("failure-record")
         self.failure_payloads.append(payload)
         self.structured_events.append(("invocation-failure", payload))
+
+    def persist_scope_extension(self, state, payload) -> None:
+        self.structured_events.append(("scope-extension", (state, payload)))
 
     def persist_native_codex_contract(
         self,
@@ -5944,6 +5966,17 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
     assert "AUTOMATIC PRIOR-SLICE REMEDIATION" in driver.codex_calls[1].native_request.canonical_json
     assert "src/prior_0.py" in driver.codex_calls[1].native_request.canonical_json
     assert "src/prior_13.py" in driver.codex_calls[1].native_request.canonical_json
+    scope_records = tuple(
+        value[1]
+        for kind, value in driver.structured_events
+        if kind == "scope-extension"
+    )
+    assert len(scope_records) == 1
+    assert scope_records[0].stop_rule_id == "VALIDATION-UNAVAILABLE"
+    assert {item.category for item in scope_records[0].additions} == {
+        "productive",
+        "test",
+    }
 
 
 def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> None:
@@ -6092,6 +6125,340 @@ def test_codex_remediation_outside_completed_plan_still_halts() -> None:
     assert result.exit_code == 4
     assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
     assert len(driver.codex_calls) == 1
+
+
+def _scope_extension_state(
+    path: str,
+    ownership: str,
+    *,
+    audit_report_path: str | None = None,
+) -> WorkflowState:
+    current_scope = tuple(
+        sorted(
+            ("src/current.py", TEST_FILE, path)
+            if ownership == "current"
+            else ("src/current.py", TEST_FILE)
+        )
+    )
+    future_scope = tuple(
+        sorted(("src/future.py", path) if ownership == "later" else ("src/future.py",))
+    )
+    work_plan_path = "docs/internal/plan.md"
+    authorized = tuple(
+        sorted(
+            {
+                *current_scope,
+                *future_scope,
+                path,
+                work_plan_path,
+                *((audit_report_path,) if audit_report_path else ()),
+            }
+        )
+    )
+    state = init_workflow_state(
+        run_id=f"scope-{ownership}-{path.replace('/', '-')}",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        first_slice_start_commit=START_COMMIT,
+        slice_count=2,
+        timestamp="2026-08-12T10:00:00+00:00",
+        task_digest="a" * 64,
+        task_scope_patterns=("**",),
+        work_plan_path=work_plan_path,
+        audit_report_path=audit_report_path,
+        target_branch="feature/workflow",
+        family_binding=FamilyBindingPayload(
+            "family-scope",
+            START_COMMIT,
+            authorized,
+            None,
+            None,
+            1,
+            None,
+            None,
+        ),
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "current implementation", current_scope),
+            PlannedSlice(2, "later implementation", future_scope),
+        ),
+        first_start_commit=START_COMMIT,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    return state.bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=current_scope,
+        start_fingerprint="0" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path_kind", "path", "ownership", "exists_at_start", "approved"),
+    (
+        ("productive", "src/extra.py", "current", True, True),
+        ("productive", "src/extra.py", "unowned", True, True),
+        ("productive", "src/extra.py", "later", True, False),
+        ("test-new", "tests/new_extra.py", "current", False, True),
+        ("test-new", "tests/new_extra.py", "unowned", False, True),
+        ("test-new", "tests/new_extra.py", "later", False, True),
+        ("test-existing", "tests/existing_extra.py", "current", True, True),
+        ("test-existing", "tests/existing_extra.py", "unowned", True, False),
+        ("test-existing", "tests/existing_extra.py", "later", True, False),
+        ("documentation", "docs/guide.md", "current", True, True),
+        ("documentation", "docs/guide.md", "unowned", True, True),
+        ("documentation", "docs/guide.md", "later", True, True),
+        ("protected", "docs/internal/plan.md", "current", True, False),
+        ("protected", "docs/internal/plan.md", "unowned", True, False),
+        ("protected", "docs/internal/plan.md", "later", True, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "family_bound",
+    (True, False),
+    ids=("with-family-binding", "without-family-binding"),
+)
+def test_scope_extension_policy_matrix(
+    path_kind: str,
+    path: str,
+    ownership: str,
+    exists_at_start: bool,
+    approved: bool,
+    family_bound: bool,
+) -> None:
+    state = _scope_extension_state(path, ownership)
+    if not family_bound:
+        state = replace(state, family_binding=None)
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        paths_existing_at_commits=(
+            {(START_COMMIT, path)} if exists_at_start else set()
+        ),
+    )
+    context = replace(
+        _context(),
+        path_classes=PathClasses(
+            productive=("src/**",),
+            tests=("tests/**",),
+            documentation=("docs/**",),
+            generated=("build/**",),
+        ),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+    request = StopRequest(
+        SCOPE_EXTENSION_REQUESTED_RULE_ID,
+        _scope_extension_rationale(path),
+        (path,),
+    )
+
+    decision = WorkflowEngine(driver)._expand_approved_remediation_scope(
+        state,
+        context,
+        request,
+    )
+
+    assert (decision is not None) is approved, (path_kind, ownership, family_bound)
+    if decision is not None and ownership != "current":
+        assert path in decision.state.current_slice.scope_paths
+
+
+@pytest.mark.parametrize("ownership", ("current", "unowned", "later"))
+@pytest.mark.parametrize(
+    ("path", "audit_report_path"),
+    (
+        ("docs/internal/review.md", "docs/internal/review.md"),
+        (
+            managed_slice_document_path(
+                "docs/internal/review.md", 1, "current implementation"
+            ),
+            "docs/internal/review.md",
+        ),
+    ),
+)
+def test_scope_extension_rejects_review_artifact_at_every_ownership(
+    path: str,
+    audit_report_path: str,
+    ownership: str,
+) -> None:
+    state = _scope_extension_state(
+        path,
+        ownership,
+        audit_report_path=audit_report_path,
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+
+    decision = WorkflowEngine(driver)._expand_approved_remediation_scope(
+        state,
+        replace(_context(), current_scope_paths=state.current_slice.scope_paths),
+        StopRequest(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            _scope_extension_rationale(path),
+            (path,),
+        ),
+    )
+
+    assert decision is None
+
+
+def test_scope_extension_rejects_generated_path_without_a_policy_row() -> None:
+    path = "build/generated.json"
+    state = _scope_extension_state(path, "unowned")
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+
+    decision = WorkflowEngine(driver)._expand_approved_remediation_scope(
+        state,
+        replace(
+            _context(),
+            path_classes=PathClasses(
+                productive=("src/**",),
+                tests=("tests/**",),
+                documentation=("docs/**",),
+                generated=("build/**",),
+            ),
+            current_scope_paths=state.current_slice.scope_paths,
+        ),
+        StopRequest(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            _scope_extension_rationale(path),
+            (path,),
+        ),
+    )
+
+    assert decision is None
+
+
+@pytest.mark.parametrize("ownership", ("current", "unowned", "later"))
+def test_scope_extension_rejects_path_outside_family_authority(
+    ownership: str,
+) -> None:
+    path = "src/extra.py"
+    state = _scope_extension_state(path, ownership)
+    assert state.family_binding is not None
+    reduced_binding = replace(
+        state.family_binding,
+        family_authorized_change_set=tuple(
+            candidate
+            for candidate in state.family_binding.family_authorized_change_set
+            if candidate != path
+        ),
+    )
+    # Exercise the independent workflow defence even for a corrupt projection;
+    # WorkflowState itself already rejects this shape for current/later owners.
+    object.__setattr__(state, "family_binding", reduced_binding)
+
+    decision = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )._expand_approved_remediation_scope(
+        state,
+        replace(_context(), current_scope_paths=state.current_slice.scope_paths),
+        StopRequest(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            _scope_extension_rationale(path),
+            (path,),
+        ),
+    )
+
+    assert decision is None
+
+
+def test_scope_extension_rejects_missing_slice_start_commit() -> None:
+    path = "tests/new_extra.py"
+    state = _scope_extension_state(path, "unowned")
+    # A started Slice normally cannot have this shape; keep the scope decision's
+    # independent fail-closed check executable against a corrupt projection.
+    object.__setattr__(state.current_slice, "start_commit", None)
+
+    decision = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )._expand_approved_remediation_scope(
+        state,
+        replace(_context(), current_scope_paths=state.current_slice.scope_paths),
+        StopRequest(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            _scope_extension_rationale(path),
+            (path,),
+        ),
+    )
+
+    assert decision is None
+
+
+def test_scope_extension_without_family_binding_is_automatically_approved_and_recorded() -> None:
+    path = "src/extra.py"
+    rationale = _scope_extension_rationale(path)
+
+    class ScopeExtensionDriver(FakeDriver):
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            if len(self.codex_calls) == 1:
+                assert invocation.native_request is not None
+                request_id = invocation.native_request.bound_context.request_id
+                canonical = json.dumps({"request_id": request_id}, sort_keys=True)
+                return NativeAgentCodexOutput(
+                    CodexContractResult(
+                        ready=None,
+                        stopped=True,
+                        stop_request=StopRequest(
+                            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+                            rationale,
+                            (path,),
+                        ),
+                        validation=None,
+                        test_files=(),
+                        findings=invocation.previous_findings,
+                        slice_plan=(),
+                    ),
+                    canonical,
+                    request_id,
+                    hashlib.sha256(canonical.encode()).hexdigest(),
+                )
+            return _test_native_codex_output(invocation, _codex_ready())
+
+    state = replace(
+        _scope_extension_state(path, "unowned"),
+        family_binding=None,
+    )
+    assert state.active_family_binding is None
+    driver = ScopeExtensionDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+
+    advanced, _ = WorkflowEngine(driver)._run_codex(
+        state,
+        context,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    persisted = tuple(
+        value[1]
+        for kind, value in driver.structured_events
+        if kind == "scope-extension"
+    )
+    assert len(persisted) == 1
+    payload = persisted[0]
+    assert isinstance(payload, ScopeExtensionPayload)
+    assert payload.stop_rule_id == SCOPE_EXTENSION_REQUESTED_RULE_ID
+    assert payload.rationale == rationale
+    assert tuple((item.path, item.category) for item in payload.additions) == (
+        (path, "productive"),
+    )
+    assert driver.codex_calls[1].native_request is not None
+    assert (
+        "AUTOMATIC IMPLEMENTER SCOPE EXTENSION"
+        in driver.codex_calls[1].native_request.canonical_json
+    )
 
 
 def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:

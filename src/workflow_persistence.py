@@ -52,6 +52,7 @@ from artifact_models import (
     ReviewValidationBindingPayload,
     Role,
     SliceBoundaryPayload,
+    ScopeExtensionPayload,
     TransientRetryPayload,
     ValidationAttestationPayload,
     ValidationContentPayload,
@@ -577,6 +578,101 @@ class WorkflowPersistence:
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
             recorded[payload.slice_id] = payload
+
+    def persist_scope_extension(
+        self,
+        state: WorkflowState,
+        payload: ScopeExtensionPayload,
+    ) -> None:
+        """Atomically record an approval and its expanded Slice boundary."""
+
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            raise WorkflowExecutionError(
+                "scope extension requires structured record persistence"
+            )
+        unit = state.current_work_unit
+        current_slice = state.current_slice
+        if (
+            payload.work_unit_id != str(unit.work_unit_id)
+            or payload.slice_id != str(current_slice.slice_id)
+        ):
+            raise WorkflowExecutionError(
+                "scope extension payload differs from the active work unit"
+            )
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        prior_boundary = next(
+            (
+                item
+                for item in replay.slice_boundaries
+                if item.slice_id == payload.slice_id
+            ),
+            None,
+        )
+        if prior_boundary is None:
+            raise WorkflowExecutionError(
+                "scope extension requires an authoritative prior Slice boundary"
+            )
+        prior_paths = {
+            path for group in prior_boundary.scope_change_groups for path in group
+        }
+        added_paths = tuple(item.path for item in payload.additions)
+        if set(added_paths) != set(current_slice.scope_paths).difference(prior_paths):
+            raise WorkflowExecutionError(
+                "scope extension record differs from the boundary additions"
+            )
+        source = next(
+            (
+                record
+                for record in replay.records
+                if isinstance(record.payload, AgentResultPayload)
+                and record.payload.work_unit_id == payload.work_unit_id
+                and record.payload.request_id == payload.source_request_id
+                and record.payload.outcome == "stopped"
+            ),
+            None,
+        )
+        if source is None:
+            raise WorkflowExecutionError(
+                "scope extension has no prior stopped implementer result"
+            )
+        boundary = SliceBoundaryPayload(
+            payload.slice_id,
+            current_slice.start_commit or "",
+            current_slice.scope_change_groups,
+            current_slice.start_fingerprint or "",
+        )
+        chain = bridge.store.current_chain()
+        extension_logical_id = f"scope-extension-{payload.work_unit_id}"
+        boundary_logical_id = f"slice-boundary-{payload.slice_id}"
+        boundary_revision = 1 + max(
+            (
+                record.revision
+                for record in chain
+                if record.record_type is RecordType.SLICE_BOUNDARY
+                and record.logical_id == boundary_logical_id
+            ),
+            default=0,
+        )
+        bridge.append_batch(
+            (
+                (
+                    payload,
+                    extension_logical_id,
+                    f"scope-extension:{payload.work_unit_id}:"
+                    f"{payload.source_request_id}",
+                    state.task_digest,
+                    FingerprintKind.CONTRACT,
+                ),
+                (
+                    boundary,
+                    boundary_logical_id,
+                    f"slice-boundary:{payload.slice_id}:{boundary_revision}",
+                    state.task_digest,
+                    FingerprintKind.CONTRACT,
+                ),
+            )
+        )
 
     @staticmethod
     def _matching_gate_record(

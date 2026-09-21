@@ -25,6 +25,7 @@ from finding_signature import finding_record_signature
 from finding_responsibility import SliceResponsibility
 from gates import (
     OPERATOR_PREREQUISITE_MISSING_RULE_ID,
+    SCOPE_EXTENSION_REQUESTED_RULE_ID,
     validate_builtin_stop_content,
 )
 from native_codex_contract import (
@@ -1575,6 +1576,45 @@ def test_stop_result_is_exclusive_and_preserves_remediation_paths() -> None:
     assert result.stop_request.remediation_paths == (
         "schemas/native-agent-codex-result-v2.schema.json",
     )
+
+
+def test_scope_extension_stop_binds_labeled_paths_to_structured_paths() -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    rationale = (
+        "Required paths: src/runtime.py\n\n"
+        "The concrete dependency appeared during implementation.\n"
+        "Why required for current Slice: runtime wiring must be completed here"
+    )
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": SCOPE_EXTENSION_REQUESTED_RULE_ID,
+        "rationale": rationale,
+        "remediation_paths": ["src/runtime.py"],
+    }
+
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    assert result.stop_request is not None
+    assert result.stop_request.rationale == rationale
+    assert result.stop_request.remediation_paths == ("src/runtime.py",)
+
+
+def test_scope_extension_stop_allows_explanatory_path_label_text() -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    document = {
+        **_base(bound, "stop_result"),
+        "rule_id": SCOPE_EXTENSION_REQUESTED_RULE_ID,
+        "rationale": (
+            "Required paths: the runtime adapter named below\n"
+            "Why required for current Slice: runtime wiring must be completed here"
+        ),
+        "remediation_paths": ["src/runtime.py"],
+    }
+
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    assert result.stop_request is not None
+    assert result.stop_request.remediation_paths == ("src/runtime.py",)
 
 
 def _operator_prerequisite_rationale() -> str:

@@ -67,6 +67,8 @@ from artifact_models import (
     RunProfilePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
+    ScopeExtensionPathPayload,
+    ScopeExtensionPayload,
     SliceSpec,
     ValidationAttestationPayload,
     ValidationResult,
@@ -3222,6 +3224,96 @@ def test_r3_scope_extension_checkpoint_accepts_older_subset_revision(
     assert tuple(record.revision for record in work_revisions) == (1, 2)
     assert work_revisions[0].payload.paths == ("src/runtime.py",)
     assert work_revisions[1].payload.paths == (
+        "docs/extra.md",
+        "src/runtime.py",
+    )
+
+
+def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/scope-extension-record")
+    task = repository / "task.md"
+    _write_task(
+        task,
+        "feature/scope-extension-record",
+        "docs/extra.md",
+        "src/runtime.py",
+    )
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="scope-extension-record",
+        task_file=str(task),
+        branch="feature/scope-extension-record",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/extra.md", "src/runtime.py"),
+        target_branch="feature/scope-extension-record",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    source_request_id = "native-codex-request-" + "c" * 64
+    append_provider_decision_authority(
+        bridge,
+        AgentResultPayload(
+            Role.CODEX,
+            str(state.current_work_unit_id),
+            "stopped",
+            (),
+            "native-codex-v2",
+            source_request_id,
+            "d" * 64,
+        ),
+        logical_id="ignored-by-helper",
+        idempotency_key="scope-extension-source",
+        fingerprint_sha256="b" * 64,
+        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+    )
+    expanded = state.extend_current_slice_scope(("docs/extra.md",))
+    payload = ScopeExtensionPayload(
+        str(state.current_work_unit_id),
+        str(state.current_slice_id),
+        source_request_id,
+        "SCOPE-EXTENSION-REQUESTED",
+        "Required paths: docs/extra.md\nWhy required: complete the Slice",
+        (ScopeExtensionPathPayload("docs/extra.md", "documentation"),),
+    )
+
+    driver.persist_scope_extension(expanded, payload)
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    extension_index = next(
+        index
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, ScopeExtensionPayload)
+    )
+    assert isinstance(chain[extension_index + 1].payload, SliceBoundaryPayload)
+    assert chain[extension_index].payload == payload
+    assert chain[extension_index + 1].payload.scope_change_groups == (
+        ("docs/extra.md",),
+        ("src/runtime.py",),
+    )
+    resolution = resolve_resume_state(repository, state.run_id)
+    assert resolution.state.current_slice.scope_paths == (
         "docs/extra.md",
         "src/runtime.py",
     )

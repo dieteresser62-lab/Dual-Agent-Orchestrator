@@ -342,6 +342,14 @@ GATE_SOURCE_MAP = (
         ("validation-unavailable",),
     ),
     GateSourceRow(
+        "SCOPE-EXTENSION-REQUESTED",
+        "stop_request",
+        "policy",
+        "workflow._halt_for_stop_request",
+        ("gates.BUILTIN_STOP_RULES",),
+        ("scope-extension-requested",),
+    ),
+    GateSourceRow(
         "CONTRACT-UNCLEAR",
         "stop_request",
         "policy",
@@ -534,6 +542,12 @@ GATE_CASE_ORACLE = (
     ),
     ("branch-mismatch", "stop_request", "BRANCH-MISMATCH", "policy"),
     ("validation-unavailable", "stop_request", "VALIDATION-UNAVAILABLE", "policy"),
+    (
+        "scope-extension-requested",
+        "stop_request",
+        "SCOPE-EXTENSION-REQUESTED",
+        "policy",
+    ),
     ("contract-unclear", "stop_request", "CONTRACT-UNCLEAR", "policy"),
     (
         "operator-prerequisite-missing",

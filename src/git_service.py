@@ -635,6 +635,31 @@ def require_committed_file_at_head(
         raise GitTransactionError("approved work plan differs in the working tree")
 
 
+def path_exists_at_commit(
+    repository_root: Path,
+    *,
+    commit: str,
+    relative_path: str,
+) -> bool:
+    """Return whether one canonical repository path exists in an exact commit."""
+
+    root = inspect_repository(repository_root).repository_root
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise GitTransactionError(
+            "path existence check requires a lowercase 40-character Git SHA"
+        )
+    normalized = _normalize_scope_paths((relative_path,))[0]
+    _git(root, "cat-file", "-e", f"{commit}^{{commit}}")
+    result = _git(
+        root,
+        "cat-file",
+        "-e",
+        f"{commit}:{normalized}",
+        accepted_exit_codes=(0, 128),
+    )
+    return result.returncode == 0
+
+
 def begin_slice(
     *,
     repository_root: Path,

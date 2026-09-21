@@ -3,13 +3,18 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from contracts import AnchorRecord
 from gates import (
     PathClass,
     PathClasses,
+    SCOPE_EXTENSION_REQUESTED_RULE_ID,
+    ScopeExtensionDetails,
     classify_change_groups,
     detect_anchor_changes,
     detect_test_changes,
+    validate_builtin_stop_content,
 )
 from repo_changes import collect_repository_changes
 
@@ -39,6 +44,58 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "base")
     return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def test_scope_extension_stop_accepts_blank_and_unlabeled_explanation_lines() -> None:
+    rationale = (
+        "Required paths: docs/guide.md, src/runtime.py\n\n"
+        "Planning could not see the concrete adapter dependency.\n\n"
+        "Why required for current Slice: both paths are needed to finish the behavior"
+    )
+
+    details = validate_builtin_stop_content(
+        SCOPE_EXTENSION_REQUESTED_RULE_ID,
+        rationale,
+        ("docs/guide.md", "src/runtime.py"),
+    )
+
+    assert details == ScopeExtensionDetails(
+        ("docs/guide.md", "src/runtime.py"),
+        "both paths are needed to finish the behavior",
+    )
+
+
+@pytest.mark.parametrize(
+    ("rationale", "message"),
+    (
+        (
+            "Why required for current Slice: needed to finish",
+            "requires required paths",
+        ),
+        ("Required paths: src/runtime.py", "requires reason"),
+        (
+            "Required paths: src/runtime.py\n"
+            "Required paths: src/other.py\n"
+            "Why required for current Slice: needed to finish",
+            "duplicate required paths",
+        ),
+        (
+            "Required paths: src/runtime.py\n"
+            "Why required for current Slice: needed to finish",
+            "requires remediation_paths",
+        ),
+    ),
+)
+def test_scope_extension_stop_rejects_incomplete_or_divergent_labels(
+    rationale: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_builtin_stop_content(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            rationale,
+            () if message == "requires remediation_paths" else ("src/other.py",),
+        )
 
 
 def test_test_gate_detects_modified_untracked_and_both_sides_of_rename(

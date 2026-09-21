@@ -687,7 +687,11 @@ def native_codex_response_to_contract_result(
     prior = context.previous_findings
     if isinstance(response, NativeCodexStopResult):
         try:
-            validate_builtin_stop_content(response.rule_id, response.rationale)
+            validate_builtin_stop_content(
+                response.rule_id,
+                response.rationale,
+                response.remediation_paths,
+            )
             stop = StopRequest(
                 response.rule_id,
                 response.rationale,

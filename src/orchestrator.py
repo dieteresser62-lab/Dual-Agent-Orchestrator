@@ -55,6 +55,7 @@ from artifact_models import (
     FindingSnapshotItem,
     flatten_finding_transition_history,
     SideEffectPayload,
+    ScopeExtensionPayload,
     WorkflowEventPayload, WorkflowTransitionPayload,
     RecordType, stable_record_id,
 )
@@ -93,6 +94,7 @@ from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
     inspect_repository,
     GitTransactionError,
+    path_exists_at_commit,
 )
 from plan_handoff import (
     branch_discovery_task_path,
@@ -1786,6 +1788,13 @@ class ProductionWorkflowDriver:
             recovery_fingerprint=recovery_fingerprint,
         )
 
+    def persist_scope_extension(
+        self,
+        state: WorkflowState,
+        payload: ScopeExtensionPayload,
+    ) -> None:
+        self._persistence_boundary().persist_scope_extension(state, payload)
+
     def persist_native_review_contract(
         self,
         output: NativeAgentReviewOutput,
@@ -2907,6 +2916,13 @@ class ProductionWorkflowDriver:
         if current is None:
             raise WorkflowExecutionError("current correction fingerprint was not collected")
         return current.full_diff
+
+    def path_exists_at_commit(self, commit: str, path: str) -> bool:
+        return path_exists_at_commit(
+            self.root,
+            commit=commit,
+            relative_path=path,
+        )
 
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]

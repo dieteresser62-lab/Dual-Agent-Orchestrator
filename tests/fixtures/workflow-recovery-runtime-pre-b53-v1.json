@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-979e6e7fdeb8d1a0b6c5d6295531524572dca857559aeee4dcf3e0331627d778",
+        "request_id": "native-codex-request-234933f51ba4fc69c86c6a173140356f8386cd1ca190ac964d9c5c207a4cc40d",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
           "role": "codex",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "codex_implementation",
-          "request_id": "native-codex-request-979e6e7fdeb8d1a0b6c5d6295531524572dca857559aeee4dcf3e0331627d778",
-          "response_sha256": "673f8fc3e06b44cf70d2e355126183a32ff7f229b5c2e65a8c4463b07392206b",
+          "request_id": "native-codex-request-234933f51ba4fc69c86c6a173140356f8386cd1ca190ac964d9c5c207a4cc40d",
+          "response_sha256": "05f91448c0b1f15d68914cf59eae0318c0df990e2e4e0e74619fb7562c96ba43",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

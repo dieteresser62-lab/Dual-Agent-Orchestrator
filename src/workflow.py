@@ -32,6 +32,8 @@ from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
     InvocationFailurePayload,
+    ScopeExtensionPathPayload,
+    ScopeExtensionPayload,
 )
 from finding_order import sorted_finding_ids
 from finding_responsibility import parse_responsibility, responsibility_document
@@ -84,12 +86,16 @@ from contracts import (
 from gates import (
     BRANCH_MISMATCH_RULE_ID,
     BUILTIN_STOP_RULES,
+    SCOPE_EXTENSION_REQUESTED_RULE_ID,
     UNEXPECTED_PATH_RULE_ID,
     VALIDATION_UNAVAILABLE_RULE_ID,
     AnchorChangeEvidence,
+    PathClass,
+    PathClassification,
     PathClasses,
     StopRule,
     TestChangeEvidence,
+    classify_path,
     detect_anchor_changes,
     matches_path_patterns,
     validate_builtin_stop_content,
@@ -347,6 +353,12 @@ class WorkflowChanges:
     def user_gate_paths(self) -> tuple[str, ...]:
         """Include historical rename paths when the driver captured them."""
         return self.gate_paths or self.paths
+
+
+@dataclass(frozen=True)
+class ApprovedScopeExtension:
+    state: WorkflowState
+    additions: tuple[PathClassification, ...]
 
 
 @dataclass(frozen=True)
@@ -648,6 +660,8 @@ class WorkflowDriver(Protocol):
         self, previous_fingerprint: str, current_fingerprint: str
     ) -> str: ...
 
+    def path_exists_at_commit(self, commit: str, path: str) -> bool: ...
+
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
     ) -> TestChangeEvidence | None: ...
@@ -704,6 +718,12 @@ class WorkflowDriver(Protocol):
         self, payload: InvocationFailurePayload
     ) -> None: ...
 
+    def persist_scope_extension(
+        self,
+        state: WorkflowState,
+        payload: ScopeExtensionPayload,
+    ) -> None: ...
+
     def persist_native_codex_contract(  # allowlist:provider -- canonical capability
         self,
         output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
@@ -751,6 +771,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "persist_gate_decision",
         "persist_gate_transition",
         "persist_invocation_failure",
+        "persist_scope_extension",
         "persist_native_codex_contract",  # allowlist:provider -- canonical capability
         "persist_native_review_contract",
         "persist_review_packet",
@@ -763,6 +784,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "recover_pending_validation_attestation",
         "validate",
         "validate_plan",
+        "path_exists_at_commit",
     }
 )
 MANDATORY_WORKFLOW_DRIVER_STATE_ATTRIBUTES = frozenset({"active_state"})
@@ -2148,86 +2170,9 @@ class WorkflowEngine:
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex stop has no structured stop request")
-            expanded = self._expand_approved_remediation_scope(
-                state, result.stop_request
+            return self._apply_stopped_agent_output(
+                state, context, history, output
             )
-            if expanded is not None:
-                self.driver.checkpoint(expanded, history)
-                self._bind_driver_work_unit(expanded)
-                remediation = ", ".join(result.stop_request.remediation_paths)
-                added_paths = tuple(
-                    sorted(
-                        set(expanded.current_slice.scope_paths).difference(
-                            state.current_slice.scope_paths
-                        )
-                    )
-                )
-                if added_paths:
-                    logger.info(
-                        "Automatically extending Slice %02d with approved remediation paths: %s",
-                        expanded.current_slice_id,
-                        remediation,
-                    )
-                    remediation_heading = "AUTOMATIC PRIOR-SLICE REMEDIATION"
-                    remediation_instruction = (
-                        "Repair these approved paths before completing the current Slice: "
-                        f"{remediation}"
-                    )
-                else:
-                    logger.info(
-                        "Remediation paths are already authorized for Slice %02d; "
-                        "re-prompting Codex once instead of requesting user approval: %s",
-                        expanded.current_slice_id,
-                        remediation,
-                    )
-                    remediation_heading = (
-                        "REMEDIATION PATHS ALREADY AUTHORIZED — DO NOT REQUEST AGAIN"
-                    )
-                    remediation_instruction = (
-                        f"The exact current allowlist already contains: {remediation}. "
-                        "Implement and validate the required correction now. Do not emit "
-                        "STOP_REQUESTED or REMEDIATION_PATHS for these paths again."
-                    )
-                expanded_context = replace(
-                    context,
-                    current_scope_paths=expanded.current_slice.scope_paths,
-                    slice_summary=(
-                        f"{context.slice_summary}\n\n"
-                        f"{remediation_heading}\n"
-                        f"Cause: {result.stop_request.rationale}\n"
-                        f"{remediation_instruction}"
-                    ),
-                )
-                return self._run_codex(expanded, expanded_context, history)
-            validation_handoff = self._handoff_agent_sandbox_validation(
-                state, result.stop_request
-            )
-            if validation_handoff is not None:
-                self.driver.checkpoint(validation_handoff, history)
-                self._bind_driver_work_unit(validation_handoff)
-                logger.info(
-                    "Agent-local validation was blocked by its sandbox; handing the "
-                    "authoritative matrix back to the orchestrator for Slice %02d.",
-                    validation_handoff.current_slice_id,
-                )
-                handoff_context = replace(
-                    context,
-                    slice_summary=(
-                        f"{context.slice_summary}\n\n"
-                        "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF\n"
-                        f"Agent-local failure: {result.stop_request.rationale}\n"
-                        "The implementation itself is not blocked. Do not rerun the "
-                        "configured full validation matrix inside the agent sandbox. "
-                        "Complete any remaining implementation bookkeeping and emit the "
-                        "normal readiness record; the orchestrator will execute the "
-                        "authoritative matrix immediately afterward. Request a stop only "
-                        "for a genuine implementation blocker or product decision."
-                    ),
-                )
-                return self._run_codex(validation_handoff, handoff_context, history)
-            state = self._halt_for_stop_request(state, context, result.stop_request)
-            self.driver.checkpoint(state, history)
-            return state, history
         if result.ready is not True:
             state = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
@@ -2310,6 +2255,143 @@ class WorkflowEngine:
         state = state.with_current_step(next_step)
         self.driver.checkpoint(state, history)
         return state, history
+
+    def _apply_stopped_agent_output(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        output: NativeAgentCodexOutput,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        stop_request = output.result.stop_request
+        assert stop_request is not None
+        try:
+            validate_builtin_stop_content(
+                stop_request.rule_id,
+                stop_request.rationale,
+                stop_request.remediation_paths,
+            )
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "STOP_REQUESTED has invalid content for "
+                f"{stop_request.rule_id!r}: {exc}"
+            ) from exc
+        scope_approval = self._expand_approved_remediation_scope(
+            state, context, stop_request
+        )
+        if scope_approval is not None:
+            return self._apply_scope_extension(
+                state, context, history, output, stop_request, scope_approval
+            )
+        validation_handoff = self._handoff_agent_sandbox_validation(
+            state, stop_request
+        )
+        if validation_handoff is not None:
+            self.driver.checkpoint(validation_handoff, history)
+            self._bind_driver_work_unit(validation_handoff)
+            logger.info(
+                "Agent-local validation was blocked by its sandbox; handing the "
+                "authoritative matrix back to the orchestrator for Slice %02d.",
+                validation_handoff.current_slice_id,
+            )
+            handoff_context = replace(
+                context,
+                slice_summary=(
+                    f"{context.slice_summary}\n\n"
+                    "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF\n"
+                    f"Agent-local failure: {stop_request.rationale}\n"
+                    "The implementation itself is not blocked. Do not rerun the "
+                    "configured full validation matrix inside the agent sandbox. "
+                    "Complete any remaining implementation bookkeeping and emit the "
+                    "normal readiness record; the orchestrator will execute the "
+                    "authoritative matrix immediately afterward. Request a stop only "
+                    "for a genuine implementation blocker or product decision."
+                ),
+            )
+            return self._run_codex(validation_handoff, handoff_context, history)
+        state = self._halt_for_stop_request(state, context, stop_request)
+        self.driver.checkpoint(state, history)
+        return state, history
+
+    def _apply_scope_extension(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        output: NativeAgentCodexOutput,
+        stop_request: StopRequest,
+        scope_approval: ApprovedScopeExtension,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        expanded = scope_approval.state
+        if scope_approval.additions:
+            self.driver.persist_scope_extension(
+                expanded,
+                ScopeExtensionPayload(
+                    work_unit_id=str(state.current_work_unit_id),
+                    slice_id=str(state.current_slice_id),
+                    source_request_id=output.request_id,
+                    stop_rule_id=stop_request.rule_id,
+                    rationale=stop_request.rationale,
+                    additions=tuple(
+                        ScopeExtensionPathPayload(item.path, item.path_class.value)
+                        for item in scope_approval.additions
+                    ),
+                ),
+            )
+        self.driver.checkpoint(expanded, history)
+        self._bind_driver_work_unit(expanded)
+        remediation = ", ".join(stop_request.remediation_paths)
+        added_paths = tuple(
+            sorted(
+                set(expanded.current_slice.scope_paths).difference(
+                    state.current_slice.scope_paths
+                )
+            )
+        )
+        if added_paths:
+            logger.info(
+                "Automatically extending Slice %02d with approved remediation paths: %s",
+                expanded.current_slice_id,
+                remediation,
+            )
+            if stop_request.rule_id == VALIDATION_UNAVAILABLE_RULE_ID:
+                remediation_heading = "AUTOMATIC PRIOR-SLICE REMEDIATION"
+                remediation_instruction = (
+                    "Repair these approved paths before completing the current "
+                    f"Slice: {remediation}"
+                )
+            else:
+                remediation_heading = "AUTOMATIC IMPLEMENTER SCOPE EXTENSION"
+                remediation_instruction = (
+                    "Use these approved paths to finish the current Slice: "
+                    f"{remediation}"
+                )
+        else:
+            logger.info(
+                "Remediation paths are already authorized for Slice %02d; "
+                "re-prompting Codex once instead of requesting user approval: %s",
+                expanded.current_slice_id,
+                remediation,
+            )
+            remediation_heading = (
+                "REMEDIATION PATHS ALREADY AUTHORIZED — DO NOT REQUEST AGAIN"
+            )
+            remediation_instruction = (
+                f"The exact current allowlist already contains: {remediation}. "
+                "Implement and validate the required correction now. Do not emit "
+                "STOP_REQUESTED or REMEDIATION_PATHS for these paths again."
+            )
+        expanded_context = replace(
+            context,
+            current_scope_paths=expanded.current_slice.scope_paths,
+            slice_summary=(
+                f"{context.slice_summary}\n\n"
+                f"{remediation_heading}\n"
+                f"Cause: {stop_request.rationale}\n"
+                f"{remediation_instruction}"
+            ),
+        )
+        return self._run_codex(expanded, expanded_context, history)
 
     def _merge_implementer_output_findings(
         self,
@@ -3997,6 +4079,7 @@ class WorkflowEngine:
             validate_builtin_stop_content(
                 stop_request.rule_id,
                 stop_request.rationale,
+                stop_request.remediation_paths,
             )
         except ValueError as exc:
             raise WorkflowExecutionError(
@@ -4008,40 +4091,110 @@ class WorkflowEngine:
             detail=f"{stop_request.rule_id} | {stop_request.rationale}",
         )
 
-    @staticmethod
     def _expand_approved_remediation_scope(
+        self,
         state: WorkflowState,
+        context: WorkflowContext,
         stop_request: StopRequest,
-    ) -> WorkflowState | None:
-        """Add only exact paths from completed approved Slices to the active Slice."""
+    ) -> ApprovedScopeExtension | None:
+        """Approve one exact, policy-safe scope request or fail closed to a gate."""
         if (
-            stop_request.rule_id != VALIDATION_UNAVAILABLE_RULE_ID
+            stop_request.rule_id
+            not in {
+                VALIDATION_UNAVAILABLE_RULE_ID,
+                SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            }
             or not stop_request.remediation_paths
             or state.current_work_unit.kind is not WorkUnitKind.SLICE
         ):
             return None
-        completed_ids = {
-            item.slice_id
-            for item in state.slices
-            if item.status is SliceStatus.COMPLETED
-        }
-        eligible = {
-            path
-            for planned in state.planned_slices
-            if planned.slice_id in completed_ids
-            for path in planned.scope_paths
-        }
         requested = set(stop_request.remediation_paths)
-        if not requested.issubset(eligible):
+        protected = self._protected_scope_extension_paths(state)
+        if requested.intersection(protected):
             return None
+
+        if stop_request.rule_id == VALIDATION_UNAVAILABLE_RULE_ID:
+            completed_ids = {
+                item.slice_id
+                for item in state.slices
+                if item.status is SliceStatus.COMPLETED
+            }
+            eligible = {
+                path
+                for planned in state.planned_slices
+                if planned.slice_id in completed_ids
+                for path in planned.scope_paths
+            }
+            if not requested.issubset(eligible):
+                return None
+        else:
+            additions = requested.difference(state.current_slice.scope_paths)
+            family_binding = state.active_family_binding
+            if (
+                family_binding is not None
+                and not requested.issubset(
+                    family_binding.family_authorized_change_set
+                )
+            ):
+                return None
+            later_owned_paths = {
+                path
+                for planned in state.planned_slices
+                if planned.slice_id > state.current_slice_id
+                for path in planned.scope_paths
+            }
+            start_commit = state.current_slice.start_commit
+            if start_commit is None:
+                return None
+            for path in sorted(additions):
+                path_class = classify_path(path, context.path_classes).path_class
+                if path_class is PathClass.DOCUMENTATION:
+                    continue
+                if path_class is PathClass.TEST:
+                    if not self.driver.path_exists_at_commit(start_commit, path):
+                        continue
+                    return None
+                if path_class is PathClass.PRODUCTIVE:
+                    if path not in later_owned_paths:
+                        continue
+                    return None
+                return None
+
         additions = tuple(sorted(requested.difference(state.current_slice.scope_paths)))
         if not additions:
             digest = hashlib.sha256("\0".join(sorted(requested)).encode("utf-8")).hexdigest()
             retry_key = f"authorized-remediation-reprompt:{digest}"
             if state.current_work_unit.has_completed_side_effect(retry_key):
                 return None
-            return state.mark_side_effect_completed(retry_key)
-        return state.extend_current_slice_scope(additions)
+            return ApprovedScopeExtension(
+                state.mark_side_effect_completed(retry_key),
+                (),
+            )
+        classified = tuple(
+            classify_path(path, context.path_classes) for path in additions
+        )
+        return ApprovedScopeExtension(
+            state.extend_current_slice_scope(additions),
+            classified,
+        )
+
+    @staticmethod
+    def _protected_scope_extension_paths(state: WorkflowState) -> frozenset[str]:
+        protected = {
+            path
+            for path in (state.work_plan_path, state.audit_report_path)
+            if path is not None
+        }
+        if state.audit_report_path is not None:
+            protected.update(
+                managed_slice_document_path(
+                    state.audit_report_path,
+                    planned.slice_id,
+                    planned.summary,
+                )
+                for planned in state.planned_slices
+            )
+        return frozenset(protected)
 
     @staticmethod
     def _handoff_agent_sandbox_validation(

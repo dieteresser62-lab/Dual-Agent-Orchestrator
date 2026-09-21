@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "branch_discovery_completed", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "branch_discovery_handoff_export", "branch_discovery_handoff_import", "plan_assignment", "remediation_cohort_checkpoint", "no_implementation_required", "closed_finding_occurrence", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "scope_extension", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "branch_discovery_completed", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "branch_discovery_handoff_export", "branch_discovery_handoff_import", "plan_assignment", "remediation_cohort_checkpoint", "no_implementation_required", "closed_finding_occurrence", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -26,6 +26,7 @@
     {"if": {"properties": {"record_type": {"const": "workflow_event"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/workflow_event"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_policy"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/workflow_policy"}}}},
     {"if": {"properties": {"record_type": {"const": "slice_boundary"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/slice_boundary"}}}},
+    {"if": {"properties": {"record_type": {"const": "scope_extension"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/scope_extension"}}}},
     {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
     {"if": {"properties": {"record_type": {"const": "plan"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/plan"}}}},
     {"if": {"properties": {"record_type": {"const": "work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/work_unit"}}}},
@@ -128,7 +129,7 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-affected-paths-v1"},
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1"},
         "family_binding": {"$ref": "#/$defs/family_binding"}
       }
     },
@@ -201,6 +202,26 @@
           "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}}
         },
         "start_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scope_extension_path": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "category"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "category": {"$ref": "#/$defs/non_empty"}
+      }
+    },
+    "scope_extension": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_unit_id", "slice_id", "source_request_id", "stop_rule_id", "rationale", "additions"],
+      "properties": {
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "slice_id": {"$ref": "#/$defs/identifier"},
+        "source_request_id": {"type": "string", "pattern": "^native-[a-z-]+-request-[0-9a-f]{64}$"},
+        "stop_rule_id": {"$ref": "#/$defs/identifier"},
+        "rationale": {"$ref": "#/$defs/non_empty"},
+        "additions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/scope_extension_path"}}
       }
     },
     "task": {

@@ -52,7 +52,7 @@ from artifact_models import (
     QuotaPausePayload,
     SideEffectPayload,
     SliceSpec,
-    SliceBoundaryPayload,
+    SliceBoundaryPayload, ScopeExtensionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     ResumeCheckPayload,
@@ -3231,6 +3231,7 @@ def _validate_payload_references(
     _validate_unbound_provider_content(
         chain, provider_content_records, bound_provider_records, positions
     )
+    _validate_scope_extensions(chain, positions)
     review_records, review_validation_records, anchors_by_review = (
         _validate_review_anchors(chain, records_by_id, positions)
     )
@@ -3264,6 +3265,69 @@ def _validate_payload_references(
     _validate_provider_attempt_sequences(chain)
     _validate_side_effect_sequences(chain)
     return pending_review_record_id
+
+
+def _validate_scope_extensions(
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+) -> None:
+    for record in chain:
+        payload = record.payload
+        if not isinstance(payload, ScopeExtensionPayload):
+            continue
+        position = positions[record.record_id]
+        source = tuple(
+            candidate
+            for candidate in chain[:position]
+            if isinstance(candidate.payload, AgentResultPayload)
+            and candidate.payload.work_unit_id == payload.work_unit_id
+            and candidate.payload.request_id == payload.source_request_id
+            and candidate.payload.outcome == "stopped"
+        )
+        if len(source) != 1:
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "scope extension requires one prior stopped implementer result",
+                record,
+            )
+        prior_boundary = next(
+            (
+                candidate.payload
+                for candidate in reversed(chain[:position])
+                if isinstance(candidate.payload, SliceBoundaryPayload)
+                and candidate.payload.slice_id == payload.slice_id
+            ),
+            None,
+        )
+        if prior_boundary is None:
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "scope extension requires a prior Slice boundary",
+                record,
+            )
+        if position + 1 >= len(chain) or not isinstance(
+            chain[position + 1].payload, SliceBoundaryPayload
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "scope extension must be followed atomically by its Slice boundary",
+                record,
+            )
+        expanded = chain[position + 1].payload
+        assert isinstance(expanded, SliceBoundaryPayload)
+        additions = tuple((item.path,) for item in payload.additions)
+        if (
+            expanded.slice_id != payload.slice_id
+            or expanded.start_commit != prior_boundary.start_commit
+            or expanded.start_fingerprint != prior_boundary.start_fingerprint
+            or set(expanded.scope_change_groups)
+            != {*prior_boundary.scope_change_groups, *additions}
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "scope extension differs from its expanded Slice boundary",
+                record,
+            )
 
 
 def _same_fingerprint(record: ArtifactRecord, referenced: ArtifactRecord) -> None:

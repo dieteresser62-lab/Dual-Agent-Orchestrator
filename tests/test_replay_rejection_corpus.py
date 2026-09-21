@@ -56,6 +56,8 @@ from artifact_models import (
     RunProfilePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
+    ScopeExtensionPathPayload,
+    ScopeExtensionPayload,
     SliceSpec,
     TransientRetryPayload,
     TaskPayload,
@@ -95,6 +97,7 @@ VALIDATION_PASSES = (
     "_validate_unbound_validation_content",
     "_validate_provider_decision_content",
     "_validate_unbound_provider_content",
+    "_validate_scope_extensions",
     "_validate_review_anchors",
     "_validate_review_validation_bindings",
     "_validate_required_review_authority",
@@ -781,7 +784,47 @@ def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
 def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     records: list[ArtifactRecord] = []
 
-    if line in {3001, 3002, 3003, 3004, 3005, 3013}:
+    if line in {3020, 3021, 3022, 3023}:
+        _append(records, _transition())
+        if line != 3021:
+            _append(
+                records,
+                SliceBoundaryPayload(
+                    "1", "1" * 40, (("src/a.py",),), "2" * 64
+                ),
+                logical_id="slice-boundary-1",
+            )
+        if line != 3020:
+            _append(
+                records,
+                replace(_agent(), outcome="stopped"),
+                logical_id="agent-1-codex_implementation-1",
+            )
+        _append(
+            records,
+            ScopeExtensionPayload(
+                "1",
+                "1",
+                REQUEST_ID,
+                "SCOPE-EXTENSION-REQUESTED",
+                "Required paths: docs/a.md\nWhy required for current Slice: needed",
+                (ScopeExtensionPathPayload("docs/a.md", "documentation"),),
+            ),
+            logical_id="scope-extension-1",
+        )
+        if line not in {3022}:
+            groups = (
+                (("src/a.py",),)
+                if line == 3023
+                else (("docs/a.md",), ("src/a.py",))
+            )
+            _append(
+                records,
+                SliceBoundaryPayload("1", "1" * 40, groups, "2" * 64),
+                logical_id="slice-boundary-1",
+                revision=2,
+            )
+    elif line in {3001, 3002, 3003, 3004, 3005, 3013}:
         finding, review, attestation = _branch_export_prefix(records)
         if line == 3003:
             export_attestation = _append_attestation(
@@ -1296,7 +1339,7 @@ def _load_baseline() -> dict[str, object]:
 
 def _entries() -> tuple[dict[str, object], ...]:
     entries = _load_baseline()["entries"]
-    assert isinstance(entries, list) and len(entries) == 100
+    assert isinstance(entries, list) and len(entries) == 104
     assert all(
         isinstance(entry, dict)
         and set(entry) == {"case_id", "input", "code", "line", "message"}
@@ -1373,11 +1416,11 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     entries = _entries()
     expected = tuple((int(entry["line"]), str(entry["code"])) for entry in entries)
     assert _source_emissions() == expected
-    assert len({entry["case_id"] for entry in entries}) == 100
-    assert len({entry["line"] for entry in entries}) == 100
+    assert len({entry["case_id"] for entry in entries}) == 104
+    assert len({entry["line"] for entry in entries}) == 104
     assert Counter(entry["code"] for entry in entries) == {
-        "RECORD-FINGERPRINT-MISMATCH": 45,
-        "RECORD-REFERENCE-MISSING": 31,
+        "RECORD-FINGERPRINT-MISMATCH": 46,
+        "RECORD-REFERENCE-MISSING": 34,
         "RECORD-DUPLICATE": 9,
         "RECORD-MISSING": 9,
         "RECORD-RUN-MISMATCH": 2,

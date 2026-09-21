@@ -17,7 +17,7 @@ import pytest
 import workflow as production
 
 from agent_runtime import NativeAgentCodexOutput
-from contracts import AgentRole, CodexContractResult, PlannedSlice
+from contracts import AgentRole, CodexContractResult, PlannedSlice, StopRequest
 from test_workflow import FakeDriver, TEST_FILE, _changes, _context, _slice_state
 from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
 from workflow_state import WorkflowStep, init_workflow_state
@@ -42,6 +42,8 @@ DISPATCH_HELPERS = {
     "_run_codex": (
         "_prepare_agent_dispatch",
         "_apply_agent_output",
+        "_apply_stopped_agent_output",
+        "_apply_scope_extension",
     ),
     "_run_review": (
         "_collect_review_dispatch_changes",
@@ -74,6 +76,16 @@ SCENARIOS: tuple[dict[str, str], ...] = (
         "trigger_mode": "provider-contract-injection",
         "error_type": "WorkflowExecutionError",
         "message": "Codex stop has no structured stop request",
+    },
+    {
+        "scenario_id": "codex-stop-invalid-content",
+        "path": "codex",
+        "trigger_mode": "provider-contract-injection",
+        "error_type": "WorkflowExecutionError",
+        "message": (
+            "STOP_REQUESTED has invalid content for "
+            "'SCOPE-EXTENSION-REQUESTED': scope extension stop requires required paths"
+        ),
     },
     {
         "scenario_id": "codex-plan-outside-task-scope",
@@ -267,6 +279,72 @@ def _assignment_matches_terminal_return(
     )
 
 
+def _declared_helper_calls(
+    function: ast.FunctionDef,
+    helper_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        call.func.attr
+        for call in _ordered(function, ast.Call)
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "self"
+        and call.func.attr in helper_names
+    )
+
+
+def _assert_dispatch_helper_graph(
+    name: str,
+    function: ast.FunctionDef,
+    helpers: dict[str, ast.FunctionDef],
+    helper_names: tuple[str, ...],
+) -> None:
+    helper_order = {helper_name: index for index, helper_name in enumerate(helper_names)}
+    call_graph = {
+        caller: _declared_helper_calls(owner, helper_names)
+        for caller, owner in ((name, function), *helpers.items())
+    }
+    for caller, direct_calls in call_graph.items():
+        ordinals = tuple(helper_order[helper_name] for helper_name in direct_calls)
+        assert len(direct_calls) == len(set(direct_calls)), (
+            f"{caller} calls a declared dispatch helper more than once: {direct_calls}"
+        )
+        assert ordinals == tuple(sorted(ordinals)), (
+            f"{caller} dispatch helper calls violate declared relative order: "
+            f"{direct_calls}"
+        )
+
+    reachable: set[str] = set()
+    pending = list(call_graph[name])
+    while pending:
+        helper_name = pending.pop()
+        if helper_name in reachable:
+            continue
+        reachable.add(helper_name)
+        pending.extend(call_graph[helper_name])
+    unreachable = tuple(sorted(set(helper_names).difference(reachable)))
+    assert not unreachable, (
+        f"{name} has unreachable declared dispatch helpers: {', '.join(unreachable)}"
+    )
+
+    discovery_order: list[str] = []
+    discovered: set[str] = set()
+
+    def visit(caller: str) -> None:
+        for helper_name in call_graph[caller]:
+            if helper_name in discovered:
+                continue
+            discovered.add(helper_name)
+            discovery_order.append(helper_name)
+            visit(helper_name)
+
+    visit(name)
+    assert tuple(discovery_order) == helper_names, (
+        f"{name} reachable dispatch helper order differs from declaration: "
+        f"{tuple(discovery_order)}"
+    )
+
+
 def _logical_dispatch_function(tree: ast.Module, name: str) -> ast.FunctionDef:
     function = copy.deepcopy(_function(tree, name))
     helper_names = DISPATCH_HELPERS[name]
@@ -274,17 +352,7 @@ def _logical_dispatch_function(tree: ast.Module, name: str) -> ast.FunctionDef:
         helper_name: copy.deepcopy(_function(tree, helper_name))
         for helper_name in helper_names
     }
-    observed_calls = [
-        call.func.attr
-        for call in _ordered(function, ast.Call)
-        if isinstance(call.func, ast.Attribute)
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id == "self"
-        and call.func.attr in helper_names
-    ]
-    if not observed_calls:
-        return function
-    assert observed_calls == list(helper_names)
+    _assert_dispatch_helper_graph(name, function, helpers, helper_names)
 
     def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
         expanded: list[ast.stmt] = []
@@ -324,6 +392,28 @@ def _logical_dispatch_function(tree: ast.Module, name: str) -> ast.FunctionDef:
     logical = ast.parse(ast.unparse(function)).body[0]
     assert isinstance(logical, ast.FunctionDef)
     return logical
+
+
+def _remove_dispatch_helper_call(
+    tree: ast.Module,
+    owner_name: str,
+    helper_name: str,
+) -> None:
+    owner = _function(tree, owner_name)
+    call = next(
+        item
+        for item in _ordered(owner, ast.Call)
+        if isinstance(item.func, ast.Attribute)
+        and isinstance(item.func.value, ast.Name)
+        and item.func.value.id == "self"
+        and item.func.attr == helper_name
+    )
+    statement = _enclosing_statement(call, _parent_map(owner))
+    assert isinstance(statement, ast.Return)
+    statement.value = ast.Tuple(
+        elts=[ast.Name(id="state", ctx=ast.Load()), ast.Name(id="history", ctx=ast.Load())],
+        ctx=ast.Load(),
+    )
 
 
 def _static_layer(tree: ast.Module, name: str) -> dict[str, object]:
@@ -414,7 +504,11 @@ def _checkpoint_site_map() -> dict[tuple[str, int], str]:
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
     result: dict[tuple[str, int], str] = {}
     checkpoint_owners = {
-        "_run_codex": ("_apply_agent_output",),
+        "_run_codex": (
+            "_apply_agent_output",
+            "_apply_stopped_agent_output",
+            "_apply_scope_extension",
+        ),
         "_run_review": ("_run_review",),
     }
     for logical_name, owners in checkpoint_owners.items():
@@ -572,6 +666,22 @@ def _run_codex_scenario(
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
             CodexContractResult(False, True, None, None, (), ()),
+        )
+    elif scenario_id == "codex-stop-invalid-content":
+        driver.codex_factory = lambda invocation: _codex_output(
+            invocation,
+            CodexContractResult(
+                False,
+                True,
+                StopRequest(
+                    "SCOPE-EXTENSION-REQUESTED",
+                    "The Slice needs src/extra.py.",
+                    ("src/extra.py",),
+                ),
+                None,
+                (),
+                (),
+            ),
         )
     elif scenario_id == "codex-plan-outside-task-scope":
         state = _plan_state()
@@ -914,7 +1024,7 @@ def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None
     baseline = json.loads(STATIC_BASELINE.read_text("utf-8"))
     assert _static_document() == baseline
     codex, review = baseline["layers"]
-    assert (len(codex["conditions"]), len(codex["aborts"])) == (20, 6)
+    assert (len(codex["conditions"]), len(codex["aborts"])) == (22, 7)
     assert (len(review["conditions"]), len(review["aborts"])) == (16, 7)
     assert len(codex["checkpoints"]) == 5
     assert len(review["checkpoints"]) == 5
@@ -958,11 +1068,11 @@ def test_runtime_corpus_is_built_once_and_each_rejection_matches(
     baseline = json.loads(RUNTIME_BASELINE.read_text("utf-8"))
     _assert_runtime_matches(runtime_corpus, baseline)
     assert _RUNTIME_BUILD_COUNT == 1
-    assert len(runtime_corpus["scenarios"]) == 13
+    assert len(runtime_corpus["scenarios"]) == 14
     assert [item["scenario_id"] for item in runtime_corpus["scenarios"]] == [
         item["scenario_id"] for item in SCENARIOS
     ]
-    assert sum(item["path"] == "codex" for item in runtime_corpus["scenarios"]) == 6
+    assert sum(item["path"] == "codex" for item in runtime_corpus["scenarios"]) == 7
     assert sum(item["path"] == "review" for item in runtime_corpus["scenarios"]) == 7
     for scenario in runtime_corpus["scenarios"]:
         assert scenario["reachable"] is True
@@ -982,6 +1092,10 @@ def test_runtime_rejections_are_one_to_one_with_static_abort_order() -> None:
         "codex-plan-outside-task-scope": (
             "f'TASK-SCOPE | SLICE_PLAN contains paths outside the declared task "
             "scope: {', '.join(unexpected_plan_paths)}'"
+        ),
+        "codex-stop-invalid-content": (
+            "f'STOP_REQUESTED has invalid content for {stop_request.rule_id!r}: "
+            "{exc}'"
         ),
         "review-packet-builder-error": (
             "f'canonical review packet could not be built: {exc}'"
@@ -1053,6 +1167,46 @@ def test_moving_checkpoint_by_one_statement_turns_static_binding_red() -> None:
     assert mutant["layers"][0]["checkpoints"] != baseline["layers"][0]["checkpoints"]
 
 
+def test_removing_nested_dispatch_helper_call_turns_corpus_red() -> None:
+    tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
+    _remove_dispatch_helper_call(
+        tree,
+        "_apply_agent_output",
+        "_apply_stopped_agent_output",
+    )
+
+    with pytest.raises(
+        AssertionError,
+        match=r"unreachable declared dispatch helpers: .*_apply_stopped_agent_output",
+    ):
+        _static_document(ast.unparse(tree))
+
+
+def test_reordering_declared_nested_dispatch_helpers_turns_corpus_red() -> None:
+    tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
+    function = _function(tree, "_run_codex")
+    helper_names = (
+        "_prepare_agent_dispatch",
+        "_apply_agent_output",
+        "_apply_scope_extension",
+        "_apply_stopped_agent_output",
+    )
+    helpers = {
+        helper_name: _function(tree, helper_name) for helper_name in helper_names
+    }
+
+    with pytest.raises(
+        AssertionError,
+        match=r"reachable dispatch helper order differs from declaration",
+    ):
+        _assert_dispatch_helper_graph(
+            "_run_codex",
+            function,
+            helpers,
+            helper_names,
+        )
+
+
 def test_changing_one_provider_request_builder_field_names_the_scenario() -> None:
     baseline = json.loads(RUNTIME_BASELINE.read_text("utf-8"))
     mutant_module = _load_mutant(_change_first_codex_provider_request_field)
@@ -1097,8 +1251,7 @@ def test_dispatch_entrypoints_and_new_helpers_stay_below_b32_threshold() -> None
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
     names = {
         "_run_codex",
-        "_prepare_agent_dispatch",
-        "_apply_agent_output",
+        *DISPATCH_HELPERS["_run_codex"],
         "_run_review",
         *DISPATCH_HELPERS["_run_review"],
     }

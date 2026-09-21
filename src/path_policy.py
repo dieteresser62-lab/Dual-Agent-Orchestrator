@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable
 
 
 class PathPolicyError(ValueError):
     """Raised when an untrusted path cannot be confined to an allowed root."""
+
+
+class PathClass(str, Enum):
+    """Closed repository path categories shared by classification and records."""
+
+    PRODUCTIVE = "productive"
+    TEST = "test"
+    DOCUMENTATION = "documentation"
+    GENERATED = "generated"
 
 
 def resolve_path_within_roots(

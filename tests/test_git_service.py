@@ -40,6 +40,7 @@ from git_service import (
     commit_managed_audit_report,
     commit_slice,
     inspect_repository,
+    path_exists_at_commit,
     preview_commit_tree,
     prepare_new_watch_task_branch,
     require_committed_file_at_head,
@@ -73,6 +74,32 @@ def _new_repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "commit", "-m", "base")
     _git(repository, "switch", "-c", "feature/transaction")
     return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def test_path_exists_at_commit_distinguishes_new_test_from_existing_test(
+    tmp_path: Path,
+) -> None:
+    repository, head = _new_repository(tmp_path)
+    new_test = repository / "tests" / "new_test.py"
+    new_test.parent.mkdir()
+    new_test.write_text("def test_new(): pass\n", encoding="utf-8")
+
+    assert path_exists_at_commit(
+        repository,
+        commit=head,
+        relative_path="base.txt",
+    )
+    assert not path_exists_at_commit(
+        repository,
+        commit=head,
+        relative_path="tests/new_test.py",
+    )
+    with pytest.raises(GitTransactionError, match="cat-file"):
+        path_exists_at_commit(
+            repository,
+            commit="f" * 40,
+            relative_path="tests/new_test.py",
+        )
 
 
 def _authorization(

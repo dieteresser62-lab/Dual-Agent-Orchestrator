@@ -700,6 +700,34 @@
       "code": "RECORD-FINGERPRINT-MISMATCH",
       "line": 3139,
       "message": "side effect result changed its immutable intent binding"
+    },
+    {
+      "case_id": "site-3020",
+      "input": "scope extension has no prior stopped implementer result",
+      "code": "RECORD-REFERENCE-MISSING",
+      "line": 3288,
+      "message": "scope extension requires one prior stopped implementer result"
+    },
+    {
+      "case_id": "site-3021",
+      "input": "scope extension has no prior Slice boundary",
+      "code": "RECORD-REFERENCE-MISSING",
+      "line": 3303,
+      "message": "scope extension requires a prior Slice boundary"
+    },
+    {
+      "case_id": "site-3022",
+      "input": "scope extension is not followed atomically by a Slice boundary",
+      "code": "RECORD-REFERENCE-MISSING",
+      "line": 3311,
+      "message": "scope extension must be followed atomically by its Slice boundary"
+    },
+    {
+      "case_id": "site-3023",
+      "input": "scope extension boundary omits the approved addition",
+      "code": "RECORD-FINGERPRINT-MISMATCH",
+      "line": 3326,
+      "message": "scope extension differs from its expanded Slice boundary"
     }
   ],
   "unreachable": [

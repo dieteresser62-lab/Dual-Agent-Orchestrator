@@ -45,6 +45,7 @@ ADDITIVE_PAYLOAD_TYPES = {
     "remediation_cohort_checkpoint": "RemediationCohortCheckpointPayload",
     "no_implementation_required": "NoImplementationRequiredPayload",
     "closed_finding_occurrence": "ClosedFindingOccurrencePayload",
+    "scope_extension": "ScopeExtensionPayload",
 }
 
 

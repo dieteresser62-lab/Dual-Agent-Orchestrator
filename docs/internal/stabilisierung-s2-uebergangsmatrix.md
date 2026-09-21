@@ -891,6 +891,8 @@ Familienbindung.
 | `native reviewer recovery result differs from its decision record` | B06 |
 | `pre-policy native reviewer result differs from its decision record` | B06 |
 | `native agent result logical binding differs` | B05 |
+| `scope extension payload differs from the active work unit` | B179; Genehmigungsrecord ↔ aktiver Slice/Work-unit, **bleibt bewusst** |
+| `scope extension record differs from the boundary additions` | B179; genehmigte Pfade ↔ atomar erweiterte SliceBoundary, **bleibt bewusst** |
 | `persisted finding handoff export differs from the prepared task` | B08 |
 | `persisted BRANCH_DISCOVERY export differs from its child task` | E1/E9; Wiederaufnahme darf nur exakt die exportgebundene Aufgabe veroeffentlichen |
 | `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
