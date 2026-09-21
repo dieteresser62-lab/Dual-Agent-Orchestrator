@@ -51,9 +51,24 @@ Damit endet jedes Finding binär. Es gibt keine Findings minderer Qualität und
 keine, die unentschieden liegenbleiben. Am Ende eines Slices ist jeder Befund
 behoben, abgelehnt-und-geschlossen, oder er hat den Slice blockiert.
 
-**Findings wandern nicht über Slicegrenzen.** Die einzige Ausnahme ist ein
-Befund, der in diesem Slice nicht behandelbar ist; er geht nicht an einen
-späteren Slice, sondern in das Arbeitsdokument der nächsten Runde.
+**Findings wandern nicht über Slicegrenzen — ohne Ausnahme.**
+
+Die Ausnahme „was im Slice nicht behandelbar ist" wurde am 21.9.2026 gestrichen,
+nachdem sich an den Daten kein einziger Fall dafür finden ließ. Alle vier in
+Canary 28 geöffneten Findings betrafen Pfade im Scope genau des Slices, in dem
+sie gefunden wurden; der Reviewer hat sie trotzdem nach vorn geroutet und wurde
+jedes Mal zu Recht abgewiesen.
+
+Die denkbaren Fälle lösen sich anders auf:
+
+| Fall | Gehört wohin |
+|---|---|
+| Operatorvorleistung fehlt (Testumgebung, Schriften) | Stop, `OPERATOR-PREREQUISITE-MISSING` — kein Finding |
+| Querschnittlich, erst im Ganzen sichtbar | Abnahmereview — kein Slice-Finding |
+| Behebung braucht Code eines späteren Slices | begründete Ablehnung; beim Review jenes Slices erneut prüfen |
+| Der Plan selbst ist falsch | Planbefund in der Planungsphase |
+
+Damit gibt es zwischen Slices **keinen** Übergabeweg mehr.
 
 ### Abnahmephase
 
@@ -123,21 +138,21 @@ Reviewer muss auf jede Ablehnung antworten: schließen oder eskalieren.
 
 ## Offene Fragen
 
-1. **Die Slicegrenze.** Ein Befund, der im Slice nicht behandelbar ist, geht
-   in das Dokument der nächsten Runde. Wer stellt fest, dass er nicht
-   behandelbar ist — Implementierer, Reviewer, oder beide übereinstimmend?
-   Ohne Antwort wird das der neue Fluchtweg.
-
-2. **Das Schweigen.** Punkt 105 hat gezeigt: unter Wiederholungsdruck nennt
+1. **Das Schweigen — jetzt der einzige verbliebene Fluchtweg.** Punkt 105 hat gezeigt: unter Wiederholungsdruck nennt
    ein Reviewer einen Befund im nächsten Versuch einfach nicht mehr. Die
    Eskalationsregel deckt den Fall nicht ab, denn sie greift erst, wenn ein
    Finding genannt ist. Ein zurückgezogenes Finding eskaliert nie.
 
-3. **Der Abnahmereview ohne eigenen Lauf.** Er braucht den vollen Branchstand,
+   Mit dem Wegfall der Slicegrenzen-Ausnahme ist das die **einzige** Tür, die
+   noch aus einem unbequemen Befund herausführt. Sie war vorher eine von
+   zweien; jetzt trägt sie den ganzen Druck. Punkt 105 steigt damit von
+   Beobachtung auf vordringlich.
+
+2. **Der Abnahmereview ohne eigenen Lauf.** Er braucht den vollen Branchstand,
    nicht nur den letzten Slice. Als Schritt innerhalb des Laufs ist das
    möglich; zu klären ist, woher er seinen Vergleichsstand nimmt.
 
-4. **Bestehende Ketten.** Die Reducerversion wechselt. 41 archivierte
+3. **Bestehende Ketten.** Die Reducerversion wechselt. 41 archivierte
    Canary-Läufe bleiben lesbar, aber nicht fortsetzbar. Das ist nach der
    geltenden Regel zulässig und hier ohne Folgen.
 
