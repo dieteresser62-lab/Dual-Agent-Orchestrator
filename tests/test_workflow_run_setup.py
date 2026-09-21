@@ -10,7 +10,14 @@ import pytest
 import workflow_run_setup
 import native_finding_decisions
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
-from artifact_models import FamilyBindingPayload
+from artifact_models import (
+    ArtifactRecord,
+    FamilyBindingPayload,
+    FindingHandoffExportPayload,
+    Fingerprint,
+    FingerprintKind,
+    Role,
+)
 from contracts import PlannedSlice
 from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
@@ -52,6 +59,7 @@ EXPECTED_SETUP_FUNCTIONS = {
     "_current_gate_approval",
     "_branch_discovery_family_binding",
     "_fresh_state",
+    "_implementation_family_binding",
     "_initialize_finding_handoff",
     "_new_watch_task_control_paths",
     "_new_watch_task_preserved_paths",
@@ -62,6 +70,7 @@ EXPECTED_SETUP_EDGES = Counter(
     {
         ("_context", "_plan_only_step_boundary"): 1,
         ("_fresh_state", "_branch_discovery_family_binding"): 1,
+        ("_fresh_state", "_implementation_family_binding"): 1,
     }
 )
 EXPECTED_PRODUCTION_BINDINGS = {
@@ -561,3 +570,76 @@ def test_fresh_family_run_uses_family_base_but_slice_keeps_current_head(
         plan_path,
         "src/a.py",
     )
+
+
+def test_remediation_plan_to_implementation_edge_preserves_cycle_number(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_run_id = "remediation-plan-cycle-2"
+    source_binding = FamilyBindingPayload(
+        "family-cycle-invariant",
+        "a" * 40,
+        ("docs/internal/remediation.md", "src/a.py"),
+        "discovery-cycle-1",
+        "ar1-" + "1" * 64,
+        2,
+        None,
+        "b" * 40,
+    )
+    export_payload = FindingHandoffExportPayload(
+        source_run_id=source_run_id,
+        source_head_record_id="ar1-" + "2" * 64,
+        approved_plan_commit="c" * 40,
+        approval_review_record_id="ar1-" + "3" * 64,
+        finding_transition_record_ids=("ar1-" + "4" * 64,),
+        finding_transitions_sha256="5" * 64,
+        target_task_path="inbox/doing/remediation-implement.md",
+        target_task_sha256="6" * 64,
+        authority=Role.ORCHESTRATOR,
+    )
+    export_record = ArtifactRecord.create(
+        run_id=source_run_id,
+        logical_id="finding-handoff-export",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "7" * 64),
+        predecessor_ids=(),
+        created_at="2026-09-21T10:00:00+00:00",
+        idempotency_key="finding-handoff-export:cycle-2",
+        payload=export_payload,
+    )
+    source_replay = SimpleNamespace(
+        records=(export_record,),
+        run_profile=SimpleNamespace(family_binding=source_binding),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "ArtifactStore",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            load_chain=lambda: (export_record,)
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "replay_artifacts",
+        lambda *_args, **_kwargs: source_replay,
+    )
+    contract = TaskContract(
+        digest="8" * 64,
+        mode=TaskMode.IMPLEMENT,
+        scope_patterns=("docs/internal/remediation.md", "src/a.py"),
+        target_branch="feature/cycle-invariant",
+        work_plan_path="docs/internal/remediation.md",
+        approved_plan_commit="c" * 40,
+        approved_slices=(PlannedSlice(1, "Fix", ("src/a.py",)),),
+        finding_handoff_source_run_id=source_run_id,
+        finding_handoff_export_record_id=export_record.record_id,
+    )
+
+    implementation_binding = workflow_run_setup._implementation_family_binding(
+        tmp_path,
+        contract,
+    )
+
+    assert implementation_binding is not None
+    assert implementation_binding.cycle_number == source_binding.cycle_number == 2

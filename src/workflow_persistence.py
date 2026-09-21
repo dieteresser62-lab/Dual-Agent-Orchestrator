@@ -199,8 +199,8 @@ class WorkflowPersistenceDependencies:
     prepare_completion_finding_handoff: Callable[
         [WorkflowState], tuple[str, str] | None
     ]
-    prepare_completion_branch_discovery_handoff: Callable[
-        [WorkflowState, str], BranchDiscoveryHandoffExportPayload
+    prepare_completion_family_handoff: Callable[
+        [WorkflowState, str], BranchDiscoveryHandoffExportPayload | None
     ]
 
 
@@ -788,55 +788,17 @@ class WorkflowPersistence:
                 "workflow-completion",
                 1,
             )
-            if state.execution_mode == TaskMode.IMPLEMENT.value:
-                existing_completion = next(
-                    (
-                        record
-                        for record in chain
-                        if record.record_id == completion_record_id
-                    ),
-                    None,
-                )
-                if existing_completion is not None:
-                    if not any(
-                        isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
-                        for record in chain[: chain.index(existing_completion)]
-                    ):
-                        raise WorkflowExecutionError(
-                            "completed IMPLEMENT run lacks its earlier "
-                            "BRANCH_DISCOVERY handoff export"
-                        )
-                    bridge.append(
-                        completion_payload,
-                        logical_id="workflow-completion",
-                        idempotency_key="workflow-completion:completed",
-                        fingerprint_sha256=final_binding.fingerprint.sha256,
-                        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
-                    )
-                    return
-                handoff_payload = (
-                    self._dependencies.prepare_completion_branch_discovery_handoff(
-                        state,
-                        completion_record_id,
-                    )
-                )
-                bridge.append_batch(
-                    (
-                        (
-                            handoff_payload,
-                            "branch-discovery-handoff-export",
-                            "branch-discovery-handoff-export:completed",
-                            final_binding.fingerprint.sha256,
-                            FingerprintKind.IMPLEMENTATION,
-                        ),
-                        (
-                            completion_payload,
-                            "workflow-completion",
-                            "workflow-completion:completed",
-                            final_binding.fingerprint.sha256,
-                            FingerprintKind.IMPLEMENTATION,
-                        ),
-                    )
+            if state.execution_mode in {
+                TaskMode.IMPLEMENT.value,
+                TaskMode.BRANCH_DISCOVERY.value,
+            }:
+                self._persist_family_completion(
+                    state=state,
+                    bridge=bridge,
+                    chain=chain,
+                    completion_payload=completion_payload,
+                    completion_record_id=completion_record_id,
+                    final_binding=final_binding,
                 )
                 return
             bridge.append(
@@ -846,6 +808,93 @@ class WorkflowPersistence:
                 fingerprint_sha256=final_binding.fingerprint.sha256,
                 fingerprint_kind=FingerprintKind.IMPLEMENTATION,
             )
+
+    def _persist_family_completion(
+        self,
+        *,
+        state: WorkflowState,
+        bridge: ArtifactBridge,
+        chain: tuple[ArtifactRecord, ...],
+        completion_payload: WorkflowCompletionPayload,
+        completion_record_id: str,
+        final_binding: ArtifactRecord,
+    ) -> None:
+        """Persist the shared linked-run export-before-completion boundary."""
+
+        existing_completion = next(
+            (
+                record
+                for record in chain
+                if record.record_id == completion_record_id
+            ),
+            None,
+        )
+        if existing_completion is not None:
+            prefix = chain[: chain.index(existing_completion)]
+            target_mode = (
+                TaskMode.BRANCH_DISCOVERY.value
+                if state.execution_mode == TaskMode.IMPLEMENT.value
+                else TaskMode.PLAN_ONLY.value
+            )
+            exports = tuple(
+                record
+                for record in prefix
+                if isinstance(
+                    record.payload, BranchDiscoveryHandoffExportPayload
+                )
+                and record.payload.target_execution_mode == target_mode
+            )
+            open_findings = reduce_findings(
+                replay_artifacts(chain, state.run_id)
+            ).open_set.finding_ids
+            required = (
+                state.execution_mode == TaskMode.IMPLEMENT.value
+                or bool(open_findings)
+            )
+            if len(exports) != (1 if required else 0):
+                raise WorkflowExecutionError(
+                    f"completed {state.execution_mode} run has an invalid "
+                    f"earlier {target_mode} handoff export count"
+                )
+            bridge.append(
+                completion_payload,
+                logical_id="workflow-completion",
+                idempotency_key="workflow-completion:completed",
+                fingerprint_sha256=final_binding.fingerprint.sha256,
+                fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+            )
+            return
+        handoff_payload = self._dependencies.prepare_completion_family_handoff(
+            state,
+            completion_record_id,
+        )
+        if handoff_payload is None:
+            bridge.append(
+                completion_payload,
+                logical_id="workflow-completion",
+                idempotency_key="workflow-completion:completed",
+                fingerprint_sha256=final_binding.fingerprint.sha256,
+                fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+            )
+            return
+        bridge.append_batch(
+            (
+                (
+                    handoff_payload,
+                    "branch-discovery-handoff-export",
+                    "branch-discovery-handoff-export:completed",
+                    final_binding.fingerprint.sha256,
+                    FingerprintKind.IMPLEMENTATION,
+                ),
+                (
+                    completion_payload,
+                    "workflow-completion",
+                    "workflow-completion:completed",
+                    final_binding.fingerprint.sha256,
+                    FingerprintKind.IMPLEMENTATION,
+                ),
+            )
+        )
 
     def _persist_native_agent_request_bundle(self, invocation: object) -> None:
         bundle = invocation.native_request

@@ -353,6 +353,54 @@ def branch_discovery_task_path(source_task_path: Path) -> Path:
     return source_task_path.with_name(stem + source_task_path.suffix)
 
 
+def remediation_plan_paths(
+    source_task_path: Path,
+    *,
+    cycle_number: int,
+) -> tuple[Path, str]:
+    """Return deterministic queue and work-plan paths for one remediation cycle."""
+
+    if cycle_number < 2:
+        raise PlanHandoffError("remediation plan requires a successor family cycle")
+    stem = source_task_path.stem
+    stem = re.sub(r"-remediation-\d+-branch-discovery$", "", stem, flags=re.IGNORECASE)
+    if stem.lower().endswith("-branch-discovery"):
+        stem = stem[:-17]
+    task_stem = f"{stem}-remediation-{cycle_number}-plan"
+    task_path = source_task_path.with_name(task_stem + source_task_path.suffix)
+    work_plan_path = f"docs/internal/{task_stem}-arbeitsplan.md"
+    return task_path, work_plan_path
+
+
+def render_remediation_plan_task(
+    *,
+    work_plan_path: str,
+    target_branch: str,
+    scope_paths: tuple[str, ...],
+    finding_handoff: tuple[str, str],
+) -> str:
+    """Render the formal PLAN_ONLY child task for an open discovery snapshot."""
+
+    source_run_id, export_record_id = finding_handoff
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
+        raise PlanHandoffError("finding handoff source run is invalid")
+    if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
+        raise PlanHandoffError("finding handoff export is invalid")
+    planning_scope = tuple(sorted({work_plan_path, *scope_paths}))
+    if not planning_scope:
+        raise PlanHandoffError("remediation plan requires a planning scope")
+    return (
+        "Plane die Behebung der offenen Befunde aus dem verknuepften "
+        "Entdeckungslauf.\n\n"
+        "ORCHESTRATOR_MODE: PLAN_ONLY\n"
+        f"WORK_PLAN_PATH: {work_plan_path}\n"
+        f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
+        f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
+        f"TARGET_BRANCH: {target_branch}\n"
+        f"TASK_SCOPE: {', '.join(planning_scope)}\n"
+    )
+
+
 def render_branch_discovery_task(
     *,
     target_branch: str,

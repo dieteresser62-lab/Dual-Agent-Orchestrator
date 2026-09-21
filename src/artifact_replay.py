@@ -1309,7 +1309,7 @@ def project_review_contracts(
     for review_record in chain:
         payload = review_record.payload
         if not isinstance(payload, ReviewPayload):
-            continue
+            projected.extend(_project_branch_discovery_contract(replay, review_record, positions, records_by_id, read_blob)); continue
         if review_record.record_id == replay.pending_review_record_id:
             continue
         anchor_record = anchors_by_review.get(review_record.record_id)
@@ -3680,6 +3680,118 @@ def _slice_acceptance_projection(spec: SliceSpec) -> dict[str, object]:
             for item in spec.acceptance_criteria
         )
     }
+
+
+def _project_branch_discovery_contract(
+    replay: ArtifactReplayResult,
+    discovery_record: ArtifactRecord,
+    positions: dict[str, int],
+    records_by_id: dict[str, ArtifactRecord],
+    read_blob: Callable[[BlobReference], bytes],
+) -> tuple[ReplayedReviewContract, ...]:
+    """Rebuild one completed discovery review from its native transaction."""
+
+    from contracts import FindingOccurrence
+    from native_finding_decisions import NativeResponsibilityRoute
+
+    payload = discovery_record.payload
+    if not isinstance(payload, BranchDiscoveryCompletedPayload):
+        return ()
+    attestation_record = records_by_id.get(
+        payload.validation_attestation_record_id
+    )
+    if attestation_record is None or not isinstance(
+        attestation_record.payload,
+        ValidationAttestationPayload,
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "branch discovery projection cannot resolve its validation attestation",
+            discovery_record,
+        )
+    attestation = _project_validation_attestation(
+        replay,
+        attestation_record,
+        read_blob,
+    )
+    event_record = next(
+        (
+            record
+            for record in replay.records[
+                positions[discovery_record.record_id] + 1 :
+            ]
+            if isinstance(record.payload, WorkflowEventPayload)
+            and record.payload.event_kind == "review"
+            and record.payload.record_refs == (discovery_record.record_id,)
+        ),
+        None,
+    )
+    if event_record is None:
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "branch discovery projection lacks its review workflow event",
+            discovery_record,
+        )
+    event_position = positions[event_record.record_id]
+    transaction = replay.records[
+        positions[discovery_record.record_id] + 1 : event_position
+    ]
+    from finding_reducer import reduce_findings
+
+    findings = reduce_findings(
+        replay.subset(replay.records[: event_position + 1])
+    ).ledger.findings
+    routes = tuple(
+        NativeResponsibilityRoute(
+            item.payload.finding_id,
+            item.payload.responsibility,
+            item.payload.rationale,
+        )
+        for item in transaction
+        if isinstance(item.payload, FindingTransitionPayload)
+        and item.payload.action == "routed"
+        and item.payload.work_unit_id == payload.work_unit_id
+        and item.payload.responsibility is not None
+    )
+    round_suffix = discovery_record.logical_id.rsplit("-", 1)[-1]
+    if not round_suffix.isdigit() or int(round_suffix) < 1:
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "branch discovery contract has no canonical logical round",
+            discovery_record,
+        )
+    return (ReplayedReviewContract(
+        record_id=discovery_record.record_id,
+        work_unit_id=payload.work_unit_id,
+        round_number=int(round_suffix),
+        result=ContractResult(
+            reviewer=AgentRole(payload.reviewer.value),
+            approval=None,
+            stopped=False,
+            stop_request=None,
+            validation=attestation,
+            test_files=(),
+            pre_mortem=payload.pre_mortem,
+            evidence=ReviewEvidence(
+                payload.review_evidence.dimensions,
+                payload.review_evidence.largest_residual_risk,
+                payload.review_evidence.break_condition,
+            ),
+            findings=findings,
+            anchors=(),
+            delivery_kind="branch_discovery_completed",
+            occurrences=tuple(
+                FindingOccurrence(
+                    item.finding_id,
+                    item.rationale,
+                    item.evidence_anchor_sha256,
+                )
+                for item in payload.occurrences
+            ),
+            scan_complete=payload.scan_complete,
+            responsibility_routes=routes,
+        ),
+    ),)
 
 
 __all__ = [

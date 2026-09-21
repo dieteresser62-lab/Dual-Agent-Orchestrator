@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import native_finding_decisions
+import workflow_run_setup
 from artifact_bridge import (
     ArtifactBridgeError,
     branch_discovery_handoff_export_payload,
@@ -15,6 +16,7 @@ from artifact_bridge import (
     derive_family_acceptance,
     finding_handoff_export_payload,
     finding_handoff_import_payload,
+    validate_plan_handoff_export_position,
 )
 from artifact_models import (
     ArtifactRecord,
@@ -40,17 +42,23 @@ from artifact_models import (
     RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
+    SideEffectPayload,
     SliceSpec,
     TaskPayload,
     ValidationAttestationPayload,
     ValidationResult,
+    WorkUnitPayload,
     WorkflowCompletionPayload,
     _payload_from_dict,
     artifact_payload_document,
     canonical_json,
     finding_transition_sequence_sha256,
+    stable_side_effect_key,
 )
 from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
+from error_classification import classify_exception
+from state_io import StateSchemaError
+from task_contract import TaskContract, TaskMode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -298,6 +306,170 @@ def _discovery_edge(monkeypatch: pytest.MonkeyPatch) -> _DiscoveryEdge:
         target_path,
         target_bytes,
     )
+
+
+def _with_export_trailing(
+    edge: _DiscoveryEdge,
+    *payloads: object,
+) -> ArtifactReplayResult:
+    records = list(edge.source_records)
+    for index, payload in enumerate(payloads, start=1):
+        _append(
+            records,
+            edge.export_record.run_id,
+            f"export-trailing-{index}",
+            payload,
+        )
+    return replace(
+        edge.source_replay,
+        records=tuple(records),
+        head_record_id=records[-1].record_id,
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_trailing",
+    (
+        "non_completion",
+        "non_completed_outcome",
+        "wrong_final_binding",
+        "non_file_publication",
+    ),
+)
+def test_plan_handoff_export_position_rejects_each_invalid_trailing_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_trailing: str,
+) -> None:
+    edge = _discovery_edge(monkeypatch)
+    export = edge.export_record.payload
+    assert isinstance(export, BranchDiscoveryHandoffExportPayload)
+    completion = WorkflowCompletionPayload(
+        "completed",
+        export.discovery_review_record_id,
+    )
+    if invalid_trailing == "non_completion":
+        trailing = (WorkUnitPayload("tail", 1, ("src/fix.py",)),)
+    elif invalid_trailing == "non_completed_outcome":
+        trailing = (WorkflowCompletionPayload("stopped", None),)
+    elif invalid_trailing == "wrong_final_binding":
+        trailing = (
+            WorkflowCompletionPayload("completed", edge.export_record.record_id),
+        )
+    else:
+        trailing = (
+            completion,
+            WorkUnitPayload("after-completion", 1, ("src/fix.py",)),
+        )
+
+    with pytest.raises(ArtifactBridgeError, match="must be the accepted source replay head"):
+        validate_plan_handoff_export_position(
+            _with_export_trailing(edge, *trailing),
+            edge.export_record,
+        )
+
+
+def test_plan_handoff_export_position_accepts_only_both_supported_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge = _discovery_edge(monkeypatch)
+    export = edge.export_record.payload
+    assert isinstance(export, BranchDiscoveryHandoffExportPayload)
+
+    validate_plan_handoff_export_position(edge.source_replay, edge.export_record)
+
+    content_digest = "7" * 64
+    operation = (export.target_task_path, content_digest)
+    publication = SideEffectPayload(
+        stable_side_effect_key("file_write", "run", operation),
+        "file_write",
+        "run",
+        operation,
+        "result",
+        content_digest,
+    )
+    completed_and_published = _with_export_trailing(
+        edge,
+        WorkflowCompletionPayload(
+            "completed",
+            export.discovery_review_record_id,
+        ),
+        publication,
+    )
+
+    validate_plan_handoff_export_position(
+        completed_and_published,
+        edge.export_record,
+    )
+
+
+def test_branch_discovery_import_rejects_mispositioned_plan_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge = _discovery_edge(monkeypatch)
+    malformed = _with_export_trailing(
+        edge,
+        WorkUnitPayload("tail", 1, ("src/fix.py",)),
+    )
+
+    with pytest.raises(ArtifactBridgeError, match="must be the accepted source replay head"):
+        branch_discovery_handoff_import_payload(
+            malformed,
+            edge.export_record,
+            target_run_id="run-b-plan",
+            target_task_path=edge.target_path,
+            target_task_bytes=edge.target_bytes,
+            target_family_binding=edge.target_family,
+        )
+
+
+def test_run_setup_classifies_mispositioned_plan_export_as_state_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge = _discovery_edge(monkeypatch)
+    malformed = _with_export_trailing(
+        edge,
+        WorkUnitPayload("tail", 1, ("src/fix.py",)),
+    )
+    task = tmp_path / edge.target_path
+    task.parent.mkdir(parents=True)
+    task.write_bytes(edge.target_bytes)
+    contract = TaskContract(
+        digest=hashlib.sha256(edge.target_bytes).hexdigest(),
+        mode=TaskMode.PLAN_ONLY,
+        scope_patterns=("docs/work-plan.md", "src/fix.py"),
+        target_branch="feature/finding-decision-in-slice",
+        work_plan_path="docs/work-plan.md",
+        finding_handoff_source_run_id=edge.export_record.run_id,
+        finding_handoff_export_record_id=edge.export_record.record_id,
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "ArtifactStore",
+        lambda *_args, **_kwargs: type(
+            "SourceStore",
+            (),
+            {"load_chain": lambda _self: malformed.records},
+        )(),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "replay_artifacts",
+        lambda *_args, **_kwargs: malformed,
+    )
+
+    with pytest.raises(
+        StateSchemaError,
+        match="BRANCH-DISCOVERY-HANDOFF-INVALID.*accepted source replay head",
+    ) as captured:
+        workflow_run_setup._branch_discovery_family_binding(
+            tmp_path,
+            task,
+            "run-b-plan",
+            contract,
+        )
+
+    assert classify_exception(captured.value).diagnostic_code == "STATE-SCHEMA"
 
 
 def test_complete_e9_discovery_handoff_round_trips_and_replays(

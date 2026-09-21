@@ -25,7 +25,6 @@ if str(SOURCE_ROOT) not in sys.path:
 from artifact_bridge import (
     ArtifactBridge,
     attestation_payload,
-    branch_discovery_handoff_export_payload,
     branch_discovery_handoff_import_payload,
     provider_input_measurement_payload,
     review_payload_matches_complete_result,
@@ -35,7 +34,6 @@ from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     BindingPayload,
-    BranchDiscoveryCompletedPayload,
     BranchDiscoveryHandoffExportPayload,
     FamilyBindingPayload,
     FingerprintKind,
@@ -1478,73 +1476,68 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     )
 
     discovery_store = ArtifactStore(journey_root, discovery_run_id)
+    discovery_publisher = _production_driver(journey_root)
+    discovery_publisher._artifact_bridge = ArtifactBridge(  # noqa: SLF001
+        discovery_store, now=lambda: FIXED_TIME
+    )
+    discovery_publisher.active_state = discovery.result.state
+    published_remediation_task = discovery_publisher.publish_family_handoff(
+        discovery.result.state
+    )
+    if published_remediation_task is None:
+        raise CrashHarnessError(
+            "completed discovery with open findings published no remediation task"
+        )
     discovery_replay = replay_artifacts(
         discovery_store.load_chain(), discovery_run_id
     )
-    discovery_attestation = next(
+    remediation_export_record = next(
         record
-        for record in reversed(discovery_replay.records)
-        if isinstance(record.payload, ValidationAttestationPayload)
+        for record in discovery_replay.records
+        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        and record.payload.target_execution_mode == "PLAN_ONLY"
     )
-    discovery_completion = next(
-        record
-        for record in reversed(discovery_replay.records)
-        if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+    remediation_export = remediation_export_record.payload
+    remediation_task = published_remediation_task
+    if remediation_task != journey_root / remediation_export.target_task_path:
+        raise CrashHarnessError(
+            "published remediation task differs from its discovery export path"
+        )
+    remediation_task_bytes = remediation_task.read_bytes()
+    if hashlib.sha256(remediation_task_bytes).hexdigest() != (
+        remediation_export.target_task_sha256
+    ):
+        raise CrashHarnessError(
+            "BRANCH_DISCOVERY completion export differs from its remediation task"
+        )
+    remediation_contract = parse_task_contract(
+        remediation_task_bytes.decode("utf-8")
     )
-    remediation_task = journey_root / "s5-remediation-plan.md"
-    remediation_task_bytes = (
-        "ORCHESTRATOR_MODE: PLAN_ONLY\n"
-        "TARGET_BRANCH: feature/dry-run\n"
-        "WORK_PLAN_PATH: docs/internal/s5-remediation-plan.md\n"
-        "## Allowed Scope\n"
-        "- docs/internal/s5-remediation-plan.md\n"
-    ).encode("utf-8")
-    remediation_task.write_bytes(remediation_task_bytes)
-    remediation_run_id = "dry-joint-remediation-plan-v1"
+    if remediation_contract.work_plan_path is None:
+        raise CrashHarnessError("remediation PLAN_ONLY task lacks its work-plan path")
+    remediation_run_id = remediation_export.target_run_identity
     remediation_family = FamilyBindingPayload(
-        family_id=source_family.family_id,
-        family_base_commit=source_family.family_base_commit,
+        family_id=remediation_export.family_id,
+        family_base_commit=remediation_export.family_base_commit,
         family_authorized_change_set=tuple(
             sorted(
                 (
-                    *source_family.family_authorized_change_set,
-                    "docs/internal/s5-remediation-plan.md",
+                    *discovery_family.family_authorized_change_set,
+                    remediation_contract.work_plan_path,
                 )
             )
         ),
-        predecessor_run_id=discovery_replay.expected_run_id,
-        predecessor_head_record_id=discovery_replay.head_record_id,
-        cycle_number=3,
+        predecessor_run_id=remediation_export.predecessor_run_id,
+        predecessor_head_record_id=remediation_export.predecessor_head_record_id,
+        cycle_number=remediation_export.cycle_number,
         current_plan_commit=plan_commit,
-        current_implementation_commit="d" * 40,
-    )
-    remediation_export = branch_discovery_handoff_export_payload(
-        discovery_replay,
-        discovery_review_record_id=discovery_completion.record_id,
-        validation_attestation_record_id=discovery_attestation.record_id,
-        reviewed_head_commit="d" * 40,
-        family_binding=remediation_family,
-        target_task_path="s5-remediation-plan.md",
-        target_task_bytes=remediation_task_bytes,
-        target_run_identity=remediation_run_id,
-    )
-    remediation_export_record = ArtifactBridge(
-        discovery_store, now=lambda: FIXED_TIME
-    ).append(
-        remediation_export,
-        logical_id="remediation-plan-handoff-export",
-        idempotency_key="remediation-plan-handoff-export",
-        fingerprint_sha256=discovery_attestation.fingerprint.sha256,
-        fingerprint_kind=discovery_attestation.fingerprint.kind,
-    )
-    discovery_replay = replay_artifacts(
-        discovery_store.load_chain(), discovery_run_id
+        current_implementation_commit=remediation_export.reviewed_head_commit,
     )
     remediation_import = branch_discovery_handoff_import_payload(
         discovery_replay,
         remediation_export_record,
         target_run_id=remediation_run_id,
-        target_task_path="s5-remediation-plan.md",
+        target_task_path=remediation_export.target_task_path,
         target_task_bytes=remediation_task_bytes,
         target_family_binding=remediation_family,
     )
@@ -1566,8 +1559,8 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         slice_count=1,
         task_digest=remediation_task_digest,
         execution_mode="PLAN_ONLY",
-        task_scope_patterns=("docs/internal/s5-remediation-plan.md",),
-        work_plan_path="docs/internal/s5-remediation-plan.md",
+        task_scope_patterns=remediation_contract.scope_patterns,
+        work_plan_path=remediation_contract.work_plan_path,
         target_branch="feature/dry-run",
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
         family_binding=remediation_family,

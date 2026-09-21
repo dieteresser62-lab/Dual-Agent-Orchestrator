@@ -946,10 +946,7 @@ def branch_discovery_handoff_import_payload(
             "branch discovery export record is not resolvable in the source run"
         )
     if export.target_execution_mode == "PLAN_ONLY":
-        if source_replay.head_record_id != export_record.record_id:
-            raise ArtifactBridgeError(
-                "branch discovery export must be the accepted source replay head"
-            )
+        validate_plan_handoff_export_position(source_replay, export_record)
     else:
         completion = next(
             (
@@ -1053,6 +1050,37 @@ def branch_discovery_handoff_import_payload(
         ),
         closed_finding_dispositions=export.closed_finding_dispositions,
     )
+
+
+def validate_plan_handoff_export_position(
+    source_replay: ArtifactReplayResult,
+    export_record: ArtifactRecord,
+) -> None:
+    """Accept E9 at the head or before completion plus ledgered publication."""
+
+    export = export_record.payload
+    assert isinstance(export, BranchDiscoveryHandoffExportPayload)
+    export_position = source_replay.records.index(export_record)
+    trailing = source_replay.records[export_position + 1 :]
+    if not trailing:
+        return
+    completion, *publication = trailing
+    if (
+        not isinstance(completion.payload, WorkflowCompletionPayload)
+        or completion.payload.outcome != "completed"
+        or completion.payload.final_binding_id
+        != export.discovery_review_record_id
+        or any(
+            not isinstance(record.payload, SideEffectPayload)
+            or record.payload.effect_class != "file_write"
+            for record in publication
+        )
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery export must be the accepted source replay head "
+            "or precede only its completed workflow and ledgered publication; "
+            "branch discovery export is not the source run head otherwise"
+        )
 
 
 def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
@@ -2324,6 +2352,7 @@ __all__ = [
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
     "branch_discovery_handoff_export_payload",
     "branch_discovery_handoff_import_payload",
+    "validate_plan_handoff_export_position",
     "branch_discovery_completed_payload",
     "branch_discovery_completed_payload_matches_result",
     "closed_finding_occurrence_payloads",

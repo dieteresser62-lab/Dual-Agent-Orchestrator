@@ -10,8 +10,10 @@ from plan_handoff import (
     branch_discovery_task_path,
     extract_implementation_slices,
     extract_slice_requirements,
+    remediation_plan_paths,
     render_branch_discovery_task,
     render_implementation_task,
+    render_remediation_plan_task,
 )
 
 
@@ -202,3 +204,25 @@ def test_render_branch_discovery_task_is_slice_free_and_uses_counterpart_path() 
     assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
     assert "TASK_SCOPE: src/core.py, tests/test_core.py\n" in rendered
     assert "SLICE_PLAN" not in rendered
+
+
+def test_render_remediation_plan_task_advances_one_deterministic_cycle() -> None:
+    task, work_plan = remediation_plan_paths(
+        Path("inbox/doing/change-remediation-2-branch-discovery.md"),
+        cycle_number=3,
+    )
+
+    rendered = render_remediation_plan_task(
+        work_plan_path=work_plan,
+        target_branch="feature/finding-handoff",
+        scope_paths=("src/core.py",),
+        finding_handoff=("discovery-run", "ar1-" + "c" * 64),
+    )
+
+    assert task == Path("inbox/doing/change-remediation-3-plan.md")
+    assert work_plan == "docs/internal/change-remediation-3-plan-arbeitsplan.md"
+    assert "ORCHESTRATOR_MODE: PLAN_ONLY\n" in rendered
+    assert f"WORK_PLAN_PATH: {work_plan}\n" in rendered
+    assert "FINDING_HANDOFF_SOURCE_RUN: discovery-run\n" in rendered
+    assert f"FINDING_HANDOFF_EXPORT: ar1-{'c' * 64}\n" in rendered
+    assert f"TASK_SCOPE: {work_plan}, src/core.py\n" in rendered

@@ -88,7 +88,7 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
         self, handoff_path: Path, approved_plan_commit: str
     ) -> None: ...
 
-    def publish_branch_discovery_handoff(self, state: WorkflowState) -> Path: ...
+    def publish_family_handoff(self, state: WorkflowState) -> Path | None: ...
 
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
@@ -102,7 +102,7 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "finalize_audit",
         "persist_implementation_handoff",
         "prepare_finding_handoff",
-        "publish_branch_discovery_handoff",
+        "publish_family_handoff",
     }
 )
 
@@ -729,6 +729,9 @@ def _run_production_transition_loop(
 
         if current.kind is WorkUnitKind.BRANCH_DISCOVERY:
             audit_commit = driver.finalize_audit(state)
+            handoff = driver.publish_family_handoff(state)
+            if handoff is not None:
+                logger.info("Remediation-plan handoff ready: %s", handoff)
             return WorkflowRunResult(state, history, audit_commit)
 
         if current.kind is WorkUnitKind.PLAN:
@@ -787,7 +790,8 @@ def _run_production_transition_loop(
             continue
 
         if state.execution_mode == TaskMode.IMPLEMENT.value:
-            handoff = driver.publish_branch_discovery_handoff(state)
+            handoff = driver.publish_family_handoff(state)
+            assert handoff is not None
             logger.info("Branch-discovery handoff ready: %s", handoff)
         return WorkflowRunResult(state, history, state.current_slice.commit_ref)
 

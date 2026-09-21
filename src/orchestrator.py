@@ -45,9 +45,14 @@ from artifact_models import (
     BlobReference, ProviderContentPayload,
     ProviderInputMeasurementPayload, canonical_json,
     ProviderAttemptPayload, ProviderUsagePayload,
+    BranchDiscoveryCompletedPayload,
+    BranchDiscoveryFindingPayload,
     BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     FamilyBindingPayload,
     FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
+    FindingSnapshotItem,
     flatten_finding_transition_history,
     SideEffectPayload,
     WorkflowEventPayload, WorkflowTransitionPayload,
@@ -61,6 +66,11 @@ from artifact_replay import (
     replay_artifacts,
 )
 from finding_reducer import reduce_findings
+from finding_planning import (
+    RemediationRoundEvaluation,
+    RemediationRoundOutcome,
+    evaluate_remediation_round,
+)
 from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
@@ -88,8 +98,10 @@ from plan_handoff import (
     branch_discovery_task_path,
     extract_implementation_slices,
     implementation_task_path,
+    remediation_plan_paths,
     render_branch_discovery_task,
     render_implementation_task,
+    render_remediation_plan_task,
 )
 from repo_changes import (
     FinalReviewEvidenceSnapshot,
@@ -229,6 +241,41 @@ from workflow_run_setup import (
 
 logger = logging.getLogger(__name__)
 
+
+def _evaluate_remediation_discovery_round(
+    *,
+    remediation_round_number: int,
+    source_snapshot: tuple[FindingSnapshotItem, ...],
+    implementation_snapshot: tuple[FindingSnapshotItem, ...],
+    new_findings: tuple[BranchDiscoveryFindingPayload, ...],
+) -> RemediationRoundEvaluation:
+    """Evaluate one linked family round with the existing absolute cap."""
+
+    inherited: dict[str, list[str]] = {}
+    for item in source_snapshot:
+        if item.is_open:
+            inherited.setdefault(item.signature, []).append(item.finding_id)
+    if not inherited:
+        raise ValueError("remediation round source snapshot has no open Finding cohort")
+    current = {item.finding_id: item for item in implementation_snapshot}
+    unresolved = tuple(
+        signature
+        for signature, finding_ids in sorted(inherited.items())
+        if any(
+            finding_id not in current or current[finding_id].is_open
+            for finding_id in finding_ids
+        )
+    )
+    return evaluate_remediation_round(
+        remediation_round_number=remediation_round_number,
+        inherited_signatures=tuple(sorted(inherited)),
+        unresolved_inherited_signatures=unresolved,
+        new_findings=tuple(
+            (item.finding_id, item.summary, item.acceptance_test)
+            for item in new_findings
+        ),
+    )
+
 _context = partial(
     _context_unbound,
     _managed_slice_scope_pattern=_managed_slice_scope_pattern,
@@ -356,8 +403,8 @@ class ProductionWorkflowDriver:
                 prepare_completion_finding_handoff=(
                     self._prepare_completion_finding_handoff
                 ),
-                prepare_completion_branch_discovery_handoff=(
-                    self._prepare_completion_branch_discovery_handoff
+                prepare_completion_family_handoff=(
+                    self._prepare_completion_family_handoff
                 ),
             )
         )
@@ -1986,6 +2033,106 @@ class ProductionWorkflowDriver:
             _state=state,
         )
 
+    def _assert_remediation_round_can_advance(
+        self,
+        replay: ArtifactReplayResult,
+    ) -> None:
+        """Apply the existing E4 evaluator before opening another round."""
+
+        discovery_import = next(
+            (
+                record
+                for record in replay.records
+                if isinstance(record.payload, BranchDiscoveryHandoffImportPayload)
+                and record.payload.target_execution_mode
+                == TaskMode.BRANCH_DISCOVERY.value
+            ),
+            None,
+        )
+        if discovery_import is None:
+            return
+        discovery = next(
+            (
+                record
+                for record in replay.records
+                if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+            ),
+            None,
+        )
+        if discovery is None:
+            raise WorkflowExecutionError(
+                "remediation round evaluation requires BRANCH_DISCOVERY_COMPLETED"
+            )
+        try:
+            source_replay = replay_artifacts(
+                ArtifactStore(
+                    self.root,
+                    discovery_import.payload.source_run_id,
+                ).load_chain(),
+                discovery_import.payload.source_run_id,
+            )
+            plan_import = next(
+                (
+                    record.payload
+                    for record in source_replay.records
+                    if isinstance(record.payload, FindingHandoffImportPayload)
+                ),
+                None,
+            )
+            plan_replay = (
+                source_replay
+                if plan_import is None
+                else replay_artifacts(
+                    ArtifactStore(self.root, plan_import.source_run_id).load_chain(),
+                    plan_import.source_run_id,
+                )
+            )
+            source_snapshot = next(
+                (
+                    record
+                    for record in plan_replay.records
+                    if isinstance(
+                        record.payload, BranchDiscoveryHandoffImportPayload
+                    )
+                    and record.payload.target_execution_mode
+                    == TaskMode.PLAN_ONLY.value
+                ),
+                None,
+            )
+        except (
+            ArtifactReplayError,
+            ArtifactStoreError,
+            OSError,
+            StopIteration,
+        ) as exc:
+            raise WorkflowExecutionError(
+                f"could not resolve the remediation round snapshot: {exc}"
+            ) from exc
+        if source_snapshot is None:
+            return
+        # Discovery edges increment the cycle; PLAN_ONLY -> IMPLEMENT preserves it,
+        # so remediation PLAN_ONLY snapshots are the even cycles 2, 4, ... .
+        remediation_round_number = source_snapshot.payload.cycle_number // 2
+        if remediation_round_number < 1:
+            raise WorkflowCompletionRejected(
+                "remediation family cycle cannot identify a positive round"
+            )
+        try:
+            evaluation = _evaluate_remediation_discovery_round(
+                remediation_round_number=remediation_round_number,
+                source_snapshot=source_snapshot.payload.finding_snapshot,
+                implementation_snapshot=(
+                    discovery_import.payload.finding_snapshot
+                ),
+                new_findings=discovery.payload.new_findings,
+            )
+        except ValueError as exc:
+            raise WorkflowCompletionRejected(
+                f"remediation round evaluation rejected the family: {exc}"
+            ) from exc
+        if evaluation.outcome is not RemediationRoundOutcome.NEXT_ROUND:
+            raise WorkflowCompletionRejected(evaluation.log_message)
+
     def _branch_discovery_handoff_material(
         self,
         state: WorkflowState,
@@ -2107,19 +2254,169 @@ class ProductionWorkflowDriver:
             final_binding_record.fingerprint.sha256,
         )
 
-    def _prepare_completion_branch_discovery_handoff(
+    def _remediation_plan_handoff_material(
+        self,
+        state: WorkflowState,
+        replay: ArtifactReplayResult,
+        *,
+        source_head_record_id: str | None = None,
+    ) -> tuple[
+        Path,
+        bytes,
+        str,
+        FamilyBindingPayload,
+        BranchDiscoveryCompletedPayload,
+        str,
+        str,
+    ]:
+        """Derive the PLAN_ONLY child bound to an open discovery snapshot."""
+
+        if state.execution_mode != TaskMode.BRANCH_DISCOVERY.value:
+            raise WorkflowExecutionError(
+                "only a BRANCH_DISCOVERY run may chain remediation planning"
+            )
+        if source_head_record_id is not None:
+            head_position = next(
+                (
+                    index
+                    for index, record in enumerate(replay.records)
+                    if record.record_id == source_head_record_id
+                ),
+                None,
+            )
+            if head_position is None:
+                raise WorkflowExecutionError(
+                    "remediation PLAN_ONLY export source head is not in the discovery run"
+                )
+            replay = replace(
+                replay,
+                records=replay.records[: head_position + 1],
+                head_record_id=source_head_record_id,
+            )
+        source_binding = (
+            None if replay.run_profile is None else replay.run_profile.family_binding
+        )
+        if source_binding is None or replay.head_record_id is None:
+            raise WorkflowExecutionError(
+                "remediation PLAN_ONLY handoff requires the discovery family binding"
+            )
+        discovery_record = next(
+            (
+                record
+                for record in reversed(replay.records)
+                if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+            ),
+            None,
+        )
+        if discovery_record is None:
+            raise WorkflowExecutionError(
+                "remediation PLAN_ONLY handoff requires BRANCH_DISCOVERY_COMPLETED"
+            )
+        if not reduce_findings(replay).open_set.finding_ids:
+            raise WorkflowExecutionError(
+                "terminal branch discovery cannot create a remediation handoff"
+            )
+        self._assert_remediation_round_can_advance(replay)
+        source_task = Path(state.task_file).resolve()
+        try:
+            source_task.relative_to(self.root)
+        except ValueError:
+            source_task = self.root / "inbox" / source_task.name
+        target_cycle = source_binding.cycle_number + 1
+        target, work_plan_path = remediation_plan_paths(
+            source_task,
+            cycle_number=target_cycle,
+        )
+        try:
+            target_relative = target.relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "remediation PLAN_ONLY handoff task must be inside the repository"
+            ) from exc
+        export_record_id = stable_record_id(
+            state.run_id,
+            RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT,
+            "branch-discovery-handoff-export",
+            1,
+        )
+        target_run_id = "remediation-plan-" + hashlib.sha256(
+            f"{state.run_id}:{replay.head_record_id}:{target_relative}".encode("utf-8")
+        ).hexdigest()[:32]
+        task_bytes = render_remediation_plan_task(
+            work_plan_path=work_plan_path,
+            target_branch=state.target_branch or state.branch,
+            scope_paths=source_binding.family_authorized_change_set,
+            finding_handoff=(state.run_id, export_record_id),
+        ).encode("utf-8")
+        family_binding = FamilyBindingPayload(
+            family_id=source_binding.family_id,
+            family_base_commit=source_binding.family_base_commit,
+            family_authorized_change_set=tuple(
+                sorted(
+                    {
+                        *source_binding.family_authorized_change_set,
+                        work_plan_path,
+                    }
+                )
+            ),
+            predecessor_run_id=state.run_id,
+            predecessor_head_record_id=replay.head_record_id,
+            cycle_number=target_cycle,
+            current_plan_commit=source_binding.current_plan_commit,
+            current_implementation_commit=(
+                source_binding.current_implementation_commit
+            ),
+        )
+        return (
+            target,
+            task_bytes,
+            target_run_id,
+            family_binding,
+            discovery_record.payload,
+            discovery_record.record_id,
+            discovery_record.fingerprint.sha256,
+        )
+
+    def _prepare_completion_family_handoff(
         self,
         state: WorkflowState,
         source_completion_record_id: str,
-    ) -> BranchDiscoveryHandoffExportPayload:
-        """Prepare the IMPLEMENT child export for atomic pre-completion append."""
+    ) -> BranchDiscoveryHandoffExportPayload | None:
+        """Prepare the next family edge for atomic pre-completion append."""
 
         bridge = self._artifact_bridge
         if bridge is None:
             raise WorkflowExecutionError(
-                "BRANCH_DISCOVERY handoff requires the artifact bridge"
+                "family handoff requires the artifact bridge"
             )
         replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        if state.execution_mode == TaskMode.BRANCH_DISCOVERY.value:
+            if not reduce_findings(replay).open_set.finding_ids:
+                return None
+            (
+                target,
+                task_bytes,
+                target_run_id,
+                family_binding,
+                discovery,
+                discovery_record_id,
+                _,
+            ) = self._remediation_plan_handoff_material(state, replay)
+            return branch_discovery_handoff_export_payload(
+                replay,
+                discovery_review_record_id=discovery_record_id,
+                validation_attestation_record_id=(
+                    discovery.validation_attestation_record_id
+                ),
+                reviewed_head_commit=discovery.reviewed_head_commit,
+                family_binding=family_binding,
+                target_task_path=target.relative_to(self.root).as_posix(),
+                target_task_bytes=task_bytes,
+                target_run_identity=target_run_id,
+                target_execution_mode=TaskMode.PLAN_ONLY.value,
+            )
+        if state.execution_mode != TaskMode.IMPLEMENT.value:
+            return None
         (
             target,
             task_bytes,
@@ -2149,15 +2446,19 @@ class ProductionWorkflowDriver:
             target_run_identity=target_run_id,
             target_execution_mode=TaskMode.BRANCH_DISCOVERY.value,
             source_completion_record_id=source_completion_record_id,
+            remediation_cohort_checkpoint_record_id=None,
             allow_pending_source_completion=True,
         )
 
-    def publish_branch_discovery_handoff(self, state: WorkflowState) -> Path:
-        """Publish the bound child identity and task through the side-effect ledger."""
+    def publish_family_handoff(self, state: WorkflowState) -> Path | None:
+        """Publish one bound child task exclusively through the side-effect ledger."""
 
-        if state.execution_mode != TaskMode.IMPLEMENT.value:
+        if state.execution_mode not in {
+            TaskMode.IMPLEMENT.value,
+            TaskMode.BRANCH_DISCOVERY.value,
+        }:
             raise WorkflowExecutionError(
-                "only an IMPLEMENT run may publish BRANCH_DISCOVERY"
+                "only IMPLEMENT or BRANCH_DISCOVERY may publish a family handoff"
             )
         bridge = self._artifact_bridge
         if bridge is None:
@@ -2165,27 +2466,50 @@ class ProductionWorkflowDriver:
                 "BRANCH_DISCOVERY handoff requires the artifact bridge"
             )
         replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        target_mode = (
+            TaskMode.BRANCH_DISCOVERY.value
+            if state.execution_mode == TaskMode.IMPLEMENT.value
+            else TaskMode.PLAN_ONLY.value
+        )
         exports = tuple(
             record
             for record in replay.records
             if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
-            and record.payload.target_execution_mode
-            == TaskMode.BRANCH_DISCOVERY.value
+            and record.payload.target_execution_mode == target_mode
         )
+        if (
+            state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+            and not reduce_findings(replay).open_set.finding_ids
+        ):
+            if exports:
+                raise WorkflowExecutionError(
+                    "terminal BRANCH_DISCOVERY run unexpectedly contains a PLAN_ONLY export"
+                )
+            return None
         if len(exports) != 1:
             raise WorkflowExecutionError(
-                "completed IMPLEMENT run requires exactly one BRANCH_DISCOVERY export"
+                f"completed {state.execution_mode} run requires exactly one "
+                f"{target_mode} export"
             )
         export_record = exports[0]
         export = export_record.payload
-        assert export.source_completion_record_id is not None
-        target, task_bytes, target_run_id, _, _, fingerprint = (
-            self._branch_discovery_handoff_material(
-                state,
-                replay,
-                export.source_completion_record_id,
+        if target_mode == TaskMode.BRANCH_DISCOVERY.value:
+            assert export.source_completion_record_id is not None
+            target, task_bytes, target_run_id, _, _, fingerprint = (
+                self._branch_discovery_handoff_material(
+                    state,
+                    replay,
+                    export.source_completion_record_id,
+                )
             )
-        )
+        else:
+            target, task_bytes, target_run_id, _, _, _, fingerprint = (
+                self._remediation_plan_handoff_material(
+                    state,
+                    replay,
+                    source_head_record_id=export.source_head_record_id,
+                )
+            )
         if (
             target.relative_to(self.root).as_posix() != export.target_task_path
             or hashlib.sha256(task_bytes).hexdigest() != export.target_task_sha256

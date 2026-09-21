@@ -36,13 +36,17 @@ from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_appr
 from artifact_models import (
     _IDENTIFIER_RE,
     AgentResultPayload,
+    ArtifactRecord,
     BindingPayload,
+    BranchDiscoveryFindingPayload,
     BranchDiscoveryHandoffExportPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
     FindingHandoffExportPayload,
+    FindingSnapshotItem,
     FindingTransitionPayload,
     FindingSeverity,
+    Fingerprint,
     FingerprintKind,
     GateDecisionPayload,
     GatePayload,
@@ -96,6 +100,12 @@ from contracts import (
     ReviewEvidence,
 )
 from finding_reducer import reduce_findings
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    responsibility_document,
+)
+from finding_planning import RemediationRoundOutcome
+from native_finding_decisions import MAX_REMEDIATION_ROUNDS
 from git_service import GitTransactionError
 from inbox_watcher import (
     QueueFinalizationDisposition,
@@ -130,7 +140,7 @@ from workflow import (
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state, write_workflow_checkpoint
-from task_contract import TaskContractError, parse_task_contract
+from task_contract import TaskContractError, TaskMode, parse_task_contract
 from workflow_state import (
     AgentProfileBinding,
     GateReason,
@@ -622,6 +632,98 @@ def _native_implementation_output(
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
         response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _native_branch_discovery_output(
+    driver: ProductionWorkflowDriver,
+    invocation: ReviewerInvocation,
+    *,
+    finding_id: str | None,
+) -> NativeAgentReviewOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    binding = driver.active_state.family_binding
+    assert binding is not None
+    finding = (
+        []
+        if finding_id is None
+        else [
+            {
+                "finding_id": finding_id,
+                "finding_class": "OBSERVATION",
+                "summary": "The completed branch still needs remediation.",
+                "predecessor_finding_ref": None,
+                "evidence_anchor_sha256": None,
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": "A later ordinary plan must address the defect.",
+                },
+                "affected_paths": ["src/one.py"],
+            }
+        ]
+    )
+    routes = (
+        []
+        if finding_id is None
+        else [
+            {
+                "finding_id": finding_id,
+                "responsibility": responsibility_document(
+                    BranchPlanningResponsibility(
+                        binding.family_id,
+                        binding.cycle_number,
+                    )
+                ),
+                "rationale": "The next linked branch plan owns this defect.",
+            }
+        ]
+    )
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "branch_discovery_completed",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "scan_complete": True,
+        "new_findings": finding,
+        "occurrences": [],
+        "responsibility_routes": routes,
+        "review_evidence": {
+            "dimensions": "correctness, contracts, failure paths, and resume",
+            "largest_residual_risk": "A later family edge could omit the snapshot.",
+            "break_condition": "The linked PLAN_ONLY task is not reproducible.",
+        },
+        "pre_mortem": "The scan could complete without publishing its open cohort.",
+    }
+    canonical = canonical_native_review_json(document)
+    return NativeAgentReviewOutput(
+        result=parse_bound_native_contract_result(document, bundle.bound_context),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        context=bundle.bound_context.context,
+    )
+
+
+def _native_branch_discovery_stop_output(
+    invocation: ReviewerInvocation,
+) -> NativeAgentReviewOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "stop_request",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "rule_id": "DISCOVERY_OUTPUT_LIMIT",
+        "rationale": "The branch scan could not be completed safely.",
+        "remediation_paths": [],
+    }
+    canonical = canonical_native_review_json(document)
+    return NativeAgentReviewOutput(
+        result=parse_bound_native_contract_result(document, bundle.bound_context),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        context=bundle.bound_context.context,
     )
 
 
@@ -6449,7 +6551,162 @@ def test_completed_implementation_chains_one_branch_discovery_task_before_comple
     assert len(list(child.parent.glob("task-branch-discovery.md"))) == 1
 
 
-def test_branch_discovery_run_is_terminal_and_cannot_publish_another_discovery(
+@pytest.mark.parametrize("finding_id", (None, "C-01", "STOP"))
+def test_completed_discovery_only_chains_open_findings_before_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    finding_id: str | None,
+) -> None:
+    repository = _repository(tmp_path, "feature/discovery-remediation-handoff")
+    task = tmp_path / "task.md"
+    _write_task(
+        task,
+        "feature/discovery-remediation-handoff",
+        "src/one.py",
+    )
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        target = repository / "src" / "one.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            target.write_text("value = 0\n", encoding="utf-8")
+            return _native_plan_output(
+                invocation,
+                summary="add implementation",
+                scope_paths=("src/one.py",),
+            )
+        target.write_text("value = 1\n", encoding="utf-8")
+        return _native_implementation_output(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "invoke_reviewer",
+        lambda _driver, invocation: _native_review_approval(invocation),
+    )
+    monkeypatch.chdir(repository)
+    implementation = run_production_workflow(task, _args(repository, task))
+    implementation_export = next(
+        record.payload
+        for record in ArtifactStore(
+            repository, implementation.state.run_id
+        ).load_chain()
+        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+    )
+    discovery_task = repository / implementation_export.target_task_path
+
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "invoke_reviewer",
+        lambda driver, invocation: (
+            _native_branch_discovery_stop_output(invocation)
+            if finding_id == "STOP"
+            else _native_branch_discovery_output(
+                driver,
+                invocation,
+                finding_id=finding_id,
+            )
+        ),
+    )
+    discovery_args = _args(repository, discovery_task)
+    discovery_args.resume = False
+    discovery_args.watch_run_id = implementation_export.target_run_identity
+    watch_identity_path(discovery_task).unlink()
+    discovery = run_production_workflow(
+        discovery_task,
+        discovery_args,
+        force_new=True,
+    )
+
+    chain = ArtifactStore(repository, discovery.state.run_id).load_chain()
+    exports = tuple(
+        (index, record)
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        and record.payload.target_execution_mode == "PLAN_ONLY"
+    )
+    completions = tuple(
+        (index, record)
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, WorkflowCompletionPayload)
+    )
+    if finding_id == "STOP":
+        assert not discovery.workflow_completed
+        assert discovery.state.current_work_unit.gate.reason.value == "stop_request"
+        assert exports == ()
+        assert completions == ()
+        assert not tuple((repository / "inbox").glob("*-remediation-*-plan.md"))
+        return
+
+    assert discovery.workflow_completed
+    assert len(completions) == 1
+    if finding_id is None:
+        assert exports == ()
+        assert not tuple((repository / "inbox").glob("*-remediation-*-plan.md"))
+        return
+
+    assert len(exports) == 1
+    assert exports[0][0] < completions[0][0]
+    export = exports[0][1].payload
+    remediation_task = repository / export.target_task_path
+    assert remediation_task.is_file()
+    assert hashlib.sha256(remediation_task.read_bytes()).hexdigest() == (
+        export.target_task_sha256
+    )
+    remediation_contract = parse_task_contract(
+        remediation_task.read_text(encoding="utf-8"),
+        source_name=remediation_task.name,
+    )
+    assert remediation_contract.mode is orchestrator.TaskMode.PLAN_ONLY
+    assert remediation_contract.finding_handoff_source_run_id == discovery.state.run_id
+    remediation_state = orchestrator._fresh_state(
+        task_file=remediation_task,
+        run_id=export.target_run_identity,
+        repository_root=repository,
+        task_contract=remediation_contract,
+    )
+    assert remediation_state.family_binding is not None
+    assert remediation_state.family_binding.cycle_number == 2
+    assert remediation_contract.work_plan_path in (
+        remediation_state.family_binding.family_authorized_change_set
+    )
+    file_results = tuple(
+        record.payload
+        for record in chain
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and record.payload.phase == "result"
+        and record.payload.operation[0] == export.target_task_path
+    )
+    assert len(file_results) == 1
+
+    resumed = run_production_workflow(
+        discovery_task,
+        _args(repository, discovery_task),
+    )
+    resumed_chain = ArtifactStore(repository, resumed.state.run_id).load_chain()
+    assert resumed.workflow_completed
+    assert sum(
+        isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
+        and record.payload.target_execution_mode == "PLAN_ONLY"
+        for record in resumed_chain
+    ) == 1
+    assert sum(
+        isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and record.payload.phase == "result"
+        and record.payload.operation[0] == export.target_task_path
+        for record in resumed_chain
+    ) == 1
+    assert len(
+        tuple((repository / "inbox").glob("*-remediation-*-plan.md"))
+    ) == 1
+
+
+
+def test_non_family_run_cannot_publish_a_family_handoff(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/terminal-branch-discovery")
@@ -6460,15 +6717,226 @@ def test_branch_discovery_run_is_terminal_and_cannot_publish_another_discovery(
         branch_base=_git(repository, "rev-parse", "HEAD"),
         first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
-        execution_mode="BRANCH_DISCOVERY",
+        execution_mode="PLAN_ONLY",
     )
     driver = object.__new__(ProductionWorkflowDriver)
 
     with pytest.raises(
         WorkflowExecutionError,
-        match="only an IMPLEMENT run may publish BRANCH_DISCOVERY",
+        match="only IMPLEMENT or BRANCH_DISCOVERY may publish a family handoff",
     ):
-        driver.publish_branch_discovery_handoff(state)
+        driver.publish_family_handoff(state)
+
+
+def test_terminal_discovery_rejects_unexpected_plan_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "terminal-discovery-with-export"
+    export = BranchDiscoveryHandoffExportPayload(
+        source_run_id=run_id,
+        source_head_record_id="ar1-" + "1" * 64,
+        discovery_review_record_id="ar1-" + "2" * 64,
+        validation_attestation_record_id="ar1-" + "3" * 64,
+        reviewed_head_commit="a" * 40,
+        family_id="family-terminal-discovery",
+        family_base_commit="b" * 40,
+        cycle_number=2,
+        predecessor_run_id=run_id,
+        predecessor_head_record_id="ar1-" + "1" * 64,
+        finding_transition_record_ids=("ar1-" + "4" * 64,),
+        finding_transitions_sha256="5" * 64,
+        target_task_path="inbox/doing/remediation-plan.md",
+        target_task_sha256="6" * 64,
+        target_run_identity="remediation-plan-run",
+        authority=Role.ORCHESTRATOR,
+    )
+    export_record = ArtifactRecord.create(
+        run_id=run_id,
+        logical_id="branch-discovery-handoff-export",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "7" * 64),
+        predecessor_ids=(),
+        created_at="2026-09-21T09:00:00+00:00",
+        idempotency_key="branch-discovery-handoff-export:completed",
+        payload=export,
+    )
+    replay = SimpleNamespace(records=(export_record,))
+    monkeypatch.setattr(
+        orchestrator,
+        "replay_artifacts",
+        lambda *_args, **_kwargs: replay,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "reduce_findings",
+        lambda _replay: SimpleNamespace(
+            open_set=SimpleNamespace(finding_ids=())
+        ),
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver._artifact_bridge = SimpleNamespace(
+        store=SimpleNamespace(current_chain=lambda: (export_record,))
+    )
+    state = SimpleNamespace(
+        execution_mode=TaskMode.BRANCH_DISCOVERY.value,
+        run_id=run_id,
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="terminal BRANCH_DISCOVERY run unexpectedly contains a PLAN_ONLY export",
+    ):
+        driver.publish_family_handoff(state)
+
+
+def test_remediation_discovery_uses_existing_absolute_round_limit() -> None:
+    source = (
+        FindingSnapshotItem(
+            "C-01",
+            "a" * 64,
+            "open",
+            FindingSeverity.OBSERVATION,
+        ),
+    )
+    implemented = (
+        FindingSnapshotItem(
+            "C-01",
+            "a" * 64,
+            "closed",
+            FindingSeverity.OBSERVATION,
+        ),
+    )
+
+    evaluation = orchestrator._evaluate_remediation_discovery_round(
+        remediation_round_number=MAX_REMEDIATION_ROUNDS,
+        source_snapshot=source,
+        implementation_snapshot=implemented,
+        new_findings=(
+            BranchDiscoveryFindingPayload(
+                "C-02",
+                FindingSeverity.OBSERVATION,
+                "A new defect remains after the final remediation round.",
+                "A later plan would need to address the new defect.",
+            ),
+        ),
+    )
+
+    assert evaluation.outcome is RemediationRoundOutcome.ROUND_LIMIT_STOP
+    assert evaluation.remediation_round_number == MAX_REMEDIATION_ROUNDS
+    assert evaluation.absolute_round_limit == MAX_REMEDIATION_ROUNDS
+
+
+@pytest.mark.parametrize("entry_mode", ("PLAN_ONLY", "IMPLEMENT"))
+def test_two_remediation_rounds_derive_rounds_one_and_two_for_both_entry_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_mode: str,
+) -> None:
+    class BranchImport:
+        def __init__(
+            self,
+            *,
+            target_execution_mode: str,
+            source_run_id: str,
+            cycle_number: int,
+        ) -> None:
+            self.target_execution_mode = target_execution_mode
+            self.source_run_id = source_run_id
+            self.cycle_number = cycle_number
+            self.finding_snapshot = (f"snapshot-{cycle_number}",)
+
+    class PlanImport:
+        def __init__(self, source_run_id: str) -> None:
+            self.source_run_id = source_run_id
+
+    class DiscoveryCompleted:
+        new_findings: tuple[object, ...] = ()
+
+    monkeypatch.setattr(
+        orchestrator,
+        "BranchDiscoveryHandoffImportPayload",
+        BranchImport,
+    )
+    monkeypatch.setattr(orchestrator, "FindingHandoffImportPayload", PlanImport)
+    monkeypatch.setattr(
+        orchestrator,
+        "BranchDiscoveryCompletedPayload",
+        DiscoveryCompleted,
+    )
+    source_replays: dict[str, object] = {}
+    current_replays: list[object] = []
+    plan_cycles = (2, 4)
+    for plan_cycle in plan_cycles:
+        implementation_run_id = f"{entry_mode.lower()}-implementation-{plan_cycle}"
+        plan_run_id = f"{entry_mode.lower()}-plan-{plan_cycle}"
+        plan_import = BranchImport(
+            target_execution_mode=TaskMode.PLAN_ONLY.value,
+            source_run_id=f"discovery-{plan_cycle - 1}",
+            cycle_number=plan_cycle,
+        )
+        plan_replay = SimpleNamespace(
+            records=(SimpleNamespace(payload=plan_import),)
+        )
+        if entry_mode == TaskMode.PLAN_ONLY.value:
+            source_replays[implementation_run_id] = SimpleNamespace(
+                records=(SimpleNamespace(payload=PlanImport(plan_run_id)),)
+            )
+            source_replays[plan_run_id] = plan_replay
+        else:
+            source_replays[implementation_run_id] = plan_replay
+        current_replays.append(
+            SimpleNamespace(
+                records=(
+                    SimpleNamespace(
+                        payload=BranchImport(
+                            target_execution_mode=TaskMode.BRANCH_DISCOVERY.value,
+                            source_run_id=implementation_run_id,
+                            cycle_number=plan_cycle + 1,
+                        )
+                    ),
+                    SimpleNamespace(payload=DiscoveryCompleted()),
+                )
+            )
+        )
+
+    class SourceStore:
+        def __init__(self, _root: Path, run_id: str) -> None:
+            self.run_id = run_id
+
+        def load_chain(self) -> str:
+            return self.run_id
+
+    monkeypatch.setattr(orchestrator, "ArtifactStore", SourceStore)
+    monkeypatch.setattr(
+        orchestrator,
+        "replay_artifacts",
+        lambda _chain, run_id: source_replays[run_id],
+    )
+    derived_rounds: list[int] = []
+
+    def evaluate(**arguments: object) -> object:
+        derived_rounds.append(int(arguments["remediation_round_number"]))
+        return SimpleNamespace(outcome=RemediationRoundOutcome.NEXT_ROUND)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_evaluate_remediation_discovery_round",
+        evaluate,
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver.root = tmp_path
+
+    for replay in current_replays:
+        driver._assert_remediation_round_can_advance(replay)
+
+    assert tuple(derived_rounds) == (1, 2)
+    assert tuple(
+        (cycle - 1, cycle, cycle, cycle + 1)
+        for cycle in plan_cycles
+    ) == (
+        (1, 2, 2, 3),
+        (3, 4, 4, 5),
+    )
 
 
 def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
