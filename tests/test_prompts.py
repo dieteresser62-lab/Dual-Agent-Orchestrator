@@ -29,3 +29,16 @@ def test_claude_policy_announces_the_slice_commit_decision_duty() -> None:
     assert "reject it with named evidence" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "route it to a named later Slice" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "slice_commit_decision_finding_ids" in NATIVE_CLAUDE_SYSTEM_POLICY
+
+
+def test_claude_policy_names_each_review_opening_responsibility_kind() -> None:
+    for operation, responsibility_kind in (
+        ("claude_slice_review", "SLICE"),
+        ("claude_plan_review", "PLAN_REVISION"),
+        ("claude_branch_discovery", "BRANCH_PLANNING"),
+    ):
+        assert (
+            f"{responsibility_kind} in {operation}"
+            in NATIVE_CLAUDE_SYSTEM_POLICY
+        )
+    assert "opening_responsibility_kind" in NATIVE_CLAUDE_SYSTEM_POLICY

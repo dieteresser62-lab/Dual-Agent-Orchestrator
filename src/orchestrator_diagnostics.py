@@ -383,6 +383,10 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_LEGACY_FINAL_COUNT_UNSUPPORTED = (
         "context-invalid: legacy final_review_pending_count is unsupported"
     )
+    REVIEW_CONTEXT_OPENING_RESPONSIBILITY_RULE_UNSUPPORTED = (
+        "context-invalid: native review context has no supported opening "
+        "responsibility rule"
+    )
     REVIEW_CONTEXT_FINAL_COUNT_SCOPE_INVALID = (
         "context-invalid: final_review_pending_count is valid only for a final review"
     )
@@ -502,6 +506,10 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_PREDECESSOR_FINDING_REFERENCE_INVALID = (
         "finding-id-invalid: predecessor finding reference is invalid"
     )
+    REVIEW_DISCOVERY_RESPONSIBILITY_ROUTE_REFERENCE_INVALID = (
+        "finding-reference-unknown: branch discovery responsibility routes may "
+        "name only findings opened in the same response"
+    )
     REVIEW_SELF_PREDECESSOR_FORBIDDEN = (
         "finding-id-invalid: finding cannot be its own predecessor"
     )
@@ -594,6 +602,18 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_PLAN_REVISION_RESPONSIBILITY_DIGEST_INVALID = (
         "finding-content-invalid: responsibility route is invalid: "
         "PLAN_REVISION.plan_digest must be a lowercase SHA-256 digest"
+    )
+    REVIEW_SLICE_OPENING_RESPONSIBILITY_INVALID = (
+        "finding-content-invalid: slice review finding opening requires "
+        "responsibility kind SLICE"
+    )
+    REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID = (
+        "finding-content-invalid: plan review finding opening requires "
+        "responsibility kind PLAN_REVISION"
+    )
+    REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID = (
+        "finding-content-invalid: branch discovery finding opening requires "
+        "responsibility kind BRANCH_PLANNING"
     )
     REVIEW_REJECTED_CLOSURE_REASON_REQUIRED = (
         "finding-content-invalid: rejected closure is missing required field rejection_reason"

@@ -256,6 +256,27 @@ def test_plan_review_opening_accepts_complete_plan_revision_identity() -> None:
     assert reduction.responsibilities[0].responsibility == responsibility
 
 
+def test_branch_discovery_opening_accepts_bound_branch_planning_identity() -> None:
+    responsibility = BranchPlanningResponsibility("family-1", 2)
+    records = _branch_discovery_prefix()
+    records.append(
+        _record(
+            len(records) + 1,
+            "finding-C-01",
+            _opening(
+                responsibility,
+                work_unit_id="1",
+                origin_slice_id="discovery",
+            ),
+            records,
+        )
+    )
+
+    reduction = reduce_finding_records(records)
+
+    assert reduction.responsibilities[0].responsibility == responsibility
+
+
 def test_codex_cannot_route_and_routing_requires_a_rationale() -> None:
     target = SliceResponsibility(RUN_ID, PLAN_COMMIT, "2")
     with pytest.raises(ArtifactValidationError, match="actor must be claude; got codex"):
@@ -479,6 +500,42 @@ def _plan_review_prefix() -> list[ArtifactRecord]:
         )),
         ("workflow-transition", WorkflowTransitionPayload(
             "1", "in_progress", "1", "claude_plan_review", "in_progress",
+        )),
+    )
+    for logical_id, payload in payloads:
+        records.append(
+            _record(len(records) + 1, logical_id, payload, records)
+        )
+    return records
+
+
+def _branch_discovery_prefix() -> list[ArtifactRecord]:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "e" * 40,
+        ("src/a.py",),
+        None,
+        None,
+        2,
+        PLAN_COMMIT,
+        None,
+    )
+    records: list[ArtifactRecord] = []
+    payloads = (
+        ("run-identity", RunIdentityPayload(
+            "inbox/task.md", "feature/responsibility", "e" * 40, "e" * 40,
+            "BRANCH_DISCOVERY", None,
+        )),
+        ("run-profile", RunProfilePayload(
+            RoleProfilePayload("implementer", "medium"),
+            RoleProfilePayload("reviewer", "high"),
+            family_binding=binding,
+        )),
+        ("task", TaskPayload(
+            "feature/responsibility", ("src/a.py",), "f" * 64, None,
+        )),
+        ("workflow-transition", WorkflowTransitionPayload(
+            "1", "in_progress", "1", "claude_branch_discovery", "in_progress",
         )),
     )
     for logical_id, payload in payloads:

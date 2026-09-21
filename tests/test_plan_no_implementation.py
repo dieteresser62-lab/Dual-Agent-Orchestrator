@@ -489,7 +489,7 @@ def _discovery_context(
     return NativeReviewContext(
         run_id="discovery-run",
         work_unit_id="discovery",
-        operation="claude_final_review",
+        operation="claude_branch_discovery",
         diff_fingerprint="a" * 64,
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
@@ -520,6 +520,7 @@ def _discovery_document(context: NativeReviewContext) -> dict[str, object]:
         "scan_complete": True,
         "new_findings": [],
         "occurrences": [],
+        "responsibility_routes": [],
         "review_evidence": {
             "dimensions": "Closed signatures, evidence anchors, and lineage checked.",
             "largest_residual_risk": "A future evidence source could be omitted.",

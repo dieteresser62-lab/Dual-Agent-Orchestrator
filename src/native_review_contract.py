@@ -39,6 +39,7 @@ from contracts import (
     ValidationStatus,
 )
 from finding_reducer import (
+    REVIEW_OPENING_RESPONSIBILITY_KINDS,
     ReviewerReclassification,
     ReviewerStatusChange,
     apply_reviewer_events,
@@ -48,6 +49,8 @@ from finding_reducer import (
 from finding_order import finding_id_sort_key, sorted_finding_ids
 from finding_responsibility import (
     BranchPlanningResponsibility,
+    PlanRevisionResponsibility,
+    ResponsibilityKind,
     SliceResponsibility,
     parse_responsibility,
     responsibility_document,
@@ -494,6 +497,7 @@ class NativeBranchDiscoveryCompleted:
     occurrences: tuple[NativeFindingOccurrence, ...]
     evidence: ReviewEvidence
     pre_mortem: str
+    responsibility_routes: tuple[NativeResponsibilityRoute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1023,6 +1027,11 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                             "$ref": "#/$defs/branch_discovery_occurrence"
                         },
                     },
+                    "responsibility_routes": {
+                        "type": "array",
+                        "maxItems": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+                        "items": {"$ref": "#/$defs/responsibility_route"},
+                    },
                     "review_evidence": {"$ref": "#/$defs/evidence"},
                     "pre_mortem": {
                         "type": "string",
@@ -1038,6 +1047,7 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                     "scan_complete",
                     "new_findings",
                     "occurrences",
+                    "responsibility_routes",
                     "review_evidence",
                     "pre_mortem",
                 ],
@@ -1131,6 +1141,13 @@ def _branch_discovery_provider_response_schema(
         )
     )
     definitions["bound_branch_discovery_occurrence"] = occurrence
+    route = _bound_review_definition(
+        definitions["responsibility_route"], finding_ids=finding_ids
+    )
+    route["properties"]["rationale"].update(
+        pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
+    )
+    definitions["bound_branch_discovery_responsibility_route"] = route
     completed = json.loads(
         json.dumps(definitions["branch_discovery_completed"]["allOf"][1])
     )
@@ -1159,6 +1176,10 @@ def _branch_discovery_provider_response_schema(
     completed["properties"]["occurrences"].update(
         maxItems=len(known_ids),
         items={"$ref": "#/$defs/bound_branch_discovery_occurrence"},
+    )
+    completed["properties"]["responsibility_routes"].update(
+        maxItems=len(finding_ids),
+        items={"$ref": "#/$defs/bound_branch_discovery_responsibility_route"},
     )
     definitions["bound_branch_discovery_completed"] = completed
     stop = _bound_stop_result_definition(
@@ -1778,6 +1799,10 @@ def _parse_native_review_response(
             ),
             evidence=discovery_evidence,
             pre_mortem=document["pre_mortem"],
+            responsibility_routes=tuple(
+                _parse_native_responsibility_route(item)
+                for item in document["responsibility_routes"]
+            ),
         )
         assert context.max_new_findings is not None
         if len(discovery.new_findings) == context.max_new_findings:
@@ -1949,6 +1974,12 @@ def _native_response_to_contract_result(
                 for item in response.occurrences
             ),
             scan_complete=response.scan_complete,
+            responsibility_routes=tuple(
+                sorted(
+                    response.responsibility_routes,
+                    key=lambda route: finding_id_sort_key(route.finding_id),
+                )
+            ),
         )
 
     response = _coalesce_known_finding_occurrences(response, context)
@@ -2434,6 +2465,7 @@ def _validate_response_events(
             "review requires at least one finding event or review evidence",
         )
     _validate_finding_event_content(response)
+    _validate_opening_responsibility_kinds(response, context)
     _validate_plan_treatment_response_decisions(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     previous_open_ids = frozenset(
@@ -2618,6 +2650,60 @@ def _validate_response_events(
         )
 
 
+def _validate_opening_responsibility_kinds(
+    response: NativeReviewResult,
+    context: NativeReviewContext,
+) -> None:
+    """Mirror the reducer's last-line rule at the retryable response edge."""
+
+    new_ids = frozenset(item.finding_id for item in response.new_findings)
+    opening_routes = tuple(
+        route
+        for route in response.responsibility_routes
+        if route.finding_id in new_ids
+    )
+    if not opening_routes:
+        return
+    required_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(context.operation)
+    if required_kind is None:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "native review context has no supported opening responsibility rule",
+        )
+    for route in opening_routes:
+        responsibility = route.responsibility
+        if required_kind is ResponsibilityKind.SLICE and not isinstance(
+            responsibility, SliceResponsibility
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "slice review finding opening requires responsibility kind SLICE",
+                orchestrator_diagnostic=(
+                    OrchestratorDiagnostic.REVIEW_SLICE_OPENING_RESPONSIBILITY_INVALID
+                ),
+            )
+        if required_kind is ResponsibilityKind.PLAN_REVISION and not isinstance(
+            responsibility, PlanRevisionResponsibility
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "plan review finding opening requires responsibility kind PLAN_REVISION",
+                orchestrator_diagnostic=(
+                    OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
+                ),
+            )
+        if required_kind is ResponsibilityKind.BRANCH_PLANNING and not isinstance(
+            responsibility, BranchPlanningResponsibility
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "branch discovery finding opening requires responsibility kind BRANCH_PLANNING",
+                orchestrator_diagnostic=(
+                    OrchestratorDiagnostic.REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID
+                ),
+            )
+
+
 def _validate_finding_event_content(response: NativeReviewResult) -> None:
     for finding in response.new_findings:
         _require_native_text(
@@ -2744,6 +2830,15 @@ def _validate_branch_discovery_completed(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
             "branch discovery occurrences must reference each finding at most once",
         )
+    new_ids = frozenset(item.finding_id for item in response.new_findings)
+    if any(
+        route.finding_id not in new_ids
+        for route in response.responsibility_routes
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
+            "branch discovery responsibility routes may name only findings opened in the same response",
+        )
     _validate_closed_finding_rediscoveries(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     fake = NativeReviewResult(
@@ -2764,6 +2859,7 @@ def _validate_branch_discovery_completed(
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
+        responsibility_routes=response.responsibility_routes,
     )
     _validate_response_events(fake, context)
 
@@ -2875,6 +2971,7 @@ def _merge_branch_discovery_findings(
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
+        responsibility_routes=response.responsibility_routes,
     )
     return _merge_findings(fake, context)
 
@@ -3297,6 +3394,14 @@ def _slice_route_scope_retry_guidance(
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
     """Return the canonical provider-independent domain-context binding."""
+    required_opening_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(
+        context.operation
+    )
+    if required_opening_kind is None:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "native review context has no supported opening responsibility rule",
+        )
     authoritative_ids = (
         context.authoritative_finding_ids
         or tuple(item.finding_id for item in context.previous_findings)
@@ -3306,6 +3411,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,
+        "opening_responsibility_kind": required_opening_kind.value,
         "diff_fingerprint": context.diff_fingerprint,
         "reviewer": context.reviewer.value,
         "approval_marker": context.approval_marker.value,

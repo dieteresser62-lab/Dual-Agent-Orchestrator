@@ -146,15 +146,15 @@
       "state": {
         "approved": true,
         "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "request_id": "native-review-request-8e315288f55b25834cee02261ca7374e9d089d3da06878b01e2f107ecbf98f7d",
+        "request_id": "native-review-request-3c3d72957f8065310dbc5737512da7a3ad6981b948208396e2a57fddf2a2639a",
         "round_number": 1,
         "content_binding": {
           "role": "claude",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "claude_slice_review",
-          "request_id": "native-review-request-8e315288f55b25834cee02261ca7374e9d089d3da06878b01e2f107ecbf98f7d",
-          "response_sha256": "2a8ba5348e26df8ed75e53066fb4a3060e4cce212318089aa1c429f2ba9778c5",
+          "request_id": "native-review-request-3c3d72957f8065310dbc5737512da7a3ad6981b948208396e2a57fddf2a2639a",
+          "response_sha256": "0d7a41d31106697b326cacffd5a466f871718e4c9c4afac89a0cbe2e3b294a0c",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

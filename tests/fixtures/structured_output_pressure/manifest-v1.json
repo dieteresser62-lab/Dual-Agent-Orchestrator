@@ -77,6 +77,7 @@
     {"field": "stop_request.rationale", "pointer": "$defs/bound_slice_convergence_stop/properties/rationale", "limit": 3000, "context_scope": "slice_convergence"},
     {"field": "pre_mortem", "pointer": "$defs/bound_branch_discovery_completed/properties/pre_mortem", "limit": 3000, "context_scope": "branch_discovery"},
     {"field": "new_findings[].summary", "pointer": "$defs/bound_branch_discovery_finding/properties/summary", "limit": 3000, "context_scope": "branch_discovery"},
+    {"field": "responsibility_transitions[].rationale", "pointer": "$defs/bound_branch_discovery_responsibility_route/properties/rationale", "limit": 3000, "context_scope": "branch_discovery"},
     {"field": "occurrences[].rationale", "pointer": "$defs/bound_branch_discovery_occurrence/properties/rationale", "limit": 3000, "context_scope": "branch_discovery_empty"},
     {"field": "occurrences[].rationale", "pointer": "$defs/bound_branch_discovery_occurrence/oneOf/*/properties/rationale", "limit": 3000, "context_scope": "branch_discovery_open"},
     {"field": "stop_request.rule_id", "pointer": "$defs/bound_branch_discovery_stop/properties/rule_id", "limit": 200, "context_scope": "branch_discovery"},

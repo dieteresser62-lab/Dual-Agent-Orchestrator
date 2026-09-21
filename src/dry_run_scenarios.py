@@ -2319,6 +2319,7 @@ def build_joint_branch_discovery_scenario(
                         }
                     ],
                     "occurrences": [],
+                    "responsibility_routes": [],
                     "review_evidence": {
                         "dimensions": (
                             "correctness, contracts, failure paths, security, resume"

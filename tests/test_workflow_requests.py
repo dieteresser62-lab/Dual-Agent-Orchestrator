@@ -51,7 +51,7 @@ PRE_CUT_CODEX_REQUEST_SHA256 = (
     "7b8f451d51ce1ce7484f635e624c932d06aba4a464d9ac1f9bd7f79d5dc315d8"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "a9dd8d655f584dc0fafc7a4bd10a3d449ee00db31fed4ac1c1932e76e15ca0b5"
+    "a43f4c0f5275892c74e6157c5e5321e6b0622c6f7b82188ad07b928828463c96"
 )
 
 
@@ -111,6 +111,7 @@ def _review_bundle(
     findings: tuple[FindingRecord, ...] = (),
     bound_open_finding_ids: tuple[str, ...] = (),
     state: WorkflowState | None = None,
+    approval_marker: ApprovalMarker = ApprovalMarker.SLICE,
 ) -> workflow_requests.NativeReviewRequestBundle:
     state = state or init_workflow_state(
         run_id="b31-request-review",
@@ -153,7 +154,7 @@ def _review_bundle(
     contract = StepContract(
         name="b31-slice-review",
         reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
+        approval_marker=approval_marker,
         slice_id="01",
         round_number=1,
         review_fingerprint=changes.fingerprint,
@@ -369,6 +370,59 @@ def test_slice_route_scope_retry_request_names_uncovered_typed_paths() -> None:
     assert uncovered in feedback["correction_instruction"]
     assert "C-01 -> Slice 2 is invalid" in feedback["correction_instruction"]
     assert "Provider-authored" not in feedback["correction_instruction"]
+
+
+def test_plan_opening_responsibility_retry_request_names_plan_revision() -> None:
+    state = init_workflow_state(
+        run_id="b31-plan-responsibility-review",
+        task_file="/repo/inbox/backlog/00-b31.md",
+        branch="feature/backlog-followups",
+        branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=1,
+        timestamp="2026-09-02T10:00:00+00:00",
+    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    failure = InvocationFailureRecord(
+        invocation_id="review-plan-responsibility-1",
+        idempotency_key=(
+            "b31-plan-responsibility-review:1:claude_plan_review:claude"
+        ),
+        role="claude",
+        failure_kind=AgentFailureKind.OUTPUT,
+        provider_text="[provider text redacted; sha256=" + "a" * 64 + "; utf8_bytes=1]",
+        received_at="2026-09-21T10:00:00+00:00",
+        step=WorkflowStep.CLAUDE_PLAN_REVIEW,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=technical_text_evidence("responsibility rejected")[0],
+        resume_at_utc="2026-09-21T10:00:02+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID.text
+        ),
+        native_review_rejection="finding-content-invalid",
+        native_review_retry_round=2,
+    )
+    state = state.record_invocation_failure(
+        failure, wait_automatically=True
+    ).resume_after_invocation_halt(
+        updated_at="2026-09-21T10:00:02+00:00"
+    ).start_recomposed_request(
+        updated_at="2026-09-21T10:00:03+00:00"
+    )
+
+    bundle = _review_bundle(
+        state=state,
+        approval_marker=ApprovalMarker.PLAN,
+    )
+
+    feedback = bundle.document["retry_feedback"]
+    assert feedback["rejection_code"] == "finding-content-invalid"
+    assert "PLAN_REVISION" in feedback["correction_instruction"]
+    assert "plan review finding opening" in feedback["correction_instruction"]
 
 
 def test_oversized_branch_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:

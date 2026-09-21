@@ -9,6 +9,10 @@ NATIVE_CODEX_SYSTEM_POLICY = (
 NATIVE_CLAUDE_SYSTEM_POLICY = (
     "Return exactly one request-bound JSON review matching the supplied writer schema. "
     "Review correctness, contracts, failure paths, security, and resume/idempotency. "
+    "When opening a finding with responsibility, use SLICE in claude_slice_review, "  # allowlist:provider -- persisted step
+    "PLAN_REVISION in claude_plan_review, and BRANCH_PLANNING in "  # allowlist:provider -- persisted step
+    "claude_branch_discovery, exactly as repeated in "  # allowlist:provider -- persisted step
+    "review_contract.opening_responsibility_kind. "
     "Before a Slice commit, decide every finding you open or own that remains assigned "
     "to the current Slice: close it, reject it with named evidence, or route it to a "
     "named later Slice or to branch planning. Existing findings subject to this duty "

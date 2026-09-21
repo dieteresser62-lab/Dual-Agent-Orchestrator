@@ -5039,6 +5039,68 @@ def test_partial_review_retry_uses_precise_value_free_failure_diagnostic() -> No
     ]
 
 
+def test_plan_opening_responsibility_rejection_retries_with_required_kind() -> None:
+    now = datetime(2026, 9, 21, 10, 0, tzinfo=timezone.utc)
+    changes = _changes("1", "docs/internal/plan.md")
+    diagnostic = OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
+    state = init_workflow_state(
+        run_id="plan-responsibility-retry",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        first_slice_start_commit=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-09-21T10:00:00+00:00",
+        task_digest="d" * 64,
+        task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/workflow",
+    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                "plan-opening-responsibility-invalid",
+                received_at=now,
+                detail=(
+                    "plan review finding opening requires responsibility kind "
+                    "PLAN_REVISION"
+                ),
+                diagnostic=diagnostic,
+            ),
+            None,
+        ],
+    )
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
+    ).run_current_work_unit(
+        state,
+        replace(
+            _context(),
+            task_scope_patterns=("docs/internal/plan.md",),
+        ),
+    )
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert [call.round_number for call in driver.reviewer_calls] == [1, 1]
+    assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
+    first = driver.reviewer_calls[0].native_request
+    retry = driver.reviewer_calls[1].native_request
+    assert first is not None and retry is not None
+    assert first.document["review_contract"]["opening_responsibility_kind"] == (
+        "PLAN_REVISION"
+    )
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": "plan-opening-responsibility-invalid",
+        "rejection_code": "finding-content-invalid",
+        "correction_instruction": diagnostic.text,
+    }
+
+
 def test_evidence_anchor_retry_replaces_the_finding_numbering_guidance() -> None:
     now = datetime(2026, 9, 20, 22, 30, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)

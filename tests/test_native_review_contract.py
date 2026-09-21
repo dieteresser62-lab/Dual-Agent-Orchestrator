@@ -331,6 +331,15 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
                 "evidence_anchor_sha256": None,
             }
         ],
+        "responsibility_routes": [
+            {
+                "finding_id": "C-02",
+                "responsibility": responsibility_document(
+                    BranchPlanningResponsibility("family-1", 1)
+                ),
+                "rationale": "The next branch plan owns this discovered defect.",
+            }
+        ],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, and resume",
             "largest_residual_risk": "A future family edge could omit a finding.",
@@ -353,6 +362,13 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
         ),
     )
     assert project_open_set(result.findings).finding_ids == ("C-01", "C-02")
+    assert result.responsibility_routes == (
+        NativeResponsibilityRoute(
+            "C-02",
+            BranchPlanningResponsibility("family-1", 1),
+            "The next branch plan owns this discovered defect.",
+        ),
+    )
 
     ordinary_review = _review(context)
     ordinary_review["responsibility_routes"] = []
@@ -394,6 +410,7 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
             }
         ],
         "occurrences": [],
+        "responsibility_routes": [],
         "review_evidence": {
             "dimensions": "correctness and completeness",
             "largest_residual_risk": "More findings remain undiscovered.",
@@ -552,6 +569,54 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     assert result.responsibility_routes == response.responsibility_routes
     assert project_open_set(result.findings).finding_ids == ("C-01",)
     assert result.findings[0].affected_paths == ("src/future.py",)
+
+
+def test_plan_opening_rejects_wrong_responsibility_kind_with_retry_guidance(
+    active_finding_decisions: None,
+) -> None:
+    context = replace(
+        _context(approval=ApprovalMarker.PLAN),
+        operation="claude_plan_review",
+        round_number=1,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "The plan needs a bounded revision.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "The revised plan covers the missing contract.",
+            },
+            "affected_paths": ["docs/internal/plan.md"],
+        }
+    ]
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("family-1", 1)
+            ),
+            "rationale": "This deliberately uses the wrong responsibility kind.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    error = raised.value
+    assert error.code is NativeReviewErrorCode.FINDING_CONTENT_INVALID
+    assert error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
+    )
+    assert native_review_retry_guidance(
+        error.code, error.orchestrator_diagnostic, context
+    ) == (
+        "finding-content-invalid: plan review finding opening requires "
+        "responsibility kind PLAN_REVISION"
+    )
 
 
 @pytest.mark.parametrize("approved", (False, True))

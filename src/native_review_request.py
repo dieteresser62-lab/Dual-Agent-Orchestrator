@@ -11,7 +11,7 @@ import re
 from typing import Any, Mapping
 
 from contracts import AgentRole, ApprovalMarker
-from finding_responsibility import responsibility_json_schema
+from finding_responsibility import ResponsibilityKind, responsibility_json_schema
 import native_finding_decisions
 from native_finding_decisions import plan_treatment_json_schema
 from native_review_contract import (
@@ -597,6 +597,9 @@ def _review_context_request_projection(
         "slice_id": context_binding["slice_id"],
         "round_number": context_binding["round_number"],
         "request_sequence": context_binding["request_sequence"],
+        "opening_responsibility_kind": context_binding[
+            "opening_responsibility_kind"
+        ],
         "next_finding_id": next_native_finding_id(context),
         "previous_findings": context_binding["previous_findings"],
         "known_open_finding_signatures": context_binding[
@@ -818,6 +821,11 @@ def _enable_native_review_request_finding_decision_schema(
         "additionalProperties": False,
     }
     contract = definitions["review_contract"]
+    contract["properties"]["opening_responsibility_kind"] = {
+        "type": "string",
+        "enum": [item.value for item in ResponsibilityKind],
+    }
+    contract["required"].append("opening_responsibility_kind")
     contract["properties"]["slice_commit_decision_finding_ids"] = {
         "type": "array",
         "maxItems": 10000,

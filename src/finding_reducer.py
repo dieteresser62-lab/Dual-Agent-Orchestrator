@@ -49,9 +49,17 @@ from finding_responsibility import (
     BranchPlanningResponsibility,
     FindingResponsibility,
     PlanRevisionResponsibility,
+    ResponsibilityKind,
     SliceResponsibility,
     responsibility_document,
 )
+
+
+REVIEW_OPENING_RESPONSIBILITY_KINDS: Mapping[str, ResponsibilityKind] = {
+    "claude_slice_review": ResponsibilityKind.SLICE,  # allowlist:provider -- persisted step
+    "claude_plan_review": ResponsibilityKind.PLAN_REVISION,  # allowlist:provider -- persisted step
+    "claude_branch_discovery": ResponsibilityKind.BRANCH_PLANNING,  # allowlist:provider -- persisted step
+}
 
 
 def is_closed_finding_status(status: FindingStatus) -> bool:
@@ -1217,12 +1225,24 @@ def _validate_opening_responsibility(
         ),
         None,
     )
-    if review_step == "claude_slice_review":  # allowlist:provider -- persisted step
-        if not isinstance(responsibility, SliceResponsibility):
-            _responsibility_fail(
-                "Slicereview opening requires responsibility kind SLICE",
-                record,
-            )
+    required_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(review_step)
+    if required_kind is None:
+        _responsibility_fail(
+            f"responsibility-bearing opening has no supported review context; step={review_step!r}",
+            record,
+        )
+    if responsibility.responsibility_kind is not required_kind:
+        review_label = {
+            ResponsibilityKind.SLICE: "Slicereview",
+            ResponsibilityKind.PLAN_REVISION: "Planreview",
+            ResponsibilityKind.BRANCH_PLANNING: "Entdeckungsreview",
+        }[required_kind]
+        _responsibility_fail(
+            f"{review_label} opening requires responsibility kind {required_kind.value}",
+            record,
+        )
+    if required_kind is ResponsibilityKind.SLICE:
+        assert isinstance(responsibility, SliceResponsibility)
         plan = next(
             (
                 candidate.payload
@@ -1240,7 +1260,6 @@ def _validate_opening_responsibility(
             ),
             None,
         )
-        assert isinstance(responsibility, SliceResponsibility)
         if responsibility.target_run_id != record.run_id:
             _responsibility_fail(
                 "SLICE.target_run_id differs from the opening record run",
@@ -1265,12 +1284,8 @@ def _validate_opening_responsibility(
                 record,
             )
         return
-    if review_step == "claude_plan_review":  # allowlist:provider -- persisted step
-        if not isinstance(responsibility, PlanRevisionResponsibility):
-            _responsibility_fail(
-                "Planreview opening requires responsibility kind PLAN_REVISION",
-                record,
-            )
+    if required_kind is ResponsibilityKind.PLAN_REVISION:
+        assert isinstance(responsibility, PlanRevisionResponsibility)
         task = next(
             (
                 candidate.payload
@@ -1279,7 +1294,6 @@ def _validate_opening_responsibility(
             ),
             None,
         )
-        assert isinstance(responsibility, PlanRevisionResponsibility)
         if responsibility.run_id != record.run_id:
             _responsibility_fail(
                 "PLAN_REVISION.run_id differs from the opening record run",
@@ -1296,18 +1310,11 @@ def _validate_opening_responsibility(
                 record,
             )
         return
-    if review_step == "claude_final_review":  # allowlist:provider -- persisted step
-        if not isinstance(responsibility, BranchPlanningResponsibility):
-            _responsibility_fail(
-                "Entdeckungsreview opening requires responsibility kind BRANCH_PLANNING",
-                record,
-            )
+    if required_kind is ResponsibilityKind.BRANCH_PLANNING:
+        assert isinstance(responsibility, BranchPlanningResponsibility)
         _validate_routed_responsibility(responsibility, record, records)
         return
-    _responsibility_fail(
-        f"responsibility-bearing opening has no supported review context; step={review_step!r}",
-        record,
-    )
+    raise AssertionError("unhandled review opening responsibility kind")
 
 
 def _validate_routed_responsibility(
