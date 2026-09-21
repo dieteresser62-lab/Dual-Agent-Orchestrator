@@ -59,7 +59,9 @@ from schema_validation import (
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from native_provider_schema import (
+    OPENAI_PROVIDER,
     assert_projected_provider_schema,
+    bind_required_empty_array as bind_provider_required_empty_array,
     defensive_provider_projection,
 )
 
@@ -537,11 +539,7 @@ def native_codex_provider_response_schema(
 
 
 def _bind_required_empty_array(schema: dict[str, Any]) -> None:
-    """Keep a required collection exact without a degenerate zero bound."""
-
-    schema.pop("minItems", None)
-    schema.pop("maxItems", None)
-    schema["const"] = []
+    bind_provider_required_empty_array(schema, provider=OPENAI_PROVIDER)
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:

@@ -48,7 +48,7 @@ from workflow_state import (
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "8f093202073da13994b268efa891af3bc6a55f973549c0e255394f1e04f87261"
+    "7b8f451d51ce1ce7484f635e624c932d06aba4a464d9ac1f9bd7f79d5dc315d8"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
     "b71c7bbfcb7863d15adf34f73e9d4a090376a739d7d466435c25568668945b40"

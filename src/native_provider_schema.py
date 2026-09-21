@@ -23,12 +23,28 @@ EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
 PROVIDER_VERSION_POLICY = "same-major-forward"
 OPENAI_PROVIDER = "co" + "dex"
 ANTHROPIC_PROVIDER = "clau" + "de"
-OPENAI_STRUCTURED_OUTPUT_KEYWORDS = frozenset(
+PROVIDER_SCHEMA_FEATURES = frozenset(
+    {
+        "closed_object",
+        "const_list",
+        "min_max_items",
+        "nested_any_of",
+        "nested_one_of",
+        "positional_tuple",
+    }
+)
+SCHEMA_FEATURE_KEYWORDS = {
+    "additionalProperties": "closed_object",
+    "anyOf": "nested_any_of",
+    "maxItems": "min_max_items",
+    "minItems": "min_max_items",
+    "oneOf": "nested_one_of",
+    "prefixItems": "positional_tuple",
+}
+OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS = frozenset(
     {
         "$defs",
         "$ref",
-        "additionalProperties",
-        "anyOf",
         "const",
         "description",
         "enum",
@@ -36,10 +52,8 @@ OPENAI_STRUCTURED_OUTPUT_KEYWORDS = frozenset(
         "exclusiveMinimum",
         "format",
         "items",
-        "maxItems",
         "maxLength",
         "maximum",
-        "minItems",
         "minLength",
         "minimum",
         "multipleOf",
@@ -136,6 +150,11 @@ def load_capability_table() -> dict[str, Any]:
         ):
             raise NativeProviderSchemaError(
                 f"provider {name} requires a boolean feature map"
+            )
+        if set(features) != PROVIDER_SCHEMA_FEATURES:
+            raise NativeProviderSchemaError(
+                f"provider {name} schema feature map differs from the "
+                "projection guard contract"
             )
     if names != sorted(set(names)):
         raise NativeProviderSchemaError("provider capability entries must be sorted and unique")
@@ -274,6 +293,26 @@ def defensive_provider_projection(
     return projected
 
 
+def bind_required_empty_array(
+    schema: dict[str, Any], *, provider: str
+) -> None:
+    """Bind an exact empty array using only positively probed features."""
+    features = provider_capability(provider)["features"]
+    schema.pop("const", None)
+    schema.pop("minItems", None)
+    schema.pop("maxItems", None)
+    if features["const_list"]:
+        schema["const"] = []
+        return
+    if features["min_max_items"]:
+        schema["minItems"] = 0
+        schema["maxItems"] = 0
+        return
+    raise NativeProviderSchemaError(
+        f"{provider} has no positively probed exact-empty-array expression"
+    )
+
+
 def assert_projected_provider_schema(
     projected_schema: Mapping[str, Any], *, provider: str
 ) -> None:
@@ -283,6 +322,12 @@ def assert_projected_provider_schema(
             "no projected-schema acceptance guard for the requested provider"
         )
 
+    features = provider_capability(provider)["features"]
+    openai_keywords = OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS | frozenset(
+        keyword
+        for keyword, feature in SCHEMA_FEATURE_KEYWORDS.items()
+        if features[feature]
+    )
     violations: list[str] = []
     if provider == OPENAI_PROVIDER:
         if projected_schema.get("type") != "object":
@@ -310,6 +355,30 @@ def assert_projected_provider_schema(
                     f"{_schema_pointer(pointer, keyword)}: must not be empty"
                 )
 
+        const_value = node.get("const")
+        if isinstance(const_value, list) and not features["const_list"]:
+            violations.append(
+                f"{_schema_pointer(pointer, 'const')}: array-valued const requires "
+                "the positively probed const_list feature"
+            )
+        items = node.get("items")
+        if (
+            isinstance(items, (bool, list))
+            and not features["positional_tuple"]
+        ):
+            violations.append(
+                f"{_schema_pointer(pointer, 'items')}: positional array schemas "
+                "require the positively probed positional_tuple feature"
+            )
+
+        if provider == ANTHROPIC_PROVIDER:
+            for keyword, feature in SCHEMA_FEATURE_KEYWORDS.items():
+                if keyword in node and not features[feature]:
+                    violations.append(
+                        f"{_schema_pointer(pointer, keyword)}: keyword {keyword!r} "
+                        f"requires the positively probed {feature} feature"
+                    )
+
         properties = node.get("properties")
         required = node.get("required")
         if isinstance(properties, Mapping) and isinstance(required, list):
@@ -319,6 +388,7 @@ def assert_projected_provider_schema(
                     isinstance(name, str)
                     and isinstance(property_schema, Mapping)
                     and property_schema.get("maxItems") == 0
+                    and features["const_list"]
                 ):
                     violations.append(
                         f"{_schema_pointer(pointer, 'properties', name, 'maxItems')}: "
@@ -326,7 +396,7 @@ def assert_projected_provider_schema(
                     )
 
         if provider == OPENAI_PROVIDER:
-            unsupported = sorted(set(node) - OPENAI_STRUCTURED_OUTPUT_KEYWORDS)
+            unsupported = sorted(set(node) - openai_keywords)
             for keyword in unsupported:
                 keyword_path = _schema_pointer(pointer, keyword)
                 rule = (
@@ -383,7 +453,6 @@ def assert_projected_provider_schema(
                         pending.append(
                             (_schema_pointer(pointer, container, str(name)), child)
                         )
-        items = node.get("items")
         if isinstance(items, Mapping):
             pending.append((_schema_pointer(pointer, "items"), items))
         additional = node.get("additionalProperties")

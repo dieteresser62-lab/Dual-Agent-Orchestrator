@@ -252,9 +252,22 @@ def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> 
         node = pending.pop()
         if isinstance(node, dict):
             assert "oneOf" not in node
+            assert not isinstance(node.get("const"), list)
             pending.extend(node.values())
         elif isinstance(node, list):
             pending.extend(node)
+
+    for result_name in (
+        "plan_result",
+        "implementation_result",
+        "correction_result",
+    ):
+        dispositions = provider_schema["$defs"][result_name]["properties"][
+            "finding_dispositions"
+        ]
+        assert dispositions["minItems"] == 0
+        assert dispositions["maxItems"] == 0
+        assert "const" not in dispositions
 
 
 def test_plan_treatment_writer_schema_is_closed_enum_discriminated_union() -> None:

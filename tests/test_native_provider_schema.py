@@ -8,8 +8,10 @@ import pytest
 import native_provider_schema
 from native_provider_schema import (
     NativeProviderSchemaError,
+    OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
     assert_projected_provider_schema,
     assert_provider_capabilities,
+    bind_required_empty_array,
     compatible_cli_version,
     defensive_provider_projection,
     load_capability_table,
@@ -94,6 +96,20 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
     assert {
         item["version_policy"] for item in capabilities["providers"]
     } == {"same-major-forward"}
+    assert {
+        frozenset(item["features"]) for item in capabilities["providers"]
+    } == {
+        frozenset(
+            {
+                "closed_object",
+                "const_list",
+                "min_max_items",
+                "nested_any_of",
+                "nested_one_of",
+                "positional_tuple",
+            }
+        )
+    }
     assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
     assert len(registered_exceptions("codex")) == 7
     assert len(registered_exceptions("claude")) == 7
@@ -110,6 +126,20 @@ def test_every_provider_must_use_the_shared_forward_version_policy(
     monkeypatch.setattr(native_provider_schema, "CAPABILITY_PATH", capability_path)
 
     with pytest.raises(NativeProviderSchemaError, match="provider-wide version policy"):
+        native_provider_schema.load_capability_table()
+
+
+def test_projection_feature_vocabulary_cannot_drift_from_capability_table(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    capabilities = load_capability_table()
+    del capabilities["providers"][1]["features"]["const_list"]
+    capability_path = tmp_path / "capabilities.json"
+    capability_path.write_text(json.dumps(capabilities), encoding="utf-8")
+    monkeypatch.setattr(native_provider_schema, "CAPABILITY_PATH", capability_path)
+
+    with pytest.raises(NativeProviderSchemaError, match="projection guard contract"):
         native_provider_schema.load_capability_table()
 
 
@@ -201,6 +231,17 @@ def test_defensive_projection_does_not_mutate_reader_schema() -> None:
     assert "uniqueItems" not in projected["properties"]["items"]
 
 
+def test_exact_empty_array_binding_is_selected_from_probed_capabilities() -> None:
+    codex_schema = {"type": "array", "minItems": 1, "maxItems": 2}
+    claude_schema = {"type": "array", "minItems": 1, "maxItems": 2}
+
+    bind_required_empty_array(codex_schema, provider="codex")
+    bind_required_empty_array(claude_schema, provider="claude")
+
+    assert codex_schema == {"type": "array", "minItems": 0, "maxItems": 0}
+    assert claude_schema == {"type": "array", "const": []}
+
+
 @pytest.mark.parametrize(
     ("violation", "message"),
     (
@@ -259,11 +300,6 @@ def test_projected_schema_guard_enforces_other_codex_provider_rules(
     ("property_schema", "message"),
     (
         ({"type": "string", "enum": []}, "/properties/value/enum: must not be empty"),
-        (
-            {"type": "array", "maxItems": 0, "items": {"type": "string"}},
-            "/properties/value/maxItems: required array property must not force "
-            "an empty collection",
-        ),
         ({"anyOf": []}, "/properties/value/anyOf: must not be empty"),
         ({"oneOf": []}, "/properties/value/oneOf: must not be empty"),
     ),
@@ -285,6 +321,47 @@ def test_projected_schema_guard_rejects_degenerate_bindings_for_both_providers(
 
     assert message in str(raised.value)
     assert provider not in str(raised.value)
+
+
+def test_projection_guard_reconciles_scalar_const_allowance_with_const_list_probe(
+) -> None:
+    assert "const" in OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS
+    scalar_const = {
+        "type": "object",
+        "properties": {"value": {"type": "string", "const": "fixed"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    list_const = copy.deepcopy(scalar_const)
+    list_const["properties"]["value"] = {"type": "array", "const": []}
+
+    assert_projected_provider_schema(scalar_const, provider="codex")
+    with pytest.raises(NativeProviderSchemaError, match="const_list feature"):
+        assert_projected_provider_schema(list_const, provider="codex")
+    assert_projected_provider_schema(list_const, provider="claude")
+
+
+def test_required_empty_array_degeneracy_is_provider_dependent() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 0,
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    assert_projected_provider_schema(schema, provider="codex")
+    with pytest.raises(
+        NativeProviderSchemaError,
+        match="required array property must not force an empty collection",
+    ):
+        assert_projected_provider_schema(schema, provider="claude")
 
 
 @pytest.mark.parametrize("keyword", ("allOf", "type"))

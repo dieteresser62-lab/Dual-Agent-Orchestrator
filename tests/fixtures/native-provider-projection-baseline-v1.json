@@ -24,12 +24,12 @@
     {
       "provider": "codex",
       "form": "implementation",
-      "sha256": "d8f86a80511191022fee41bb2599d9637ff04d5e27f17c7256a9569b9635e007"
+      "sha256": "7418b2405ea04cb2c7796266ba75c79b1b5af687aa067c71aa5879b2edb88155"
     },
     {
       "provider": "codex",
       "form": "plan",
-      "sha256": "a7f6a18e523f53e978330b5ec9120df824d718444f3d16c0a3b59c705622b15b"
+      "sha256": "c88adcc80a643a68e182761f53ccaf12f09f6bc54a999f7ec9a00ed2beffa0f5"
     }
   ]
 }

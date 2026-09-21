@@ -68,7 +68,9 @@ from validation_matrix import (
     matches_validation_family,
 )
 from native_provider_schema import (
+    ANTHROPIC_PROVIDER,
     assert_projected_provider_schema,
+    bind_required_empty_array as bind_provider_required_empty_array,
     defensive_provider_projection,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
@@ -1424,9 +1426,7 @@ def native_review_provider_response_schema(
             items={"$ref": "#/$defs/bound_approved_reclassification"},
         )
     else:
-        _bind_required_empty_array(
-            approved["properties"]["reclassifications"]
-        )
+        _bind_required_empty_array(approved["properties"]["reclassifications"])
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
     }
@@ -1724,11 +1724,7 @@ def _bound_review_result_definition(
 
 
 def _bind_required_empty_array(schema: dict[str, Any]) -> None:
-    """Keep a required collection exact without a degenerate zero bound."""
-
-    schema.pop("minItems", None)
-    schema.pop("maxItems", None)
-    schema["const"] = []
+    bind_provider_required_empty_array(schema, provider=ANTHROPIC_PROVIDER)
 
 
 def _bound_stop_result_definition(
