@@ -815,11 +815,11 @@ def _project_work_unit_round_and_kind(
     kind = (
         "correction"
         if isinstance(definition, CorrectionWorkUnitPayload)
+        else "branch_discovery"
+        if first_step == "claude_branch_discovery"  # allowlist:provider -- canonical state-v3 step
         else "plan"
         if unit.work_unit_id == "1"
         or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
-        else "final_review"
-        if first_step in {"codex_final_review", "claude_final_review"}  # allowlist:provider -- canonical state-v3 steps
         else "slice"
     )
     return round_number, kind

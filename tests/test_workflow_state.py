@@ -82,9 +82,15 @@ def test_branch_discovery_state_starts_as_its_own_terminal_review_run(
 
     assert state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
     assert state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+    assert state.current_work_unit.round_number == 1
+    assert state.current_work_unit.request_sequence == 1
     assert state.current_slice.status is SliceStatus.COMPLETED
     assert state.current_slice.start_commit == reviewed_head
     assert state.current_slice.commit_ref == reviewed_head
+    assert state.current_slice.scope_paths == ()
+    assert state.current_slice.scope_change_groups == ()
+    assert state.current_slice.start_fingerprint is None
+    assert state.planned_slices == ()
 
 
 def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:

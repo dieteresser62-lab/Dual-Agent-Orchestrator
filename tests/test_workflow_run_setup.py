@@ -16,7 +16,14 @@ from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
 from task_contract import TaskContract, TaskMode
 from workflow import WorkflowContext
-from workflow_state import ProtocolBinding, ProtocolMode, WorkUnitKind, init_workflow_state
+from workflow_state import (
+    ProtocolBinding,
+    ProtocolMode,
+    SliceStatus,
+    WorkflowStep,
+    WorkUnitKind,
+    init_workflow_state,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -436,6 +443,66 @@ def test_fresh_state_family_binding_is_not_controlled_by_retired_cutover_flag(
 
     assert state.family_binding == binding
     assert state.branch_base == binding.family_base_commit
+
+
+def test_fresh_branch_discovery_run_uses_a_branch_wide_work_unit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reviewed_head = "a" * 40
+    family_base = "c" * 40
+    contract = TaskContract(
+        digest="b" * 64,
+        mode=TaskMode.BRANCH_DISCOVERY,
+        scope_patterns=("src/a.py", "tests/test_a.py"),
+        target_branch="feature/branch-discovery",
+        finding_handoff_source_run_id="implementation-run",
+        finding_handoff_export_record_id="ar1-" + "d" * 64,
+    )
+    binding = FamilyBindingPayload(
+        "family-branch-discovery",
+        family_base,
+        contract.scope_patterns,
+        "implementation-run",
+        "ar1-" + "e" * 64,
+        1,
+        None,
+        reviewed_head,
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "inspect_repository",
+        lambda _root: SimpleNamespace(
+            branch=contract.target_branch,
+            head=reviewed_head,
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "_branch_discovery_family_binding",
+        lambda *_args, **_kwargs: binding,
+    )
+
+    state = workflow_run_setup._fresh_state(
+        task_file=tmp_path / "branch-discovery.md",
+        run_id="branch-discovery",
+        repository_root=tmp_path,
+        task_contract=contract,
+    )
+
+    assert state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+    assert state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
+    assert state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+    assert state.current_work_unit.round_number == 1
+    assert state.current_work_unit.request_sequence == 1
+    assert state.current_slice.status is SliceStatus.COMPLETED
+    assert state.current_slice.start_commit == reviewed_head
+    assert state.current_slice.commit_ref == reviewed_head
+    assert state.current_slice.scope_paths == ()
+    assert state.current_slice.scope_change_groups == ()
+    assert state.current_slice.start_fingerprint is None
+    assert state.planned_slices == ()
+    assert state.branch_review_base_commit == family_base
+    assert state.branch_review_authorized_change_set == contract.scope_patterns
 
 
 def test_fresh_family_run_uses_family_base_but_slice_keeps_current_head(

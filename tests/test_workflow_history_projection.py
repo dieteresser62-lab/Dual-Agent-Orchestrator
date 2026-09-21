@@ -31,6 +31,8 @@ from artifact_models import (
     InvocationFailurePayload,
     PlanPayload,
     ProviderContentPayload,
+    ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload,
     ReviewPacketPayload,
     ReviewEvidencePayload,
     ReviewPayload,
@@ -69,6 +71,7 @@ from content_authority_support import (
 )
 from finding_reducer import reduce_findings
 from finding_responsibility import SliceResponsibility
+from final_review_preflight import relevant_record_head, run_final_review_preflight
 from state_io import write_workflow_state_projection
 from workflow import WorkflowHistory
 from workflow_state import (
@@ -572,6 +575,204 @@ def _state_projection_bridge(tmp_path: Path, chain_name: str) -> ArtifactBridge:
     return ArtifactBridge(
         ArtifactStore(chain_root, RUN_ID),
         now=lambda: STATE_PROJECTION_FIXED_TIME,
+    )
+
+
+def _branch_discovery_journey(bridge: ArtifactBridge) -> tuple:
+    reviewed_head = "d" * 40
+    family_binding = FamilyBindingPayload(
+        "family-branch-discovery",
+        "b" * 40,
+        ("src/one.py", "tests/test_one.py"),
+        "implementation-run",
+        "ar1-" + "c" * 64,
+        1,
+        None,
+        reviewed_head,
+    )
+    identity = bridge.append(
+        RunIdentityPayload(
+            "inbox/backlog/branch-discovery.md",
+            "feature/state-authority-consolidation",
+            family_binding.family_base_commit,
+            reviewed_head,
+            "BRANCH_DISCOVERY",
+            None,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    _append_event(
+        bridge,
+        identity,
+        event_kind="run",
+        work_unit_id=None,
+        slice_id="1",
+        round_number=None,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload("gpt-5.6-sol", "medium"),
+            RoleProfilePayload("sonnet", "high"),
+            family_binding=family_binding,
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        TaskPayload(
+            "feature/state-authority-consolidation",
+            family_binding.family_authorized_change_set,
+            FINGERPRINT,
+        ),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    _append_transition(
+        bridge,
+        revision=1,
+        slice_id="1",
+        slice_status="completed",
+        work_unit_id="1",
+        step="claude_branch_discovery",
+        work_unit_status="in_progress",
+    )
+    _append_policy_gate(bridge, work_unit_id="1")
+    return bridge.store.load_chain()
+
+
+def _productively_checked_work_unit_kinds() -> frozenset[WorkUnitKind]:
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    checked_names: set[str] = set()
+    for path in sorted(source_root.glob("*.py")):
+        if path.name in {"dry_run_scenarios.py", "workflow_dry_run.py"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for comparison in (
+            node for node in ast.walk(tree) if isinstance(node, ast.Compare)
+        ):
+            checked_names.update(
+                node.attr
+                for node in ast.walk(comparison)
+                if isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "WorkUnitKind"
+            )
+    return frozenset(WorkUnitKind[name] for name in checked_names)
+
+
+def test_branch_discovery_record_projection_restores_branch_wide_unit_and_preflight(
+    tmp_path: Path,
+) -> None:
+    bridge = _state_projection_bridge(tmp_path, "branch-discovery")
+    chain = _branch_discovery_journey(bridge)
+
+    projected = project_workflow_state(replay_artifacts(chain, RUN_ID)).state
+
+    assert projected.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
+    assert projected.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+    assert projected.current_work_unit.round_number == 1
+    assert projected.current_work_unit.request_sequence == 1
+    assert projected.current_slice.status is SliceStatus.COMPLETED
+    assert projected.current_slice.scope_paths == ()
+    assert projected.current_slice.scope_change_groups == ()
+    assert projected.current_slice.start_fingerprint is None
+    assert not any(isinstance(record.payload, SliceBoundaryPayload) for record in chain)
+
+    fingerprint = "e" * 64
+    append_validation_authority(
+        bridge,
+        ValidationAttestationPayload(
+            (
+                ValidationResult(
+                    CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    "pass",
+                    0,
+                    "f" * 64,
+                ),
+            ),
+            Role.ORCHESTRATOR,
+            "1" * 64,
+            "ar1-" + "2" * 64,
+        ),
+        logical_id="branch-discovery-validation",
+        idempotency_key="branch-discovery-validation",
+        fingerprint_sha256=fingerprint,
+    )
+    current_chain = bridge.store.load_chain()
+    measurement = bridge.append(
+        ProviderInputMeasurementPayload(
+            Role.CLAUDE,
+            Role.CLAUDE,
+            WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value,
+            str(projected.current_work_unit_id),
+            "3" * 64,
+            relevant_record_head(current_chain),
+            "4" * 64,
+            "5" * 64,
+            (ProviderInputComponentPayload("prompt", 3, 3),),
+            3,
+            3,
+            10,
+            10,
+            None,
+            None,
+            None,
+            10,
+            10,
+            True,
+            (),
+            0,
+            0,
+            "prompt",
+        ),
+        logical_id="provider-input-1-claude-branch-discovery",
+        idempotency_key="provider-input:branch-discovery",
+        fingerprint_sha256=fingerprint,
+    )
+
+    preflight = run_final_review_preflight(
+        state=projected,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py", "tests/test_one.py"),
+    )
+
+    assert preflight.passed
+
+
+def test_every_productively_checked_work_unit_kind_has_a_productive_projection(
+    tmp_path: Path,
+) -> None:
+    regular = project_workflow_state(
+        replay_artifacts(
+            _journey(_state_projection_bridge(tmp_path, "regular-kinds")),
+            RUN_ID,
+        )
+    ).state
+    discovery = project_workflow_state(
+        replay_artifacts(
+            _branch_discovery_journey(
+                _state_projection_bridge(tmp_path, "branch-discovery-kind")
+            ),
+            RUN_ID,
+        )
+    ).state
+    produced = frozenset(
+        unit.kind for state in (regular, discovery) for unit in state.work_units
+    )
+    checked = _productively_checked_work_unit_kinds()
+
+    assert checked == frozenset(WorkUnitKind)
+    assert checked <= produced, (
+        "WorkUnitKind is checked in production but has no productive record "
+        f"projection: {sorted(kind.value for kind in checked - produced)}"
     )
 
 
