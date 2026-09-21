@@ -264,6 +264,33 @@ stand: Ein Finding aus einem verworfenen Versuch zur Pflicht zu machen, hieße
 einem ungültigen Ergebnis Autorität zu geben. Der Schutz liegt eine Ebene
 tiefer, im Abnahmereview über den gesamten Code.
 
+## Wann ein Blocker als behoben gilt
+
+**Das Urteil des Reviewers genügt.** Kein Messnachweis, keine typisierte
+Abnahme, kein `FAIL → PASS` an zwei Fingerprints.
+
+Damit entfällt die gesamte Abnahmemessung: `acceptance_measurements`, die
+typisierten Abnahmebefehle, ihre Präfixregeln, die Nachmessung fehlender
+Befehle und die Bindungsprüfung. In `src/` sind das rund **520 Fundstellen**
+zum Stichwort `acceptance`.
+
+Der Reviewer ist ohnehin die einzige Instanz, die Befunde autoritativ
+entscheidet. Ein Messnachweis, den er selbst anfordert und selbst auswertet,
+fügt keine Unabhängigkeit hinzu — er fügt nur eine zweite Stelle hinzu, an der
+die Regeln nicht zusammenpassen können. Genau das war der Halt in Canary 28.
+
+## Der Ausgangsstand eines Slicereviews
+
+**Immer der Slice-Start**, in jeder Runde — nicht die letzte Korrektur.
+
+Der Reviewer beurteilt also stets „ist dieser Slice gut", nie „ist diese
+Korrektur gut". Damit entfällt das Korrekturdelta als eigener Vergleichsstand
+samt seiner Fingerprintbindung (24 Fundstellen).
+
+Es hat auch eine fachliche Seite: Eine Korrektur kann etwas reparieren und
+dabei etwas anderes zerbrechen, das in Runde 1 noch in Ordnung war. Wer nur
+das Delta prüft, sieht das nicht.
+
 ## Terminierung
 
 ### Was eine Runde ist
