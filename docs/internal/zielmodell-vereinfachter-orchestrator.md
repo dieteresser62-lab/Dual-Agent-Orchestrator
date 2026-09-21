@@ -328,6 +328,31 @@ ohne Fortschritt endet negativ, ohne Commit.
 Der „weiterreichen"-Teil der heutigen Regel entfällt mit dem Routing. Übrig
 bleibt: *schließe etwas Bekanntes oder belege eine Änderung.*
 
+Ausgeschrieben sieht die äußere Grenze so aus:
+
+```
+Durchlauf 1   Planung → Slice 01 … nn → Abnahmereview  ─ negativ ─┐
+Durchlauf 2   Planung → Slice 01 … nn → Abnahmereview  ─ negativ ─┤
+   …                                                              │
+Durchlauf 6   Planung → Slice 01 … nn → Abnahmereview  ─ negativ ─┘
+                                                                  │
+                                                              Schluss
+```
+
+Jeder Durchlauf hat seinen eigenen Planungs- und Implementierungsteil und
+endet mit genau einem Abnahmereview.
+
+### Was „Schluss" bedeutet
+
+Der Prozess endet, ohne weiteren Durchlauf. Konkret:
+
+- Das Implement-Dokument geht in den **`failed`-Ausgang**, nicht nach `done`.
+- Die Befunde des letzten Abnahmereviews bleiben in der Recordkette und im
+  Auditbericht lesbar.
+- Es wird **kein** neues Arbeitsdokument mehr erzeugt.
+- Die bis dahin committeten Slices bleiben auf der Zielbranch. Sie werden
+  nicht zurückgerollt — der Operator entscheidet, was damit geschieht.
+
 Damit ist die Terminierung doppelt gesichert — durch Fortschrittspflicht je
 Runde und durch eine harte Obergrenze.
 
