@@ -152,6 +152,27 @@ aus jeder anderen Anforderung.
 Der Reviewer schreibt die Datei nicht selbst — er ist lesend. Der Orchestrator
 erzeugt sie aus den Befunden.
 
+### Die Form des Arbeitsdokuments ist frei
+
+Ein Arbeitsdokument darf Prosa sein oder hochdetailliert. Das einzige
+Kriterium ist, dass **Planer und Implementierer daraus ihren Arbeitsplan
+erzeugen können**.
+
+Daraus folgt: Das aus einem Abnahmereview erzeugte Dokument trägt so viel
+technische Genauigkeit, wie der Befund braucht — Pfade, Abnahmebefehle,
+Beobachtungen — und zwar **im Text**. Es braucht keine Verkettung in die
+Vorrunde, weil die Genauigkeit im Dokument reist und nicht in einer
+Recordbeziehung.
+
+**Korrelation über Runden hinweg ist nicht nötig.** Jeder Lauf beweist seine
+eigene Arbeit an seinen eigenen Fingerprints. Dass ein Befund in der nächsten
+Runde eine andere Kennung trägt, ist folgenlos — die neue Runde misst gegen
+ihren eigenen Ausgangsstand.
+
+Das ist der Grund, warum Familienbindung, Zyklusnummern und Handoff-Records
+ersatzlos entfallen können und nicht durch etwas Kleineres ersetzt werden
+müssen.
+
 ## Die Commitbedingung
 
 Nach jeder Reviewrunde ist per Konstruktion **kein Finding unentschieden** —
