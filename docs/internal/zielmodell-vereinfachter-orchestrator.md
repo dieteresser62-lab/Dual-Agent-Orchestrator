@@ -53,8 +53,30 @@ Der Reviewer hat je Finding genau **zwei** Züge:
 Offenlassen ist kein dritter Zug. Will der Reviewer ein Finding offen halten,
 **ist** das die Eskalation zum Blocker.
 
-Der Implementierer hat je Finding zwei Züge — umsetzen oder ablehnen — und
-bei einem Blocker keinen: er muss ihn beheben.
+### Der Vertrag des Implementierers
+
+> **Blocker müssen gelöst werden.**
+> **Findings können gelöst oder abgelehnt werden.**
+
+Eine Ablehnung trägt eine Begründung. Ob sie gilt, entscheidet der Reviewer,
+indem er das Finding schließt — oder es zum Blocker macht.
+
+**Der Implementierer kann einen Blocker nicht bestreiten.** Das ist gewollt:
+die Entscheidungshoheit über Befunde liegt beim Reviewer. Ein Blocker, der
+sachlich falsch oder in sich widersprüchlich ist, würde damit aber eine
+Endlosschleife erzeugen — der Implementierer kann ihn weder beheben noch
+ablehnen.
+
+Der Ausweg dafür ist kein Ablehnen, sondern ein **Stop**:
+
+| Lage | Stopgrund |
+|---|---|
+| Der Blocker ist in sich widersprüchlich oder unverständlich | `CONTRACT-UNCLEAR` |
+| Die Behebung braucht etwas, das der Implementierer nicht beschaffen kann | `OPERATOR-PREREQUISITE-MISSING` |
+| Die Behebung braucht weitere Dateien | `SCOPE-EXTENSION-REQUESTED` |
+
+Ein Stop holt den Operator, statt stumm zu kreisen. Das ist die einzige
+Asymmetrie im Modell, und sie ist bewusst so gebaut.
 
 ```
                      ┌─────────────┐
