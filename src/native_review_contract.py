@@ -74,6 +74,7 @@ from native_provider_schema import (
     defensive_provider_projection,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
+from rejected_response_shape import RejectedNativeResponseShape
 from route_scope import uncovered_route_paths
 import native_finding_decisions
 from native_finding_decisions import (
@@ -257,6 +258,7 @@ def native_review_retry_guidance(
     code: NativeReviewErrorCode,
     diagnostic: OrchestratorDiagnostic | None = None,
     context: NativeReviewContext | None = None,
+    rejected_response_shape: RejectedNativeResponseShape | None = None,
 ) -> str:
     """Return bounded corrective guidance for one response-dependent rejection."""
 
@@ -266,8 +268,22 @@ def native_review_retry_guidance(
         raise ValueError(f"native review rejection {code.value} is not retryable") from exc
     if (
         code is NativeReviewErrorCode.APPROVAL_INVALID
-        and diagnostic is OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID
+        and diagnostic
+        in {
+            OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID,
+            OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED,
+        }
     ):
+        decision_guidance = _slice_decision_retry_guidance(
+            context,
+            rejected_response_shape,
+            include_new_findings=(
+                diagnostic
+                is OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED
+            ),
+        )
+        if decision_guidance is not None:
+            return decision_guidance
         route_guidance = _slice_route_scope_retry_guidance(context)
         if route_guidance is not None:
             return route_guidance
@@ -1912,6 +1928,7 @@ def _parse_native_review_response(
         pre_mortem=document["pre_mortem"],
     )
     response = _coalesce_known_finding_occurrences(response, context)
+    response = _absorb_redundant_route_status_changes(response)
     _validate_response_events(response, context)
     return response
 
@@ -2014,6 +2031,7 @@ def _native_response_to_contract_result(
         )
 
     response = _coalesce_known_finding_occurrences(response, context)
+    response = _absorb_redundant_route_status_changes(response)
     _validate_response_events(response, context)
     findings = _merge_findings(response, context)
     anchors = _convert_anchors(response, context)
@@ -2481,6 +2499,118 @@ def _validate_fixed_acceptance_evidence(
         )
 
 
+def _absorb_redundant_route_status_changes(
+    response: NativeReviewResult,
+) -> NativeReviewResult:
+    """Let a route absorb the exact OPEN state that the route already implies."""
+
+    status_counts: dict[str, int] = {}
+    route_counts: dict[str, int] = {}
+    for update in response.status_changes:
+        status_counts[update.finding_id] = status_counts.get(update.finding_id, 0) + 1
+    for route in response.responsibility_routes:
+        route_counts[route.finding_id] = route_counts.get(route.finding_id, 0) + 1
+    reclassified_ids = {item.finding_id for item in response.reclassifications}
+    absorbed_ids = {
+        update.finding_id
+        for update in response.status_changes
+        if not is_closed_finding_status(update.status)
+        and update.closure is None
+        and status_counts[update.finding_id] == 1
+        and route_counts.get(update.finding_id) == 1
+        and update.finding_id not in reclassified_ids
+    }
+    if not absorbed_ids:
+        return response
+    return replace(
+        response,
+        status_changes=tuple(
+            update
+            for update in response.status_changes
+            if update.finding_id not in absorbed_ids
+        ),
+    )
+
+
+def _validate_finding_event_collisions(
+    response: NativeReviewResult,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Reject each ambiguous event shape with its own actionable diagnosis."""
+
+    new_ids = [item.finding_id for item in response.new_findings]
+    status_ids = [item.finding_id for item in response.status_changes]
+    class_ids = [item.finding_id for item in response.reclassifications]
+    route_ids = [item.finding_id for item in response.responsibility_routes]
+
+    def duplicates(values: list[str]) -> tuple[str, ...]:
+        return sorted_finding_ids(
+            finding_id
+            for finding_id in set(values)
+            if values.count(finding_id) > 1
+        )
+
+    collision_checks = (
+        (
+            duplicates(new_ids),
+            "finding IDs occur more than once in new_findings: ",
+            "; keep exactly one new_findings entry per Finding ID",
+            OrchestratorDiagnostic.REVIEW_FINDING_NEW_DUPLICATE,
+        ),
+        (
+            duplicates(status_ids),
+            "finding IDs occur more than once in status_changes: ",
+            "; keep exactly one status_changes entry per Finding ID",
+            OrchestratorDiagnostic.REVIEW_FINDING_STATUS_DUPLICATE,
+        ),
+        (
+            duplicates(class_ids),
+            "finding IDs occur more than once in reclassifications: ",
+            "; keep exactly one reclassifications entry per Finding ID",
+            OrchestratorDiagnostic.REVIEW_FINDING_RECLASSIFICATION_DUPLICATE,
+        ),
+        (
+            duplicates(route_ids),
+            "finding IDs occur more than once in responsibility_routes: ",
+            "; keep exactly one responsibility_routes entry per Finding ID",
+            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_DUPLICATE,
+        ),
+        (
+            sorted_finding_ids(set(new_ids).intersection(class_ids)),
+            "finding IDs occur in both new_findings and reclassifications: ",
+            "; set the intended finding_class in new_findings only",
+            OrchestratorDiagnostic.REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT,
+        ),
+        (
+            sorted_finding_ids(set(status_ids).intersection(class_ids)),
+            "finding IDs occur in both status_changes and reclassifications: ",
+            "; use only one of those decision fields per response",
+            OrchestratorDiagnostic.REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT,
+        ),
+        (
+            sorted_finding_ids(set(route_ids).intersection(status_ids)),
+            "finding IDs occur in both responsibility_routes and status_changes with "
+            "a non-redundant status decision: ",
+            "; use responsibility_routes alone to keep them OPEN and transfer "
+            "responsibility, or status_changes alone",
+            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT,
+        ),
+        (
+            sorted_finding_ids(set(route_ids).intersection(class_ids)),
+            "finding IDs occur in both responsibility_routes and reclassifications: ",
+            "; use only one of those decision fields per response",
+            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT,
+        ),
+    )
+    for finding_ids, prefix, suffix, diagnostic in collision_checks:
+        if finding_ids:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
+                prefix + ", ".join(finding_ids) + suffix,
+                orchestrator_diagnostic=diagnostic,
+            )
+    return new_ids, status_ids, class_ids, route_ids
+
+
 def _validate_response_events(
     response: NativeReviewResult, context: NativeReviewContext
 ) -> None:
@@ -2502,23 +2632,9 @@ def _validate_response_events(
     previous_open_ids = frozenset(
         project_open_set(context.previous_findings).finding_ids
     )
-    new_ids = [item.finding_id for item in response.new_findings]
-    status_ids = [item.finding_id for item in response.status_changes]
-    class_ids = [item.finding_id for item in response.reclassifications]
-    route_ids = [item.finding_id for item in response.responsibility_routes]
-    if (
-        len(set(new_ids)) != len(new_ids)
-        or len(set(status_ids)) != len(status_ids)
-        or len(set(class_ids)) != len(class_ids)
-        or len(set(route_ids)) != len(route_ids)
-        or set(new_ids).intersection(class_ids)
-        or set(status_ids).intersection(class_ids)
-        or set(route_ids).intersection((*status_ids, *class_ids))
-    ):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
-            "finding id occurs in more than one event",
-        )
+    new_ids, status_ids, class_ids, route_ids = (
+        _validate_finding_event_collisions(response)
+    )
     if any(finding_id in previous for finding_id in new_ids):
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
@@ -3283,12 +3399,38 @@ def _validate_decision(
             )
         )
         if unresolved_ids:
+            newly_opened_ids = frozenset(
+                item.finding_id for item in response.new_findings
+            )
+            unresolved_new_ids = tuple(
+                finding_id
+                for finding_id in unresolved_ids
+                if finding_id in newly_opened_ids
+            )
+            labeled_ids = ", ".join(
+                f"{finding_id} ({'opened in this response' if finding_id in newly_opened_ids else 'existing before this response'})"
+                for finding_id in unresolved_ids
+            )
+            detail = (
+                "approval leaves open findings assigned to the current Slice: "
+                + labeled_ids
+                + "; for each ID, add either a status_changes entry with "
+                "status=CLOSED and a typed fixed or evidenced-rejection closure, "
+                "or a responsibility_routes entry to a named later Slice or to "
+                "branch planning; a Finding opened in new_findings may be decided "
+                "in the same response"
+            )
+            if unresolved_new_ids:
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.APPROVAL_INVALID,
+                    detail,
+                    orchestrator_diagnostic=(
+                        OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED
+                    ),
+                )
             raise NativeReviewContractError(
                 NativeReviewErrorCode.APPROVAL_INVALID,
-                "approval leaves open findings assigned to the current Slice: "
-                + ", ".join(unresolved_ids)
-                + "; close them, reject them with named evidence, or route them "
-                "to a named later Slice or to branch planning",
+                detail,
             )
     validation = context.validation_attestation
     if (
@@ -3421,6 +3563,90 @@ def _slice_route_scope_retry_guidance(
     if not body:
         return None
     return prefix + "; ".join(body) + suffix
+
+
+def _slice_decision_retry_guidance(
+    context: NativeReviewContext | None,
+    rejected_response_shape: RejectedNativeResponseShape | None,
+    *,
+    include_new_findings: bool,
+) -> str | None:
+    """Reconstruct undecided Slice IDs from provider-free response structure."""
+
+    if (
+        context is None
+        or context.approval_marker is not ApprovalMarker.SLICE
+        or rejected_response_shape is None
+        or rejected_response_shape.release_decision != "approved"
+    ):
+        return None
+    new_count = next(
+        (
+            field.item_count
+            for field in rejected_response_shape.fields
+            if field.name == "new_findings" and field.value_kind == "array"
+        ),
+        None,
+    )
+    if new_count is None:
+        return None
+    if include_new_findings:
+        first_number = int(next_native_finding_id(context).split("-", 1)[1])
+        new_ids = tuple(
+            f"C-{first_number + offset:02d}" for offset in range(new_count)
+        )
+    else:
+        new_ids = ()
+    closed_ids = {
+        item.finding_id
+        for item in rejected_response_shape.status_changes
+        if is_closed_finding_status(FindingStatus(item.status))
+    }
+    open_ids = (
+        set(project_open_set(context.previous_findings).finding_ids) | set(new_ids)
+    ) - closed_ids
+    routable_slice_ids = _routable_planned_slice_ids(context)
+    routed_ids = {
+        route.finding_id
+        for route in rejected_response_shape.responsibility_routes
+        if route.target is not None
+        and (
+            route.target.responsibility_kind == ResponsibilityKind.BRANCH_PLANNING.value
+            or (
+                route.target.responsibility_kind == ResponsibilityKind.SLICE.value
+                and route.target.target_run_id == context.run_id
+                and route.target.slice_id in routable_slice_ids
+            )
+        )
+    }
+    unresolved_ids = sorted_finding_ids(open_ids - routed_ids)
+    if not unresolved_ids:
+        return None
+    new_id_set = frozenset(new_ids)
+    existing = tuple(
+        finding_id for finding_id in unresolved_ids if finding_id not in new_id_set
+    )
+    newly_opened = tuple(
+        finding_id for finding_id in unresolved_ids if finding_id in new_id_set
+    )
+    groups = []
+    if existing:
+        groups.append("existing Finding IDs: " + ", ".join(existing))
+    if newly_opened:
+        groups.append(
+            "Finding IDs opened in the rejected response: "
+            + ", ".join(newly_opened)
+        )
+    return (
+        "Decide every still-current-Slice Finding ("
+        + "; ".join(groups)
+        + ") in the same response. For each listed ID, either add status_changes "
+        "with status=CLOSED and closure.kind=fixed, or closure.kind=rejected plus "
+        "rejection_reason and named evidence; otherwise add responsibility_routes "
+        "targeting a named later Slice or BRANCH_PLANNING. A Finding may be opened "
+        "in new_findings and decided in that same response. A route already implies "
+        "status=OPEN, so do not add a confirming OPEN status_changes entry."
+    )
 
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:

@@ -613,7 +613,11 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     with pytest.raises(NativeReviewContractError) as raised:
         parse_bound_native_contract_result(approved, bundle.bound_context)
     assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
-    assert "C-01, C-02" in raised.value.detail
+    assert "C-01 (existing before this response)" in raised.value.detail
+    assert "C-02 (existing before this response)" in raised.value.detail
+    assert "status_changes entry with status=CLOSED" in raised.value.detail
+    assert "typed fixed or evidenced-rejection closure" in raised.value.detail
+    assert "responsibility_routes entry to a named later Slice" in raised.value.detail
 
     sparse_disposition = json.loads(json.dumps(approved))
     sparse_disposition["status_changes"] = []

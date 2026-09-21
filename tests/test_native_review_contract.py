@@ -52,6 +52,7 @@ from native_review_contract import (
 )
 from native_finding_decisions import NativeResponsibilityRoute
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from rejected_response_shape import extract_rejected_native_response_shape
 from schema_validation import SchemaMismatch, validate_schema_document
 from validation_matrix import (
     ValidationCommand,
@@ -571,6 +572,257 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     assert result.findings[0].affected_paths == ("src/future.py",)
 
 
+def test_canary_26_attempt_one_open_confirmation_is_absorbed_by_route(
+    active_finding_decisions: None,
+) -> None:
+    finding = _finding(
+        "C-01", AgentRole.CLAUDE, finding_class=FindingClass.OBSERVATION
+    )
+    context = _context(previous=(finding,))
+    document = _review(context, approved=True)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "C-01 remains open for the branch-planning follow-up.",
+            "closure": None,
+        }
+    ]
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("canary-26", 1)
+            ),
+            "rationale": "Branch planning owns the remaining work.",
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    response = parse_native_review_response(document, context)
+    result = native_response_to_contract_result(response, context)
+
+    assert response.status_changes == ()
+    assert result.approval is True
+    assert result.findings[0].status is FindingStatus.OPEN
+    assert result.responsibility_routes == response.responsibility_routes
+
+
+def test_route_does_not_absorb_open_status_with_partial_closure(
+    active_finding_decisions: None,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "Work remains after the measured partial repair.",
+            "closure": {
+                "kind": "partial",
+                "evidence": "The bound evidence covers only part of the defect.",
+                "remaining": "Complete the remaining repair.",
+            },
+        }
+    ]
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("canary-26", 1)
+            ),
+            "rationale": "Branch planning owns the remaining work.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT
+    )
+
+
+def test_seven_original_event_collisions_have_seven_precise_diagnostics(
+    active_finding_decisions: None,
+) -> None:
+    context = _context(
+        previous=(
+            _finding("C-01", AgentRole.CLAUDE),
+            _finding("C-02", AgentRole.CLAUDE),
+        )
+    )
+    base = parse_native_review_response(_review(context, approved=False), context)
+    assert isinstance(base, NativeReviewResult)
+    new_finding = NativeFinding(
+        "C-03",
+        FindingClass.BLOCKER,
+        "A new response-local defect.",
+        NativeProseAcceptance("The response-local defect is repaired."),
+    )
+    status = NativeStatusChange(
+        "C-01", FindingStatus.OPEN, "The existing blocker remains reproducible."
+    )
+    closed_status = NativeStatusChange(
+        "C-01",
+        FindingStatus.CLOSED,
+        "The existing blocker is resolved.",
+        native_finding_decisions.NativeFindingClosure(
+            kind=native_finding_decisions.NativeClosureKind.FIXED
+        ),
+    )
+    reclassification = NativeReclassification(
+        "C-01", FindingClass.OBSERVATION, "The impact is non-blocking."
+    )
+    route = NativeResponsibilityRoute(
+        "C-01",
+        BranchPlanningResponsibility("collision-family", 1),
+        "Branch planning owns the follow-up.",
+    )
+
+    cases: list[
+        tuple[dict[str, object], OrchestratorDiagnostic, tuple[str, ...]]
+    ] = []
+    for mutation, diagnostic, field_names in (
+        (
+            {"new_findings": (new_finding, new_finding)},
+            OrchestratorDiagnostic.REVIEW_FINDING_NEW_DUPLICATE,
+            ("new_findings",),
+        ),
+        (
+            {"status_changes": (status, status)},
+            OrchestratorDiagnostic.REVIEW_FINDING_STATUS_DUPLICATE,
+            ("status_changes",),
+        ),
+        (
+            {"reclassifications": (reclassification, reclassification)},
+            OrchestratorDiagnostic.REVIEW_FINDING_RECLASSIFICATION_DUPLICATE,
+            ("reclassifications",),
+        ),
+        (
+            {"responsibility_routes": (route, route)},
+            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_DUPLICATE,
+            ("responsibility_routes",),
+        ),
+        (
+            {
+                "new_findings": (new_finding,),
+                "reclassifications": (
+                    replace(reclassification, finding_id="C-03"),
+                ),
+            },
+            OrchestratorDiagnostic.REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT,
+            ("new_findings", "reclassifications"),
+        ),
+        (
+            {
+                "status_changes": (status,),
+                "reclassifications": (reclassification,),
+            },
+            OrchestratorDiagnostic.REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT,
+            ("status_changes", "reclassifications"),
+        ),
+        (
+            {
+                "status_changes": (closed_status,),
+                "responsibility_routes": (route,),
+            },
+            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT,
+            ("status_changes", "responsibility_routes"),
+        ),
+    ):
+        cases.append((mutation, diagnostic, field_names))
+
+    seen: set[OrchestratorDiagnostic] = set()
+    for mutation, diagnostic, field_names in cases:
+        with pytest.raises(NativeReviewContractError) as raised:
+            native_response_to_contract_result(replace(base, **mutation), context)
+        error = raised.value
+        assert error.code is NativeReviewErrorCode.FINDING_EVENT_CONFLICT
+        assert error.orchestrator_diagnostic is diagnostic
+        assert "C-" in error.detail
+        assert all(field_name in error.detail for field_name in field_names)
+        assert error.detail != "finding id occurs in more than one event"
+        seen.add(diagnostic)
+
+    assert len(seen) == 7
+
+
+def test_route_reclassification_collision_names_both_fields(
+    active_finding_decisions: None,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["reclassifications"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "rationale": "The finding has lower impact.",
+        }
+    ]
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("collision-family", 1)
+            ),
+            "rationale": "Branch planning owns the follow-up.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT
+    )
+    assert "responsibility_routes" in raised.value.detail
+    assert "reclassifications" in raised.value.detail
+
+
+def test_approval_retry_guidance_labels_existing_and_same_response_findings() -> None:
+    context = _context(
+        previous=(
+            _finding(
+                "C-01",
+                AgentRole.CLAUDE,
+                finding_class=FindingClass.OBSERVATION,
+            ),
+        )
+    )
+    document = _review(context, approved=True)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "OBSERVATION",
+            "summary": "A newly opened observation remains undecided.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Decide the new observation in this response.",
+            },
+            "affected_paths": [],
+        }
+    ]
+    shape = extract_rejected_native_response_shape(document)
+    assert shape is not None
+
+    guidance = native_review_retry_guidance(
+        NativeReviewErrorCode.APPROVAL_INVALID,
+        OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED,
+        context,
+        shape,
+    )
+
+    assert "existing Finding IDs: C-01" in guidance
+    assert "opened in the rejected response: C-02" in guidance
+    assert "status_changes" in guidance
+    assert "status=CLOSED" in guidance
+    assert "responsibility_routes" in guidance
+    assert "opened in new_findings and decided in that same response" in guidance
+
+
 def test_plan_opening_rejects_wrong_responsibility_kind_with_retry_guidance(
     active_finding_decisions: None,
 ) -> None:
@@ -800,10 +1052,14 @@ def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
         parse_native_contract_result(document, context)
 
     assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
-    assert "C-01, C-02" in raised.value.detail
-    assert "close them" in raised.value.detail
-    assert "reject them with named evidence" in raised.value.detail
-    assert "named later Slice or to branch planning" in raised.value.detail
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED
+    )
+    assert "C-01 (opened in this response)" in raised.value.detail
+    assert "C-02 (opened in this response)" in raised.value.detail
+    assert "status_changes" in raised.value.detail
+    assert "responsibility_routes" in raised.value.detail
+    assert "may be decided in the same response" in raised.value.detail
 
 
 def test_slice_approval_accepts_finding_opened_and_closed_in_same_response(

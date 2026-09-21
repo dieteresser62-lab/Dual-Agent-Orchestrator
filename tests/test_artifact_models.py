@@ -578,7 +578,7 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     assert ArtifactRecord.from_dict(document).payload == codex
 
 
-def test_terminal_native_rejection_roundtrips_provider_free_response_shape() -> None:
+def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retry() -> None:
     marker, digest, byte_count = technical_text_evidence("approval-invalid")
     shape = extract_rejected_native_response_shape(
         {
@@ -642,15 +642,24 @@ def test_terminal_native_rejection_roundtrips_provider_free_response_shape() -> 
     ] == "approved"
     assert "provider rationale is discarded" not in json.dumps(document)
     assert ArtifactRecord.from_dict(document).payload == payload
+    transient = replace(
+        payload,
+        failure_class="transient",
+        automatic_resume=True,
+        resume_at_utc="2026-09-21T20:24:02+00:00",
+        retry_delay_seconds=2,
+    )
+    assert ArtifactRecord.from_dict(
+        json.loads(_record(transient).canonical_json())
+    ).payload == transient
     with pytest.raises(
         ArtifactValidationError,
-        match="terminal native response failure",
+        match="typed native response failure",
     ):
         replace(
-            payload,
-            automatic_resume=True,
-            resume_at_utc="2026-09-21T20:24:02+00:00",
-            retry_delay_seconds=2,
+            transient,
+            native_review_rejection=None,
+            native_review_retry_round=None,
         )
 
 

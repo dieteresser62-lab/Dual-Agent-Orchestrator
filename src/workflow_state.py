@@ -540,12 +540,12 @@ class InvocationFailureRecord:
                 raise WorkflowStateValidationError(
                     "invocation failure rejected response shape must be typed"
                 )
-            if self.automatic_resume or (
+            if (
                 self.native_review_rejection is None
                 and self.native_implementer_rejection is None
             ):
                 raise WorkflowStateValidationError(
-                    "rejected response shape requires a terminal native response failure"
+                    "rejected response shape requires a typed native response failure"
                 )
 
     def to_dict(self) -> dict[str, object]:

@@ -3272,14 +3272,11 @@ def _validate_native_response_failure_feedback(
                 "invocation failure rejected response shape must be typed"
             )
         if (
-            payload.automatic_resume
-            or (
-                payload.native_review_rejection is None
-                and payload.native_implementer_rejection is None
-            )
+            payload.native_review_rejection is None
+            and payload.native_implementer_rejection is None
         ):
             raise ArtifactValidationError(
-                "rejected response shape requires a terminal native response failure"
+                "rejected response shape requires a typed native response failure"
             )
 
 

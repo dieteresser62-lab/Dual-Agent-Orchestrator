@@ -29,6 +29,10 @@ def test_claude_policy_announces_the_slice_commit_decision_duty() -> None:
     assert "reject it with named evidence" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "route it to a named later Slice" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "slice_commit_decision_finding_ids" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "only the request-time part" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "opened and decided in that same response" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "route already implies" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "do not add a confirming status_changes entry" in NATIVE_CLAUDE_SYSTEM_POLICY
 
 
 def test_claude_policy_names_each_review_opening_responsibility_kind() -> None:

@@ -422,7 +422,10 @@ def _native_review_retry_feedback(
         prior_invocation_id=failure.invocation_id,
         rejection_code=code,
         correction_instruction=native_review_retry_guidance(
-            code, diagnostic, native_context
+            code,
+            diagnostic,
+            native_context,
+            failure.rejected_response_shape,
         ),
     )
 

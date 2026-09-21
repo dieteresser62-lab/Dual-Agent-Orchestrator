@@ -630,8 +630,38 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTENT_EVENT_OR_EVIDENCE_REQUIRED = (
         "review-content-missing: review requires at least one finding event or review evidence"
     )
-    REVIEW_FINDING_EVENT_UNIQUE = (
-        "finding-event-conflict: finding id occurs in more than one event"
+    REVIEW_FINDING_NEW_DUPLICATE = (
+        "finding-event-conflict: duplicate finding_id in new_findings; keep exactly "
+        "one new_findings entry per Finding ID"
+    )
+    REVIEW_FINDING_STATUS_DUPLICATE = (
+        "finding-event-conflict: duplicate finding_id in status_changes; keep exactly "
+        "one status_changes entry per Finding ID"
+    )
+    REVIEW_FINDING_RECLASSIFICATION_DUPLICATE = (
+        "finding-event-conflict: duplicate finding_id in reclassifications; keep "
+        "exactly one reclassifications entry per Finding ID"
+    )
+    REVIEW_FINDING_ROUTE_DUPLICATE = (
+        "finding-event-conflict: duplicate finding_id in responsibility_routes; keep "
+        "exactly one responsibility_routes entry per Finding ID"
+    )
+    REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT = (
+        "finding-event-conflict: one Finding ID occurs in new_findings and "
+        "reclassifications; set the intended class in new_findings only"
+    )
+    REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT = (
+        "finding-event-conflict: one Finding ID occurs in status_changes and "
+        "reclassifications; use only one of those decision fields per response"
+    )
+    REVIEW_FINDING_ROUTE_STATUS_CONFLICT = (
+        "finding-event-conflict: one Finding ID occurs in responsibility_routes and "
+        "status_changes with a non-redundant status decision; use responsibility_routes "
+        "alone to keep it OPEN and transfer responsibility, or status_changes alone"
+    )
+    REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT = (
+        "finding-event-conflict: one Finding ID occurs in responsibility_routes and "
+        "reclassifications; use only one of those decision fields per response"
     )
     REVIEW_FINDING_ID_REUSE_FORBIDDEN = (
         "finding-event-conflict: new finding reuses a previous finding id"
@@ -705,6 +735,10 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_APPROVAL_OPEN_BLOCKER_FORBIDDEN = (
         "approval-invalid: approval is invalid while an own BLOCKER is open"
+    )
+    REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED = (
+        "approval-invalid: approved Slice review leaves Findings opened in this response "
+        "without a same-response closure, evidenced rejection, or responsibility route"
     )
 
     @property

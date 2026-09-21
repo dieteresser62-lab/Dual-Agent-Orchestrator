@@ -4953,7 +4953,12 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
     ]
     assert [
         item.rejected_response_shape is None for item in driver.failure_payloads
-    ] == [True, True, False]
+    ] == [False, False, False]
+    assert all(
+        item.rejected_response_shape is not None
+        and item.rejected_response_shape.release_decision == "ready"
+        for item in driver.failure_payloads
+    )
     implementer_shape = driver.failure_payloads[-1].rejected_response_shape
     assert implementer_shape is not None
     assert implementer_shape.release_decision == "ready"
@@ -5192,10 +5197,30 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     now = datetime(2026, 9, 20, 16, 30, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)
     detail = (
-        "approval leaves open findings assigned to the current Slice: C-01; "
-        "close them, reject them with named evidence, or route them to a named "
-        "later Slice or to branch planning"
+        "approval leaves open findings assigned to the current Slice: "
+        "C-01 (opened in this response)"
     )
+    rejected_document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "review_result",
+        "request_id": "native-review-request-" + "a" * 64,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [
+            {
+                "finding_id": "C-01",
+                "finding_class": "OBSERVATION",
+                "summary": "provider summary must not survive",
+            }
+        ],
+        "status_changes": [],
+        "reclassifications": [],
+        "responsibility_routes": [],
+        "plan_treatment_decisions": [],
+        "anchors": [],
+        "review_evidence": {},
+        "pre_mortem": "provider pre-mortem must not survive",
+    }
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
@@ -5206,6 +5231,10 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
                 "review-open-finding-without-decision",
                 received_at=now,
                 detail=detail,
+                diagnostic=(
+                    OrchestratorDiagnostic.REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED
+                ),
+                provider_data=rejected_document,
             ),
             None,
         ],
@@ -5219,15 +5248,19 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     assert len(driver.reviewer_calls) == 2
     retry = driver.reviewer_calls[1].native_request
     assert retry is not None
-    assert retry.document["retry_feedback"] == {
-        "prior_invocation_id": "review-open-finding-without-decision",
-        "rejection_code": "approval-invalid",
-        "correction_instruction": (
-            "For every Finding ID named by the rejection, close it, reject it "
-            "with named evidence, or route it to a named later Slice or to "
-            "branch planning."
-        ),
-    }
+    feedback = retry.document["retry_feedback"]
+    assert feedback["prior_invocation_id"] == (
+        "review-open-finding-without-decision"
+    )
+    assert feedback["rejection_code"] == "approval-invalid"
+    instruction = feedback["correction_instruction"]
+    assert "opened in the rejected response: C-01" in instruction
+    assert "status_changes" in instruction
+    assert "status=CLOSED" in instruction
+    assert "responsibility_routes" in instruction
+    assert "opened in new_findings and decided in that same response" in instruction
+    assert driver.failure_payloads[0].rejected_response_shape is not None
+    assert "provider summary must not survive" not in json.dumps(feedback)
     assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
     assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
 
@@ -5467,7 +5500,12 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
     ]
     assert [
         item.rejected_response_shape is None for item in driver.failure_payloads
-    ] == [True, True, False]
+    ] == [False, False, False]
+    assert all(
+        item.rejected_response_shape is not None
+        and item.rejected_response_shape.release_decision == "approved"
+        for item in driver.failure_payloads
+    )
     review_shape = driver.failure_payloads[-1].rejected_response_shape
     assert review_shape is not None
     assert review_shape.release_decision == "approved"
@@ -5482,6 +5520,10 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
         result.state.current_work_unit.invocation_failures[-1]
         .rejected_response_shape
         == review_shape
+    )
+    assert all(
+        item.rejected_response_shape is not None
+        for item in result.state.current_work_unit.invocation_failures
     )
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert result.state.current_work_unit.gate.resume_step is WorkflowStep.CLAUDE_SLICE_REVIEW
