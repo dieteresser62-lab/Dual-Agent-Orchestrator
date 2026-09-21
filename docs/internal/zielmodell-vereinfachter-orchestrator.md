@@ -237,25 +237,52 @@ Zu ändern ist ihre Verbindlichkeit. Heute gilt laut `CLAUDE.md`:
 Künftig muss der Implementierer **jedes** offene Finding disponieren, und der
 Reviewer muss auf jede Ablehnung antworten: schließen oder eskalieren.
 
-## Offene Fragen
+## Was der Reviewer jeweils liest
 
-1. **Das Schweigen — jetzt der einzige verbliebene Fluchtweg.** Punkt 105 hat gezeigt: unter Wiederholungsdruck nennt
-   ein Reviewer einen Befund im nächsten Versuch einfach nicht mehr. Die
-   Eskalationsregel deckt den Fall nicht ab, denn sie greift erst, wenn ein
-   Finding genannt ist. Ein zurückgezogenes Finding eskaliert nie.
+| Review | Umfang | Mechanismus heute |
+|---|---|---|
+| Planreview | Plandokument | packetlos |
+| **Slicereview** | **nur die geänderten Bereiche** | `ReviewPacket`, manifestgewählt |
+| **Abnahmereview** | **der gesamte Code** | packetloser Git-Schnappschuss |
 
-   Mit dem Wegfall der Slicegrenzen-Ausnahme ist das die **einzige** Tür, die
-   noch aus einem unbequemen Befund herausführt. Sie war vorher eine von
-   zweien; jetzt trägt sie den ganzen Druck. Punkt 105 steigt damit von
-   Beobachtung auf vordringlich.
+Beides ist bereits so umgesetzt. `agent_runtime.py` `_review_snapshot_paths`
+liest für einen packetlosen Review den vollen Arbeitsbaum über
+`git ls-files --cached --others --exclude-standard`.
 
-2. **Der Abnahmereview ohne eigenen Lauf.** Er braucht den vollen Branchstand,
-   nicht nur den letzten Slice. Als Schritt innerhalb des Laufs ist das
-   möglich; zu klären ist, woher er seinen Vergleichsstand nimmt.
+Der Abnahmereview ist damit das Netz unter den Slicereviews: Was ein
+Slicereview übersieht oder unter Wiederholungsdruck fallenlässt, wird dort
+gefunden.
 
-3. **Bestehende Ketten.** Die Reducerversion wechselt. 41 archivierte
-   Canary-Läufe bleiben lesbar, aber nicht fortsetzbar. Das ist nach der
-   geltenden Regel zulässig und hier ohne Folgen.
+## Verworfene Reviewergebnisse binden nicht
+
+Ein Reviewlauf, der nicht korrekt endet, wird verworfen — samt allem, was er
+gefunden oder nicht gefunden hat. Aus einer ungültigen Antwort entsteht keine
+Pflicht.
+
+Damit ist auch die Frage nach dem „Schweigen" beantwortet, die vorher hier
+stand: Ein Finding aus einem verworfenen Versuch zur Pflicht zu machen, hieße
+einem ungültigen Ergebnis Autorität zu geben. Der Schutz liegt eine Ebene
+tiefer, im Abnahmereview über den gesamten Code.
+
+## Offene Frage: der Bindungsanker des Abnahmereviews
+
+`branch_review_base_commit` steuert nicht, *was* gelesen wird, sondern woran
+das Ergebnis **gebunden** wird — `workflow_validation_evidence.py:40` prüft,
+dass der Änderungsfingerprint zu genau diesem Ausgangspunkt gehört. Heute
+liefert ihn die Familienbindung als Familienbasis-Commit.
+
+Ohne Familienbindung bliebe der Branchbasis-Commit des jeweiligen Laufs. Der
+Abnahmereview der zweiten Runde läse dann alles, bezeugte aber nur die
+Änderungen seit Runde 1. Gelesen und bezeugt wären nicht dasselbe.
+
+**Vorschlag:** der Abzweigpunkt der Zielbranch vom Hauptstrang,
+`git merge-base master <zielbranch>`. Über alle Runden stabil, jederzeit aus
+git ableitbar, kein laufübergreifender Zustand. Die Infrastruktur dafür
+existiert — `merge-base` wird in `git_service.py` bereits verwendet, und
+`RepositoryChanges` trägt ein Feld `merge_base`.
+
+Damit entfällt auch `family_base_commit`, eines der drei Felder der
+Familienbindung, ersatzlos.
 
 ## Vorgehen
 
