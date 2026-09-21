@@ -264,6 +264,43 @@ stand: Ein Finding aus einem verworfenen Versuch zur Pflicht zu machen, hieße
 einem ungültigen Ergebnis Autorität zu geben. Der Schutz liegt eine Ebene
 tiefer, im Abnahmereview über den gesamten Code.
 
+## Terminierung
+
+Zwei unabhängige Grenzen, beide als Parameter mit Vorgabewert **6**:
+
+| Grenze | Wirkung bei Erreichen |
+|---|---|
+| Runden je Planungs- bzw. Slice-Schleife | Schleife endet negativ, kein Commit |
+| Zyklen Abnahmereview → neue Runde | kein weiterer Zyklus |
+
+Dazu bleibt die **Konvergenzregel** erhalten, in vereinfachter Form: Der erste
+Review entdeckt; jeder weitere abgelehnte Review muss einen bereits bekannten
+Befund schließen oder eine fingerprintändernde Behebung belegen. Eine Runde
+ohne Fortschritt endet negativ, ohne Commit.
+
+Der „weiterreichen"-Teil der heutigen Regel entfällt mit dem Routing. Übrig
+bleibt: *schließe etwas Bekanntes oder belege eine Änderung.*
+
+Damit ist die Terminierung doppelt gesichert — durch Fortschrittspflicht je
+Runde und durch eine harte Obergrenze.
+
+## Symmetrie zwischen Planung und Implementierung
+
+Die Eskalationsregel gilt in **beiden** Phasen. Der Planer darf ein Finding
+ablehnen wie der Implementierer; schließt der Reviewer es nicht, wird es ein
+Blocker.
+
+Zwei verschiedene Verfahren für dieselbe Sache wären genau die Bauart, die
+diesem Projekt wiederholt geschadet hat.
+
+## Start der nächsten Runde
+
+Der Orchestrator legt das neue Arbeitsdokument in die Inbox, und der Wachmodus
+nimmt es auf. Die nächste Runde startet damit **unbeaufsichtigt**.
+
+Das ist als Parameter einstellbar, Vorgabewert **ja** — Voraussetzung dafür,
+dass ein Lauf über Nacht durchläuft. Wer die Vorlage will, schaltet ab.
+
 ## Offene Frage: der Bindungsanker des Abnahmereviews
 
 `branch_review_base_commit` steuert nicht, *was* gelesen wird, sondern woran
@@ -286,7 +323,21 @@ Familienbindung, ersatzlos.
 
 ## Vorgehen
 
-Bevor Code angefasst wird, das Erreichbarkeitsmodell aus B184 gegen **dieses**
-Modell als Referenz bauen. Es prüft dann nicht nur, ob die Regeln zueinander
-passen, sondern ob sie diesen Fluss zulassen — und meldet Abweichungen in
-beide Richtungen.
+**Der Orchestrator wird während des Umbaus nicht genutzt.** Der Operator hat
+das am 21.9.2026 festgelegt.
+
+Das hebt die Nebenbedingung auf, die einen Umbau dieser Größe sonst teuer
+macht: Es muss **kein** Zwischenstand lauffähig sein. Kein schrittweises
+Umstellen mit Doppelpfaden, keine Schalter, kein Parallelbetrieb von altem und
+neuem Verhalten — also nichts von dem, was beim letzten Cutover die halbe
+Arbeit ausgemacht hat.
+
+Daraus folgt für die Reihenfolge:
+
+1. Das Erreichbarkeitsmodell gegen dieses Zielmodell als Referenz bauen. Es
+   ist providerfrei und braucht keinen lauffähigen Orchestrator.
+2. Die Streichung in einem Zug, nicht in Etappen: entfallende Maschinerie
+   entfernen, verbleibende Regeln zusammenziehen.
+3. Die Testmatrix wieder grün ziehen. Sie ist der Ersatz für den Canary,
+   solange der Orchestrator steht.
+4. Erst danach wieder ein Canary-Lauf.
