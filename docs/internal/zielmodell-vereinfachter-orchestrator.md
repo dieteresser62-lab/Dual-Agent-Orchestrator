@@ -266,6 +266,25 @@ tiefer, im Abnahmereview über den gesamten Code.
 
 ## Terminierung
 
+### Was eine Runde ist
+
+**Eine Runde umfasst Implementierer und Reviewer** — einen Durchlauf durch das
+Paar.
+
+```
+Runde 1   Implementierer setzt um   →  Reviewer prüft
+Runde 2   Implementierer korrigiert →  Reviewer prüft
+...
+```
+
+In der Planungsphase entsprechend: eine Runde ist Planer plus Reviewer.
+
+Die Grenze von 6 gilt **je Schleife**, also je Slice und je Planungsphase
+getrennt — nicht über alle Slices zusammengezählt.
+
+Der Abnahmezyklus zählt anders: dort ist eine Einheit ein **vollständiger
+Durchlauf** von Planung über alle Slices bis zum Abnahmereview.
+
 Zwei unabhängige Grenzen, beide als Parameter mit Vorgabewert **6**:
 
 | Grenze | Wirkung bei Erreichen |
