@@ -42,10 +42,42 @@ zum Implementierer.
 - **Findings** entscheidet der Implementierer: umsetzen oder ablehnen, mit
   Begründung.
 
-Die Eskalation schließt die Lücke:
+### Die Züge
 
-> Setzt der Implementierer ein Finding nicht um und schließt der Reviewer es
-> nicht, **wird es ein Blocker**.
+Der Reviewer hat je Finding genau **zwei** Züge:
+
+1. **schließen** — weil es umgesetzt wurde, oder weil er die Ablehnung des
+   Implementierers annimmt,
+2. **zum Blocker machen**.
+
+Offenlassen ist kein dritter Zug. Will der Reviewer ein Finding offen halten,
+**ist** das die Eskalation zum Blocker.
+
+Der Implementierer hat je Finding zwei Züge — umsetzen oder ablehnen — und
+bei einem Blocker keinen: er muss ihn beheben.
+
+```
+                     ┌─────────────┐
+   Reviewer öffnet ──┤   FINDING   │
+                     └──────┬──────┘
+                            │  Implementierer
+               ┌────────────┴────────────┐
+          umgesetzt                 abgelehnt
+               │                         │
+               ▼                         ▼
+         Reviewer prüft          Reviewer entscheidet
+               │                    ┌────┴─────┐
+        ┌──────┴──────┐        schließt    eskaliert
+   geschlossen    eskaliert        │           │
+                     │             ▼           │
+                     └────────► BLOCKER ◄──────┘
+                                   │  Implementierer muss beheben
+                                   ▼
+                             Reviewer prüft
+                                   │
+                            ┌──────┴──────┐
+                      geschlossen    bleibt BLOCKER
+```
 
 Damit endet jedes Finding binär. Es gibt keine Findings minderer Qualität und
 keine, die unentschieden liegenbleiben. Am Ende eines Slices ist jeder Befund
@@ -87,6 +119,19 @@ Reviewer prüft das Ganze
 Der einzige Übergabeweg zwischen Runden ist eine **Datei in der Inbox** —
 derselbe Weg, den auch ein Mensch benutzt.
 
+## Die Commitbedingung
+
+Nach jeder Reviewrunde ist per Konstruktion **kein Finding unentschieden** —
+der Reviewer hat nur schließen oder eskalieren. Damit reduziert sich die
+Bedingung für den Slice-Commit auf eine einzige:
+
+> **Es gibt keinen offenen Blocker.**
+
+Heute prüft `slice_exit.py` dafür sechs Bedingungen auf 664 Zeilen. Die
+Prüfungen „kein unentschiedenes Finding" und „kein Finding, das noch dem
+aktuellen Slice gehört" entfallen, weil beide Zustände nicht mehr entstehen
+können.
+
 ## Was dadurch entfällt
 
 Gemessen am Stand `2e1e9a5`:
@@ -101,6 +146,8 @@ Gemessen am Stand `2e1e9a5`:
 | `remediation_round` | 51 | keine Rundenzählung über Läufe |
 | `branch_planning` | 17 | kein Routingziel mehr |
 | `OBSERVATION` | 20 | ersetzt durch die Eskalationsregel |
+| `responsibilit*` | 490 | ohne Übergabe gibt es nichts zu verantworten |
+| `responsibility_routes` | 70 | Feld entfällt aus dem Reviewvertrag |
 
 Dateien, die es überwiegend wegen dieser Maschinerie gibt:
 
