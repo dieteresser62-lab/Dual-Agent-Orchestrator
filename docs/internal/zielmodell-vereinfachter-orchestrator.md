@@ -373,7 +373,7 @@ nimmt es auf. Die nächste Runde startet damit **unbeaufsichtigt**.
 Das ist als Parameter einstellbar, Vorgabewert **ja** — Voraussetzung dafür,
 dass ein Lauf über Nacht durchläuft. Wer die Vorlage will, schaltet ab.
 
-## Offene Frage: der Bindungsanker des Abnahmereviews
+## Der Bindungsanker des Abnahmereviews
 
 `branch_review_base_commit` steuert nicht, *was* gelesen wird, sondern woran
 das Ergebnis **gebunden** wird — `workflow_validation_evidence.py:40` prüft,
@@ -384,14 +384,16 @@ Ohne Familienbindung bliebe der Branchbasis-Commit des jeweiligen Laufs. Der
 Abnahmereview der zweiten Runde läse dann alles, bezeugte aber nur die
 Änderungen seit Runde 1. Gelesen und bezeugt wären nicht dasselbe.
 
-**Vorschlag:** der Abzweigpunkt der Zielbranch vom Hauptstrang,
-`git merge-base master <zielbranch>`. Über alle Runden stabil, jederzeit aus
+**Festgelegt vom Operator am 21.9.2026:** der Abzweigpunkt der Zielbranch vom
+Hauptstrang, `git merge-base master <zielbranch>`. Über alle Runden stabil, jederzeit aus
 git ableitbar, kein laufübergreifender Zustand. Die Infrastruktur dafür
 existiert — `merge-base` wird in `git_service.py` bereits verwendet, und
 `RepositoryChanges` trägt ein Feld `merge_base`.
 
 Damit entfällt auch `family_base_commit`, eines der drei Felder der
 Familienbindung, ersatzlos.
+
+**Das Konzept hat damit keine offene Frage mehr.**
 
 ## Vorgehen
 
