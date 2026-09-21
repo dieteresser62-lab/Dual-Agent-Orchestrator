@@ -1,0 +1,207 @@
+{
+  "schema": "target-model-deviation-ratchet-v1",
+  "target_model": "docs/internal/zielmodell-vereinfachter-orchestrator.md",
+  "target_model_commit": "2f76f7f",
+  "situation_count": 43,
+  "move_evaluation_count": 473,
+  "skipped": [
+    {
+      "lage": "planung.blocker.stop.contract-unclear",
+      "grund": "Stop ends before review contract and record decision"
+    },
+    {
+      "lage": "planung.blocker.stop.operator-prerequisite-missing",
+      "grund": "Stop ends before review contract and record decision"
+    },
+    {
+      "lage": "planung.blocker.stop.scope-extension-requested",
+      "grund": "Stop ends before review contract and record decision"
+    },
+    {
+      "lage": "implementierung.blocker.stop.contract-unclear",
+      "grund": "Stop ends before review contract and record decision"
+    },
+    {
+      "lage": "implementierung.blocker.stop.operator-prerequisite-missing",
+      "grund": "Stop ends before review contract and record decision"
+    },
+    {
+      "lage": "implementierung.blocker.stop.scope-extension-requested",
+      "grund": "Stop ends before review contract and record decision"
+    }
+  ],
+  "known_exclusion": {
+    "finding": "103",
+    "reason": "Ein in derselben Antwort geoeffnetes Finding ist eine Mitteilungsluecke, keine Erreichbarkeitsluecke."
+  },
+  "abweichungen": [
+    {
+      "id": "automatic-rejection-escalation",
+      "klasse": "FEHLEND",
+      "lage": "implementierung.finding.review.rejection_invalid.first_review",
+      "zug": "ZUM-BLOCKER-MACHEN",
+      "istzustand": "Vertrag: NativeReviewContractError: approval-invalid: denied review requires an open own BLOCKER; Recordschicht: record reduction accepted bytes but missed the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/finding_reducer.py"
+      ]
+    },
+    {
+      "id": "mandatory-implementer-disposition",
+      "klasse": "FEHLEND",
+      "lage": "implementierung.finding.implementer",
+      "zug": "JEDES-FINDING-DISPONIEREN",
+      "istzustand": "Vertrag: native Codex domain path accepts an omitted disposition; Recordschicht: no response transition is emitted",
+      "codestellen": [
+        "src/native_codex_contract.py",
+        "src/finding_reducer.py"
+      ]
+    },
+    {
+      "id": "acceptance-cycle-beyond-six",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "abnahme.findings.cycle-limit",
+      "zug": "ACCEPTANCE-CYCLE-7",
+      "istzustand": "Vertrag: installed absolute remediation limit is 64; Recordschicht: the persisted planning payload accepts the same installed limit",
+      "codestellen": [
+        "src/native_finding_decisions.py",
+        "src/finding_planning.py"
+      ]
+    },
+    {
+      "id": "blocker-rejection",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.blocker.implementer",
+      "zug": "ABLEHNEN",
+      "istzustand": "Vertrag: native Codex domain path accepts REJECTED for a BLOCKER; Recordschicht: Finding response records accept the rejection",
+      "codestellen": [
+        "src/native_codex_contract.py",
+        "src/finding_reducer.py"
+      ]
+    },
+    {
+      "id": "branch-planning-route",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.finding.review.rejection_invalid.first_review",
+      "zug": "BRANCH_PLANNING",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/finding_responsibility.py",
+        "src/finding_reducer.py"
+      ]
+    },
+    {
+      "id": "correction-review-baseline",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.blocker.review.unresolved.fingerprint_changed",
+      "zug": "KORREKTURDELTA-ALS-AUSGANGSSTAND",
+      "istzustand": "Vertrag: review context selected prior-review fingerprint bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; Recordschicht: the request binding persists that selected fingerprint",
+      "codestellen": [
+        "src/workflow_recovery.py",
+        "src/workflow_requests.py",
+        "src/workflow.py"
+      ]
+    },
+    {
+      "id": "later-slice-route",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.finding.review.rejection_invalid.first_review",
+      "zug": "ROUTE-ZU-SPAETEREM-SLICE",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/slice_exit.py"
+      ]
+    },
+    {
+      "id": "loop-round-seven",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "planung.blocker.review.unresolved.round-limit",
+      "zug": "RUNDE-7",
+      "istzustand": "Vertrag: WorkflowState advances to round 7; Recordschicht: state projection retains the continuing work unit",
+      "codestellen": [
+        "src/workflow_state.py"
+      ]
+    },
+    {
+      "id": "observation-class",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.finding.review.fixed.first_review",
+      "zug": "OBSERVATION",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/contracts.py",
+        "src/native_review_contract.py"
+      ]
+    },
+    {
+      "id": "open-plan-finding-handoff",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "planung.clean",
+      "zug": "OFFENEN-PLANBEFUND-UEBERGEBEN",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/native_finding_decisions.py",
+        "src/plan_handoff.py"
+      ]
+    },
+    {
+      "id": "partial-closure",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.blocker.review.unresolved.first_review",
+      "zug": "PARTIAL",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/artifact_models.py"
+      ]
+    },
+    {
+      "id": "route-plus-confirming-open",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.finding.review.rejection_invalid.first_review",
+      "zug": "ROUTE+OPEN",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/workflow_persistence.py"
+      ]
+    },
+    {
+      "id": "separate-branch-discovery-run",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "abnahme.findings.restart",
+      "zug": "BRANCH_DISCOVERY-LAUF",
+      "istzustand": "Vertrag: workflow initializer creates a dedicated discovery work unit; Recordschicht: state projection persists that work-unit kind",
+      "codestellen": [
+        "src/workflow_state.py",
+        "src/workflow.py"
+      ]
+    },
+    {
+      "id": "six-part-slice-exit",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.clean",
+      "zug": "SECHS-COMMITBEDINGUNGEN",
+      "istzustand": "Vertrag: evaluate_slice_exit returned conditions (1, 2, 3, 4, 5, 6); Recordschicht: the same record projection supplies all six conditions",
+      "codestellen": [
+        "src/slice_exit.py",
+        "src/finding_reducer.py"
+      ]
+    },
+    {
+      "id": "typed-acceptance-command",
+      "klasse": "UEBERZAEHLIG",
+      "lage": "implementierung.blocker.review.unresolved.first_review",
+      "zug": "TYPISIERTER-ABNAHMEBEFEHL",
+      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
+      "codestellen": [
+        "src/native_review_contract.py",
+        "src/validation_matrix.py",
+        "src/finding_reducer.py"
+      ]
+    }
+  ]
+}
