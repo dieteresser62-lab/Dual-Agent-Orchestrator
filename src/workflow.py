@@ -4288,14 +4288,6 @@ class WorkflowEngine:
                 return None
         else:
             additions = requested.difference(state.current_slice.scope_paths)
-            family_binding = state.active_family_binding
-            if (
-                family_binding is not None
-                and not requested.issubset(
-                    family_binding.family_authorized_change_set
-                )
-            ):
-                return None
             later_owned_paths = {
                 path
                 for planned in state.planned_slices
@@ -4333,7 +4325,7 @@ class WorkflowEngine:
             classify_path(path, context.path_classes) for path in additions
         )
         return ApprovedScopeExtension(
-            state.extend_current_slice_scope(additions),
+            state.approve_current_slice_scope_extension(additions),
             classified,
         )
 

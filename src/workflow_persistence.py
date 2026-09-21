@@ -61,11 +61,13 @@ from artifact_models import (
     WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    extend_family_authorized_change_set,
     stable_record_id,
 )
 from artifact_replay import (
     ReplayedWorkflowCursor,
     ReplayedWorkUnitState,
+    effective_family_binding,
     replay_artifacts,
 )
 from contracts import (
@@ -620,6 +622,17 @@ class WorkflowPersistence:
         if set(added_paths) != set(current_slice.scope_paths).difference(prior_paths):
             raise WorkflowExecutionError(
                 "scope extension record differs from the boundary additions"
+            )
+        prior_family_binding = effective_family_binding(replay)
+        if prior_family_binding is None:
+            raise WorkflowExecutionError(
+                "scope extension requires a run-bound family identity"
+            )
+        if state.active_family_binding != extend_family_authorized_change_set(
+            prior_family_binding, added_paths
+        ):
+            raise WorkflowExecutionError(
+                "scope extension state differs from the record-approved family growth"
             )
         source = next(
             (

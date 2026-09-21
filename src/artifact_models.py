@@ -53,6 +53,9 @@ from rejected_response_shape import (
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-family-from-entry-v1"
+)
+PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1"
 )
 PRE_SCOPE_EXTENSION_REDUCER_VERSION = (
@@ -291,6 +294,40 @@ def family_binding_document(binding: FamilyBindingPayload) -> dict[str, Any]:
     if not isinstance(binding, FamilyBindingPayload):
         raise ArtifactValidationError("family binding is invalid")
     return _json_value(asdict(binding))
+
+
+def initial_family_id(run_id: str, family_base_commit: str) -> str:
+    """Derive the stable identity of a family created by its entry run."""
+
+    _require_identifier(run_id, "run_id")
+    _require_git_sha(family_base_commit, "family_base_commit")
+    digest = hashlib.sha256(
+        f"{run_id}:{family_base_commit}".encode("utf-8")
+    ).hexdigest()
+    return f"family-{digest[:32]}"
+
+
+def extend_family_authorized_change_set(
+    binding: FamilyBindingPayload,
+    approved_paths: Sequence[str],
+) -> FamilyBindingPayload:
+    """Project record-approved paths into the cumulative family allowlist."""
+
+    if not isinstance(binding, FamilyBindingPayload):
+        raise ArtifactValidationError("family binding is invalid")
+    _require_paths(approved_paths, allow_empty=True)
+    return FamilyBindingPayload(
+        family_id=binding.family_id,
+        family_base_commit=binding.family_base_commit,
+        family_authorized_change_set=tuple(
+            sorted({*binding.family_authorized_change_set, *approved_paths})
+        ),
+        predecessor_run_id=binding.predecessor_run_id,
+        predecessor_head_record_id=binding.predecessor_head_record_id,
+        cycle_number=binding.cycle_number,
+        current_plan_commit=binding.current_plan_commit,
+        current_implementation_commit=binding.current_implementation_commit,
+    )
 
 
 @dataclass(frozen=True, slots=True)

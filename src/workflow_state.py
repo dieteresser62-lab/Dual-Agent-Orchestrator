@@ -11,6 +11,7 @@ from acceptance_criteria import acceptance_criteria_from_documents
 from artifact_models import (
     ArtifactValidationError,
     FamilyBindingPayload,
+    extend_family_authorized_change_set,
     family_binding_document,
 )
 from contracts import PlannedSlice
@@ -2038,6 +2039,67 @@ class WorkflowState:
         return replace(
             self,
             slices=slices,
+            updated_at=updated_at or _now_iso(),
+        )
+
+    def approve_current_slice_scope_extension(
+        self,
+        additions: tuple[str, ...],
+        *,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Atomically widen the Slice and its record-backed family allowlist."""
+
+        binding = self.active_family_binding
+        if binding is None:
+            raise WorkflowStateValidationError(
+                "approved scope extension requires a run-bound family identity"
+            )
+        normalized_additions = _normalize_scope_paths(additions)
+        current = self.current_work_unit
+        current_slice = self.current_slice
+        if (
+            current.kind is not WorkUnitKind.SLICE
+            or current.status is not WorkUnitStatus.IN_PROGRESS
+            or current_slice.status is not SliceStatus.IN_PROGRESS
+        ):
+            raise WorkflowStateValidationError(
+                "only an in-progress regular Slice can extend its remediation scope"
+            )
+        if not current_slice.scope_paths or current_slice.start_fingerprint is None:
+            raise WorkflowStateValidationError(
+                "remediation scope extension requires a persisted Git boundary"
+            )
+        if set(normalized_additions).intersection(current_slice.scope_paths):
+            raise WorkflowStateValidationError(
+                "remediation additions must not repeat current Slice paths"
+            )
+        expanded_scope = tuple(
+            sorted({*current_slice.scope_paths, *normalized_additions})
+        )
+        expanded_groups = tuple(
+            sorted(
+                {
+                    *current_slice.scope_change_groups,
+                    *((path,) for path in normalized_additions),
+                }
+            )
+        )
+        expanded_slice = replace(
+            current_slice,
+            scope_paths=expanded_scope,
+            scope_change_groups=expanded_groups,
+        )
+        slices = tuple(
+            expanded_slice if item.slice_id == current_slice.slice_id else item
+            for item in self.slices
+        )
+        return replace(
+            self,
+            slices=slices,
+            family_binding=extend_family_authorized_change_set(
+                binding, normalized_additions
+            ),
             updated_at=updated_at or _now_iso(),
         )
 

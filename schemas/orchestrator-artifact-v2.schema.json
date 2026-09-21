@@ -129,7 +129,7 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1"},
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-family-from-entry-v1"},
         "family_binding": {"$ref": "#/$defs/family_binding"}
       }
     },
@@ -682,6 +682,7 @@
             "context-invalid: plan_artifact_path must be one exact repository-relative Markdown path",
             "context-invalid: planned slice ids must be contiguous and 1-based",
             "context-invalid: planned slices must contain only typed PlannedSlice values",
+            "context-invalid: branch_planning_target must be a typed BRANCH_PLANNING responsibility",
             "context-invalid: pre_change_fingerprint must be lowercase SHA-256",
             "context-invalid: previous findings must be sorted and unique",
             "context-invalid: provider schema projection requires NativeCo\u0064exContext",
@@ -696,6 +697,7 @@
             "context-invalid: validation command prefixes must be unique safe argv prefixes",
             "dormant-finding-decision-field: native implementer output must not use dormant finding decision fields",
             "dormant-finding-decision-field: native review output must not use dormant finding decision fields",
+            "finding-content-invalid: BRANCH_PLANNING responsibility does not match the run-bound family identity; close or evidentially reject the Finding, or route it to a valid named later Slice",
             "finding-content-invalid: closed Finding occurrence carries another evidence anchor",
             "finding-content-invalid: implementation treatment cannot close its Finding in plan review",
             "finding-content-invalid: native review finding content must satisfy its closed contract",

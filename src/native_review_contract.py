@@ -601,6 +601,7 @@ class NativeReviewContext:
     max_new_findings: int | None = None
     implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
     planned_slices: tuple[PlannedSlice, ...] = ()
+    branch_planning_target: BranchPlanningResponsibility | None = None
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
     closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
     pre_change_fingerprint: str | None = None
@@ -736,6 +737,7 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "planned slices must contain only typed PlannedSlice values",
             )
+        _validate_branch_planning_target(self.branch_planning_target)
         planned_ids = tuple(item.slice_id for item in self.planned_slices)
         if planned_ids and planned_ids != tuple(range(1, len(planned_ids) + 1)):
             raise NativeReviewContractError(
@@ -820,6 +822,21 @@ class NativeReviewContext:
             separators=(",", ":"),
         ).encode("utf-8")
         return "native-review-request-" + hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_branch_planning_target(
+    target: BranchPlanningResponsibility | None,
+) -> None:
+    if target is not None and not isinstance(
+        target, BranchPlanningResponsibility
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED.detail,
+            orchestrator_diagnostic=(
+                OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED
+            ),
+        )
 
 
 def _validate_implementer_responsibility_proposals(
@@ -2691,6 +2708,7 @@ def _validate_response_events(
     new_ids, status_ids, class_ids, route_ids = (
         _validate_finding_event_collisions(response)
     )
+    _validate_branch_planning_route_identities(response, context)
     if any(finding_id in previous for finding_id in new_ids):
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
@@ -2911,6 +2929,27 @@ def _validate_opening_responsibility_kinds(
                 orchestrator_diagnostic=(
                     OrchestratorDiagnostic.REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID
                 ),
+            )
+
+
+def _validate_branch_planning_route_identities(
+    response: NativeReviewResult,
+    context: NativeReviewContext,
+) -> None:
+    """Reject a route that the record reducer would reject at point 67."""
+
+    expected = context.branch_planning_target
+    for route in response.responsibility_routes:
+        if not isinstance(route.responsibility, BranchPlanningResponsibility):
+            continue
+        if expected is None or route.responsibility != expected:
+            diagnostic = (
+                OrchestratorDiagnostic.REVIEW_BRANCH_PLANNING_IDENTITY_INVALID
+            )
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+                diagnostic.detail,
+                orchestrator_diagnostic=diagnostic,
             )
 
 
@@ -3765,6 +3804,10 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "red_state_followup_slice": context.red_state_followup_slice,
         "pre_change_fingerprint": context.pre_change_fingerprint,
     }
+    if context.branch_planning_target is not None:
+        binding["branch_planning_target"] = responsibility_document(
+            context.branch_planning_target
+        )
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
     if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:

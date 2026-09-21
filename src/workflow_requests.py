@@ -19,6 +19,7 @@ from contracts import (
 )
 from finding_order import sorted_finding_ids
 from finding_reducer import project_open_set
+from finding_responsibility import BranchPlanningResponsibility
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexErrorCode as NativeImplementerErrorCode,  # allowlist:provider -- typed implementer rejection
@@ -485,6 +486,7 @@ def native_review_request(
         contract.existing_finding_ids,
         state.current_work_unit.open_findings,
     )
+    family_binding = state.active_family_binding
     native_context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -508,6 +510,14 @@ def native_review_request(
         plan_artifact_path=plan_artifact_path,
         final_review_pending_count=None,
         planned_slices=state.planned_slices,
+        branch_planning_target=(
+            None
+            if family_binding is None
+            else BranchPlanningResponsibility(
+                family_binding.family_id,
+                family_binding.cycle_number,
+            )
+        ),
         pre_change_fingerprint=(
             None
             if review_kind is NativeReviewKind.BRANCH_DISCOVERY

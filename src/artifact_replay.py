@@ -69,7 +69,7 @@ from artifact_models import (
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
     TransientRetryPayload,
-    canonical_json,
+    canonical_json, extend_family_authorized_change_set,
 )
 from finding_order import sorted_finding_ids
 from finding_signature import finding_record_signature
@@ -1037,7 +1037,7 @@ def _assemble_workflow_state_document(
     responsibilities = responsibility_projection_document(reduce_findings(replay))
     return {
         **({"finding_responsibilities": responsibilities} if responsibilities else {}),
-        **({"family_binding": family_binding_document(profile.family_binding)} if profile.family_binding is not None else {}),
+        **({"family_binding": family_binding_document(effective_family_binding(replay))} if effective_family_binding(replay) is not None else {}),
         "version": 3,
         "run_id": replay.expected_run_id,
         "task_file": identity.task_file,
@@ -3858,6 +3858,21 @@ def _project_branch_discovery_contract(
     ),)
 
 
+def effective_family_binding(replay: ArtifactReplayResult):
+    """Project the initial binding plus every recorded scope approval."""
+
+    binding = None if replay.run_profile is None else replay.run_profile.family_binding
+    if binding is None:
+        return None
+    approved_paths = tuple(
+        addition.path
+        for record in replay.records
+        if isinstance(record.payload, ScopeExtensionPayload)
+        for addition in record.payload.additions
+    )
+    return extend_family_authorized_change_set(binding, approved_paths)
+
+
 __all__ = [
     "ArtifactReplayError",
     "ArtifactReplayResult",
@@ -3866,6 +3881,7 @@ __all__ = [
     "ReplayDiagnosticCode",
     "ReplayFact",
     "STATE_PROJECTION_REDUCER_VERSION",
+    "effective_family_binding",
     "ReplayedWorkflowCursor",
     "ReplayedWorkUnitState",
     "ReplayedSideEffect",

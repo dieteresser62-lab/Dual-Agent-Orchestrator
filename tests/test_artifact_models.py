@@ -98,7 +98,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-family-from-entry-v1",
         "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
@@ -134,6 +134,22 @@ def test_pre_scope_extension_reducer_is_named_and_rejected_fail_closed() -> None
             RoleProfilePayload("implementer-model", "medium"),
             RoleProfilePayload("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_SCOPE_EXTENSION_REDUCER_VERSION,
+        )
+
+
+def test_pre_family_from_entry_reducer_is_named_and_rejected_fail_closed() -> None:
+    assert artifact_models.PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION == (
+        "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1"
+    )
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+    ):
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            reducer_version=artifact_models.PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION,
         )
 
 

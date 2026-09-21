@@ -184,6 +184,7 @@ def _context(
         anchor_origin=anchor_origin,
         validation_command_prefixes=(("python3", "-m", "pytest"),),
         red_state_followup_slice=red_state_followup_slice,
+        branch_planning_target=BranchPlanningResponsibility("family-1", 1),
     )
 
 
@@ -472,6 +473,8 @@ def test_native_routes_roundtrip_through_shared_responsibility_types(
     responsibility,
 ) -> None:
     context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    if isinstance(responsibility, BranchPlanningResponsibility):
+        context = replace(context, branch_planning_target=responsibility)
     document = _review(context, approved=False)
     from finding_responsibility import responsibility_document
 
@@ -573,13 +576,65 @@ def test_review_can_route_a_finding_opened_in_the_same_response(
     assert result.findings[0].affected_paths == ("src/future.py",)
 
 
+@pytest.mark.parametrize(
+    "bound_target",
+    (None, BranchPlanningResponsibility("family-1", 2)),
+    ids=("missing-run-family", "foreign-cycle"),
+)
+def test_branch_planning_route_is_rejected_before_record_persistence(
+    active_finding_decisions: None,
+    bound_target: BranchPlanningResponsibility | None,
+) -> None:
+    context = replace(
+        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
+        branch_planning_target=bound_target,
+    )
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(
+                BranchPlanningResponsibility("family-1", 1)
+            ),
+            "rationale": "Branch planning would own the follow-up.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_review_response(document, context)
+
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_BRANCH_PLANNING_IDENTITY_INVALID
+    )
+    guidance = native_review_retry_guidance(
+        raised.value.code,
+        raised.value.orchestrator_diagnostic,
+        context,
+    )
+    assert "close or evidentially reject" in guidance
+    assert "valid named later Slice" in guidance
+
+
+def test_branch_planning_target_must_be_typed() -> None:
+    with pytest.raises(NativeReviewContractError) as raised:
+        replace(_context(), branch_planning_target="family-1")  # type: ignore[arg-type]
+
+    assert raised.value.code is NativeReviewErrorCode.CONTEXT_INVALID
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED
+    )
+
+
 def test_canary_26_attempt_one_open_confirmation_is_absorbed_by_route(
     active_finding_decisions: None,
 ) -> None:
     finding = _finding(
         "C-01", AgentRole.CLAUDE, finding_class=FindingClass.OBSERVATION
     )
-    context = _context(previous=(finding,))
+    context = replace(
+        _context(previous=(finding,)),
+        branch_planning_target=BranchPlanningResponsibility("canary-26", 1),
+    )
     document = _review(context, approved=True)
     document["status_changes"] = [
         {
@@ -614,7 +669,10 @@ def test_canary_26_attempt_one_open_confirmation_is_absorbed_by_route(
 def test_route_does_not_absorb_open_status_with_partial_closure(
     active_finding_decisions: None,
 ) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = replace(
+        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
+        branch_planning_target=BranchPlanningResponsibility("canary-26", 1),
+    )
     document = _review(context, approved=False)
     document["status_changes"] = [
         {

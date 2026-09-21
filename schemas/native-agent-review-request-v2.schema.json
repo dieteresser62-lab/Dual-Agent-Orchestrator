@@ -343,6 +343,24 @@
           "type": ["string", "null"],
           "minLength": 1
         },
+        "branch_planning_target": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "responsibility_kind": {"const": "BRANCH_PLANNING"},
+                "family_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+                },
+                "cycle_number": {"type": "integer", "minimum": 1}
+              },
+              "required": ["responsibility_kind", "family_id", "cycle_number"],
+              "additionalProperties": false
+            },
+            {"type": "null"}
+          ]
+        },
         "plan_artifact_path": {
           "type": ["string", "null"],
           "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}\\.[mM][dD]$"

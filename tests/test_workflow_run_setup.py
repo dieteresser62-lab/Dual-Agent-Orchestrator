@@ -17,6 +17,7 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     Role,
+    initial_family_id,
 )
 from contracts import PlannedSlice
 from gates import PathClasses
@@ -58,6 +59,7 @@ EXPECTED_SETUP_FUNCTIONS = {
     "_context",
     "_current_gate_approval",
     "_branch_discovery_family_binding",
+    "_entry_family_binding",
     "_fresh_state",
     "_implementation_family_binding",
     "_initialize_finding_handoff",
@@ -71,6 +73,7 @@ EXPECTED_SETUP_EDGES = Counter(
         ("_context", "_plan_only_step_boundary"): 1,
         ("_fresh_state", "_branch_discovery_family_binding"): 1,
         ("_fresh_state", "_implementation_family_binding"): 1,
+        ("_fresh_state", "_entry_family_binding"): 1,
     }
 )
 EXPECTED_PRODUCTION_BINDINGS = {
@@ -367,7 +370,7 @@ def test_context_matches_every_workflow_context_field(
         assert getattr(actual, field.name) == getattr(expected, field.name), field.name
 
 
-def test_fresh_approved_plan_run_keeps_current_head_as_all_branch_bases_without_family(
+def test_fresh_approved_plan_run_starts_its_deterministic_cycle_one_family(
     tmp_path: Path, monkeypatch
 ) -> None:
     head = "a" * 40
@@ -403,10 +406,87 @@ def test_fresh_approved_plan_run_keeps_current_head_as_all_branch_bases_without_
         task_contract=contract,
     )
 
-    assert state.family_binding is None
+    assert state.family_binding == FamilyBindingPayload(
+        initial_family_id("family-dormancy", head),
+        head,
+        ("docs/internal/plan.md", "src/a.py"),
+        None,
+        None,
+        1,
+        head,
+        None,
+    )
     assert state.branch_base == head
     assert state.branch_review_base_commit == head
     assert state.current_slice.start_commit == head
+
+
+@pytest.mark.parametrize("mode", (TaskMode.PLAN_ONLY, TaskMode.IMPLEMENT))
+def test_every_no_handoff_entry_mode_gets_the_same_deterministic_cycle_one_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: TaskMode,
+) -> None:
+    head = "a" * 40
+    branch_base = "c" * 40
+    work_plan_path = (
+        "docs/internal/entry-plan.md" if mode is TaskMode.PLAN_ONLY else None
+    )
+    contract = TaskContract(
+        digest="b" * 64,
+        mode=mode,
+        scope_patterns=tuple(
+            sorted(
+                {
+                    "src/a.py",
+                    *((work_plan_path,) if work_plan_path is not None else ()),
+                }
+            )
+        ),
+        target_branch="feature/family-entry",
+        work_plan_path=work_plan_path,
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "inspect_repository",
+        lambda _root: SimpleNamespace(
+            branch="feature/family-entry", head=head
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "resolve_merge_base",
+        lambda _root: SimpleNamespace(commit=branch_base),
+    )
+
+    states = tuple(
+        workflow_run_setup._fresh_state(
+            task_file=tmp_path / "task.md",
+            run_id="deterministic-entry-run",
+            repository_root=tmp_path,
+            task_contract=contract,
+        )
+        for _ in range(2)
+    )
+
+    assert states[0].family_binding == states[1].family_binding
+    assert states[0].family_binding == FamilyBindingPayload(
+        initial_family_id("deterministic-entry-run", branch_base),
+        branch_base,
+        tuple(
+            sorted(
+                {
+                    "src/a.py",
+                    *((work_plan_path,) if work_plan_path is not None else ()),
+                }
+            )
+        ),
+        None,
+        None,
+        1,
+        None,
+        None,
+    )
 
 
 def test_fresh_state_family_binding_is_not_controlled_by_retired_cutover_flag(
@@ -611,6 +691,7 @@ def test_remediation_plan_to_implementation_edge_preserves_cycle_number(
     source_replay = SimpleNamespace(
         records=(export_record,),
         run_profile=SimpleNamespace(family_binding=source_binding),
+        effective_family_binding=source_binding,
     )
     monkeypatch.setattr(
         workflow_run_setup,

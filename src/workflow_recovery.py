@@ -72,6 +72,7 @@ from native_codex_request import (
 )
 from native_review_contract import (
     BoundNativeReviewContext,
+    BranchPlanningResponsibility,
     NativeReviewContext,
     NativeReviewContractError,
     parse_bound_native_contract_result,
@@ -130,6 +131,16 @@ def _review_pre_change_fingerprint(
     return (
         history.last_claude_fingerprint  # allowlist:provider -- bound role field
         or slice_start_fingerprint
+    )
+
+
+def _branch_planning_target(state: object) -> BranchPlanningResponsibility | None:
+    family_binding = getattr(state, "active_family_binding", None)
+    if family_binding is None:
+        return None
+    return BranchPlanningResponsibility(
+        family_binding.family_id,
+        family_binding.cycle_number,
     )
 
 
@@ -1719,6 +1730,7 @@ class WorkflowRecovery:
             ),
             red_state_followup_slice=context.red_state_followup_slice,
             final_review_pending_count=final_review_pending_count,
+            branch_planning_target=_branch_planning_target(state),
             pre_change_fingerprint=_review_pre_change_fingerprint(
                 approval_marker,
                 history,

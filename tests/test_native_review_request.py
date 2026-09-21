@@ -38,7 +38,7 @@ from native_review_contract import (
     parse_native_contract_result,
     validate_native_review_document,
 )
-from finding_responsibility import SliceResponsibility
+from finding_responsibility import BranchPlanningResponsibility, SliceResponsibility
 from native_finding_decisions import NativeResponsibilityProposal
 from native_review_request import (
     NativeReviewEvidenceInput,
@@ -175,6 +175,20 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     ).hexdigest() == (
         "acda19a1399b4e69eba09f6c54006a65664adfdb2f46c441818d61c4c5cd3348"
     )
+
+
+def test_review_request_binds_the_only_valid_branch_planning_target() -> None:
+    context = replace(
+        _context(),
+        branch_planning_target=BranchPlanningResponsibility("family-bound", 3),
+    )
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert bundle.document["review_contract"]["branch_planning_target"] == {
+        "responsibility_kind": "BRANCH_PLANNING",
+        "family_id": "family-bound",
+        "cycle_number": 3,
+    }
 
 
 def test_enabled_review_request_exposes_codex_proposal_as_non_authority(

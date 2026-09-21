@@ -63,6 +63,7 @@ from artifact_store import ArtifactStore, ArtifactStoreError
 from artifact_replay import (
     ArtifactReplayError,
     ArtifactReplayResult,
+    effective_family_binding,
     pending_workflow_event_payload,
     replay_artifacts,
 )
@@ -2120,8 +2121,9 @@ class ProductionWorkflowDriver:
             ) from exc
         if source_snapshot is None:
             return
-        # Discovery edges increment the cycle; PLAN_ONLY -> IMPLEMENT preserves it,
-        # so remediation PLAN_ONLY snapshots are the even cycles 2, 4, ... .
+        # Discovery edges increment the cycle; PLAN_ONLY -> IMPLEMENT preserves it.
+        # With cycle one bound at entry, remediation PLAN_ONLY snapshots are the
+        # odd cycles 3, 5, ...; floor division still maps them to rounds 1, 2, ... .
         remediation_round_number = source_snapshot.payload.cycle_number // 2
         if remediation_round_number < 1:
             raise WorkflowCompletionRejected(
@@ -2174,11 +2176,7 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError(
                 "BRANCH_DISCOVERY handoff requires the source RunIdentity"
             )
-        source_binding = (
-            None
-            if replay.run_profile is None
-            else replay.run_profile.family_binding
-        )
+        source_binding = effective_family_binding(replay)
         scope_paths = tuple(
             sorted(
                 {
@@ -2303,9 +2301,7 @@ class ProductionWorkflowDriver:
                 records=replay.records[: head_position + 1],
                 head_record_id=source_head_record_id,
             )
-        source_binding = (
-            None if replay.run_profile is None else replay.run_profile.family_binding
-        )
+        source_binding = effective_family_binding(replay)
         if source_binding is None or replay.head_record_id is None:
             raise WorkflowExecutionError(
                 "remediation PLAN_ONLY handoff requires the discovery family binding"

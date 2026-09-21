@@ -623,6 +623,10 @@ def _review_context_request_projection(
             "pre_change_fingerprint"
         ],
     }
+    if "branch_planning_target" in context_binding:
+        review_contract["branch_planning_target"] = context_binding[
+            "branch_planning_target"
+        ]
     if review_kind == NativeReviewKind.PLAN.value:
         review_contract["plan_artifact_path"] = context_binding[
             "plan_artifact_path"

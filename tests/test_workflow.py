@@ -5983,6 +5983,16 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
         first_slice_start_commit=START_COMMIT,
         slice_count=2,
         timestamp="2026-08-12T10:00:00+00:00",
+        family_binding=FamilyBindingPayload(
+            "family-auto-remediation",
+            START_COMMIT,
+            tuple(sorted((*prior_scope, *current_scope))),
+            None,
+            None,
+            1,
+            None,
+            None,
+        ),
     ).bind_slice_plan(
         (
             PlannedSlice(1, "source adapter", prior_scope),
@@ -6227,7 +6237,6 @@ def _scope_extension_state(
             {
                 *current_scope,
                 *future_scope,
-                path,
                 work_plan_path,
                 *((audit_report_path,) if audit_report_path else ()),
             }
@@ -6295,9 +6304,9 @@ def _scope_extension_state(
     ),
 )
 @pytest.mark.parametrize(
-    "family_bound",
+    "unowned_path_pre_authorized",
     (True, False),
-    ids=("with-family-binding", "without-family-binding"),
+    ids=("pre-authorized", "new-to-family"),
 )
 def test_scope_extension_policy_matrix(
     path_kind: str,
@@ -6305,11 +6314,20 @@ def test_scope_extension_policy_matrix(
     ownership: str,
     exists_at_start: bool,
     approved: bool,
-    family_bound: bool,
+    unowned_path_pre_authorized: bool,
 ) -> None:
     state = _scope_extension_state(path, ownership)
-    if not family_bound:
-        state = replace(state, family_binding=None)
+    if unowned_path_pre_authorized and ownership == "unowned":
+        assert state.family_binding is not None
+        state = replace(
+            state,
+            family_binding=replace(
+                state.family_binding,
+                family_authorized_change_set=tuple(
+                    sorted({*state.family_binding.family_authorized_change_set, path})
+                ),
+            ),
+        )
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[],
@@ -6340,7 +6358,11 @@ def test_scope_extension_policy_matrix(
         request,
     )
 
-    assert (decision is not None) is approved, (path_kind, ownership, family_bound)
+    assert (decision is not None) is approved, (
+        path_kind,
+        ownership,
+        unowned_path_pre_authorized,
+    )
     if decision is not None and ownership != "current":
         assert path in decision.state.current_slice.scope_paths
 
@@ -6410,27 +6432,19 @@ def test_scope_extension_rejects_generated_path_without_a_policy_row() -> None:
     assert decision is None
 
 
-@pytest.mark.parametrize("ownership", ("current", "unowned", "later"))
-def test_scope_extension_rejects_path_outside_family_authority(
-    ownership: str,
-) -> None:
+def test_scope_extension_adds_newly_approved_path_to_family_authority() -> None:
     path = "src/extra.py"
-    state = _scope_extension_state(path, ownership)
+    state = _scope_extension_state(path, "unowned")
     assert state.family_binding is not None
-    reduced_binding = replace(
-        state.family_binding,
-        family_authorized_change_set=tuple(
-            candidate
-            for candidate in state.family_binding.family_authorized_change_set
-            if candidate != path
-        ),
-    )
-    # Exercise the independent workflow defence even for a corrupt projection;
-    # WorkflowState itself already rejects this shape for current/later owners.
-    object.__setattr__(state, "family_binding", reduced_binding)
+    assert path not in state.family_binding.family_authorized_change_set
 
     decision = WorkflowEngine(
-        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+        FakeDriver(
+            snapshots=[],
+            codex_outputs=[],
+            reviewer_outputs=[],
+            paths_existing_at_commits={(START_COMMIT, path)},
+        )
     )._expand_approved_remediation_scope(
         state,
         replace(_context(), current_scope_paths=state.current_slice.scope_paths),
@@ -6441,7 +6455,11 @@ def test_scope_extension_rejects_path_outside_family_authority(
         ),
     )
 
-    assert decision is None
+    assert decision is not None
+    assert decision.additions[0].path == path
+    assert decision.state.family_binding is not None
+    assert path in decision.state.family_binding.family_authorized_change_set
+    assert path in decision.state.current_slice.scope_paths
 
 
 def test_scope_extension_rejects_missing_slice_start_commit() -> None:
@@ -6466,7 +6484,7 @@ def test_scope_extension_rejects_missing_slice_start_commit() -> None:
     assert decision is None
 
 
-def test_scope_extension_without_family_binding_is_automatically_approved_and_recorded() -> None:
+def test_scope_extension_grows_family_and_second_access_needs_no_new_request() -> None:
     path = "src/extra.py"
     rationale = _scope_extension_rationale(path)
 
@@ -6497,11 +6515,9 @@ def test_scope_extension_without_family_binding_is_automatically_approved_and_re
                 )
             return _test_native_codex_output(invocation, _codex_ready())
 
-    state = replace(
-        _scope_extension_state(path, "unowned"),
-        family_binding=None,
-    )
-    assert state.active_family_binding is None
+    state = _scope_extension_state(path, "unowned")
+    assert state.active_family_binding is not None
+    assert path not in state.active_family_binding.family_authorized_change_set
     driver = ScopeExtensionDriver(
         snapshots=[],
         codex_outputs=[],
@@ -6519,6 +6535,10 @@ def test_scope_extension_without_family_binding_is_automatically_approved_and_re
     )
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert advanced.active_family_binding is not None
+    assert path in advanced.active_family_binding.family_authorized_change_set
+    assert path in advanced.current_slice.scope_paths
+    assert len(driver.codex_calls) == 2
     persisted = tuple(
         value[1]
         for kind, value in driver.structured_events

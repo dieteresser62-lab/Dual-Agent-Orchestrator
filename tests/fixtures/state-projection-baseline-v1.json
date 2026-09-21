@@ -1,7 +1,7 @@
 {
   "schema_version": "state-projection-baseline-v1",
   "source_commit": "c6d3963",
-  "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-scope-extension-v1",
+  "reducer_version": "structured-v2-schema-2-state-v3-family-from-entry-v1",
   "fixed_time": "2026-09-03T12:00:00+00:00",
   "entries": [
     {

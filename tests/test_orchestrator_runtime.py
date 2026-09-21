@@ -42,6 +42,7 @@ from artifact_models import (
     BranchDiscoveryHandoffExportPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
+    FamilyBindingPayload,
     FindingHandoffExportPayload,
     FindingSnapshotItem,
     FindingTransitionPayload,
@@ -78,6 +79,7 @@ from artifact_models import (
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     canonical_json,
+    initial_family_id,
 )
 from artifact_store import ArtifactStore
 from artifact_resume import ArtifactResumeError, resolve_resume_state
@@ -1506,6 +1508,7 @@ def test_run_records_exist_before_first_workflow_dispatch(
 
     def inspect_first_dispatch(self, state, context, history):
         chain = ArtifactStore(repository, state.run_id).load_chain()
+        observed["run_id"] = state.run_id
         observed["types"] = tuple(record.record_type for record in chain)
         observed["identity"] = chain[0].payload
         observed["profile"] = chain[2].payload
@@ -1533,10 +1536,11 @@ def test_run_records_exist_before_first_workflow_dispatch(
         record_type is RecordType.SIDE_EFFECT
         for record_type in observed["types"][10:]
     )
+    family_base = _git(repository, "merge-base", "HEAD", "master")
     assert observed["identity"] == RunIdentityPayload(
         str(task.resolve()),
         "feature/run-binding-order",
-        _git(repository, "merge-base", "HEAD", "master"),
+        family_base,
         _git(repository, "rev-parse", "HEAD"),
         "IMPLEMENT",
         None,
@@ -1545,6 +1549,16 @@ def test_run_records_exist_before_first_workflow_dispatch(
         RoleProfilePayload("gpt-order", "max"),
         RoleProfilePayload("opus-order", "max"),
         orchestrator.orchestrator_code_version(),
+        family_binding=FamilyBindingPayload(
+            initial_family_id(str(observed["run_id"]), family_base),
+            family_base,
+            ("src/new.py",),
+            None,
+            None,
+            1,
+            None,
+            None,
+        ),
     )
 
 
@@ -3252,6 +3266,16 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         task_scope_patterns=("docs/extra.md", "src/runtime.py"),
         target_branch="feature/scope-extension-record",
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        family_binding=FamilyBindingPayload(
+            initial_family_id("scope-extension-record", head),
+            head,
+            ("src/runtime.py",),
+            None,
+            None,
+            1,
+            None,
+            None,
+        ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3288,7 +3312,7 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         fingerprint_sha256="b" * 64,
         operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
     )
-    expanded = state.extend_current_slice_scope(("docs/extra.md",))
+    expanded = state.approve_current_slice_scope_extension(("docs/extra.md",))
     payload = ScopeExtensionPayload(
         str(state.current_work_unit_id),
         str(state.current_slice_id),
@@ -3298,6 +3322,17 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         (ScopeExtensionPathPayload("docs/extra.md", "documentation"),),
     )
 
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="scope extension state differs from the record-approved family growth",
+    ):
+        unrecorded_family_growth = replace(expanded)
+        object.__setattr__(
+            unrecorded_family_growth,
+            "family_binding",
+            state.family_binding,
+        )
+        driver.persist_scope_extension(unrecorded_family_growth, payload)
     driver.persist_scope_extension(expanded, payload)
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
@@ -3314,6 +3349,11 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
     )
     resolution = resolve_resume_state(repository, state.run_id)
     assert resolution.state.current_slice.scope_paths == (
+        "docs/extra.md",
+        "src/runtime.py",
+    )
+    assert resolution.state.family_binding is not None
+    assert resolution.state.family_binding.family_authorized_change_set == (
         "docs/extra.md",
         "src/runtime.py",
     )
@@ -6760,7 +6800,7 @@ def test_completed_discovery_only_chains_open_findings_before_completion(
         task_contract=remediation_contract,
     )
     assert remediation_state.family_binding is not None
-    assert remediation_state.family_binding.cycle_number == 2
+    assert remediation_state.family_binding.cycle_number == 3
     assert remediation_contract.work_plan_path in (
         remediation_state.family_binding.family_authorized_change_set
     )
@@ -6957,7 +6997,7 @@ def test_two_remediation_rounds_derive_rounds_one_and_two_for_both_entry_modes(
     )
     source_replays: dict[str, object] = {}
     current_replays: list[object] = []
-    plan_cycles = (2, 4)
+    plan_cycles = (3, 5)
     for plan_cycle in plan_cycles:
         implementation_run_id = f"{entry_mode.lower()}-implementation-{plan_cycle}"
         plan_run_id = f"{entry_mode.lower()}-plan-{plan_cycle}"
@@ -7026,8 +7066,8 @@ def test_two_remediation_rounds_derive_rounds_one_and_two_for_both_entry_modes(
         (cycle - 1, cycle, cycle, cycle + 1)
         for cycle in plan_cycles
     ) == (
-        (1, 2, 2, 3),
-        (3, 4, 4, 5),
+        (2, 3, 3, 4),
+        (4, 5, 5, 6),
     )
 
 

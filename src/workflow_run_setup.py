@@ -26,8 +26,9 @@ from artifact_models import (
     TaskPayload,
     WorkflowCompletionPayload,
     build_family_authorized_change_set,
+    initial_family_id,
 )
-from artifact_replay import ArtifactReplayError, replay_artifacts
+from artifact_replay import ArtifactReplayError, effective_family_binding, replay_artifacts
 from artifact_store import ArtifactStore
 from finding_reducer import reduce_findings
 from git_service import inspect_repository, require_committed_file_at_head
@@ -287,6 +288,50 @@ def _new_watch_task_preserved_paths(
     return (task_contract.work_plan_path,)
 
 
+def _entry_family_binding(
+    *,
+    run_id: str,
+    branch_base: str,
+    task_contract: TaskContract,
+    audit_report_path: str | None,
+) -> FamilyBindingPayload:
+    """Bind a no-handoff entry run to its deterministic cycle-one family."""
+
+    known_scope = tuple(
+        sorted(
+            {
+                *task_contract.scope_patterns,
+                *(
+                    path
+                    for planned_slice in task_contract.approved_slices
+                    for path in planned_slice.scope_paths
+                ),
+            }
+        )
+    )
+    authorized_change_set = build_family_authorized_change_set(
+        inherited_change_set=known_scope,
+        work_plan_paths=(
+            ()
+            if task_contract.work_plan_path is None
+            else (task_contract.work_plan_path,)
+        ),
+        commit_authorized_control_artifacts=(
+            () if audit_report_path is None else (audit_report_path,)
+        ),
+    )
+    return FamilyBindingPayload(
+        family_id=initial_family_id(run_id, branch_base),
+        family_base_commit=branch_base,
+        family_authorized_change_set=authorized_change_set,
+        predecessor_run_id=None,
+        predecessor_head_record_id=None,
+        cycle_number=1,
+        current_plan_commit=task_contract.approved_plan_commit,
+        current_implementation_commit=None,
+    )
+
+
 def _fresh_state(
     *,
     task_file: Path,
@@ -347,6 +392,13 @@ def _fresh_state(
         branch_base = identity.head
     else:
         branch_base = resolve_merge_base(repository_root).commit
+    if family_binding is None:
+        family_binding = _entry_family_binding(
+            run_id=run_id,
+            branch_base=branch_base,
+            task_contract=task_contract,
+            audit_report_path=audit_report_path,
+        )
     state = init_workflow_state(
         run_id=run_id,
         task_file=str(task_file.resolve()),
@@ -418,11 +470,7 @@ def _branch_discovery_family_binding(
             raise ArtifactBridgeError(
                 "family handoff does not reference a branch discovery export"
             )
-        source_binding = (
-            None
-            if source_replay.run_profile is None
-            else source_replay.run_profile.family_binding
-        )
+        source_binding = effective_family_binding(source_replay)
         try:
             target_path = task_file.resolve().relative_to(
                 repository_root.resolve()
@@ -564,11 +612,7 @@ def _implementation_family_binding(
         )
         if not isinstance(export_record.payload, FindingHandoffExportPayload):
             return None
-        source_binding = (
-            None
-            if source_replay.run_profile is None
-            else source_replay.run_profile.family_binding
-        )
+        source_binding = effective_family_binding(source_replay)
         if source_binding is None:
             return None
         if task_contract.approved_plan_commit is None:

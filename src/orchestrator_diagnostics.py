@@ -369,6 +369,9 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_PLANNED_SLICES_TYPED = (
         "context-invalid: planned slices must contain only typed PlannedSlice values"
     )
+    REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED = (
+        "context-invalid: branch_planning_target must be a typed BRANCH_PLANNING responsibility"
+    )
     REVIEW_CONTEXT_PLANNED_SLICE_IDS_INVALID = (
         "context-invalid: planned slice ids must be contiguous and 1-based"
     )
@@ -618,6 +621,11 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID = (
         "finding-content-invalid: branch discovery finding opening requires "
         "responsibility kind BRANCH_PLANNING"
+    )
+    REVIEW_BRANCH_PLANNING_IDENTITY_INVALID = (
+        "finding-content-invalid: BRANCH_PLANNING responsibility does not match "
+        "the run-bound family identity; close or evidentially reject the Finding, "
+        "or route it to a valid named later Slice"
     )
     REVIEW_REJECTED_CLOSURE_REASON_REQUIRED = (
         "finding-content-invalid: rejected closure is missing required field rejection_reason"
