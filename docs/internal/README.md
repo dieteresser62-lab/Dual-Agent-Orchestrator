@@ -5,6 +5,12 @@ Unterlagen.
 
 ## Aktive Dokumente
 
+- [Zielmodell: vereinfachter Orchestrator](zielmodell-vereinfachter-orchestrator.md) —
+  vom Operator am 21.9.2026 festgelegt. **Die Referenz für den laufenden
+  Umbau.** Beschreibt den Sollfluss aus Planung, Implementierung je Slice und
+  Abnahme, die Eskalationsregel `abgelehnt ∧ nicht geschlossen ⇒ Blocker`, die
+  eine Commitbedingung und die Rundengrenzen. Alles, was diesem Modell
+  widerspricht, ist Umbaustoff — nicht umgekehrt.
 - [Roadmap für Phase 2 und Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
 - [S2-Übergangs- und Divergenzmatrix](stabilisierung-s2-uebergangsmatrix.md) —
   die Inventur der Record-Mirror-Kanten. Sie bleibt aktiv, obwohl die
