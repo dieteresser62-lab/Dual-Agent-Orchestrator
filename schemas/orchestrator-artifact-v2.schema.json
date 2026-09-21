@@ -484,6 +484,98 @@
       "type": "object", "additionalProperties": false, "required": ["binding_kind", "target", "attestation_id", "approval_ids"],
       "properties": {"binding_kind": {"enum": ["commit", "plan_commit", "implementation_handoff"]}, "target": {"$ref": "#/$defs/non_empty"}, "attestation_id": {"$ref": "#/$defs/identifier"}, "approval_ids": {"$ref": "#/$defs/non_empty_identifiers"}}
     },
+    "rejected_response_field_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "value_kind", "item_count"],
+      "properties": {
+        "name": {"enum": ["anchors", "decision", "finding_dispositions", "new_findings", "occurrences", "plan_completion", "plan_treatment_decisions", "plan_treatments", "pre_mortem", "rationale", "reclassifications", "ready", "remediation_paths", "request_id", "responsibility_routes", "result_type", "review_evidence", "reviewer", "rule_id", "scan_complete", "schema_version", "slice_plan", "status_changes", "test_files"]},
+        "value_kind": {"enum": ["array", "boolean", "integer", "null", "number", "object", "string"]},
+        "item_count": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "rejected_response_target_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["responsibility_kind", "target_run_id", "slice_id", "family_id", "cycle_number", "run_id", "revision"],
+      "properties": {
+        "responsibility_kind": {"enum": ["SLICE", "BRANCH_PLANNING", "PLAN_REVISION"]},
+        "target_run_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "slice_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "family_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "cycle_number": {"type": ["integer", "null"], "minimum": 1},
+        "run_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "revision": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "rejected_finding_disposition_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "decision", "responsibility_proposal"],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/finding_id"},
+        "decision": {"enum": ["accepted", "rejected", null]},
+        "responsibility_proposal": {"oneOf": [{"$ref": "#/$defs/rejected_response_target_shape"}, {"type": "null"}]}
+      }
+    },
+    "rejected_status_change_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "status", "closure_kind", "rejection_reason"],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/finding_id"},
+        "status": {"enum": ["OPEN", "CLOSED", null]},
+        "closure_kind": {"enum": ["fixed", "partial", "rejected", null]},
+        "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed", null]}
+      }
+    },
+    "rejected_reclassification_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "finding_class"],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/finding_id"},
+        "finding_class": {"enum": ["BLOCKER", "OBSERVATION", null]}
+      }
+    },
+    "rejected_responsibility_route_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "target"],
+      "properties": {
+        "finding_id": {"$ref": "#/$defs/finding_id"},
+        "target": {"oneOf": [{"$ref": "#/$defs/rejected_response_target_shape"}, {"type": "null"}]}
+      }
+    },
+    "rejected_plan_treatment_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["signature", "finding_ids", "treatment_kind", "closing_slice_ids", "rejection_reason"],
+      "properties": {
+        "signature": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "finding_ids": {"type": "array", "items": {"$ref": "#/$defs/finding_id"}},
+        "treatment_kind": {"enum": ["implementation", "no_code", null]},
+        "closing_slice_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed", null]}
+      }
+    },
+    "rejected_plan_treatment_decision_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["signature", "decision"],
+      "properties": {
+        "signature": {"$ref": "#/$defs/sha256"},
+        "decision": {"enum": ["accepted", "rejected", null]}
+      }
+    },
+    "rejected_native_response_shape": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fields", "unknown_field_count", "result_type", "release_decision", "finding_dispositions", "status_changes", "reclassifications", "responsibility_routes", "plan_treatments", "plan_treatment_decisions"],
+      "properties": {
+        "fields": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/rejected_response_field_shape"}},
+        "unknown_field_count": {"type": "integer", "minimum": 0},
+        "result_type": {"enum": ["branch_discovery_completed", "correction_result", "implementation_result", "plan_result", "review_result", "stop_request", "stop_result", null]},
+        "release_decision": {"enum": ["approved", "denied", "not_ready", "ready", "scan_complete", "scan_incomplete", null]},
+        "finding_dispositions": {"type": "array", "items": {"$ref": "#/$defs/rejected_finding_disposition_shape"}},
+        "status_changes": {"type": "array", "items": {"$ref": "#/$defs/rejected_status_change_shape"}},
+        "reclassifications": {"type": "array", "items": {"$ref": "#/$defs/rejected_reclassification_shape"}},
+        "responsibility_routes": {"type": "array", "items": {"$ref": "#/$defs/rejected_responsibility_route_shape"}},
+        "plan_treatments": {"type": "array", "items": {"$ref": "#/$defs/rejected_plan_treatment_shape"}},
+        "plan_treatment_decisions": {"type": "array", "items": {"$ref": "#/$defs/rejected_plan_treatment_decision_shape"}}
+      }
+    },
     "invocation_failure": {
       "type": "object", "additionalProperties": false,
       "required": ["invocation_id", "idempotency_key", "role", "failure_kind", "failure_class", "diagnostic_code", "provider_text", "provider_text_sha256", "provider_text_bytes", "technical_text", "technical_text_sha256", "technical_text_bytes", "received_at", "decision_at_utc", "step", "slice_id", "work_unit_id", "diagnostic_exit_code", "process_exit_code", "parse_path", "source_timezone", "reset_at_utc", "resume_at_utc", "safety_margin_seconds", "retry_delay_seconds", "auto_resume_count", "automatic_resume", "diff_fingerprint"],
@@ -721,6 +813,7 @@
         "native_review_retry_round": {"type": "integer", "minimum": 1},
         "native_implementer_rejection": {"enum": ["schema-invalid", "request-mismatch", "result-kind-mismatch", "result-content-invalid", "finding-reference-invalid", "test-files-invalid", "slice-plan-invalid", "stop-content-invalid", "dormant-finding-decision-field"]},
         "native_implementer_retry_round": {"type": "integer", "minimum": 1},
+        "rejected_response_shape": {"$ref": "#/$defs/rejected_native_response_shape"},
         "received_at": {"type": "string", "format": "date-time"},
         "decision_at_utc": {"type": "string", "format": "date-time"},
         "step": {"$ref": "#/$defs/identifier"},

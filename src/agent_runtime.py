@@ -88,6 +88,10 @@ from orchestrator_diagnostics import (
     OrchestratorDiagnostic,
     STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
 )
+from rejected_response_shape import (
+    RejectedNativeResponseShape,
+    extract_rejected_native_response_shape,
+)
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -158,6 +162,7 @@ class AgentInvocationError(RuntimeError):
         native_implementer_rejection: NativeImplementerErrorCode | None = None,
         native_implementer_rejection_detail: str | None = None,
         native_implementer_response_retryable: bool = False,
+        rejected_response_shape: RejectedNativeResponseShape | None = None,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
@@ -213,6 +218,16 @@ class AgentInvocationError(RuntimeError):
             and native_implementer_rejection is not None
         ):
             raise TypeError("one invocation cannot carry two native rejection roles")
+        if rejected_response_shape is not None and (
+            not isinstance(rejected_response_shape, RejectedNativeResponseShape)
+            or (
+                native_review_rejection is None
+                and native_implementer_rejection is None
+            )
+        ):
+            raise TypeError(
+                "rejected response shape requires one typed native rejection"
+            )
         self.agent_key = agent_key
         self.kind = kind
         self.invocation_id = invocation_id
@@ -231,6 +246,7 @@ class AgentInvocationError(RuntimeError):
         self.native_implementer_response_retryable = (
             native_implementer_response_retryable
         )
+        self.rejected_response_shape = rejected_response_shape
         label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
         super().__init__(
             f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
@@ -2418,6 +2434,14 @@ def classify_agent_failure(
             and is_retryable_native_implementer_response_error(
                 native_implementer_form_failure
             )
+        ),
+        rejected_response_shape=(
+            extract_rejected_native_response_shape(raw_provider_data)
+            if (
+                native_review_form_failure is not None
+                or native_implementer_form_failure is not None
+            )
+            else None
         ),
     )
 

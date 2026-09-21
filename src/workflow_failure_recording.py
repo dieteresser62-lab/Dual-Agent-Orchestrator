@@ -292,6 +292,7 @@ class _InvocationRetryDecision:
     response_diagnostics: _NativeResponseFailureDiagnostics
     native_review_retry_round: int | None
     native_implementer_retry_round: int | None
+    native_response_retry_exhausted: bool
 
 
 def _invocation_retry_decision(
@@ -395,6 +396,17 @@ def _invocation_retry_decision(
             if response_diagnostics.implementer_persisted_rejection is not None
             else None
         ),
+        native_response_retry_exhausted=(
+            not automatic_transient
+            and retryable_transient
+            and transient_policy.automatic
+            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
+            and prior_auto_resumes >= transient_policy.maximum_auto_resumes
+            and (
+                response_diagnostics.persisted_rejection is not None
+                or response_diagnostics.implementer_persisted_rejection is not None
+            )
+        ),
     )
 
 
@@ -466,6 +478,11 @@ def _invocation_failure_documents(
         native_review_retry_round=decision.native_review_retry_round,
         native_implementer_rejection=diagnostics.implementer_persisted_rejection,
         native_implementer_retry_round=decision.native_implementer_retry_round,
+        rejected_response_shape=(
+            error.rejected_response_shape
+            if decision.native_response_retry_exhausted
+            else None
+        ),
     )
     quota_terminal_verdict = (
         error.kind is AgentFailureKind.QUOTA
@@ -518,6 +535,7 @@ def _invocation_failure_documents(
         native_review_retry_round=decision.native_review_retry_round,
         native_implementer_rejection=diagnostics.implementer_persisted_rejection,
         native_implementer_retry_round=decision.native_implementer_retry_round,
+        rejected_response_shape=record.rejected_response_shape,
     )
     return record, payload, decision_at
 

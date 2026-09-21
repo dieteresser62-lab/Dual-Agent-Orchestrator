@@ -301,6 +301,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "native_review_retry_round",
         "native_implementer_rejection",
         "native_implementer_retry_round",
+        "rejected_response_shape",
     },
     "GateRecord": {"status", "reason", "detail", "fingerprint", "paths", "resume_step"},
     "GateDecisionRecord": {

@@ -71,6 +71,7 @@ from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
     OrchestratorDiagnostic,
 )
+from rejected_response_shape import extract_rejected_native_response_shape
 
 
 DIGEST = "a" * 64
@@ -575,6 +576,82 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
         "result-content-invalid"
     )
     assert ArtifactRecord.from_dict(document).payload == codex
+
+
+def test_terminal_native_rejection_roundtrips_provider_free_response_shape() -> None:
+    marker, digest, byte_count = technical_text_evidence("approval-invalid")
+    shape = extract_rejected_native_response_shape(
+        {
+            "result_type": "review_result",
+            "decision": "approved",
+            "status_changes": [],
+            "responsibility_routes": [
+                {
+                    "finding_id": "C-01",
+                    "responsibility": {
+                        "responsibility_kind": "SLICE",
+                        "target_run_id": "run-22",
+                        "slice_id": "4",
+                    },
+                    "rationale": "provider rationale is discarded",
+                }
+            ],
+        }
+    )
+    assert shape is not None
+    payload = InvocationFailurePayload(
+        invocation_id="native-review-terminal-output",
+        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        role=Role.CLAUDE,
+        failure_kind="output",
+        failure_class="resumable_halt",
+        diagnostic_code="NATIVE-REVIEW-FORM",
+        provider_text=PROVIDER_MARKER,
+        provider_text_sha256=PROVIDER_DIGEST,
+        provider_text_bytes=PROVIDER_BYTES,
+        technical_text=marker,
+        technical_text_sha256=digest,
+        technical_text_bytes=byte_count,
+        received_at="2026-09-21T20:24:00+00:00",
+        decision_at_utc="2026-09-21T20:24:00+00:00",
+        step="claude_slice_review",
+        slice_id="4",
+        work_unit_id="work-01",
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        parse_path=None,
+        source_timezone=None,
+        reset_at_utc=None,
+        resume_at_utc=None,
+        safety_margin_seconds=0,
+        retry_delay_seconds=0,
+        auto_resume_count=2,
+        automatic_resume=False,
+        diff_fingerprint=DIGEST,
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID.text
+        ),
+        native_review_rejection="approval-invalid",
+        native_review_retry_round=3,
+        rejected_response_shape=shape,
+    )
+
+    document = json.loads(_record(payload).canonical_json())
+    assert document["payload"]["rejected_response_shape"][
+        "release_decision"
+    ] == "approved"
+    assert "provider rationale is discarded" not in json.dumps(document)
+    assert ArtifactRecord.from_dict(document).payload == payload
+    with pytest.raises(
+        ArtifactValidationError,
+        match="terminal native response failure",
+    ):
+        replace(
+            payload,
+            automatic_resume=True,
+            resume_at_utc="2026-09-21T20:24:02+00:00",
+            retry_delay_seconds=2,
+        )
 
 
 def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> None:

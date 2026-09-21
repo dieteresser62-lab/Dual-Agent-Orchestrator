@@ -1471,6 +1471,7 @@ def _native_review_contract_failure(
     detail: str = "provider-authored review rejected",
     operator_detail: str | None = None,
     diagnostic: OrchestratorDiagnostic | None = None,
+    provider_data: dict[str, object] | None = None,
 ) -> AgentInvocationError:
     contract_error = NativeReviewContractError(
         code,
@@ -1482,6 +1483,7 @@ def _native_review_contract_failure(
         "native review result violates its bound contract",
         technical_text=f"{code.value}: {contract_error.detail}",
         orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
+        provider_data=provider_data,
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
@@ -1501,6 +1503,7 @@ def _native_codex_contract_failure(
     received_at: datetime,
     detail: str = "provider-authored implementer result rejected",
     diagnostic: OrchestratorDiagnostic | None = None,
+    provider_data: dict[str, object] | None = None,
 ) -> AgentInvocationError:
     contract_error = NativeCodexContractError(
         code,
@@ -1511,6 +1514,7 @@ def _native_codex_contract_failure(
         "native Codex result violates its bound contract",
         technical_text=f"{code.value}: {contract_error.detail}",
         orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
+        provider_data=provider_data,
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
@@ -4894,6 +4898,26 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
             NativeCodexErrorCode.RESULT_CONTENT_INVALID,
             f"codex-content-invalid-{attempt}",
             received_at=now[0],
+            provider_data={
+                "schema_version": "native-agent-codex-result-v2",
+                "result_type": "implementation_result",
+                "request_id": "native-codex-request-" + "a" * 64,
+                "ready": True,
+                "test_files": ["provider/path/must-not-survive.py"],
+                "finding_dispositions": [
+                    {
+                        "finding_id": "C-01",
+                        "decision": "accepted",
+                        "rationale": "provider rationale must not survive",
+                        "responsibility_proposal": {
+                            "responsibility_kind": "SLICE",
+                            "target_run_id": "run-implementer",
+                            "approved_plan_commit": "b" * 40,
+                            "slice_id": "6",
+                        },
+                    }
+                ],
+            },
         )
         for attempt in range(1, 4)
     ]
@@ -4927,6 +4951,26 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
         "transient",
         "resumable_halt",
     ]
+    assert [
+        item.rejected_response_shape is None for item in driver.failure_payloads
+    ] == [True, True, False]
+    implementer_shape = driver.failure_payloads[-1].rejected_response_shape
+    assert implementer_shape is not None
+    assert implementer_shape.release_decision == "ready"
+    assert implementer_shape.finding_dispositions[0].finding_id == "C-01"
+    assert (
+        implementer_shape.finding_dispositions[0]
+        .responsibility_proposal.slice_id
+        == "6"
+    )
+    assert "provider rationale must not survive" not in json.dumps(
+        driver.failure_payloads[-1].native_response_feedback_document
+    )
+    assert (
+        result.state.current_work_unit.invocation_failures[-1]
+        .rejected_response_shape
+        == implementer_shape
+    )
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
 
 
@@ -4991,6 +5035,10 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
     assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2, 3]
     assert result.state.current_work_unit.round_number == 1
     assert result.state.current_work_unit.request_sequence == 3
+    assert all(
+        item.rejected_response_shape is None
+        for item in driver.failure_payloads
+    )
     assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
 
 
@@ -5349,6 +5397,36 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
             NativeReviewErrorCode.APPROVAL_INVALID,
             f"review-content-invalid-{attempt}",
             received_at=now[0],
+            provider_data={
+                "schema_version": "native-agent-review-result-v2",
+                "result_type": "review_result",
+                "request_id": "native-review-request-" + "a" * 64,
+                "reviewer": "claude",
+                "decision": "approved",
+                "new_findings": [],
+                "status_changes": [],
+                "reclassifications": [],
+                "responsibility_routes": [
+                    {
+                        "finding_id": "C-01",
+                        "responsibility": {
+                            "responsibility_kind": "SLICE",
+                            "target_run_id": "run-canary-22",
+                            "approved_plan_commit": "b" * 40,
+                            "slice_id": "4",
+                        },
+                        "rationale": "provider route rationale must not survive",
+                    }
+                ],
+                "plan_treatment_decisions": [],
+                "anchors": [],
+                "review_evidence": {
+                    "dimensions": "provider dimensions must not survive",
+                    "largest_residual_risk": "provider risk must not survive",
+                    "break_condition": "provider break condition must not survive",
+                },
+                "pre_mortem": "provider pre-mortem must not survive",
+            },
         )
         for attempt in range(1, 4)
     ]
@@ -5387,6 +5465,24 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
         "transient",
         "resumable_halt",
     ]
+    assert [
+        item.rejected_response_shape is None for item in driver.failure_payloads
+    ] == [True, True, False]
+    review_shape = driver.failure_payloads[-1].rejected_response_shape
+    assert review_shape is not None
+    assert review_shape.release_decision == "approved"
+    assert review_shape.status_changes == ()
+    assert review_shape.responsibility_routes[0].finding_id == "C-01"
+    assert review_shape.responsibility_routes[0].target is not None
+    assert review_shape.responsibility_routes[0].target.slice_id == "4"
+    assert "provider route rationale must not survive" not in json.dumps(
+        driver.failure_payloads[-1].native_response_feedback_document
+    )
+    assert (
+        result.state.current_work_unit.invocation_failures[-1]
+        .rejected_response_shape
+        == review_shape
+    )
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert result.state.current_work_unit.gate.resume_step is WorkflowStep.CLAUDE_SLICE_REVIEW
 

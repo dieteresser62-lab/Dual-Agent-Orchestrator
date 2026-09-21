@@ -22,6 +22,11 @@ from finding_responsibility import (
 )
 import native_finding_decisions
 from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
+from rejected_response_shape import (
+    RejectedNativeResponseShape,
+    rejected_native_response_shape_document,
+    rejected_native_response_shape_from_document,
+)
 
 
 STATE_VERSION = 3
@@ -364,6 +369,7 @@ class InvocationFailureRecord:
     native_review_retry_round: int | None = None
     native_implementer_rejection: str | None = None
     native_implementer_retry_round: int | None = None
+    rejected_response_shape: RejectedNativeResponseShape | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -527,6 +533,20 @@ class InvocationFailureRecord:
                 self.native_implementer_retry_round,
                 "invocation failure native implementer retry round",
             )
+        if self.rejected_response_shape is not None:
+            if not isinstance(
+                self.rejected_response_shape, RejectedNativeResponseShape
+            ):
+                raise WorkflowStateValidationError(
+                    "invocation failure rejected response shape must be typed"
+                )
+            if self.automatic_resume or (
+                self.native_review_rejection is None
+                and self.native_implementer_rejection is None
+            ):
+                raise WorkflowStateValidationError(
+                    "rejected response shape requires a terminal native response failure"
+                )
 
     def to_dict(self) -> dict[str, object]:
         document: dict[str, object] = {
@@ -563,6 +583,12 @@ class InvocationFailureRecord:
             document["native_implementer_retry_round"] = (
                 self.native_implementer_retry_round
             )
+        if self.rejected_response_shape is not None:
+            document["rejected_response_shape"] = (
+                rejected_native_response_shape_document(
+                    self.rejected_response_shape
+                )
+            )
         return document
 
     @classmethod
@@ -582,6 +608,7 @@ class InvocationFailureRecord:
             "native_review_retry_round",
             "native_implementer_rejection",
             "native_implementer_retry_round",
+            "rejected_response_shape",
         }
         if not required_keys.issubset(raw) or not set(raw).issubset(
             required_keys | optional_keys
@@ -638,6 +665,14 @@ class InvocationFailureRecord:
                 else _positive_int(
                     raw["native_implementer_retry_round"],
                     "invocation failure native implementer retry round",
+                )
+            ),
+            rejected_response_shape=(
+                None
+                if raw.get("rejected_response_shape") is None
+                else _rejected_response_shape(
+                    raw["rejected_response_shape"],
+                    "invocation failure rejected response shape",
                 )
             ),
         )
@@ -3213,6 +3248,17 @@ def _mapping(value: object, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise WorkflowStateValidationError(f"{label} must be an object")
     return value
+
+
+def _rejected_response_shape(
+    value: object, label: str
+) -> RejectedNativeResponseShape:
+    try:
+        return rejected_native_response_shape_from_document(
+            _mapping(value, label)
+        )
+    except ValueError as exc:
+        raise WorkflowStateValidationError(f"{label} is invalid: {exc}") from exc
 
 
 def _list(value: object, label: str) -> list[object]:

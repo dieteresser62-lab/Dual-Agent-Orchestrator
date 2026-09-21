@@ -44,6 +44,11 @@ from orchestrator_diagnostics import (
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
 )
 import native_finding_decisions
+from rejected_response_shape import (
+    RejectedNativeResponseShape,
+    rejected_native_response_shape_document,
+    rejected_native_response_shape_from_document,
+)
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
@@ -2952,6 +2957,7 @@ class InvocationFailurePayload:
     native_review_retry_round: int | None = None
     native_implementer_rejection: str | None = None
     native_implementer_retry_round: int | None = None
+    rejected_response_shape: RejectedNativeResponseShape | None = None
     status: ClassVar[str] = "classified"
     record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
 
@@ -2975,6 +2981,12 @@ class InvocationFailurePayload:
             document.update(
                 native_implementer_rejection=self.native_implementer_rejection,
                 native_implementer_retry_round=self.native_implementer_retry_round,
+            )
+        if self.rejected_response_shape is not None:
+            document["rejected_response_shape"] = (
+                rejected_native_response_shape_document(
+                    self.rejected_response_shape
+                )
             )
         return document
 
@@ -3252,6 +3264,23 @@ def _validate_native_response_failure_feedback(
         raise ArtifactValidationError(
             "invocation failure cannot contain two native rejection roles"
         )
+    if payload.rejected_response_shape is not None:
+        if not isinstance(
+            payload.rejected_response_shape, RejectedNativeResponseShape
+        ):
+            raise ArtifactValidationError(
+                "invocation failure rejected response shape must be typed"
+            )
+        if (
+            payload.automatic_resume
+            or (
+                payload.native_review_rejection is None
+                and payload.native_implementer_rejection is None
+            )
+        ):
+            raise ArtifactValidationError(
+                "rejected response shape requires a terminal native response failure"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3482,6 +3511,15 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     ):
         raw.pop("native_implementer_rejection", None)
         raw.pop("native_implementer_retry_round", None)
+    if isinstance(payload, InvocationFailurePayload):
+        if payload.rejected_response_shape is None:
+            raw.pop("rejected_response_shape", None)
+        else:
+            raw["rejected_response_shape"] = (
+                rejected_native_response_shape_document(
+                    payload.rejected_response_shape
+                )
+            )
     if isinstance(payload, GateDecisionPayload) and payload.invocation_id is None:
         raw.pop("invocation_id", None)
     return _json_value(raw)
@@ -4236,6 +4274,13 @@ _PAYLOAD_READERS: dict[
             data.get("native_review_retry_round"),
             data.get("native_implementer_rejection"),
             data.get("native_implementer_retry_round"),
+            (
+                None
+                if data.get("rejected_response_shape") is None
+                else rejected_native_response_shape_from_document(
+                    data["rejected_response_shape"]
+                )
+            ),
         ),
     RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
         Role(data["role"]), data["repository_fingerprint"], data["retry_at"],
