@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-234933f51ba4fc69c86c6a173140356f8386cd1ca190ac964d9c5c207a4cc40d",
+        "request_id": "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
           "role": "codex",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "codex_implementation",
-          "request_id": "native-codex-request-234933f51ba4fc69c86c6a173140356f8386cd1ca190ac964d9c5c207a4cc40d",
-          "response_sha256": "05f91448c0b1f15d68914cf59eae0318c0df990e2e4e0e74619fb7562c96ba43",
+          "request_id": "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46",
+          "response_sha256": "a0283c507c65a366735683871fbe5bf52b2f86ad130f0788471f60a9d43a5c44",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },
@@ -146,15 +146,15 @@
       "state": {
         "approved": true,
         "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "request_id": "native-review-request-c0b89a403e36b5db9a29f977339c6a531d1cb4c74d8842b7684cfc19597aaad2",
+        "request_id": "native-review-request-e920b8b8d985faa4fbd89d028180975529eec3fe54fe68f248bbcf55b43c35ad",
         "round_number": 1,
         "content_binding": {
           "role": "claude",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "claude_slice_review",
-          "request_id": "native-review-request-c0b89a403e36b5db9a29f977339c6a531d1cb4c74d8842b7684cfc19597aaad2",
-          "response_sha256": "45a3f6c06ead0cf1eb9d1a36f3c55cdc6cdbddcc1942c802564462f72811d2d7",
+          "request_id": "native-review-request-e920b8b8d985faa4fbd89d028180975529eec3fe54fe68f248bbcf55b43c35ad",
+          "response_sha256": "5e0301f75f754dae5353e7c76786eee32af9b9ebb49f81a72ca5d3013e08d28c",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

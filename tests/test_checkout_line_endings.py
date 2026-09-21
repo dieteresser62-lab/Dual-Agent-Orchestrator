@@ -24,7 +24,9 @@ def _tracked_regular_files() -> tuple[Path, ...]:
         mode = metadata.split(b" ", 1)[0]
         if mode not in {b"100644", b"100755"}:
             continue
-        paths.append(ROOT / os.fsdecode(raw_path))
+        path = ROOT / os.fsdecode(raw_path)
+        if path.is_file():
+            paths.append(path)
     return tuple(paths)
 
 

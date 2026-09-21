@@ -11,7 +11,6 @@ import re
 from typing import Any
 
 from finding_order import sorted_finding_ids
-from finding_responsibility import FindingResponsibility
 
 
 # Historical marker for the single joint 67/68 cutover.  Production no longer
@@ -419,28 +418,12 @@ class NativeFindingClosure:
             raise ValueError("rejected closure requires named evidence")
 
 
-@dataclass(frozen=True, slots=True)
-class NativeResponsibilityRoute:
-    finding_id: str
-    responsibility: FindingResponsibility
-    rationale: str
-
-
-@dataclass(frozen=True, slots=True)
-class NativeResponsibilityProposal:
-    finding_id: str
-    responsibility: FindingResponsibility
-    rationale: str
-
-
 __all__ = [
     "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "MAX_REMEDIATION_ROUNDS",
     "NativeClosureKind",
     "NativeFindingClosure",
     "NativeRejectionReason",
-    "NativeResponsibilityProposal",
-    "NativeResponsibilityRoute",
     "ClosedFindingReviewBinding",
     "NoCodeEvidenceAnchor",
     "PlanCompletionKind",

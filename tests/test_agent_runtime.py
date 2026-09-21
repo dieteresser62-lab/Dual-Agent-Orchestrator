@@ -671,7 +671,6 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {

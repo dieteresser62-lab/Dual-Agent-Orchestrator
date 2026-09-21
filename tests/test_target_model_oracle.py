@@ -67,22 +67,6 @@ def test_target_model_is_reachable_and_current_delta_does_not_grow() -> None:
     assert all(item.deviation_id != "103" for item in report.deviations)
 
 
-def test_mutation_107_branch_planning_without_family_becomes_uneinig(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    before = CONTRACT_SOURCE.read_bytes()
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            native_review_contract,
-            "_validate_branch_planning_route_identities",
-            lambda response, context: None,
-        )
-        _assert_mutation_is_new(
-            "branch-planning-without-family", DeviationClass.UNEINIG
-        )
-    assert CONTRACT_SOURCE.read_bytes() == before
-
-
 def test_mutation_106_passing_typed_acceptance_has_no_truthful_move(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -95,22 +79,6 @@ def test_mutation_106_passing_typed_acceptance_has_no_truthful_move(
         )
         _assert_mutation_is_new(
             "typed-green-no-truthful-move", DeviationClass.FEHLEND
-        )
-    assert CONTRACT_SOURCE.read_bytes() == before
-
-
-def test_mutation_102_route_plus_open_is_falsely_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    before = CONTRACT_SOURCE.read_bytes()
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            native_review_contract,
-            "_absorb_redundant_route_status_changes",
-            lambda response: response,
-        )
-        _assert_mutation_is_new(
-            "route-plus-confirming-open", DeviationClass.UNEINIG
         )
     assert CONTRACT_SOURCE.read_bytes() == before
 

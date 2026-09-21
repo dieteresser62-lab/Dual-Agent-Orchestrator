@@ -98,7 +98,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-target-routing-removal-v1",
         "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
@@ -167,6 +167,24 @@ def test_pre_target_finding_lifecycle_reducer_is_named_and_rejected_fail_closed(
             RoleProfilePayload("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION
+            ),
+        )
+
+
+def test_pre_target_routing_removal_reducer_is_named_and_rejected_fail_closed() -> None:
+    assert artifact_models.PRE_TARGET_ROUTING_REMOVAL_REDUCER_VERSION == (
+        "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1"
+    )
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+    ):
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            reducer_version=(
+                artifact_models.PRE_TARGET_ROUTING_REMOVAL_REDUCER_VERSION
             ),
         )
 
@@ -659,15 +677,11 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
         {
             "result_type": "review_result",
             "decision": "approved",
-            "status_changes": [],
-            "responsibility_routes": [
+            "status_changes": [
                 {
                     "finding_id": "C-01",
-                    "responsibility": {
-                        "responsibility_kind": "SLICE",
-                        "target_run_id": "run-22",
-                        "slice_id": "4",
-                    },
+                    "status": "CLOSED",
+                    "closure": {"kind": "fixed"},
                     "rationale": "provider rationale is discarded",
                 }
             ],

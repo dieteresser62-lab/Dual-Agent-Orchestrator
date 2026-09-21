@@ -34,11 +34,6 @@ from schema_validation import (
     validate_schema_document,
 )
 from finding_order import sorted_finding_ids
-from finding_responsibility import (
-    FindingResponsibility,
-    parse_responsibility,
-    responsibility_document,
-)
 from path_policy import PathClass
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
@@ -53,6 +48,9 @@ from rejected_response_shape import (
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-target-routing-removal-v1"
+)
+PRE_TARGET_ROUTING_REMOVAL_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1"
 )
 PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION = (
@@ -1195,8 +1193,6 @@ class FindingTransitionPayload:
     origin_slice_id: str | None = None
     origin_round_number: int | None = None
     response_decision: str | None = None
-    # Older structured-v2 chains may omit responsibility on historical openings.
-    responsibility: FindingResponsibility | None = None
     # Preserve the reviewer's active typed decision instead of collapsing it
     # into prose; partial is intentionally an open intermediate state.
     closure_kind: str | None = None
@@ -1223,7 +1219,7 @@ class FindingTransitionPayload:
         if self.reporter is not Role.CLAUDE:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {
-            "opened", "responded", "status_changed", "reclassified", "escalated", "routed",
+            "opened", "responded", "status_changed", "reclassified", "escalated",
             "acceptance_measured",
         }:
             raise ArtifactValidationError("finding action is invalid")
@@ -1252,30 +1248,6 @@ class FindingTransitionPayload:
             raise ArtifactValidationError("only codex may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
             raise ArtifactValidationError("a codex response cannot close a finding")
-        if self.action == "routed":
-            if self.actor is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
-                raise ArtifactValidationError(
-                    f"finding routing actor must be claude; got {self.actor.value}"  # allowlist:provider -- diagnostic role
-                )
-            if self.finding_status != "open":
-                raise ArtifactValidationError(
-                    "a routed finding must retain finding_status open"
-                )
-            if self.responsibility is None:
-                raise ArtifactValidationError(
-                    "a routed finding requires a new responsibility"
-                )
-        if self.responsibility is not None:
-            try:
-                responsibility_document(self.responsibility)
-            except ValueError as exc:
-                raise ArtifactValidationError(
-                    f"finding responsibility is invalid: {exc}"
-                ) from exc
-            if self.action not in {"opened", "routed"}:
-                raise ArtifactValidationError(
-                    "finding responsibility is limited to opened and routed transitions"
-                )
         _require_text(self.rationale, "rationale")
         if self.work_unit_id is not None:
             _require_identifier(self.work_unit_id, "work_unit_id")
@@ -1298,12 +1270,6 @@ class FindingTransitionPayload:
             _require_text(self.acceptance_test, "acceptance_test")
             _require_identifier(self.origin_slice_id, "origin_slice_id")
             _require_positive(self.origin_round_number, "origin_round_number")
-        if self.action == "opened" and self.responsibility is not None and (
-            self.work_unit_id is None or any(item is None for item in opening_metadata)
-        ):
-            raise ArtifactValidationError(
-                "a responsibility-bearing opening requires complete review context metadata"
-            )
         if self.action == "opened" and self.affected_paths is not None:
             _require_paths(self.affected_paths, allow_empty=True)
         elif self.affected_paths:
@@ -3529,10 +3495,6 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             occurrences.append(item)
         raw["occurrences"] = occurrences
     if isinstance(payload, FindingTransitionPayload):
-        if payload.responsibility is None:
-            raw.pop("responsibility", None)
-        else:
-            raw["responsibility"] = responsibility_document(payload.responsibility)
         if payload.closure_kind is None:
             raw.pop("closure_kind", None)
             raw.pop("rejection_reason", None)
@@ -4154,11 +4116,6 @@ _PAYLOAD_READERS: dict[
             origin_slice_id=data.get("origin_slice_id"),
             origin_round_number=data.get("origin_round_number"),
             response_decision=data.get("response_decision"),
-            responsibility=(
-                None
-                if "responsibility" not in data
-                else parse_responsibility(data["responsibility"])
-            ),
             closure_kind=data.get("closure_kind"),
             rejection_reason=data.get("rejection_reason"),
             closure_evidence=data.get("closure_evidence"),

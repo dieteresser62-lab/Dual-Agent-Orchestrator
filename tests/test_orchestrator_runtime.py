@@ -104,10 +104,6 @@ from contracts import (
     ReviewEvidence,
 )
 from finding_reducer import reduce_findings
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    responsibility_document,
-)
 from finding_planning import RemediationRoundOutcome
 from native_finding_decisions import MAX_REMEDIATION_ROUNDS
 from git_service import GitTransactionError
@@ -560,8 +556,6 @@ def _native_plan_output(
 
 def _native_review_approval(
     invocation: ReviewerInvocation,
-    *,
-    observation_id: str | None = None,
 ) -> NativeAgentReviewOutput:
     bundle = invocation.native_request
     assert bundle is not None
@@ -571,25 +565,9 @@ def _native_review_approval(
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",
         "decision": "approved",
-        "new_findings": (
-            []
-            if observation_id is None
-            else [
-                {
-                    "finding_id": observation_id,
-                    "finding_class": "OBSERVATION",
-                    "affected_paths": [],
-                    "summary": "Carry the approved-plan follow-up into implementation.",
-                    "acceptance_test": {
-                        "kind": "prose",
-                        "text": "The IMPLEMENT handoff preserves this finding.",
-                    },
-                }
-            ]
-        ),
+        "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
@@ -623,7 +601,6 @@ def _native_implementation_output(
                 "finding_id": finding.finding_id,
                 "decision": "accepted",
                 "rationale": "The implementation resolves the offered finding.",
-                "responsibility_proposal": None,
             }
             for finding in bundle.bound_context.context.previous_findings
             if finding.status is FindingStatus.OPEN
@@ -647,8 +624,6 @@ def _native_branch_discovery_output(
 ) -> NativeAgentReviewOutput:
     bundle = invocation.native_request
     assert bundle is not None
-    binding = driver.active_state.family_binding
-    assert binding is not None
     finding = (
         []
         if finding_id is None
@@ -667,22 +642,6 @@ def _native_branch_discovery_output(
             }
         ]
     )
-    routes = (
-        []
-        if finding_id is None
-        else [
-            {
-                "finding_id": finding_id,
-                "responsibility": responsibility_document(
-                    BranchPlanningResponsibility(
-                        binding.family_id,
-                        binding.cycle_number,
-                    )
-                ),
-                "rationale": "The next linked branch plan owns this defect.",
-            }
-        ]
-    )
     document = {
         "schema_version": "native-agent-review-result-v2",
         "result_type": "branch_discovery_completed",
@@ -691,7 +650,6 @@ def _native_branch_discovery_output(
         "scan_complete": True,
         "new_findings": finding,
         "occurrences": [],
-        "responsibility_routes": routes,
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, and resume",
             "largest_residual_risk": "A later family edge could omit the snapshot.",
@@ -3494,7 +3452,6 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
             }
         ],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
@@ -4743,7 +4700,6 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The recovery path now completes durable responses.",
-                "responsibility_proposal": None,
             }
         ],
     }
@@ -7892,192 +7848,8 @@ def test_plan_only_repairs_handoff_contract_before_review(
     assert task.with_name("task-implement.md").is_file()
 
 
-def test_plan_only_unowned_observation_is_exported_before_workflow_completion(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/plan-finding-export")
-    inbox = repository / "inbox"
-    inbox.mkdir()
-    task = inbox / "plan.md"
-    task.write_text(
-        "\n".join(
-            (
-                "ORCHESTRATOR_MODE: PLAN_ONLY",
-                "WORK_PLAN_PATH: docs/internal/work-plan.md",
-                "TARGET_BRANCH: feature/plan-finding-export",
-                "TASK_SCOPE: docs/internal/work-plan.md",
-            )
-        ),
-        encoding="utf-8",
-    )
-
-    def codex(
-        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
-    ) -> NativeAgentCodexOutput:
-        plan = repository / "docs" / "internal" / "work-plan.md"
-        plan.parent.mkdir(parents=True, exist_ok=True)
-        plan.write_text(
-            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
-            "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
-            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
-            encoding="utf-8",
-        )
-        return _native_plan_output(
-            invocation,
-            summary="create reviewed work plan",
-            scope_paths=("docs/internal/work-plan.md",),
-        )
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> NativeAgentReviewOutput:
-        return _native_review_approval(invocation, observation_id="C-01")
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.setattr(
-        ProductionWorkflowDriver,
-        "assert_structured_decision_context",
-        lambda _driver: None,
-    )
-    monkeypatch.chdir(repository)
-
-    result = run_production_workflow(task, _args(repository, task))
-
-    assert result.workflow_completed
-    persisted = orchestrator.load_workflow_state(
-        repository / ".orchestrator" / "state.json",
-        allowed_roots=(repository,),
-    )
-    assert isinstance(persisted, WorkflowState)
-    chain = ArtifactStore(repository, persisted.run_id).load_chain()
-    assert any(isinstance(record.payload, PlanPayload) for record in chain)
-    export_position = next(
-        index
-        for index, record in enumerate(chain)
-        if isinstance(record.payload, FindingHandoffExportPayload)
-    )
-    completion_position = next(
-        index
-        for index, record in enumerate(chain)
-        if isinstance(record.payload, WorkflowCompletionPayload)
-    )
-    assert export_position < completion_position
-    assert task.with_name("plan-implement.md").is_file()
 
 
-def test_unowned_plan_observation_resume_stays_halted_without_agents(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/legacy-plan-finding-export")
-    inbox = repository / "inbox"
-    inbox.mkdir()
-    task = inbox / "plan.md"
-    task.write_text(
-        "\n".join(
-            (
-                "ORCHESTRATOR_MODE: PLAN_ONLY",
-                "WORK_PLAN_PATH: docs/internal/work-plan.md",
-                "TARGET_BRANCH: feature/legacy-plan-finding-export",
-                "TASK_SCOPE: docs/internal/work-plan.md",
-            )
-        ),
-        encoding="utf-8",
-    )
-    agent_steps: list[WorkflowStep] = []
-
-    def codex(
-        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
-    ) -> NativeAgentCodexOutput:
-        agent_steps.append(invocation.step)
-        plan = repository / "docs" / "internal" / "work-plan.md"
-        plan.parent.mkdir(parents=True, exist_ok=True)
-        plan.write_text(
-            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
-            "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
-            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
-            encoding="utf-8",
-        )
-        return _native_plan_output(
-            invocation,
-            summary="create reviewed work plan",
-            scope_paths=("docs/internal/work-plan.md",),
-        )
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> NativeAgentReviewOutput:
-        agent_steps.append(invocation.step)
-        return _native_review_approval(invocation, observation_id="C-01")
-
-    real_bind = WorkflowState.bind_completed_plan_commit
-    suppress_binding = True
-
-    def legacy_bind(
-        state: WorkflowState, *, commit_ref: str, updated_at: str | None = None
-    ) -> WorkflowState:
-        if suppress_binding:
-            return state
-        return real_bind(state, commit_ref=commit_ref, updated_at=updated_at)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.setattr(
-        ProductionWorkflowDriver,
-        "assert_structured_decision_context",
-        lambda _driver: None,
-    )
-    monkeypatch.setattr(WorkflowState, "bind_completed_plan_commit", legacy_bind)
-    monkeypatch.chdir(repository)
-    args = _args(repository, task)
-
-    with pytest.raises(
-        WorkflowExecutionError,
-        match=(
-            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
-            "open findings without valid responsibility: C-01"
-        ),
-    ) as rejected:
-        run_production_workflow(task, args)
-    assert "dual-write mismatch" not in str(rejected.value)
-
-    persisted = orchestrator.load_workflow_state(
-        repository / ".orchestrator" / "state.json",
-        allowed_roots=(repository,),
-    )
-    assert isinstance(persisted, WorkflowState)
-    assert persisted.approved_plan_commit is None
-    before_resume = ArtifactStore(repository, persisted.run_id).load_chain()
-    assert not any(
-        isinstance(record.payload, WorkflowCompletionPayload)
-        for record in before_resume
-    )
-    assert not any(isinstance(record.payload, PlanPayload) for record in before_resume)
-    steps_before_resume = tuple(agent_steps)
-
-    suppress_binding = False
-    args.resume = True
-    with pytest.raises(
-        WorkflowExecutionError,
-        match=(
-            "OPEN-FINDING-WITHOUT-RESPONSIBILITY: workflow completion rejected; "
-            "open findings without valid responsibility: C-01"
-        ),
-    ):
-        run_production_workflow(task, args)
-
-    assert tuple(agent_steps) == steps_before_resume
-    assert not task.with_name("plan-implement.md").exists()
-    after_resume = ArtifactStore(repository, persisted.run_id).load_chain()
-    assert not any(isinstance(record.payload, PlanPayload) for record in after_resume)
-    assert not any(
-        isinstance(record.payload, FindingHandoffExportPayload)
-        for record in after_resume
-    )
-    assert not any(
-        isinstance(record.payload, WorkflowCompletionPayload)
-        for record in after_resume
-    )
 
 
 def test_completed_plan_resume_retries_failed_handoff_without_agents(

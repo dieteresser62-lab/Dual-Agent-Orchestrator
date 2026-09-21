@@ -18,7 +18,6 @@ from contracts import (
     FindingRecord,
     FindingResponseDecision,
     FindingStatus,
-    PlannedSlice,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
@@ -26,12 +25,6 @@ from contracts import (
     apply_finding_response,
 )
 from finding_reducer import project_open_set, project_reviewer_persistence_transitions
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    PlanRevisionResponsibility,
-    SliceResponsibility,
-    responsibility_document,
-)
 from gates import detect_anchor_changes
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
@@ -53,7 +46,6 @@ from native_review_contract import (
     validate_native_review_disposition_budget,
     parse_native_review_response,
 )
-from native_finding_decisions import NativeResponsibilityRoute
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from rejected_response_shape import extract_rejected_native_response_shape
 from schema_validation import SchemaMismatch, validate_schema_document
@@ -186,7 +178,6 @@ def _context(
         anchor_origin=anchor_origin,
         validation_command_prefixes=(("python3", "-m", "pytest"),),
         red_state_followup_slice=red_state_followup_slice,
-        branch_planning_target=BranchPlanningResponsibility("family-1", 1),
     )
 
 
@@ -216,7 +207,6 @@ def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str,
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
@@ -366,15 +356,6 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
                 "evidence_anchor_sha256": None,
             }
         ],
-        "responsibility_routes": [
-            {
-                "finding_id": "C-02",
-                "responsibility": responsibility_document(
-                    BranchPlanningResponsibility("family-1", 1)
-                ),
-                "rationale": "The next branch plan owns this discovered defect.",
-            }
-        ],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, and resume",
             "largest_residual_risk": "A future family edge could omit a finding.",
@@ -397,16 +378,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
         ),
     )
     assert project_open_set(result.findings).finding_ids == ("C-01", "C-02")
-    assert result.responsibility_routes == (
-        NativeResponsibilityRoute(
-            "C-02",
-            BranchPlanningResponsibility("family-1", 1),
-            "The next branch plan owns this discovered defect.",
-        ),
-    )
-
     ordinary_review = _review(context)
-    ordinary_review["responsibility_routes"] = []
     with pytest.raises(SchemaMismatch):
         validate_schema_document(
             {"result": ordinary_review},
@@ -445,7 +417,6 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
             }
         ],
         "occurrences": [],
-        "responsibility_routes": [],
         "review_evidence": {
             "dimensions": "correctness and completeness",
             "largest_residual_risk": "More findings remain undiscovered.",
@@ -490,253 +461,21 @@ def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity
         parse_native_contract_result(incomplete, context)
 
 
-@pytest.mark.parametrize(
-    "responsibility",
-    (
-        SliceResponsibility("later-run", "b" * 40, "6", "ac-" + "d" * 64),
-        BranchPlanningResponsibility("family-1", 2),
-        PlanRevisionResponsibility(
-            "plan-run", "docs/internal/plan.md", "c" * 64, 3
-        ),
-    ),
-)
-def test_native_routes_roundtrip_through_shared_responsibility_types(
-    active_finding_decisions: None,
-    responsibility,
-) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
-    if isinstance(responsibility, BranchPlanningResponsibility):
-        context = replace(context, branch_planning_target=responsibility)
-    document = _review(context, approved=False)
-    from finding_responsibility import responsibility_document
-
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(responsibility),
-            "rationale": "Claude assigns the open finding to its next owner.",
-        }
-    ]
-
-    response = parse_native_review_response(document, context)
-    result = native_response_to_contract_result(response, context)
-
-    assert response.responsibility_routes == (
-        NativeResponsibilityRoute(
-            "C-01",
-            responsibility,
-            "Claude assigns the open finding to its next owner.",
-        ),
-    )
-    assert result.findings[0].status is FindingStatus.OPEN
 
 
-def test_first_review_writer_offers_new_finding_ids_for_responsibility_routes(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(_context(), round_number=1)
-    writer = native_review_provider_response_schema(context)
-
-    new_finding_ids = writer["$defs"]["bound_approved_finding"]["properties"][
-        "finding_id"
-    ]["enum"]
-    route_ids = writer["$defs"]["bound_responsibility_route"]["properties"][
-        "finding_id"
-    ]["enum"]
-    route_limit = writer["$defs"]["bound_slice_initial_approved"]["properties"][
-        "responsibility_routes"
-    ]["maxItems"]
-
-    assert route_ids == new_finding_ids
-    assert route_ids[0] == "C-01"
-    assert route_limit == 32
 
 
-def test_review_can_route_a_finding_opened_in_the_same_response(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(
-        _context(),
-        round_number=1,
-        planned_slices=(
-            PlannedSlice(1, "Current", ("src/current.py",)),
-            PlannedSlice(2, "Later", ("src/future.py",)),
-        ),
-    )
-    responsibility = SliceResponsibility(
-        context.run_id,
-        "b" * 40,
-        "2",
-        "ac-" + "c" * 64,
-    )
-    document = _review(context, approved=True)
-    document["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "summary": "src/future.py needs a later planned repair.",
-            "acceptance_test": {
-                "kind": "prose",
-                "text": "The later Slice repairs src/future.py.",
-            },
-            "affected_paths": ["src/future.py"],
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(responsibility),
-            "rationale": "The later planned Slice owns this observation.",
-        }
-    ]
-
-    validate_schema_document(
-        {"result": document}, native_review_provider_response_schema(context)
-    )
-    response = parse_native_review_response(document, context)
-    result = native_response_to_contract_result(response, context)
-
-    assert response.responsibility_routes == (
-        NativeResponsibilityRoute(
-            "C-01",
-            responsibility,
-            "The later planned Slice owns this observation.",
-        ),
-    )
-    assert result.responsibility_routes == response.responsibility_routes
-    assert project_open_set(result.findings).finding_ids == ("C-01",)
-    assert result.findings[0].affected_paths == ("src/future.py",)
 
 
-@pytest.mark.parametrize(
-    "bound_target",
-    (None, BranchPlanningResponsibility("family-1", 2)),
-    ids=("missing-run-family", "foreign-cycle"),
-)
-def test_branch_planning_route_is_rejected_before_record_persistence(
-    active_finding_decisions: None,
-    bound_target: BranchPlanningResponsibility | None,
-) -> None:
-    context = replace(
-        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
-        branch_planning_target=bound_target,
-    )
-    document = _review(context, approved=False)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("family-1", 1)
-            ),
-            "rationale": "Branch planning would own the follow-up.",
-        }
-    ]
-
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_review_response(document, context)
-
-    assert raised.value.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_BRANCH_PLANNING_IDENTITY_INVALID
-    )
-    guidance = native_review_retry_guidance(
-        raised.value.code,
-        raised.value.orchestrator_diagnostic,
-        context,
-    )
-    assert "close or evidentially reject" in guidance
-    assert "valid named later Slice" in guidance
 
 
-def test_branch_planning_target_must_be_typed() -> None:
-    with pytest.raises(NativeReviewContractError) as raised:
-        replace(_context(), branch_planning_target="family-1")  # type: ignore[arg-type]
-
-    assert raised.value.code is NativeReviewErrorCode.CONTEXT_INVALID
-    assert raised.value.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED
-    )
 
 
-def test_canary_26_attempt_one_open_confirmation_is_absorbed_by_route(
-    active_finding_decisions: None,
-) -> None:
-    finding = _finding(
-        "C-01", AgentRole.CLAUDE, finding_class=FindingClass.OBSERVATION
-    )
-    context = replace(
-        _context(previous=(finding,)),
-        branch_planning_target=BranchPlanningResponsibility("canary-26", 1),
-    )
-    document = _review(context, approved=True)
-    document["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "OPEN",
-            "rationale": "C-01 remains open for the branch-planning follow-up.",
-            "closure": None,
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("canary-26", 1)
-            ),
-            "rationale": "Branch planning owns the remaining work.",
-        }
-    ]
-
-    validate_schema_document(
-        {"result": document}, native_review_provider_response_schema(context)
-    )
-    response = parse_native_review_response(document, context)
-    result = native_response_to_contract_result(response, context)
-
-    assert response.status_changes == ()
-    assert result.approval is True
-    assert result.findings[0].status is FindingStatus.OPEN
-    assert result.responsibility_routes == response.responsibility_routes
 
 
-def test_route_does_not_absorb_open_status_with_partial_closure(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(
-        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
-        branch_planning_target=BranchPlanningResponsibility("canary-26", 1),
-    )
-    document = _review(context, approved=False)
-    document["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "OPEN",
-            "rationale": "Work remains after the measured partial repair.",
-            "closure": {
-                "kind": "partial",
-                "evidence": "The bound evidence covers only part of the defect.",
-                "remaining": "Complete the remaining repair.",
-            },
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("canary-26", 1)
-            ),
-            "rationale": "Branch planning owns the remaining work.",
-        }
-    ]
-
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
-
-    assert raised.value.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT
-    )
 
 
-def test_seven_original_event_collisions_have_seven_precise_diagnostics(
+def test_five_finding_event_collisions_have_precise_diagnostics(
     active_finding_decisions: None,
 ) -> None:
     context = _context(
@@ -756,23 +495,9 @@ def test_seven_original_event_collisions_have_seven_precise_diagnostics(
     status = NativeStatusChange(
         "C-01", FindingStatus.OPEN, "The existing blocker remains reproducible."
     )
-    closed_status = NativeStatusChange(
-        "C-01",
-        FindingStatus.CLOSED,
-        "The existing blocker is resolved.",
-        native_finding_decisions.NativeFindingClosure(
-            kind=native_finding_decisions.NativeClosureKind.FIXED
-        ),
-    )
     reclassification = NativeReclassification(
         "C-01", FindingClass.OBSERVATION, "The impact is non-blocking."
     )
-    route = NativeResponsibilityRoute(
-        "C-01",
-        BranchPlanningResponsibility("collision-family", 1),
-        "Branch planning owns the follow-up.",
-    )
-
     cases: list[
         tuple[dict[str, object], OrchestratorDiagnostic, tuple[str, ...]]
     ] = []
@@ -793,11 +518,6 @@ def test_seven_original_event_collisions_have_seven_precise_diagnostics(
             ("reclassifications",),
         ),
         (
-            {"responsibility_routes": (route, route)},
-            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_DUPLICATE,
-            ("responsibility_routes",),
-        ),
-        (
             {
                 "new_findings": (new_finding,),
                 "reclassifications": (
@@ -815,14 +535,6 @@ def test_seven_original_event_collisions_have_seven_precise_diagnostics(
             OrchestratorDiagnostic.REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT,
             ("status_changes", "reclassifications"),
         ),
-        (
-            {
-                "status_changes": (closed_status,),
-                "responsibility_routes": (route,),
-            },
-            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT,
-            ("status_changes", "responsibility_routes"),
-        ),
     ):
         cases.append((mutation, diagnostic, field_names))
 
@@ -838,39 +550,9 @@ def test_seven_original_event_collisions_have_seven_precise_diagnostics(
         assert error.detail != "finding id occurs in more than one event"
         seen.add(diagnostic)
 
-    assert len(seen) == 7
+    assert len(seen) == 5
 
 
-def test_route_reclassification_collision_names_both_fields(
-    active_finding_decisions: None,
-) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
-    document = _review(context, approved=False)
-    document["reclassifications"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "rationale": "The finding has lower impact.",
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("collision-family", 1)
-            ),
-            "rationale": "Branch planning owns the follow-up.",
-        }
-    ]
-
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
-
-    assert raised.value.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT
-    )
-    assert "responsibility_routes" in raised.value.detail
-    assert "reclassifications" in raised.value.detail
 
 
 def test_approval_retry_guidance_labels_existing_and_same_response_findings() -> None:
@@ -910,211 +592,15 @@ def test_approval_retry_guidance_labels_existing_and_same_response_findings() ->
     assert "opened in the rejected response: C-02" in guidance
     assert "status_changes" in guidance
     assert "status=CLOSED" in guidance
-    assert "responsibility_routes" in guidance
     assert "opened in new_findings and decided in that same response" in guidance
 
 
-def test_plan_opening_rejects_wrong_responsibility_kind_with_retry_guidance(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(
-        _context(approval=ApprovalMarker.PLAN),
-        operation="claude_plan_review",
-        round_number=1,
-        plan_artifact_path="docs/internal/plan.md",
-    )
-    document = _review(context, approved=False)
-    document["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "BLOCKER",
-            "summary": "The plan needs a bounded revision.",
-            "acceptance_test": {
-                "kind": "prose",
-                "text": "The revised plan covers the missing contract.",
-            },
-            "affected_paths": ["docs/internal/plan.md"],
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("family-1", 1)
-            ),
-            "rationale": "This deliberately uses the wrong responsibility kind.",
-        }
-    ]
-
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
-
-    error = raised.value
-    assert error.code is NativeReviewErrorCode.FINDING_CONTENT_INVALID
-    assert error.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
-    )
-    assert native_review_retry_guidance(
-        error.code, error.orchestrator_diagnostic, context
-    ) == (
-        "finding-content-invalid: plan review finding opening requires "
-        "responsibility kind PLAN_REVISION"
-    )
 
 
-@pytest.mark.parametrize("approved", (False, True))
-def test_slice_route_rejects_uncovered_typed_paths_with_actionable_guidance(
-    active_finding_decisions: None,
-    approved: bool,
-) -> None:
-    affected_paths = (
-        "docs/internal/kochdauer-und-aufwand-arbeitsplan.md",
-        "pipeline/schemas/recipe.schema.json",
-        "pipeline/src/validateRecipe.ts",
-    )
-    provider_prose = "provider prose must not enter deterministic feedback"
-    finding = replace(
-        _finding(
-            "C-01",
-            AgentRole.CLAUDE,
-            finding_class=FindingClass.BLOCKER,
-        ),
-        summary=provider_prose,
-        acceptance_test=provider_prose,
-        affected_paths=affected_paths,
-    )
-    context = replace(
-        _context(previous=(finding,)),
-        planned_slices=(
-            PlannedSlice(1, "Current", ("src/current.py",)),
-            PlannedSlice(
-                2,
-                "Recipe implementation",
-                (
-                    "pipeline/schemas/recipe.schema.json",
-                    "pipeline/src/validateRecipe.ts",
-                ),
-            ),
-        ),
-    )
-    document = _review(context, approved=approved)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(
-                SliceResponsibility(context.run_id, "b" * 40, "2")
-            ),
-            "rationale": provider_prose,
-        }
-    ]
-
-    validate_schema_document(
-        {"result": document}, native_review_provider_response_schema(context)
-    )
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
-
-    error = raised.value
-    assert error.code is NativeReviewErrorCode.APPROVAL_INVALID
-    assert error.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID
-    )
-    assert error.detail == (
-        "route for finding C-01 cannot target Slice 2 because its approved "
-        "scope does not cover affected_paths: "
-        "docs/internal/kochdauer-und-aufwand-arbeitsplan.md; close C-01, "
-        "reject it with named evidence, route it to a named later Slice whose "
-        "approved scope covers every affected_path, or route it to branch planning"
-    )
-    assert "pipeline/schemas/recipe.schema.json" not in error.detail
-    assert "pipeline/src/validateRecipe.ts" not in error.detail
-    assert provider_prose not in error.detail
-    assert provider_prose not in error.orchestrator_diagnostic.text
-
-    retry_guidance = native_review_retry_guidance(
-        error.code, error.orchestrator_diagnostic, context
-    )
-    assert "C-01 -> Slice 2 is invalid" in retry_guidance
-    assert "docs/internal/kochdauer-und-aufwand-arbeitsplan.md" in retry_guidance
-    assert (
-        "Close the affected Finding, reject it with named evidence"
-        in retry_guidance
-    )
-    assert "approved scope covers every affected_path" in retry_guidance
-    assert "branch planning" in retry_guidance
-    assert provider_prose not in retry_guidance
 
 
-def test_slice_route_accepts_a_target_scope_covering_every_affected_path(
-    active_finding_decisions: None,
-) -> None:
-    finding = replace(
-        _finding(
-            "C-01",
-            AgentRole.CLAUDE,
-            finding_class=FindingClass.OBSERVATION,
-        ),
-        affected_paths=("src/future/one.py", "src/future/two.py"),
-    )
-    context = replace(
-        _context(previous=(finding,)),
-        planned_slices=(
-            PlannedSlice(1, "Current", ("src/current.py",)),
-            PlannedSlice(2, "Later", ("src/future",)),
-        ),
-    )
-    responsibility = SliceResponsibility(context.run_id, "b" * 40, "2")
-    document = _review(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(responsibility),
-            "rationale": "The complete affected path set is in Slice 2.",
-        }
-    ]
-
-    result = parse_native_contract_result(document, context)
-
-    assert result.approval is True
-    assert result.responsibility_routes == (
-        NativeResponsibilityRoute(
-            "C-01", responsibility, "The complete affected path set is in Slice 2."
-        ),
-    )
 
 
-def test_branch_planning_route_remains_the_scope_independent_fallback(
-    active_finding_decisions: None,
-) -> None:
-    finding = replace(
-        _finding(
-            "C-01",
-            AgentRole.CLAUDE,
-            finding_class=FindingClass.OBSERVATION,
-        ),
-        affected_paths=("docs/internal/not-in-any-slice.md",),
-    )
-    context = replace(
-        _context(previous=(finding,)),
-        planned_slices=(
-            PlannedSlice(1, "Current", ("src/current.py",)),
-            PlannedSlice(2, "Later", ("src/future.py",)),
-        ),
-    )
-    responsibility = BranchPlanningResponsibility("family-1", 1)
-    document = _review(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(responsibility),
-            "rationale": "A later branch plan must create an owning Slice.",
-        }
-    ]
-
-    result = parse_native_contract_result(document, context)
-
-    assert result.approval is True
-    assert result.responsibility_routes[0].responsibility == responsibility
 
 
 def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
@@ -1149,7 +635,6 @@ def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
     assert "C-01 (opened in this response)" in raised.value.detail
     assert "C-02 (opened in this response)" in raised.value.detail
     assert "status_changes" in raised.value.detail
-    assert "responsibility_routes" in raised.value.detail
     assert "may be decided in the same response" in raised.value.detail
 
 
@@ -1224,123 +709,12 @@ def test_slice_denial_allows_new_undecided_finding(
     assert project_open_set(result.findings).finding_ids == ("C-01",)
 
 
-def test_review_writer_limits_slice_routes_to_plan_slice_ids(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(
-        _context(previous=(_finding("C-01", AgentRole.CLAUDE),)),
-        planned_slices=tuple(
-            PlannedSlice(
-                slice_id,
-                f"Slice {slice_id}",
-                (f"src/slice_{slice_id}.py",),
-            )
-            for slice_id in range(1, 7)
-        ),
-    )
-    writer = native_review_provider_response_schema(context)
-    target_schema = writer["$defs"]["finding_responsibility"]["oneOf"][0][
-        "properties"
-    ]["slice_id"]
-
-    assert target_schema == {
-        "type": "string",
-        "enum": ["2", "3", "4", "5", "6"],
-    }
-    assert "const" not in target_schema
-
-    document = _review(context, approved=False)
-    route = {
-        "finding_id": "C-01",
-        "responsibility": responsibility_document(
-            SliceResponsibility(context.run_id, "b" * 40, "2")
-        ),
-        "rationale": "The later planned Slice owns this observation.",
-    }
-    document["responsibility_routes"] = [route]
-    validate_schema_document({"result": document}, writer)
-
-    route["responsibility"] = responsibility_document(
-        SliceResponsibility(context.run_id, "b" * 40, "01")
-    )
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document({"result": document}, writer)
 
 
-def test_route_in_new_id_window_must_name_a_finding_opened_in_the_response(
-    active_finding_decisions: None,
-) -> None:
-    context = replace(_context(), round_number=1)
-    document = _review(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-02",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("family-1", 1)
-            ),
-            "rationale": "A route cannot create the referenced finding.",
-        }
-    ]
-
-    validate_schema_document(
-        {"result": document}, native_review_provider_response_schema(context)
-    )
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_review_response(document, context)
-
-    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN
 
 
-def test_route_cannot_name_an_unoffered_open_finding(
-    active_finding_decisions: None,
-) -> None:
-    offered = _finding("C-01", AgentRole.CLAUDE)
-    foreign = _finding("C-02", AgentRole.CLAUDE)
-    context = replace(
-        _context(previous=(offered,)),
-        known_open_findings=(offered, foreign),
-        authoritative_finding_ids=("C-01", "C-02"),
-    )
-    document = _review(context, approved=False)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-02",
-            "responsibility": responsibility_document(
-                BranchPlanningResponsibility("family-1", 1)
-            ),
-            "rationale": "The reviewer may only route an offered own finding.",
-        }
-    ]
-
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(
-            {"result": document}, native_review_provider_response_schema(context)
-        )
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_review_response(document, context)
-
-    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN
 
 
-def test_native_route_names_a_missing_responsibility_field(
-    active_finding_decisions: None,
-) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
-    document = _review(context, approved=False)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": {
-                "responsibility_kind": "SLICE",
-                "target_run_id": "later-run",
-                "approved_plan_commit": "b" * 40,
-            },
-            "rationale": "The later Slice owns the follow-up.",
-        }
-    ]
-
-    with pytest.raises(NativeReviewContractError, match="slice_id"):
-        parse_native_review_response(document, context)
 
 
 def test_closed_status_requires_a_typed_closure(
@@ -1348,7 +722,6 @@ def test_closed_status_requires_a_typed_closure(
 ) -> None:
     context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
     document = _review(context, approved=False)
-    document["responsibility_routes"] = []
     document["status_changes"] = [
         {
             "finding_id": "C-01",
@@ -1378,7 +751,6 @@ def test_closed_status_accepts_fixed_or_evidenced_rejection(
 ) -> None:
     context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
     document = _review(context, approved=True)
-    document["responsibility_routes"] = []
     document["status_changes"] = [
         {
             "finding_id": "C-01",
@@ -1480,7 +852,7 @@ def test_partial_finding_decision_records_evidence_and_keeps_blocker_open() -> N
             "rationale": "Nine of twelve factories are now wired.",
             "closure": {
                 "kind": "partial",
-                "evidence": "The bound route test reaches nine factories.",
+                "evidence": "The bound regression reaches nine factories.",
                 "remaining": "Wire onboarding, backup, and ingredient guide.",
             },
         }
@@ -1492,7 +864,7 @@ def test_partial_finding_decision_records_evidence_and_keeps_blocker_open() -> N
     assert result.own_open_blockers == (result.findings[0],)
     closure = dict(result.finding_closures)["C-01"]
     assert closure.kind is native_finding_decisions.NativeClosureKind.PARTIAL
-    assert closure.evidence == "The bound route test reaches nine factories."
+    assert closure.evidence == "The bound regression reaches nine factories."
     assert closure.remaining == "Wire onboarding, backup, and ingredient guide."
 
 
@@ -1551,7 +923,6 @@ def test_rejected_closure_requires_named_evidence_and_a_known_reason(
 ) -> None:
     context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
     document = _review(context, approved=False)
-    document["responsibility_routes"] = []
     document["status_changes"] = [
         {
             "finding_id": "C-01",
@@ -1565,7 +936,7 @@ def test_rejected_closure_requires_named_evidence_and_a_known_reason(
         parse_native_review_response(document, context)
 
 
-def test_combined_review_budget_counts_status_class_and_route_before_effects(
+def test_combined_review_budget_counts_status_and_class_before_effects(
     active_finding_decisions: None,
 ) -> None:
     previous = tuple(
@@ -1575,23 +946,16 @@ def test_combined_review_budget_counts_status_class_and_route_before_effects(
     context = _context(approval=ApprovalMarker.SLICE, previous=previous)
     document = _review(context, approved=False)
     document["status_changes"] = [{} for _ in range(30)]
-    document["reclassifications"] = [{}]
-    document["responsibility_routes"] = [{}, {}]
+    document["reclassifications"] = [{} for _ in range(3)]
 
     with pytest.raises(NativeReviewContractError) as raised:
         validate_native_review_disposition_budget(document, context)
 
     assert raised.value.disposition_limit == NativeReviewDispositionLimit(33, 32)
     assert "status_changes=30" in raised.value.detail
-    assert "reclassifications=1" in raised.value.detail
-    assert "responsibility_routes=2" in raised.value.detail
+    assert "reclassifications=3" in raised.value.detail
 
 
-def test_active_review_contract_accepts_empty_responsibility_routes() -> None:
-    context = _context()
-    parsed = parse_native_review_response(_review(context), context)
-    assert isinstance(parsed, NativeReviewResult)
-    assert parsed.responsibility_routes == ()
 
 
 def test_active_review_contract_accepts_typed_closure() -> None:
@@ -2377,7 +1741,7 @@ def test_large_non_slice_schema_has_no_disposition_partition_branch_list(
     thirty_three_findings = approval_schema(33)
 
     assert thirty_three_findings["anyOf"] == one_finding["anyOf"]
-    assert len(thirty_three_findings["anyOf"]) == 5
+    assert len(thirty_three_findings["anyOf"]) == 4
     assert not any(
         {"status_changes", "reclassifications"}
         <= set(branch.get("properties", {}))

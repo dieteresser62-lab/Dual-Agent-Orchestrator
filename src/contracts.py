@@ -17,7 +17,6 @@ from content_authority import (
 from finding_order import sorted_finding_ids
 from native_finding_decisions import (
     NativeFindingClosure,
-    NativeResponsibilityRoute,
     PlanCompletionKind,
     PlanTreatmentDecision,
     PlanTreatmentProposal,
@@ -528,7 +527,6 @@ class ContractResult:
     scan_complete: bool | None = None
     plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
     finding_closures: tuple[tuple[str, NativeFindingClosure], ...] = ()
-    responsibility_routes: tuple[NativeResponsibilityRoute, ...] = ()
 
     def __post_init__(self) -> None:
         if self.delivery_kind not in {"review", "branch_discovery_completed"}:
@@ -577,18 +575,6 @@ class ContractResult:
             or closure_ids != sorted_finding_ids(closure_ids)
         ):
             raise ValueError("finding closures must be typed, sorted, and unique")
-        route_ids = tuple(item.finding_id for item in self.responsibility_routes)
-        if (
-            any(
-                not isinstance(item, NativeResponsibilityRoute)
-                or not SOURCE_FINDING_ID_PATTERN.fullmatch(item.finding_id)
-                for item in self.responsibility_routes
-            )
-            or route_ids != sorted_finding_ids(route_ids)
-        ):
-            raise ValueError(
-                "responsibility routes must be typed, sorted, and unique"
-            )
         if (
             self.red_state_followup_slice is not None
             and not self.red_state_followup_slice.strip()

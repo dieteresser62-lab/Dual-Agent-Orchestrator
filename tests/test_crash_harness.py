@@ -425,13 +425,13 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert journeys["multi-slice-correction-observation-resume"]["correction_round_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
-    ] == ["C-01:CLOSED", "C-02:CLOSED"]
+    ] == ["C-01:CLOSED"]
     assert journeys["branch-discovery-remediation-handoff"][
         "target_execution_mode"
     ] == "PLAN_ONLY"
     assert journeys["branch-discovery-remediation-handoff"][
         "finding_statuses"
-    ] == ["C-01:closed", "C-02:closed", "C-03:open"]
+    ] == ["C-01:closed", "C-02:open"]
     assert journeys["branch-discovery-remediation-handoff"][
         "transitive_finding_count"
     ] > 0

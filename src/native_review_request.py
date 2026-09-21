@@ -11,7 +11,6 @@ import re
 from typing import Any, Mapping
 
 from contracts import AgentRole, ApprovalMarker
-from finding_responsibility import ResponsibilityKind, responsibility_json_schema
 import native_finding_decisions
 from native_finding_decisions import plan_treatment_json_schema
 from native_review_contract import (
@@ -597,9 +596,6 @@ def _review_context_request_projection(
         "slice_id": context_binding["slice_id"],
         "round_number": context_binding["round_number"],
         "request_sequence": context_binding["request_sequence"],
-        "opening_responsibility_kind": context_binding[
-            "opening_responsibility_kind"
-        ],
         "next_finding_id": next_native_finding_id(context),
         "previous_findings": context_binding["previous_findings"],
         "known_open_finding_signatures": context_binding[
@@ -623,10 +619,6 @@ def _review_context_request_projection(
             "pre_change_fingerprint"
         ],
     }
-    if "branch_planning_target" in context_binding:
-        review_contract["branch_planning_target"] = context_binding[
-            "branch_planning_target"
-        ]
     if review_kind == NativeReviewKind.PLAN.value:
         review_contract["plan_artifact_path"] = context_binding[
             "plan_artifact_path"
@@ -635,9 +627,6 @@ def _review_context_request_projection(
         review_contract["max_new_findings"] = context_binding[
             "max_new_findings"
         ]
-    review_contract["implementer_responsibility_proposals"] = context_binding[
-        "implementer_responsibility_proposals"
-    ]
     review_contract["planned_slices"] = context_binding["planned_slices"]
     review_contract["plan_treatments"] = context_binding["plan_treatments"]
     review_contract["closed_finding_bindings"] = context_binding[
@@ -808,28 +797,7 @@ def _enable_native_review_request_finding_decision_schema(
         ],
         "additionalProperties": False,
     }
-    definitions["finding_responsibility"] = responsibility_json_schema(
-        union_keyword="oneOf"
-    )
-    definitions["responsibility_proposal"] = {
-        "type": "object",
-        "properties": {
-            "finding_id": {
-                "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-            },
-            "responsibility": {"$ref": "#/$defs/finding_responsibility"},
-            "rationale": {"$ref": "#/$defs/safe_text"},
-        },
-        "required": ["finding_id", "responsibility", "rationale"],
-        "additionalProperties": False,
-    }
     contract = definitions["review_contract"]
-    contract["properties"]["opening_responsibility_kind"] = {
-        "type": "string",
-        "enum": [item.value for item in ResponsibilityKind],
-    }
-    contract["required"].append("opening_responsibility_kind")
     contract["properties"]["slice_commit_decision_finding_ids"] = {
         "type": "array",
         "maxItems": 10000,
@@ -846,12 +814,6 @@ def _enable_native_review_request_finding_decision_schema(
         ]
     }
     contract["required"].append("pre_change_fingerprint")
-    contract["properties"]["implementer_responsibility_proposals"] = {
-        "type": "array",
-        "maxItems": 128,
-        "items": {"$ref": "#/$defs/responsibility_proposal"},
-    }
-    contract["required"].append("implementer_responsibility_proposals")
     contract["properties"]["planned_slices"] = {
         "type": "array",
         "maxItems": 64,

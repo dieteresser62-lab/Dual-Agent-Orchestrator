@@ -15,12 +15,6 @@ from artifact_models import (
     family_binding_document,
 )
 from contracts import PlannedSlice
-from finding_order import finding_id_sort_key
-from finding_responsibility import (
-    FindingResponsibility,
-    parse_responsibility,
-    responsibility_document,
-)
 import native_finding_decisions
 from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
 from rejected_response_shape import (
@@ -1349,34 +1343,6 @@ class BootstrapCheckFact:
         )
 
 
-def _parse_finding_responsibilities(
-    raw: Mapping[str, Any],
-) -> tuple[tuple[str, FindingResponsibility], ...]:
-    responsibility_raw = _mapping(
-        raw.get("finding_responsibilities", {}),
-        "finding_responsibilities",
-    )
-    try:
-        return tuple(
-            (
-                finding_id,
-                parse_responsibility(
-                    _mapping(
-                        responsibility_raw[finding_id],
-                        f"finding_responsibilities.{finding_id}",
-                    )
-                ),
-            )
-            for finding_id in sorted(
-                responsibility_raw, key=finding_id_sort_key
-            )
-        )
-    except ValueError as exc:
-        raise WorkflowStateValidationError(
-            f"finding_responsibilities is invalid: {exc}"
-        ) from exc
-
-
 def _parse_bootstrap_checks(raw: Mapping[str, Any]) -> tuple[BootstrapCheckFact, ...]:
     return tuple(
         BootstrapCheckFact.from_dict(_mapping(item, f"bootstrap_checks[{index}]"))
@@ -1508,7 +1474,6 @@ class WorkflowState:
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
     bootstrap_checks: tuple[BootstrapCheckFact, ...] = ()
-    finding_responsibilities: tuple[tuple[str, FindingResponsibility], ...] = ()
     family_binding: FamilyBindingPayload | None = None
 
     def __post_init__(self) -> None:
@@ -1663,30 +1628,6 @@ class WorkflowState:
         keys = tuple((item.check_kind, item.transition_fingerprint) for item in self.bootstrap_checks)
         if len(keys) != len(set(keys)):
             raise WorkflowStateValidationError("bootstrap checks must be idempotently unique")
-        responsibility_ids = tuple(
-            finding_id for finding_id, _responsibility in self.finding_responsibilities
-        )
-        if any(
-            re.fullmatch(r"C-(0[1-9]|[1-9][0-9]*)", finding_id) is None
-            for finding_id in responsibility_ids
-        ):
-            raise WorkflowStateValidationError(
-                "finding_responsibilities contains an invalid finding ID"
-            )
-        if responsibility_ids != tuple(
-            sorted(set(responsibility_ids), key=finding_id_sort_key)
-        ):
-            raise WorkflowStateValidationError(
-                "finding_responsibilities must be sorted and unique by finding ID"
-            )
-        try:
-            for _finding_id, responsibility in self.finding_responsibilities:
-                responsibility_document(responsibility)
-        except ValueError as exc:
-            raise WorkflowStateValidationError(
-                f"finding_responsibilities is invalid: {exc}"
-            ) from exc
-
     @property
     def current_work_unit(self) -> WorkUnitRecord:
         return next(
@@ -2858,11 +2799,6 @@ class WorkflowState:
             ),
             "bootstrap_checks": [item.to_dict() for item in self.bootstrap_checks],
         }
-        if self.finding_responsibilities:
-            document["finding_responsibilities"] = {
-                finding_id: responsibility_document(responsibility)
-                for finding_id, responsibility in self.finding_responsibilities
-            }
         if self.family_binding is not None:
             document["family_binding"] = family_binding_document(
                 self.family_binding
@@ -2941,8 +2877,6 @@ class WorkflowState:
             "finding_handoff_export_record_id",
         }
         handoff_keys = {*handoff_shape_keys, "bootstrap_checks"}
-        # The dormant responsibility field is optional for every historical shape.
-        finding_responsibilities = _parse_finding_responsibilities(raw)
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -2961,7 +2895,6 @@ class WorkflowState:
             # for historical shape selection while validating its contents below.
             raw_keys = frozenset(raw) - {
                 "bootstrap_checks",
-                "finding_responsibilities",
                 "family_binding",
             }
             if raw_keys not in {
@@ -3073,7 +3006,6 @@ class WorkflowState:
             target_branch=target_branch,
             protocol_binding=protocol_binding,
             bootstrap_checks=bootstrap_checks,
-            finding_responsibilities=finding_responsibilities,
             family_binding=family_binding,
         )
 

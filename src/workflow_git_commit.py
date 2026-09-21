@@ -1,4 +1,4 @@
-"""Ledger-bracketed Git Slice commit responsibility.
+"""Ledger-bracketed Git Slice commit transaction.
 
 The production driver remains the composition root and public workflow
 surface.  This module owns the complete commit authorization, intent/result

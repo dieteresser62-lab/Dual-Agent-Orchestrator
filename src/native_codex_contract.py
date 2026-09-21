@@ -28,10 +28,6 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import sorted_finding_ids
-from finding_responsibility import (
-    parse_responsibility,
-    responsibility_json_schema,
-)
 from gates import (
     BUILTIN_STOP_RULES,
     STOP_RULE_ID_PATTERN,
@@ -40,7 +36,6 @@ from gates import (
 import native_finding_decisions
 from native_finding_decisions import (
     NativeRejectionReason,
-    NativeResponsibilityProposal,
     PlanCompletionKind,
     PlanTreatmentKind,
     PlanTreatmentProposal,
@@ -328,7 +323,6 @@ class NativeFindingDisposition:
     finding_id: str
     decision: FindingResponseDecision
     rationale: str
-    responsibility_proposal: NativeResponsibilityProposal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,16 +432,6 @@ def native_codex_provider_response_schema(
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
     required.append("plan_treatments")
-    slice_responsibility = schema["$defs"]["finding_responsibility"][
-        "anyOf"
-    ][0]
-    acceptance_criterion = slice_responsibility["properties"][
-        "acceptance_criterion_id"
-    ]
-    slice_responsibility["properties"]["acceptance_criterion_id"] = {
-        "anyOf": [acceptance_criterion, {"type": "null"}]
-    }
-    slice_responsibility["required"].append("acceptance_criterion_id")
     open_ids = project_open_set(context.previous_findings).finding_ids
     disposition = schema["$defs"]["finding_disposition"]
     if open_ids:
@@ -790,7 +774,6 @@ def _parse_dispositions(
             finding_id=item["finding_id"],
             decision=FindingResponseDecision(item["decision"].upper()),
             rationale=item["rationale"],
-            responsibility_proposal=_parse_responsibility_proposal(item),
         )
         for item in items
     )
@@ -838,40 +821,6 @@ def _parse_plan_treatments(
     return treatments
 
 
-def native_responsibility_proposals(
-    response: NativeCodexResponse,  # allowlist:provider -- bound result type
-) -> tuple[NativeResponsibilityProposal, ...]:
-    """Expose implementer proposals solely as non-authoritative reviewer input."""
-
-    if isinstance(response, NativeCodexStopResult):  # allowlist:provider -- result variant
-        return ()
-    return tuple(
-        disposition.responsibility_proposal
-        for disposition in response.dispositions
-        if disposition.responsibility_proposal is not None
-    )
-
-
-def _parse_responsibility_proposal(
-    item: Mapping[str, Any],
-) -> NativeResponsibilityProposal | None:
-    raw = item.get("responsibility_proposal")
-    if raw is None:
-        return None
-    try:
-        responsibility = parse_responsibility(raw)
-    except ValueError as exc:
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
-            f"responsibility proposal for {item['finding_id']} is invalid: {exc}",
-        ) from exc
-    return NativeResponsibilityProposal(
-        finding_id=item["finding_id"],
-        responsibility=responsibility,
-        rationale=item["rationale"],
-    )
-
-
 def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
     planned_slice = definitions["planned_slice"]
@@ -899,15 +848,6 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
         },
     }
     planned_slice["required"].append("acceptance_criteria")
-    definitions["finding_responsibility"] = responsibility_json_schema()
-    disposition = definitions["finding_disposition"]
-    disposition["properties"]["responsibility_proposal"] = {
-        "anyOf": [
-            {"$ref": "#/$defs/finding_responsibility"},
-            {"type": "null"},
-        ]
-    }
-    disposition["required"].append("responsibility_proposal")
     definitions["plan_treatment"] = plan_treatment_json_schema()
     plan_result = definitions["plan_result"]
     plan_result["properties"]["plan_treatments"] = {

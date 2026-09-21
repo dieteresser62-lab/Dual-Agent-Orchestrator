@@ -38,8 +38,6 @@ from native_review_contract import (
     parse_native_contract_result,
     validate_native_review_document,
 )
-from finding_responsibility import BranchPlanningResponsibility, SliceResponsibility
-from native_finding_decisions import NativeResponsibilityProposal
 from native_review_request import (
     NativeReviewEvidenceInput,
     NativeReviewKind,
@@ -168,65 +166,17 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "2f8f81f6431d672a7c908521a4ad5c2a8354d8a92c61b347e0822afd6f24dae5"
+        "dbc3ea2d07e523a1cc7eeef5f9111a916d45a259c368722b20ab89d6f37a8b32"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "acda19a1399b4e69eba09f6c54006a65664adfdb2f46c441818d61c4c5cd3348"
+        "15323aa4e20b53153cb57f0d88601eec63fd8e81ba60e95128ccb0c8080bbd83"
     )
 
 
-def test_review_request_binds_the_only_valid_branch_planning_target() -> None:
-    context = replace(
-        _context(),
-        branch_planning_target=BranchPlanningResponsibility("family-bound", 3),
-    )
-    bundle = build_native_review_request(replace(_spec(), context=context))
-
-    assert bundle.document["review_contract"]["branch_planning_target"] == {
-        "responsibility_kind": "BRANCH_PLANNING",
-        "family_id": "family-bound",
-        "cycle_number": 3,
-    }
 
 
-def test_enabled_review_request_exposes_codex_proposal_as_non_authority(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-    finding = _prior_finding()
-    proposal = NativeResponsibilityProposal(
-        "C-01",
-        SliceResponsibility("later-run", "c" * 40, "6"),
-        "Codex proposes that the later Slice owns this work.",
-    )
-    context = replace(
-        _context(),
-        previous_findings=(finding,),
-        implementer_responsibility_proposals=(proposal,),
-    )
-
-    bundle = build_native_review_request(replace(_spec(), context=context))
-
-    assert bundle.document["review_contract"][
-        "implementer_responsibility_proposals"
-    ] == [
-        {
-            "finding_id": "C-01",
-            "responsibility": {
-                "responsibility_kind": "SLICE",
-                "target_run_id": "later-run",
-                "approved_plan_commit": "c" * 40,
-                "slice_id": "6",
-            },
-            "rationale": "Codex proposes that the later Slice owns this work.",
-        }
-    ]
 
 
 def test_enabled_review_request_binds_record_plan_criteria_structurally(
@@ -457,7 +407,6 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
@@ -631,7 +580,6 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     assert "C-02 (existing before this response)" in raised.value.detail
     assert "status_changes entry with status=CLOSED" in raised.value.detail
     assert "typed fixed or evidenced-rejection closure" in raised.value.detail
-    assert "responsibility_routes entry to a named later Slice" in raised.value.detail
 
     sparse_disposition = json.loads(json.dumps(approved))
     sparse_disposition["status_changes"] = []
@@ -1051,7 +999,6 @@ def _response(request_id: str) -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {

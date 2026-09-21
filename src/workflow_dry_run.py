@@ -36,7 +36,6 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
             "new_findings": [],
             "status_changes": [],
             "reclassifications": [],
-            "responsibility_routes": [],
             "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {

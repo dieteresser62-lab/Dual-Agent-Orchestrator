@@ -56,7 +56,7 @@
       "provider": "claude",
       "operations": ["plan", "slice"],
       "error_code": "approval-invalid",
-      "local_invariant": "A denial leaves an own BLOCKER open; an approval leaves no own BLOCKER open and no open Finding assigned to the current Slice after every finding transition and responsibility route is applied.",
+      "local_invariant": "A denial leaves an own BLOCKER open; an approval leaves no own BLOCKER open and no open Finding in the current Slice after every finding transition is applied.",
       "missing_schema_feature": "cross_array_state_transition_fold",
       "provider_evidence": "The writer schema constrains each event and cardinality but cannot fold prior finding state together with generated status and reclassification arrays.",
       "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"

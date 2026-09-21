@@ -1240,7 +1240,6 @@ def _negative_convergence() -> SliceConvergenceEvaluation:
         cohort_finding_ids=("C-01",),
         newly_opened_finding_ids=("C-02",),
         closed_local_finding_ids=(),
-        forwarded_local_finding_ids=(),
         attested_remediation_finding_ids=(),
         progress_made=False,
         reason=(
@@ -1256,7 +1255,6 @@ def _negative_discovery() -> SliceConvergenceEvaluation:
         cohort_finding_ids=(),
         newly_opened_finding_ids=(),
         closed_local_finding_ids=(),
-        forwarded_local_finding_ids=(),
         attested_remediation_finding_ids=(),
         progress_made=False,
         reason="the discovery round opened no findings",
@@ -1269,7 +1267,6 @@ def _discovery_convergence() -> SliceConvergenceEvaluation:
         cohort_finding_ids=("C-01",),
         newly_opened_finding_ids=("C-01",),
         closed_local_finding_ids=(),
-        forwarded_local_finding_ids=(),
         attested_remediation_finding_ids=(),
         progress_made=True,
         reason="the discovery round opened reviewer-owned findings",
@@ -5009,12 +5006,6 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
                         "finding_id": "C-01",
                         "decision": "accepted",
                         "rationale": "provider rationale must not survive",
-                        "responsibility_proposal": {
-                            "responsibility_kind": "SLICE",
-                            "target_run_id": "run-implementer",
-                            "approved_plan_commit": "b" * 40,
-                            "slice_id": "6",
-                        },
                     }
                 ],
             },
@@ -5063,11 +5054,6 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
     assert implementer_shape is not None
     assert implementer_shape.release_decision == "ready"
     assert implementer_shape.finding_dispositions[0].finding_id == "C-01"
-    assert (
-        implementer_shape.finding_dispositions[0]
-        .responsibility_proposal.slice_id
-        == "6"
-    )
     assert "provider rationale must not survive" not in json.dumps(
         driver.failure_payloads[-1].native_response_feedback_document
     )
@@ -5192,66 +5178,6 @@ def test_partial_review_retry_uses_precise_value_free_failure_diagnostic() -> No
     ]
 
 
-def test_plan_opening_responsibility_rejection_retries_with_required_kind() -> None:
-    now = datetime(2026, 9, 21, 10, 0, tzinfo=timezone.utc)
-    changes = _changes("1", "docs/internal/plan.md")
-    diagnostic = OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
-    state = init_workflow_state(
-        run_id="plan-responsibility-retry",
-        task_file="/repo/task.md",
-        branch="feature/workflow",
-        branch_base=START_COMMIT,
-        first_slice_start_commit=START_COMMIT,
-        slice_count=1,
-        timestamp="2026-09-21T10:00:00+00:00",
-        task_digest="d" * 64,
-        task_scope_patterns=("docs/internal/plan.md",),
-        target_branch="feature/workflow",
-    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
-    driver = FakeDriver(
-        snapshots=[changes],
-        codex_outputs=[],
-        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
-        reviewer_failures=[
-            _native_review_contract_failure(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "plan-opening-responsibility-invalid",
-                received_at=now,
-                detail=(
-                    "plan review finding opening requires responsibility kind "
-                    "PLAN_REVISION"
-                ),
-                diagnostic=diagnostic,
-            ),
-            None,
-        ],
-    )
-
-    result = WorkflowEngine(
-        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
-    ).run_current_work_unit(
-        state,
-        replace(
-            _context(),
-            task_scope_patterns=("docs/internal/plan.md",),
-        ),
-    )
-
-    assert result.completed
-    assert len(driver.reviewer_calls) == 2
-    assert [call.round_number for call in driver.reviewer_calls] == [1, 1]
-    assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
-    first = driver.reviewer_calls[0].native_request
-    retry = driver.reviewer_calls[1].native_request
-    assert first is not None and retry is not None
-    assert first.document["review_contract"]["opening_responsibility_kind"] == (
-        "PLAN_REVISION"
-    )
-    assert retry.document["retry_feedback"] == {
-        "prior_invocation_id": "plan-opening-responsibility-invalid",
-        "rejection_code": "finding-content-invalid",
-        "correction_instruction": diagnostic.text,
-    }
 
 
 def test_evidence_anchor_retry_replaces_the_finding_numbering_guidance() -> None:
@@ -5315,7 +5241,6 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
         ],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {},
@@ -5357,7 +5282,6 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     assert "opened in the rejected response: C-01" in instruction
     assert "status_changes" in instruction
     assert "status=CLOSED" in instruction
-    assert "responsibility_routes" in instruction
     assert "opened in new_findings and decided in that same response" in instruction
     assert driver.failure_payloads[0].rejected_response_shape is not None
     assert "provider summary must not survive" not in json.dumps(feedback)
@@ -5398,7 +5322,6 @@ def test_rejected_first_review_then_two_findings_remains_discovery_round() -> No
                 cohort_finding_ids=("C-01", "C-02"),
                 newly_opened_finding_ids=("C-01", "C-02"),
                 closed_local_finding_ids=(),
-                forwarded_local_finding_ids=(),
                 attested_remediation_finding_ids=(),
                 progress_made=True,
                 reason="the discovery round opened reviewer-owned findings",
@@ -5537,20 +5460,15 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
                 "reviewer": "claude",
                 "decision": "approved",
                 "new_findings": [],
-                "status_changes": [],
-                "reclassifications": [],
-                "responsibility_routes": [
+                "status_changes": [
                     {
                         "finding_id": "C-01",
-                        "responsibility": {
-                            "responsibility_kind": "SLICE",
-                            "target_run_id": "run-canary-22",
-                            "approved_plan_commit": "b" * 40,
-                            "slice_id": "4",
-                        },
-                        "rationale": "provider route rationale must not survive",
+                        "status": "OPEN",
+                        "rationale": "provider status rationale must not survive",
+                        "closure": None,
                     }
                 ],
+                "reclassifications": [],
                 "plan_treatment_decisions": [],
                 "anchors": [],
                 "review_evidence": {
@@ -5609,11 +5527,9 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
     review_shape = driver.failure_payloads[-1].rejected_response_shape
     assert review_shape is not None
     assert review_shape.release_decision == "approved"
-    assert review_shape.status_changes == ()
-    assert review_shape.responsibility_routes[0].finding_id == "C-01"
-    assert review_shape.responsibility_routes[0].target is not None
-    assert review_shape.responsibility_routes[0].target.slice_id == "4"
-    assert "provider route rationale must not survive" not in json.dumps(
+    assert review_shape.status_changes[0].finding_id == "C-01"
+    assert review_shape.status_changes[0].status == "OPEN"
+    assert "provider status rationale must not survive" not in json.dumps(
         driver.failure_payloads[-1].native_response_feedback_document
     )
     assert (
@@ -6907,7 +6823,6 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
                 cohort_finding_ids=("C-01",),
                 newly_opened_finding_ids=("C-01",),
                 closed_local_finding_ids=(),
-                forwarded_local_finding_ids=(),
                 attested_remediation_finding_ids=(),
                 progress_made=True,
                 reason="the discovery round opened reviewer-owned findings",

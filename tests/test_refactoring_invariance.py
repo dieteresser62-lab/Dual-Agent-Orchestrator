@@ -358,7 +358,6 @@ def _native_review_approval(
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "record order, contracts, failure paths, and resume",

@@ -18,10 +18,6 @@ from artifact_models import (
     WorkflowEventPayload,
 )
 from finding_convergence import SliceReviewPhase, evaluate_slice_convergence
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    SliceResponsibility,
-)
 
 
 RUN_ID = "finding-convergence"
@@ -49,7 +45,7 @@ def test_discovery_round_treats_new_findings_as_progress() -> None:
     assert result.progress_made
 
 
-def test_discovery_round_counts_two_unowned_findings_from_the_round() -> None:
+def test_discovery_round_counts_two_origin_bound_findings_from_the_round() -> None:
     """Regression for Canary 17: record openings exhaust the decision set."""
 
     chain = _base_chain()
@@ -58,8 +54,8 @@ def test_discovery_round_counts_two_unowned_findings_from_the_round() -> None:
         round_number=1,
         fingerprint=OLD_FINGERPRINT,
         transitions=(
-            _unowned_opening("C-01", FindingSeverity.BLOCKER),
-            _unowned_opening("C-02", FindingSeverity.OBSERVATION),
+            _opening_with_severity("C-01", FindingSeverity.BLOCKER),
+            _opening_with_severity("C-02", FindingSeverity.OBSERVATION),
         ),
         finding_ids=("C-01", "C-02"),
     )
@@ -102,24 +98,6 @@ def test_convergence_round_counts_a_closed_previously_local_finding() -> None:
     result = _evaluate(chain, round_number=2)
 
     assert result.closed_local_finding_ids == ("C-01",)
-    assert result.progress_made
-
-
-def test_convergence_round_counts_a_typed_forwarding_of_a_local_finding() -> None:
-    chain = _chain_after_discovery()
-    _append_review_round(
-        chain,
-        round_number=2,
-        fingerprint=OLD_FINGERPRINT,
-        transitions=(
-            _route("C-01", BranchPlanningResponsibility("family-1", 1)),
-        ),
-        finding_ids=("C-01",),
-    )
-
-    result = _evaluate(chain, round_number=2)
-
-    assert result.forwarded_local_finding_ids == ("C-01",)
     assert result.progress_made
 
 
@@ -228,11 +206,10 @@ def _opening(finding_id: str, *, round_number: int) -> FindingTransitionPayload:
         acceptance_test="src/current.py passes its regression test",
         origin_slice_id=SLICE_ID,
         origin_round_number=round_number,
-        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, SLICE_ID),
     )
 
 
-def _unowned_opening(
+def _opening_with_severity(
     finding_id: str, severity: FindingSeverity
 ) -> FindingTransitionPayload:
     return FindingTransitionPayload(
@@ -242,7 +219,7 @@ def _unowned_opening(
         action="opened",
         severity=severity,
         finding_status="open",
-        rationale="The discovery round opened this unassigned finding.",
+        rationale="The discovery round opened this origin-bound finding.",
         work_unit_id=WORK_UNIT_ID,
         summary=f"Repair {finding_id}",
         acceptance_test=f"The regression for {finding_id} passes",
@@ -250,7 +227,6 @@ def _unowned_opening(
         # numeric Slice ID.  Membership must not depend on that representation.
         origin_slice_id=f"0{SLICE_ID}",
         origin_round_number=1,
-        responsibility=None,
     )
 
 
@@ -271,20 +247,6 @@ def _closure(finding_id: str, *, kind: str) -> FindingTransitionPayload:
             if kind == "rejected"
             else None
         ),
-    )
-
-
-def _route(finding_id: str, responsibility) -> FindingTransitionPayload:
-    return FindingTransitionPayload(
-        finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
-        action="routed",
-        severity=FindingSeverity.OBSERVATION,
-        finding_status="open",
-        rationale="Transfer to the typed successor responsibility.",
-        work_unit_id=WORK_UNIT_ID,
-        responsibility=responsibility,
     )
 
 

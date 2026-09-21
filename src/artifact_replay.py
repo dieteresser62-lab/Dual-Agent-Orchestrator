@@ -1033,10 +1033,7 @@ def _assemble_workflow_state_document(
     import_record: ArtifactRecord | None,
     runtime_history: dict[str, dict[str, tuple[str, ...]]],
 ) -> dict[str, object]:
-    from finding_reducer import reduce_findings, responsibility_projection_document
-    responsibilities = responsibility_projection_document(reduce_findings(replay))
     return {
-        **({"finding_responsibilities": responsibilities} if responsibilities else {}),
         **({"family_binding": family_binding_document(effective_family_binding(replay))} if effective_family_binding(replay) is not None else {}),
         "version": 3,
         "run_id": replay.expected_run_id,
@@ -3756,7 +3753,6 @@ def _project_branch_discovery_contract(
     """Rebuild one completed discovery review from its native transaction."""
 
     from contracts import FindingOccurrence
-    from native_finding_decisions import NativeResponsibilityRoute
 
     payload = discovery_record.payload
     if not isinstance(payload, BranchDiscoveryCompletedPayload):
@@ -3805,18 +3801,6 @@ def _project_branch_discovery_contract(
     findings = reduce_findings(
         replay.subset(replay.records[: event_position + 1])
     ).ledger.findings
-    routes = tuple(
-        NativeResponsibilityRoute(
-            item.payload.finding_id,
-            item.payload.responsibility,
-            item.payload.rationale,
-        )
-        for item in transaction
-        if isinstance(item.payload, FindingTransitionPayload)
-        and item.payload.action == "routed"
-        and item.payload.work_unit_id == payload.work_unit_id
-        and item.payload.responsibility is not None
-    )
     round_suffix = discovery_record.logical_id.rsplit("-", 1)[-1]
     if not round_suffix.isdigit() or int(round_suffix) < 1:
         _fail(
@@ -3853,7 +3837,6 @@ def _project_branch_discovery_contract(
                 for item in payload.occurrences
             ),
             scan_complete=payload.scan_complete,
-            responsibility_routes=routes,
         ),
     ),)
 

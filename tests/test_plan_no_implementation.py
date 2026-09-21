@@ -310,7 +310,6 @@ def test_native_plan_can_finish_explicitly_without_an_implementation_slice() -> 
                     "rationale": (
                         "The fingerprint-bound evidence establishes that no defect exists."
                     ),
-                    "responsibility_proposal": None,
                 }
             ],
             "plan_treatments": [
@@ -529,7 +528,6 @@ def _discovery_document(context: NativeReviewContext) -> dict[str, object]:
         "scan_complete": True,
         "new_findings": [],
         "occurrences": [],
-        "responsibility_routes": [],
         "review_evidence": {
             "dimensions": "Closed signatures, evidence anchors, and lineage checked.",
             "largest_residual_risk": "A future evidence source could be omitted.",

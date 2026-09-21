@@ -2,7 +2,7 @@
 
 The extractor in this module deliberately copies no open-ended response value.
 It retains only repository-owned field names and enum values, canonical Finding
-and responsibility identifiers, bounded counts, and boolean release decisions.
+identifiers, bounded counts, and boolean release decisions.
 Provider-authored prose, paths, summaries, rationales, and evidence never enter
 the returned model.
 """
@@ -15,7 +15,6 @@ from typing import Any, Mapping
 
 
 _FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _KNOWN_FIELDS = frozenset(
@@ -34,7 +33,6 @@ _KNOWN_FIELDS = frozenset(
         "ready",
         "remediation_paths",
         "request_id",
-        "responsibility_routes",
         "result_type",
         "review_evidence",
         "reviewer",
@@ -77,9 +75,6 @@ _CLOSURE_KINDS = frozenset({"fixed", "partial", "rejected"})
 _REJECTION_REASONS = frozenset(
     {"already_fixed", "no_defect", "out_of_scope"}
 )
-_RESPONSIBILITY_KINDS = frozenset(
-    {"BRANCH_PLANNING", "PLAN_REVISION", "SLICE"}
-)
 _PLAN_TREATMENT_KINDS = frozenset({"implementation", "no_code"})
 _PLAN_TREATMENT_DECISIONS = frozenset({"accepted", "rejected"})
 
@@ -94,11 +89,6 @@ def _require_optional_enum(
 ) -> None:
     if value is not None:
         _require_enum(value, allowed, label)
-
-
-def _require_identifier(value: object, label: str) -> None:
-    if not isinstance(value, str) or _IDENTIFIER_RE.fullmatch(value) is None:
-        raise ValueError(f"{label} must be a canonical identifier")
 
 
 def _require_finding_id(value: object, label: str) -> None:
@@ -138,68 +128,9 @@ class RejectedResponseFieldShape:
 
 
 @dataclass(frozen=True, slots=True)
-class RejectedResponseTargetShape:
-    responsibility_kind: str
-    target_run_id: str | None = None
-    slice_id: str | None = None
-    family_id: str | None = None
-    cycle_number: int | None = None
-    run_id: str | None = None
-    revision: int | None = None
-
-    def __post_init__(self) -> None:
-        _require_enum(
-            self.responsibility_kind,
-            _RESPONSIBILITY_KINDS,
-            "rejected response responsibility kind",
-        )
-        if self.responsibility_kind == "SLICE":
-            _require_identifier(self.target_run_id, "SLICE target_run_id")
-            _require_identifier(self.slice_id, "SLICE slice_id")
-            if any(
-                value is not None
-                for value in (
-                    self.family_id,
-                    self.cycle_number,
-                    self.run_id,
-                    self.revision,
-                )
-            ):
-                raise ValueError("SLICE target carries foreign target fields")
-            return
-        if self.responsibility_kind == "BRANCH_PLANNING":
-            _require_identifier(self.family_id, "BRANCH_PLANNING family_id")
-            _require_positive(self.cycle_number, "BRANCH_PLANNING cycle_number")
-            if any(
-                value is not None
-                for value in (
-                    self.target_run_id,
-                    self.slice_id,
-                    self.run_id,
-                    self.revision,
-                )
-            ):
-                raise ValueError("BRANCH_PLANNING target carries foreign target fields")
-            return
-        _require_identifier(self.run_id, "PLAN_REVISION run_id")
-        _require_positive(self.revision, "PLAN_REVISION revision")
-        if any(
-            value is not None
-            for value in (
-                self.target_run_id,
-                self.slice_id,
-                self.family_id,
-                self.cycle_number,
-            )
-        ):
-            raise ValueError("PLAN_REVISION target carries foreign target fields")
-
-
-@dataclass(frozen=True, slots=True)
 class RejectedFindingDispositionShape:
     finding_id: str
     decision: str | None
-    responsibility_proposal: RejectedResponseTargetShape | None = None
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "rejected disposition finding_id")
@@ -208,10 +139,6 @@ class RejectedFindingDispositionShape:
             _FINDING_DECISIONS,
             "rejected disposition decision",
         )
-        if self.responsibility_proposal is not None and not isinstance(
-            self.responsibility_proposal, RejectedResponseTargetShape
-        ):
-            raise ValueError("rejected disposition proposal must be typed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,19 +181,6 @@ class RejectedReclassificationShape:
             _FINDING_CLASSES,
             "reclassification finding class",
         )
-
-
-@dataclass(frozen=True, slots=True)
-class RejectedResponsibilityRouteShape:
-    finding_id: str
-    target: RejectedResponseTargetShape | None
-
-    def __post_init__(self) -> None:
-        _require_finding_id(self.finding_id, "responsibility route finding_id")
-        if self.target is not None and not isinstance(
-            self.target, RejectedResponseTargetShape
-        ):
-            raise ValueError("responsibility route target must be typed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,7 +236,6 @@ class RejectedNativeResponseShape:
     finding_dispositions: tuple[RejectedFindingDispositionShape, ...]
     status_changes: tuple[RejectedStatusChangeShape, ...]
     reclassifications: tuple[RejectedReclassificationShape, ...]
-    responsibility_routes: tuple[RejectedResponsibilityRouteShape, ...]
     plan_treatments: tuple[RejectedPlanTreatmentShape, ...]
     plan_treatment_decisions: tuple[RejectedPlanTreatmentDecisionShape, ...]
 
@@ -375,14 +288,6 @@ def _safe_enum(value: object, allowed: frozenset[str]) -> str | None:
     return value if isinstance(value, str) and value in allowed else None
 
 
-def _safe_identifier(value: object) -> str | None:
-    return (
-        value
-        if isinstance(value, str) and _IDENTIFIER_RE.fullmatch(value) is not None
-        else None
-    )
-
-
 def _safe_finding_id(value: object) -> str | None:
     return (
         value
@@ -393,40 +298,6 @@ def _safe_finding_id(value: object) -> str | None:
 
 def _safe_positive(value: object) -> int | None:
     return value if not isinstance(value, bool) and isinstance(value, int) and value > 0 else None
-
-
-def _target_shape(raw: object) -> RejectedResponseTargetShape | None:
-    if not isinstance(raw, Mapping):
-        return None
-    kind = _safe_enum(raw.get("responsibility_kind"), _RESPONSIBILITY_KINDS)
-    try:
-        if kind == "SLICE":
-            target_run_id = _safe_identifier(raw.get("target_run_id"))
-            slice_id = _safe_identifier(raw.get("slice_id"))
-            if target_run_id is None or slice_id is None:
-                return None
-            return RejectedResponseTargetShape(
-                kind, target_run_id=target_run_id, slice_id=slice_id
-            )
-        if kind == "BRANCH_PLANNING":
-            family_id = _safe_identifier(raw.get("family_id"))
-            cycle_number = _safe_positive(raw.get("cycle_number"))
-            if family_id is None or cycle_number is None:
-                return None
-            return RejectedResponseTargetShape(
-                kind, family_id=family_id, cycle_number=cycle_number
-            )
-        if kind == "PLAN_REVISION":
-            run_id = _safe_identifier(raw.get("run_id"))
-            revision = _safe_positive(raw.get("revision"))
-            if run_id is None or revision is None:
-                return None
-            return RejectedResponseTargetShape(
-                kind, run_id=run_id, revision=revision
-            )
-    except ValueError:
-        return None
-    return None
 
 
 def _mapping_items(raw: object) -> tuple[Mapping[str, object], ...]:
@@ -471,7 +342,6 @@ def extract_rejected_native_response_shape(
             RejectedFindingDispositionShape(
                 finding_id,
                 _safe_enum(item.get("decision"), _FINDING_DECISIONS),
-                _target_shape(item.get("responsibility_proposal")),
             )
         )
 
@@ -505,16 +375,6 @@ def extract_rejected_native_response_shape(
                 RejectedReclassificationShape(
                     finding_id,
                     _safe_enum(item.get("finding_class"), _FINDING_CLASSES),
-                )
-            )
-
-    responsibility_routes: list[RejectedResponsibilityRouteShape] = []
-    for item in _mapping_items(document.get("responsibility_routes")):
-        finding_id = _safe_finding_id(item.get("finding_id"))
-        if finding_id is not None:
-            responsibility_routes.append(
-                RejectedResponsibilityRouteShape(
-                    finding_id, _target_shape(item.get("responsibility"))
                 )
             )
 
@@ -591,7 +451,6 @@ def extract_rejected_native_response_shape(
         finding_dispositions=tuple(finding_dispositions),
         status_changes=tuple(status_changes),
         reclassifications=tuple(reclassifications),
-        responsibility_routes=tuple(responsibility_routes),
         plan_treatments=tuple(plan_treatments),
         plan_treatment_decisions=tuple(plan_treatment_decisions),
     )
@@ -629,7 +488,6 @@ def rejected_native_response_shape_from_document(
         "finding_dispositions",
         "status_changes",
         "reclassifications",
-        "responsibility_routes",
         "plan_treatments",
         "plan_treatment_decisions",
     }
@@ -648,23 +506,6 @@ def rejected_native_response_shape_from_document(
         if set(item) != keys:
             raise ValueError(f"{label} fields differ from its contract")
 
-    def target(value: object) -> RejectedResponseTargetShape | None:
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise ValueError("rejected response target must be an object or null")
-        target_keys = {
-            "responsibility_kind",
-            "target_run_id",
-            "slice_id",
-            "family_id",
-            "cycle_number",
-            "run_id",
-            "revision",
-        }
-        exact(value, target_keys, "rejected response target")
-        return RejectedResponseTargetShape(**value)
-
     fields: list[RejectedResponseFieldShape] = []
     for item in mappings("fields"):
         exact(item, {"name", "value_kind", "item_count"}, "response field shape")
@@ -672,16 +513,11 @@ def rejected_native_response_shape_from_document(
 
     dispositions: list[RejectedFindingDispositionShape] = []
     for item in mappings("finding_dispositions"):
-        exact(
-            item,
-            {"finding_id", "decision", "responsibility_proposal"},
-            "finding disposition shape",
-        )
+        exact(item, {"finding_id", "decision"}, "finding disposition shape")
         dispositions.append(
             RejectedFindingDispositionShape(
                 item["finding_id"],
                 item["decision"],
-                target(item["responsibility_proposal"]),
             )
         )
 
@@ -698,15 +534,6 @@ def rejected_native_response_shape_from_document(
     for item in mappings("reclassifications"):
         exact(item, {"finding_id", "finding_class"}, "reclassification shape")
         reclassifications.append(RejectedReclassificationShape(**item))
-
-    routes: list[RejectedResponsibilityRouteShape] = []
-    for item in mappings("responsibility_routes"):
-        exact(item, {"finding_id", "target"}, "responsibility route shape")
-        routes.append(
-            RejectedResponsibilityRouteShape(
-                item["finding_id"], target(item["target"])
-            )
-        )
 
     treatments: list[RejectedPlanTreatmentShape] = []
     for item in mappings("plan_treatments"):
@@ -748,7 +575,6 @@ def rejected_native_response_shape_from_document(
         finding_dispositions=tuple(dispositions),
         status_changes=tuple(statuses),
         reclassifications=tuple(reclassifications),
-        responsibility_routes=tuple(routes),
         plan_treatments=tuple(treatments),
         plan_treatment_decisions=tuple(treatment_decisions),
     )
@@ -761,8 +587,6 @@ __all__ = [
     "RejectedPlanTreatmentShape",
     "RejectedReclassificationShape",
     "RejectedResponseFieldShape",
-    "RejectedResponseTargetShape",
-    "RejectedResponsibilityRouteShape",
     "RejectedStatusChangeShape",
     "extract_rejected_native_response_shape",
     "rejected_native_response_shape_document",

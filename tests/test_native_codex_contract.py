@@ -22,7 +22,6 @@ from contracts import (
 )
 from finding_reducer import project_finding_response_delta
 from finding_signature import finding_record_signature
-from finding_responsibility import SliceResponsibility
 from gates import (
     CONTRACT_UNCLEAR_RULE_ID,
     OPERATOR_PREREQUISITE_MISSING_RULE_ID,
@@ -40,7 +39,6 @@ from native_codex_contract import (
     load_native_codex_schema,
     native_codex_retry_guidance,
     native_codex_provider_response_schema,
-    native_responsibility_proposals,
     parse_native_codex_response,
     parse_bound_native_codex_contract_result,
 )
@@ -506,7 +504,7 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
         "test_files": [],
     }
     valid_dispositions = [
-        {"finding_id": finding_id, "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None}
+        {"finding_id": finding_id, "decision": "accepted", "rationale": "fixed"}
         for finding_id in ("C-01", "C-02")
     ]
     validate_schema_document(
@@ -539,8 +537,8 @@ def test_writer_schema_leaves_only_registered_disposition_order_exception() -> N
         "ready": False,
         "test_files": [],
         "finding_dispositions": [
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None},
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed", "responsibility_proposal": None},
+            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
+            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
         ],
     }
     provider_output = json.loads(json.dumps(duplicate))
@@ -581,7 +579,6 @@ def test_finding_dispositions_use_natural_order_beyond_one_hundred() -> None:
                 "finding_id": finding_id,
                 "decision": "accepted",
                 "rationale": "The finding is addressed.",
-                "responsibility_proposal": None,
             }
             for finding_id in ids
         ]
@@ -986,13 +983,11 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                         "finding_id": "C-01",
                         "decision": "accepted",
                         "rationale": "fixed",
-                        "responsibility_proposal": None,
                     },
                     {
                         "finding_id": "C-01",
                         "decision": "accepted",
                         "rationale": "fixed",
-                        "responsibility_proposal": None,
                     },
                 ],
             },
@@ -1101,7 +1096,6 @@ def test_plan_revision_requires_every_open_finding_disposition() -> None:
             "finding_id": "C-01",
             "decision": "accepted",
             "rationale": "The revised plan now closes the contractual gap.",
-            "responsibility_proposal": None,
         }
     ]
     result = parse_bound_native_codex_contract_result(document, bound)
@@ -1242,86 +1236,12 @@ def test_implementation_result_applies_each_supplied_finding_disposition() -> No
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The implementation now covers it.",
-                "responsibility_proposal": None,
             }
         ],
     }
     result = parse_bound_native_codex_contract_result(document, bound)
     assert result.test_files == ("tests/test_native_codex_contract.py",)
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
-
-
-def test_codex_responsibility_proposal_is_visible_but_never_authoritative(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-    bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
-        findings=(_finding(),),
-        expected_tests=(),
-        test_changes_approved=True,
-    )
-    document = {
-        **_base(bound, "implementation_result"),
-        "ready": True,
-        "test_files": [],
-        "finding_dispositions": [
-            {
-                "finding_id": "C-01",
-                "decision": "accepted",
-                "rationale": "A later Slice is the proposed owner.",
-                "responsibility_proposal": {
-                    "responsibility_kind": "SLICE",
-                    "target_run_id": "later-run",
-                    "approved_plan_commit": "c" * 40,
-                    "slice_id": "6",
-                },
-            }
-        ],
-    }
-
-    response = parse_native_codex_response(document, bound)
-    result = parse_bound_native_codex_contract_result(document, bound)
-
-    proposals = native_responsibility_proposals(response)
-    assert proposals[0].responsibility == SliceResponsibility(
-        "later-run", "c" * 40, "6"
-    )
-    delta = project_finding_response_delta(
-        bound.context.previous_findings, result.findings
-    )
-    assert tuple(item.finding.finding_id for item in delta) == ("C-01",)
-    assert result.findings[0].status is FindingStatus.OPEN
-    assert not hasattr(result.findings[0], "responsibility")
-
-
-def test_active_codex_contract_accepts_explicit_null_proposal() -> None:
-    bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
-        findings=(_finding(),),
-        expected_tests=(),
-        test_changes_approved=True,
-    )
-    document = {
-        **_base(bound, "implementation_result"),
-        "ready": True,
-        "test_files": [],
-        "finding_dispositions": [
-            {
-                "finding_id": "C-01",
-                "decision": "accepted",
-                "rationale": "Codex proposes a later owner.",
-                "responsibility_proposal": None,
-            }
-        ],
-    }
-
-    parsed = parse_native_codex_response(document, bound)
-    assert native_responsibility_proposals(parsed) == ()
 
 
 def test_implementation_dispositions_cover_every_open_finding() -> None:
@@ -1344,7 +1264,6 @@ def test_implementation_dispositions_cover_every_open_finding() -> None:
                 "finding_id": finding.finding_id,
                 "decision": "accepted",
                 "rationale": "The implementation answers this open finding.",
-                "responsibility_proposal": None,
             }
             for finding in findings
         ],
@@ -1369,7 +1288,6 @@ def test_implementation_dispositions_cover_every_open_finding() -> None:
             "finding_id": "C-65",
             "decision": "accepted",
             "rationale": "Only this finding needs a new implementation answer.",
-            "responsibility_proposal": None,
         }
     ]
     validate_schema_document({"result": document}, writer)
@@ -1436,7 +1354,6 @@ def test_native_result_rejects_missing_and_foreign_dispositions() -> None:
             "finding_id": "C-02",
             "decision": "accepted",
             "rationale": "This finding was never offered in the bound context.",
-            "responsibility_proposal": None,
         }
     ]
     with pytest.raises(NativeCodexContractError) as raised:
@@ -1469,7 +1386,6 @@ def test_native_result_rejects_disposition_to_closed_finding_with_context() -> N
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "This closed finding must remain unavailable.",
-                "responsibility_proposal": None,
             }
         ],
     }
@@ -1500,7 +1416,6 @@ def test_native_result_rejects_unknown_finding_with_context() -> None:
                 "finding_id": "C-99",
                 "decision": "accepted",
                 "rationale": "This identifier is absent from the bound context.",
-                "responsibility_proposal": None,
             }
         ],
     }
@@ -1552,7 +1467,6 @@ def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The correction implements the requested invariant.",
-                "responsibility_proposal": None,
             }
         ],
     }

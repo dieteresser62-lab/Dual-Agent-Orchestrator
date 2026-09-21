@@ -1,9 +1,4 @@
-"""Projection of authoritative native reviewer decisions into Finding records.
-
-The joint 67/68 cutover is active. Implementer responsibility proposals are
-not an input to this projection and therefore cannot acquire reviewer
-authority here.
-"""
+"""Projection of authoritative native reviewer decisions into Finding records."""
 
 from __future__ import annotations
 
@@ -22,13 +17,7 @@ def project_native_review_decision_payloads(
     *,
     work_unit_id: int | str,
 ) -> tuple[FindingTransitionPayload, ...]:
-    """Project authoritative reviewer closures and routes without writing them.
-
-    The native response has already passed its request-bound validation.  This
-    additional boundary still checks its exact runtime type and references so
-    that an implementer proposal cannot be accidentally treated as a reviewer
-    decision by a future caller.
-    """
+    """Project authoritative reviewer closures without writing them."""
 
     if not isinstance(response, NativeReviewResult):
         raise TypeError(
@@ -71,21 +60,6 @@ def project_native_review_decision_payloads(
             )
         )
 
-    for route in response.responsibility_routes:
-        finding = _referenced_open_finding(findings, route.finding_id)
-        payloads.append(
-            FindingTransitionPayload(
-                finding_id=route.finding_id,
-                reporter=Role(response.reviewer.value),
-                actor=Role(response.reviewer.value),
-                action="routed",
-                severity=FindingSeverity(finding.finding_class.value),
-                finding_status="open",
-                rationale=route.rationale,
-                work_unit_id=str(work_unit_id),
-                responsibility=route.responsibility,
-            )
-        )
     return tuple(payloads)
 
 

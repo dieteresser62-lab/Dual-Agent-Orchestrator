@@ -369,9 +369,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_PLANNED_SLICES_TYPED = (
         "context-invalid: planned slices must contain only typed PlannedSlice values"
     )
-    REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED = (
-        "context-invalid: branch_planning_target must be a typed BRANCH_PLANNING responsibility"
-    )
     REVIEW_CONTEXT_PLANNED_SLICE_IDS_INVALID = (
         "context-invalid: planned slice ids must be contiguous and 1-based"
     )
@@ -390,18 +387,11 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_LEGACY_FINAL_COUNT_UNSUPPORTED = (
         "context-invalid: legacy final_review_pending_count is unsupported"
     )
-    REVIEW_CONTEXT_OPENING_RESPONSIBILITY_RULE_UNSUPPORTED = (
-        "context-invalid: native review context has no supported opening "
-        "responsibility rule"
-    )
     REVIEW_CONTEXT_FINAL_COUNT_SCOPE_INVALID = (
         "context-invalid: final_review_pending_count is valid only for a final review"
     )
     REVIEW_CONTEXT_VALIDATION_PREFIXES_INVALID = (
         "context-invalid: validation command prefixes must be unique safe argv prefixes"
-    )
-    REVIEW_CONTEXT_IMPLEMENTER_PROPOSALS_INVALID = (
-        "context-invalid: implementer responsibility proposals must be typed, sorted, and unique"
     )
     REVIEW_CONTEXT_SLICE_COMMIT_DECISION_SET_MISMATCH = (
         "context-invalid: communicated Slice-commit decision Finding set differs from the "
@@ -513,10 +503,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_PREDECESSOR_FINDING_REFERENCE_INVALID = (
         "finding-id-invalid: predecessor finding reference is invalid"
     )
-    REVIEW_DISCOVERY_RESPONSIBILITY_ROUTE_REFERENCE_INVALID = (
-        "finding-reference-unknown: branch discovery responsibility routes may "
-        "name only findings opened in the same response"
-    )
     REVIEW_SELF_PREDECESSOR_FORBIDDEN = (
         "finding-id-invalid: finding cannot be its own predecessor"
     )
@@ -590,43 +576,6 @@ class OrchestratorDiagnostic(StrEnum):
         "finding-content-invalid: plan treatment decisions must be sorted and unique "
         "by signature"
     )
-    REVIEW_RESPONSIBILITY_OBJECT_REQUIRED = (
-        "finding-content-invalid: responsibility route is invalid: responsibility must "
-        "be an object"
-    )
-    REVIEW_RESPONSIBILITY_KIND_REQUIRED = (
-        "finding-content-invalid: responsibility route is invalid: responsibility is "
-        "missing required field responsibility_kind"
-    )
-    REVIEW_SLICE_RESPONSIBILITY_COMMIT_INVALID = (
-        "finding-content-invalid: responsibility route is invalid: "
-        "SLICE.approved_plan_commit must be a lowercase 40-character Git SHA"
-    )
-    REVIEW_SLICE_RESPONSIBILITY_CRITERION_INVALID = (
-        "finding-content-invalid: responsibility route is invalid: "
-        "SLICE.acceptance_criterion_id must be ac- followed by a lowercase SHA-256 digest"
-    )
-    REVIEW_PLAN_REVISION_RESPONSIBILITY_DIGEST_INVALID = (
-        "finding-content-invalid: responsibility route is invalid: "
-        "PLAN_REVISION.plan_digest must be a lowercase SHA-256 digest"
-    )
-    REVIEW_SLICE_OPENING_RESPONSIBILITY_INVALID = (
-        "finding-content-invalid: slice review finding opening requires "
-        "responsibility kind SLICE"
-    )
-    REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID = (
-        "finding-content-invalid: plan review finding opening requires "
-        "responsibility kind PLAN_REVISION"
-    )
-    REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID = (
-        "finding-content-invalid: branch discovery finding opening requires "
-        "responsibility kind BRANCH_PLANNING"
-    )
-    REVIEW_BRANCH_PLANNING_IDENTITY_INVALID = (
-        "finding-content-invalid: BRANCH_PLANNING responsibility does not match "
-        "the run-bound family identity; close or evidentially reject the Finding, "
-        "or route it to a valid named later Slice"
-    )
     REVIEW_REJECTED_CLOSURE_REASON_REQUIRED = (
         "finding-content-invalid: rejected closure is missing required field rejection_reason"
     )
@@ -654,25 +603,12 @@ class OrchestratorDiagnostic(StrEnum):
         "finding-event-conflict: duplicate finding_id in reclassifications; keep "
         "exactly one reclassifications entry per Finding ID"
     )
-    REVIEW_FINDING_ROUTE_DUPLICATE = (
-        "finding-event-conflict: duplicate finding_id in responsibility_routes; keep "
-        "exactly one responsibility_routes entry per Finding ID"
-    )
     REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT = (
         "finding-event-conflict: one Finding ID occurs in new_findings and "
         "reclassifications; set the intended class in new_findings only"
     )
     REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT = (
         "finding-event-conflict: one Finding ID occurs in status_changes and "
-        "reclassifications; use only one of those decision fields per response"
-    )
-    REVIEW_FINDING_ROUTE_STATUS_CONFLICT = (
-        "finding-event-conflict: one Finding ID occurs in responsibility_routes and "
-        "status_changes with a non-redundant status decision; use responsibility_routes "
-        "alone to keep it OPEN and transfer responsibility, or status_changes alone"
-    )
-    REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT = (
-        "finding-event-conflict: one Finding ID occurs in responsibility_routes and "
         "reclassifications; use only one of those decision fields per response"
     )
     REVIEW_FINDING_ID_REUSE_FORBIDDEN = (
@@ -750,7 +686,7 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED = (
         "approval-invalid: approved Slice review leaves Findings opened in this response "
-        "without a same-response closure, evidenced rejection, or responsibility route"
+        "without a same-response closure or escalation"
     )
 
     @property

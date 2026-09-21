@@ -255,7 +255,6 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {

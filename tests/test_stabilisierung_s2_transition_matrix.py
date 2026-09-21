@@ -162,8 +162,6 @@ BRIDGE_ERROR_MARKERS = (
     "plan assignment result and Review use different work units",
     "plan assignment requires a typed family binding",
     "plan assignment family binding differs from its source snapshot",
-    "plan assignment open finding lacks BRANCH_PLANNING responsibility: ",
-    "plan assignment open finding has foreign or future BRANCH_PLANNING responsibility: ",
     "persisted implementer plan treatment is invalid: ",
     "plan assignment coverage is invalid: ",
     "remediation cohort checkpoint requires a PlanAssignment record",
@@ -388,7 +386,6 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "target_branch",
         "protocol_binding",
         "bootstrap_checks",
-        "finding_responsibilities",
         "family_binding",
     },
 }
@@ -1044,7 +1041,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 94
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 92
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1138,7 +1135,6 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
                     "scan_complete",
                     "plan_treatment_decisions",
                     "finding_closures",
-                    "responsibility_routes",
         },
         ("src/artifact_models.py", "ReviewPayload"): {
             "reviewer",

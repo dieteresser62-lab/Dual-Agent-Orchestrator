@@ -37,8 +37,6 @@ from artifact_models import (
     BranchDiscoveryHandoffExportPayload,
     FamilyBindingPayload,
     FingerprintKind,
-    FindingSeverity,
-    FindingTransitionPayload,
     ReviewPayload,
     Role,
     ValidationAttestationPayload,
@@ -52,7 +50,6 @@ from dry_run_scenarios import (
     ScriptedInterruption as InjectedCrash,
     ScriptedWorkflowDriver,
 )
-from finding_responsibility import BranchPlanningResponsibility
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
 from side_effects import (
@@ -218,47 +215,6 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
         self._record_driver.persist_native_review_contract(
             output, fingerprint, round_number, request_sequence, previous_findings
         )
-        state = self._record_driver.active_state
-        bridge = self._record_driver._artifact_bridge  # noqa: SLF001
-        if (
-            state is not None
-            and bridge is not None
-            and state.execution_mode == "BRANCH_DISCOVERY"
-        ):
-            family_binding = state.active_family_binding
-            if family_binding is None:  # pragma: no cover - harness invariant
-                raise CrashHarnessError(
-                    "scripted branch discovery has no family binding"
-                )
-            previous_ids = {item.finding_id for item in previous_findings}
-            for finding in output.result.findings:
-                if finding.finding_id in previous_ids or finding.status.value != "OPEN":
-                    continue
-                bridge.append(
-                    FindingTransitionPayload(
-                        finding_id=finding.finding_id,
-                        reporter=Role.CLAUDE,  # allowlist:provider -- reviewer authority
-                        actor=Role.CLAUDE,  # allowlist:provider -- reviewer authority
-                        action="routed",
-                        severity=FindingSeverity(finding.finding_class.value),
-                        finding_status="open",
-                        rationale=(
-                            "The scripted branch-discovery reviewer routes the "
-                            "new finding to the bound remediation planning cycle."
-                        ),
-                        work_unit_id=str(state.current_work_unit_id),
-                        responsibility=BranchPlanningResponsibility(
-                            family_binding.family_id,
-                            family_binding.cycle_number,
-                        ),
-                    ),
-                    logical_id=f"finding-{finding.finding_id}",
-                    idempotency_key=(
-                        f"finding:{finding.finding_id}:routed:work_unit:"
-                        f"{state.current_work_unit_id}:{round_number}:claude"  # allowlist:provider -- stable reviewer identity
-                    ),
-                    fingerprint_sha256=fingerprint,
-                )
         super().persist_native_review_contract(
             output, fingerprint, round_number, request_sequence, previous_findings
         )
@@ -1281,7 +1237,7 @@ def _tracked_implementation_sources(
         sorted(
             os.fsdecode(raw).replace("\\", "/")
             for raw in completed.stdout.split(b"\0")
-            if raw
+            if raw and (root / os.fsdecode(raw)).is_file()
         )
     )
     required = {"scripts/crash_harness.py", manifest_relative}
@@ -1589,14 +1545,14 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         or long.result.state.current_step is not WorkflowStep.COMPLETED
         or long.result.state.execution_mode != "IMPLEMENT"
         or long.result.state.approved_plan_commit != plan_commit
-        or tuple(item.finding_id for item in findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in findings) != ("C-01",)
         or journey_resolutions["long"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("combined long-run did not close its complete ledger")
     if (
         not second_long.result.workflow_completed
-        or tuple(item.finding_id for item in second_findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in second_findings) != ("C-01",)
         or journey_resolutions["independent"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
@@ -1609,7 +1565,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         or journey_resolutions["discovery"].state.current_step
         is not WorkflowStep.COMPLETED
         or tuple(item.finding_id for item in discovery_findings)
-        != ("C-01", "C-02", "C-03")
+        != ("C-01", "C-02")
     ):
         raise CrashHarnessError(
             "linked BRANCH_DISCOVERY run did not converge: "
@@ -1625,7 +1581,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     )
     if (
         remediation_resolution.state.current_step is not WorkflowStep.CODEX_PLAN  # allowlist:provider -- typed workflow step
-        or imported_remediation_ids != ("C-01", "C-02", "C-03")
+        or imported_remediation_ids != ("C-01", "C-02")
     ):
         raise CrashHarnessError(
             "BRANCH_DISCOVERY remediation handoff did not preserve its finding ledger"

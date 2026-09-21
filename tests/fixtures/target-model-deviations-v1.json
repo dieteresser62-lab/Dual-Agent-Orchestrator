@@ -58,18 +58,6 @@
       ]
     },
     {
-      "id": "branch-planning-route",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "implementierung.finding.review.rejection_invalid.first_review",
-      "zug": "BRANCH_PLANNING",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/finding_responsibility.py",
-        "src/finding_reducer.py"
-      ]
-    },
-    {
       "id": "correction-review-baseline",
       "klasse": "UEBERZAEHLIG",
       "lage": "implementierung.blocker.review.unresolved.fingerprint_changed",
@@ -79,17 +67,6 @@
         "src/workflow_recovery.py",
         "src/workflow_requests.py",
         "src/workflow.py"
-      ]
-    },
-    {
-      "id": "later-slice-route",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "implementierung.finding.review.rejection_invalid.first_review",
-      "zug": "ROUTE-ZU-SPAETEREM-SLICE",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/slice_exit.py"
       ]
     },
     {
@@ -134,17 +111,6 @@
       "codestellen": [
         "src/native_review_contract.py",
         "src/artifact_models.py"
-      ]
-    },
-    {
-      "id": "route-plus-confirming-open",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "implementierung.finding.review.rejection_invalid.first_review",
-      "zug": "ROUTE+OPEN",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/workflow_persistence.py"
       ]
     },
     {

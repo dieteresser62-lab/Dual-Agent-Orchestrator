@@ -164,8 +164,6 @@ def _normalized_payload_fields(payload: object) -> object:
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.FindingTransitionPayload):
         raw = asdict(payload)
-        if payload.responsibility is None:
-            raw.pop("responsibility", None)
         if payload.closure_kind is None:
             raw.pop("closure_kind", None)
             raw.pop("rejection_reason", None)
@@ -200,8 +198,6 @@ def _normalized_payload_fields(payload: object) -> object:
                 transition.pop("source_run_id")
                 transition.pop("source_record_id")
             transition_payload = transition["payload"]
-            if transition_payload["responsibility"] is None:
-                transition_payload.pop("responsibility")
             if transition_payload["closure_kind"] is None:
                 transition_payload.pop("closure_kind")
                 transition_payload.pop("rejection_reason")

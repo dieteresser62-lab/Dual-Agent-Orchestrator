@@ -87,12 +87,7 @@ from finding_reducer import (
 )
 from review_packets import ReviewPacket
 from orchestrator_diagnostics import OrchestratorDiagnostic
-from slice_exit import (
-    UNDECIDED_FINDING_DIAGNOSTIC,
-    UNOWNED_OPEN_FINDING_DIAGNOSTIC,
-    unowned_open_finding_ids,
-    workflow_completion_blocking_finding_ids,
-)
+from slice_exit import workflow_completion_blocking_finding_ids
 from task_contract import TaskMode
 from workflow import WorkflowCompletionRejected, WorkflowExecutionError
 from workflow_state import (
@@ -842,25 +837,18 @@ class WorkflowPersistence:
                 chain,
                 run_id=state.run_id,
             )
-            if blocking_finding_ids:
-                unowned_finding_ids = unowned_open_finding_ids(
-                    chain,
-                    run_id=state.run_id,
-                )
-                if set(blocking_finding_ids).issubset(unowned_finding_ids):
-                    raise WorkflowCompletionRejected(
-                        f"{UNOWNED_OPEN_FINDING_DIAGNOSTIC}: workflow completion "
-                        "rejected; open findings without valid responsibility: "
-                        + ", ".join(blocking_finding_ids)
-                    )
-                raise WorkflowCompletionRejected(
-                    f"{UNDECIDED_FINDING_DIAGNOSTIC}: workflow completion "
-                    "rejected; findings without a valid terminal outcome: "
-                    + ", ".join(blocking_finding_ids)
-                )
             branch_discovery = (
                 state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
             )
+            if blocking_finding_ids and not branch_discovery:
+                raise WorkflowCompletionRejected(
+                    "workflow completion rejected; findings without a valid "
+                    "terminal outcome: "
+                    + ", ".join(blocking_finding_ids)
+                )
+            # The still-separate BRANCH_DISCOVERY workflow publishes its open
+            # cohort and completion atomically below.  It needs no mutable
+            # owner fact: the export carries the immutable opening history.
             final_binding = (
                 next(
                     (
@@ -1735,44 +1723,6 @@ class WorkflowPersistence:
                 idempotency_key=idempotency_key,
                 fingerprint_sha256=fingerprint,
             )
-        findings_by_id = {
-            finding.finding_id: finding for finding in result.findings
-        }
-        open_finding_ids = frozenset(
-            project_open_set(result.findings).finding_ids
-        )
-        for route in result.responsibility_routes:
-            finding = findings_by_id.get(route.finding_id)
-            if finding is None or route.finding_id not in open_finding_ids:
-                raise WorkflowExecutionError(
-                    "native review persistence cannot route a missing or closed "
-                    f"finding {route.finding_id}"
-                )
-            if work_unit_id is None:
-                raise WorkflowExecutionError(
-                    "native review responsibility routing requires a structured "
-                    "work unit"
-                )
-            bridge.append(
-                FindingTransitionPayload(
-                    finding_id=route.finding_id,
-                    reporter=Role(result.reviewer.value),
-                    actor=Role(result.reviewer.value),
-                    action="routed",
-                    severity=FindingSeverity(finding.finding_class.value),
-                    finding_status="open",
-                    rationale=route.rationale,
-                    work_unit_id=work_unit_id,
-                    responsibility=route.responsibility,
-                ),
-                logical_id=f"finding-{route.finding_id}",
-                idempotency_key=(
-                    f"finding:{route.finding_id}:routed:work_unit:"
-                    f"{work_unit_id}:{round_number}:{result.reviewer.value}"
-                ),
-                fingerprint_sha256=fingerprint,
-            )
-
     def persist_contract_diagnostic(
         self, role: AgentRole, output: str, reason: str, attempt: int
     ) -> None:

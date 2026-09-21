@@ -103,16 +103,16 @@ FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-234933f51ba4fc69c86c6a173140356f8386cd1ca190ac964d9c5c207a4cc40d"
+    "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-c0b89a403e36b5db9a29f977339c6a531d1cb4c74d8842b7684cfc19597aaad2"
+    "native-review-request-e920b8b8d985faa4fbd89d028180975529eec3fe54fe68f248bbcf55b43c35ad"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "05f91448c0b1f15d68914cf59eae0318c0df990e2e4e0e74619fb7562c96ba43"
+    "a0283c507c65a366735683871fbe5bf52b2f86ad130f0788471f60a9d43a5c44"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "45a3f6c06ead0cf1eb9d1a36f3c55cdc6cdbddcc1942c802564462f72811d2d7"
+    "5e0301f75f754dae5353e7c76786eee32af9b9ebb49f81a72ca5d3013e08d28c"
 )
 
 RECOVERY_HELPERS = {
@@ -1046,7 +1046,6 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
                 "finding_id": "C-02",
                 "decision": "accepted",
                 "rationale": "The earlier finding remains valid and open.",
-                "responsibility_proposal": None,
             }
         ],
     }
@@ -1240,7 +1239,6 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
                 "finding_id": "C-02",
                 "decision": "accepted",
                 "rationale": "This answer was stale when it was written.",
-                "responsibility_proposal": None,
             }
         ],
     }
@@ -1327,7 +1325,6 @@ def _reviewer_base() -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "recovery identity and idempotency",

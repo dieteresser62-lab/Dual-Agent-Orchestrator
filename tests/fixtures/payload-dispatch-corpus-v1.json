@@ -10,7 +10,7 @@
     {
       "record_type": "run_profile",
       "expected_class": "RunProfilePayload",
-      "input": {"implementer": {"model": "gpt-5.6-sol", "effort": "max"}, "reviewer": {"model": "opus", "effort": "max"}, "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reducer_version": "structured-v2-schema-2-state-v3-target-finding-lifecycle-v1"}
+      "input": {"implementer": {"model": "gpt-5.6-sol", "effort": "max"}, "reviewer": {"model": "opus", "effort": "max"}, "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reducer_version": "structured-v2-schema-2-state-v3-target-routing-removal-v1"}
     },
     {
       "record_type": "workflow_transition",

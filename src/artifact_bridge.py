@@ -1232,31 +1232,6 @@ def plan_assignment_payload(
         raise ArtifactBridgeError(
             "plan assignment family binding differs from its source snapshot"
         )
-    from finding_reducer import reduce_finding_records
-    from finding_responsibility import BranchPlanningResponsibility
-
-    imported_findings = reduce_finding_records((source_snapshot_record,))
-    responsibilities = {
-        item.finding_id: item.responsibility
-        for item in imported_findings.responsibilities
-    }
-    for item in snapshot.finding_snapshot:
-        if not item.is_open:
-            continue
-        responsibility = responsibilities.get(item.finding_id)
-        if not isinstance(responsibility, BranchPlanningResponsibility):
-            raise ArtifactBridgeError(
-                "plan assignment open finding lacks BRANCH_PLANNING responsibility: "
-                f"{item.finding_id}"
-            )
-        if (
-            responsibility.family_id != family_id
-            or responsibility.cycle_number > cycle_number
-        ):
-            raise ArtifactBridgeError(
-                "plan assignment open finding has foreign or future "
-                f"BRANCH_PLANNING responsibility: {item.finding_id}"
-            )
     groups_by_signature: dict[str, list[str]] = {}
     for item in snapshot.finding_snapshot:
         if item.is_open:

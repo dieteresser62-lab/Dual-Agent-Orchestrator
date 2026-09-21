@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -74,10 +73,6 @@ from finding_planning import (
     validate_plan_treatment_decisions,
 )
 from finding_signature import finding_record_signature
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    SliceResponsibility,
-)
 from native_finding_decisions import NativeRejectionReason
 from native_codex_contract import (
     BoundNativeCodexContext,
@@ -345,7 +340,7 @@ def test_absolute_round_limit_stops_and_names_its_value(caplog: pytest.LogCaptur
     assert f"absolute_round_limit={MAX_REMEDIATION_ROUNDS}" in caplog.text
 
 
-def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
+def test_branch_finding_origin_is_enough_for_inherited_plan_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -368,32 +363,12 @@ def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
         finding.acceptance_test,
         "6",
         1,
-        responsibility=SliceResponsibility(
-            "implementation-run", "0" * 40, "6"
-        ),
     )
     imported = ImportedFindingTransition(
         "ar1-" + "1" * 64,
         opening,
         "implementation-run",
         "ar1-" + "1" * 64,
-    )
-    route = FindingTransitionPayload(
-        "C-01",
-        Role.CLAUDE,
-        Role.CLAUDE,
-        "routed",
-        FindingSeverity.OBSERVATION,
-        "open",
-        "No approved later Slice carries the repair.",
-        "6",
-        responsibility=BranchPlanningResponsibility("family-1", 1),
-    )
-    routed = ImportedFindingTransition(
-        "ar1-" + "6" * 64,
-        route,
-        "implementation-run",
-        "ar1-" + "6" * 64,
     )
     snapshot = BranchDiscoveryHandoffImportPayload(
         source_run_id="discovery-run",
@@ -411,10 +386,8 @@ def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
         target_task_path="inbox/doing/remediation.md",
         target_task_sha256="6" * 64,
         target_run_identity="plan-run",
-        finding_transitions_sha256=finding_transition_sequence_sha256(
-            (imported, routed)
-        ),
-        transitions=(imported, routed),
+        finding_transitions_sha256=finding_transition_sequence_sha256((imported,)),
+        transitions=(imported,),
         finding_snapshot=(
             FindingSnapshotItem(
                 "C-01", signature, "open", FindingSeverity.OBSERVATION
@@ -458,7 +431,7 @@ def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
             "native-review-request-" + "9" * 64,
             "a" * 64,
             ReviewEvidencePayload(
-                "Coverage, paths, and closing responsibility checked.",
+            "Coverage, paths, and closing treatment checked.",
                 "The implementation may expose a new integration defect.",
                 "A missing closing Slice would invalidate approval.",
             ),
@@ -506,10 +479,8 @@ def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
         export_record_id="ar1-" + "8" * 64,
         target_run_id="implementation-run",
         target_task_sha256="9" * 64,
-        finding_transitions_sha256=finding_transition_sequence_sha256(
-            (imported, routed)
-        ),
-        transitions=(imported, routed),
+        finding_transitions_sha256=finding_transition_sequence_sha256((imported,)),
+        transitions=(imported,),
         authority=Role.ORCHESTRATOR,
     )
     implementation_import_record = _record(
@@ -536,22 +507,6 @@ def test_routed_branch_finding_becomes_inherited_s_r_in_plan_assignment(
 
     assert checkpoint.inherited_signatures == (signature,)
     assert checkpoint.unresolved_inherited_signatures == (signature,)
-
-    unrouted_snapshot = replace(
-        snapshot,
-        finding_transitions_sha256=finding_transition_sequence_sha256((imported,)),
-        transitions=(imported,),
-    )
-    with pytest.raises(ArtifactBridgeError, match="lacks BRANCH_PLANNING"):
-        plan_assignment_payload(
-            source_snapshot_record=_record(
-                "plan-run", "unrouted-snapshot", unrouted_snapshot
-            ),
-            plan_result_record=codex_record,
-            review_record=review_record,
-            family_binding=family,
-            remediation_round_number=1,
-        )
 
     foreign_codex_record = _record(
         "other-plan-run", "codex-plan", codex_record.payload
@@ -654,7 +609,6 @@ def test_native_codex_plan_transports_complete_signature_treatments(
                 "finding_id": "C-01",
                 "decision": "accepted",
                 "rationale": "The plan assigns the repair to Slice 1.",
-                "responsibility_proposal": None,
             }
         ],
         "plan_treatments": [
@@ -758,7 +712,6 @@ def test_native_plan_review_binds_and_requires_explicit_treatment_decisions(
             }
         ],
         "reclassifications": [],
-        "responsibility_routes": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "Coverage, evidence, and fingerprint binding checked.",

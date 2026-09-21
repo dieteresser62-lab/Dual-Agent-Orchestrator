@@ -26,7 +26,6 @@ import workflow_recovery
 from artifact_bridge import finding_payload
 from artifact_models import (
     ArtifactRecord,
-    FamilyBindingPayload,
     FindingSeverity,
     FindingTransitionPayload,
     Fingerprint,
@@ -58,17 +57,11 @@ from finding_reducer import (
     project_reviewer_persistence_transitions,
     reduce_finding_records,
 )
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    SliceResponsibility,
-    responsibility_document,
-)
 from native_codex_contract import NativeFindingDisposition, _apply_dispositions  # allowlist:provider -- exercised production contract
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
     NativeRejectionReason,
-    NativeResponsibilityRoute,
     PlanTreatmentDecision,
     PlanTreatmentDecisionKind,
     PlanTreatmentKind,
@@ -523,9 +516,7 @@ class ReviewProbe:
     target_viable: bool
     expected_status: FindingStatus | None
     expected_class: CurrentFindingClass | None
-    expected_route: object | None
     locations: tuple[str, ...]
-    record_family_binding: FamilyBindingPayload | None = None
 
 
 def _attestation(
@@ -607,7 +598,6 @@ def _context(
     round_number: int = 2,
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
-    branch_target: BranchPlanningResponsibility | None = None,
     fingerprint: str = FINGERPRINT,
     pre_change_fingerprint: str | None = None,
     plan_treatments: tuple[PlanTreatmentProposal, ...] = (),
@@ -627,7 +617,6 @@ def _context(
         anchor_origin=(None if approval is ApprovalMarker.PLAN else "approved-plan"),
         validation_command_prefixes=(("python3", "-m", "pytest"),),
         planned_slices=planned_slices,
-        branch_planning_target=branch_target,
         pre_change_fingerprint=pre_change_fingerprint,
         plan_treatments=plan_treatments,
     )
@@ -643,7 +632,6 @@ def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str,
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
@@ -662,7 +650,6 @@ def _typed_response(
     new_findings: tuple[NativeFinding, ...] = (),
     status_changes: tuple[NativeStatusChange, ...] = (),
     reclassifications: tuple[NativeReclassification, ...] = (),
-    routes: tuple[NativeResponsibilityRoute, ...] = (),
     plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = (),
 ) -> NativeReviewResult:
     return NativeReviewResult(
@@ -672,7 +659,6 @@ def _typed_response(
         new_findings=new_findings,
         status_changes=status_changes,
         reclassifications=reclassifications,
-        responsibility_routes=routes,
         plan_treatment_decisions=plan_treatment_decisions,
         anchors=(),
         evidence=None,
@@ -703,9 +689,7 @@ class _ReviewProbeCollector:
         target_viable: bool | None = None,
         expected_status: FindingStatus | None = None,
         expected_class: CurrentFindingClass | None = None,
-        expected_route: object | None = None,
         locations: tuple[str, ...] = ("src/native_review_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
-        family: FamilyBindingPayload | None = None,
     ) -> None:
         self.probes.append(
             ReviewProbe(
@@ -722,9 +706,7 @@ class _ReviewProbeCollector:
                 ),
                 expected_status,
                 expected_class,
-                expected_route,
                 locations,
-                family,
             )
         )
 
@@ -958,150 +940,6 @@ def _plan_review_probes() -> tuple[ReviewProbe, ...]:
     return tuple(probes)
 
 
-def _route_review_probes() -> tuple[ReviewProbe, ...]:
-    probes: list[ReviewProbe] = []
-    add = _ReviewProbeCollector(probes)
-    rejected = _finding(
-        CurrentFindingClass.OBSERVATION,
-        decision=FindingResponseDecision.REJECTED,
-    )
-
-    # Implementation-only moves whose successful end-to-end execution is a
-    # measured UEBERZAEHLIG deviation.
-    family = FamilyBindingPayload(
-        family_id="oracle-family",
-        family_base_commit="b" * 40,
-        family_authorized_change_set=("src/native_review_contract.py",),  # allowlist:provider -- measured code location
-        predecessor_run_id=None,
-        predecessor_head_record_id=None,
-        cycle_number=1,
-        current_plan_commit=None,
-        current_implementation_commit=None,
-    )
-    branch = BranchPlanningResponsibility("oracle-family", 1)
-    context = _context((rejected,), branch_target=branch)
-    route = NativeResponsibilityRoute(
-        "C-01", branch, "Branch planning owns the finding."
-    )
-    document = _base_document(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(branch),
-            "rationale": route.rationale,
-        }
-    ]
-    add(
-        "branch-planning-route",
-        "implementierung.finding.review.rejection_invalid.first_review",
-        "BRANCH_PLANNING",
-        context,
-        document,
-        _typed_response(context, approved=True, routes=(route,)),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.OBSERVATION,
-        expected_route=branch,
-        locations=(
-            "src/native_review_contract.py",  # allowlist:provider -- measured code location
-            "src/finding_responsibility.py",
-            "src/finding_reducer.py",
-        ),
-        family=family,
-    )
-
-    status = NativeStatusChange(
-        "C-01", FindingStatus.OPEN, "The route also confirms OPEN."
-    )
-    document = _base_document(context, approved=True)
-    document["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "OPEN",
-            "rationale": status.rationale,
-            "closure": None,
-        }
-    ]
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(branch),
-            "rationale": route.rationale,
-        }
-    ]
-    add(
-        "route-plus-confirming-open",
-        "implementierung.finding.review.rejection_invalid.first_review",
-        "ROUTE+OPEN",
-        context,
-        document,
-        _typed_response(
-            context, approved=True, status_changes=(status,), routes=(route,)
-        ),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.OBSERVATION,
-        expected_route=branch,
-        locations=("src/native_review_contract.py", "src/workflow_persistence.py"),  # allowlist:provider -- measured code location
-        family=family,
-    )
-
-    # Point 107 control: both layers reject this today.  Removing the contract
-    # check makes only the contract accept it and therefore produces UNEINIG.
-    context = _context((rejected,), branch_target=None)
-    document = _base_document(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(branch),
-            "rationale": route.rationale,
-        }
-    ]
-    add(
-        "branch-planning-without-family",
-        "implementierung.finding.review.rejection_invalid.first_review",
-        "BRANCH_PLANNING-OHNE-FAMILIE",
-        context,
-        document,
-        _typed_response(context, approved=True, routes=(route,)),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.OBSERVATION,
-        expected_route=branch,
-        locations=("src/native_review_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
-    )
-
-    planned = (
-        PlannedSlice(1, "current", ("src/native_review_contract.py",)),  # allowlist:provider -- measured code location
-        PlannedSlice(2, "later", ("src/native_review_contract.py",)),  # allowlist:provider -- measured code location
-    )
-    later = SliceResponsibility(RUN_ID, "d" * 40, "2")
-    context = _context((rejected,), planned_slices=planned)
-    route = NativeResponsibilityRoute("C-01", later, "A later Slice owns it.")
-    document = _base_document(context, approved=True)
-    document["responsibility_routes"] = [
-        {
-            "finding_id": "C-01",
-            "responsibility": responsibility_document(later),
-            "rationale": route.rationale,
-        }
-    ]
-    add(
-        "later-slice-route",
-        "implementierung.finding.review.rejection_invalid.first_review",
-        "ROUTE-ZU-SPAETEREM-SLICE",
-        context,
-        document,
-        _typed_response(context, approved=True, routes=(route,)),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.OBSERVATION,
-        expected_route=later,
-        locations=("src/native_review_contract.py", "src/slice_exit.py"),  # allowlist:provider -- measured code location
-    )
-    return tuple(probes)
-
-
 def _legacy_finding_review_probes() -> tuple[ReviewProbe, ...]:
     probes: list[ReviewProbe] = []
     add = _ReviewProbeCollector(probes)
@@ -1244,7 +1082,6 @@ def _review_probes() -> tuple[ReviewProbe, ...]:
     return (
         *_core_review_probes(),
         *_plan_review_probes(),
-        *_route_review_probes(),
         *_legacy_finding_review_probes(),
     )
 
@@ -1290,8 +1127,6 @@ def _native_opening_record(finding: NativeFinding) -> FindingRecord:
 def _semantic_match(
     findings: Sequence[FindingRecord],
     probe: ReviewProbe,
-    *,
-    responsibilities: Sequence[object] = (),
 ) -> bool:
     if probe.expected_status is None and probe.expected_class is None:
         return True
@@ -1301,8 +1136,6 @@ def _semantic_match(
     if probe.expected_status is not None and finding.status is not probe.expected_status:
         return False
     if probe.expected_class is not None and finding.finding_class is not probe.expected_class:
-        return False
-    if probe.expected_route is not None and probe.expected_route not in responsibilities:
         return False
     return True
 
@@ -1315,7 +1148,6 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
         RunProfilePayload(
             RoleProfilePayload("oracle-implementer", "medium"),
             RoleProfilePayload("oracle-reviewer", "high"),
-            family_binding=probe.record_family_binding,
         ),
     )
     for prior in probe.context.previous_findings:
@@ -1387,31 +1219,8 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
                     ),
                 ),
             )
-        current_by_id = {item.finding_id: item for item in current}
-        for route in probe.typed_response.responsibility_routes:
-            finding = current_by_id[route.finding_id]
-            _new_record(
-                records,
-                f"finding-{route.finding_id}",
-                FindingTransitionPayload(
-                    finding_id=route.finding_id,
-                    reporter=Role.CLAUDE,  # allowlist:provider -- current typed ownership
-                    actor=Role.CLAUDE,  # allowlist:provider -- current typed ownership
-                    action="routed",
-                    severity=FindingSeverity(finding.finding_class.value),
-                    finding_status="open",
-                    rationale=route.rationale,
-                    work_unit_id=WORK_UNIT_ID,
-                    responsibility=route.responsibility,
-                ),
-            )
         reduction = reduce_finding_records(records)
-        responsibilities = tuple(item.responsibility for item in reduction.responsibilities)
-        matched = _semantic_match(
-            reduction.ledger.findings,
-            probe,
-            responsibilities=responsibilities,
-        )
+        matched = _semantic_match(reduction.ledger.findings, probe)
         return matched, (
             "record reduction reached the requested semantic state"
             if matched
@@ -1424,8 +1233,7 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
 def _contract_probe(probe: ReviewProbe) -> tuple[bool, str]:
     try:
         result = parse_native_contract_result(probe.document, probe.context)
-        responsibilities = tuple(route.responsibility for route in result.responsibility_routes)
-        matched = _semantic_match(result.findings, probe, responsibilities=responsibilities)
+        matched = _semantic_match(result.findings, probe)
         return matched, (
             "review contract reached the requested semantic state"
             if matched

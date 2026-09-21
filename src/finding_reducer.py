@@ -18,11 +18,7 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     ImportedFindingTransition,
-    PlanPayload,
-    RunProfilePayload,
-    TaskPayload,
     WorkUnitPayload,
-    WorkflowTransitionPayload,
 )
 from artifact_replay import (
     ArtifactReplayResult,
@@ -45,21 +41,6 @@ from contracts import (
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
 from finding_signature import finding_record_signature
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    FindingResponsibility,
-    PlanRevisionResponsibility,
-    ResponsibilityKind,
-    SliceResponsibility,
-    responsibility_document,
-)
-
-
-REVIEW_OPENING_RESPONSIBILITY_KINDS: Mapping[str, ResponsibilityKind] = {
-    "claude_slice_review": ResponsibilityKind.SLICE,  # allowlist:provider -- persisted step
-    "claude_plan_review": ResponsibilityKind.PLAN_REVISION,  # allowlist:provider -- persisted step
-    "claude_branch_discovery": ResponsibilityKind.BRANCH_PLANNING,  # allowlist:provider -- persisted step
-}
 
 
 def is_closed_finding_status(status: FindingStatus) -> bool:
@@ -92,16 +73,6 @@ class FindingLineageProjection:
     finding: FindingRecord
     opening_record_id: str
     transition_record_ids: tuple[str, ...]
-    responsibility: FindingResponsibility | None
-
-
-@dataclass(frozen=True, slots=True)
-class FindingResponsibilityProjection:
-    """Current responsibility while keeping Finding origin independent."""
-
-    finding_id: str
-    origin_slice_id: str
-    responsibility: FindingResponsibility
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,8 +171,7 @@ class SliceExitFindingHeadProjection:
     summary: str
     acceptance_test: str
     affected_paths: tuple[str, ...]
-    responsibility: FindingResponsibility | None
-    last_assignment: FindingTransitionProjection | None
+    origin_slice_id: str
     last_status_change: FindingTransitionProjection | None
     invalid_downgrade: FindingTransitionProjection | None
 
@@ -238,8 +208,7 @@ class _MutableSliceExitFindingHead:
     summary: str
     acceptance_test: str
     affected_paths: tuple[str, ...]
-    responsibility: FindingResponsibility | None
-    last_assignment: FindingTransitionProjection | None
+    origin_slice_id: str
     last_status_change: FindingTransitionProjection | None = None
     has_record_evidence: bool = False
     invalid_downgrade: FindingTransitionProjection | None = None
@@ -253,7 +222,6 @@ class FindingReduction:
     open_set: FindingOpenSetProjection
     import_snapshot: FindingImportSnapshotProjection | None
     status_transitions: FindingStatusTransitionsProjection
-    responsibilities: tuple[FindingResponsibilityProjection, ...]
     diagnostics: tuple[FindingOpeningConflictDiagnostic, ...]
     _events: tuple[FindingTransitionProjection, ...] = field(
         repr=False
@@ -346,22 +314,12 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
     status_transitions = FindingStatusTransitionsProjection(
         tuple(event for event in events if event.payload.action != "responded")
     )
-    responsibilities = tuple(
-        FindingResponsibilityProjection(
-            item.finding.finding_id,
-            item.finding.origin.slice_id,
-            item.responsibility,
-        )
-        for item in lineages
-        if item.responsibility is not None
-    )
     import_snapshot = _project_import_snapshot(records, events)
     return FindingReduction(
         ledger=ledger,
         open_set=open_set,
         import_snapshot=import_snapshot,
         status_transitions=status_transitions,
-        responsibilities=responsibilities,
         diagnostics=tuple(diagnostics),
         _events=events,
     )
@@ -370,7 +328,7 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
 def project_slice_exit_findings(
     records: Sequence[ArtifactRecord],
 ) -> SliceExitFindingProjection:
-    """Fold only record facts required by E4 without changing route policy."""
+    """Fold only record facts required by E4 without changing finding policy."""
 
     events = _transition_events(records)
     mutable: dict[str, _MutableSliceExitFindingHead] = {}
@@ -385,10 +343,7 @@ def project_slice_exit_findings(
                     summary=payload.summary or payload.rationale,
                     acceptance_test=payload.acceptance_test or payload.rationale,
                     affected_paths=payload.affected_paths or (),
-                    responsibility=payload.responsibility,
-                    last_assignment=(
-                        event if payload.responsibility is not None else None
-                    ),
+                    origin_slice_id=payload.origin_slice_id or "",
                 ),
             )
             continue
@@ -400,8 +355,6 @@ def project_slice_exit_findings(
         elif payload.action == "status_changed":
             head.status = payload.finding_status
             head.last_status_change = event
-            if payload.finding_status == "closed":
-                head.responsibility = None
         elif payload.action in {"reclassified", "escalated"}:
             if (
                 head.severity is FindingSeverity.BLOCKER
@@ -410,9 +363,6 @@ def project_slice_exit_findings(
             ):
                 head.invalid_downgrade = event
             head.severity = payload.severity
-        elif payload.action == "routed":
-            head.responsibility = payload.responsibility
-            head.last_assignment = event
     return SliceExitFindingProjection(
         events,
         tuple(
@@ -423,8 +373,7 @@ def project_slice_exit_findings(
                 summary=head.summary,
                 acceptance_test=head.acceptance_test,
                 affected_paths=head.affected_paths,
-                responsibility=head.responsibility,
-                last_assignment=head.last_assignment,
+                origin_slice_id=head.origin_slice_id,
                 last_status_change=head.last_status_change,
                 invalid_downgrade=head.invalid_downgrade,
             )
@@ -1001,7 +950,6 @@ def _reduce_lineages(
     head_openings: dict[str, FindingTransitionProjection] = {}
     opening_records: dict[tuple[str, str], str] = {}
     transition_records: dict[tuple[str, str], list[str]] = {}
-    responsibilities: dict[tuple[str, str], FindingResponsibility | None] = {}
     opening_order: list[tuple[str, str]] = []
     for event in events:
         payload = event.payload
@@ -1044,12 +992,6 @@ def _reduce_lineages(
                     f"structured finding opening is invalid: {exc}",
                     record,
                 )
-            if (
-                payload.responsibility is not None
-                and records is not None
-                and not event.imported
-            ):
-                _validate_opening_responsibility(event, records)
             if payload.predecessor_finding_ref is not None:
                 predecessor_key = active_keys.get(
                     payload.predecessor_finding_ref
@@ -1100,7 +1042,6 @@ def _reduce_lineages(
             head_openings[payload.finding_id] = event
             opening_records[lineage_key] = event.source_record_id
             transition_records[lineage_key] = [event.source_record_id]
-            responsibilities[lineage_key] = payload.responsibility
             opening_order.append(lineage_key)
             continue
         scoped_key = (payload.work_unit_id, payload.finding_id)
@@ -1126,13 +1067,7 @@ def _reduce_lineages(
                 record,
             )
         try:
-            finding, responsibility = _apply_transition_to_finding(
-                event,
-                finding,
-                responsibilities[lineage_key],
-                records,
-            )
-            responsibilities[lineage_key] = responsibility
+            finding = _apply_transition_to_finding(event, finding)
         except ValueError as exc:
             _fail(
                 ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
@@ -1147,7 +1082,6 @@ def _reduce_lineages(
             finding=findings[lineage_key],
             opening_record_id=opening_records[lineage_key],
             transition_record_ids=tuple(transition_records[lineage_key]),
-            responsibility=responsibilities[lineage_key],
         )
         for lineage_key in opening_order
     )
@@ -1156,9 +1090,7 @@ def _reduce_lineages(
 def _apply_transition_to_finding(
     event: FindingTransitionProjection,
     finding: FindingRecord,
-    responsibility: FindingResponsibility | None,
-    records: Sequence[ArtifactRecord] | None,
-) -> tuple[FindingRecord, FindingResponsibility | None]:
+) -> FindingRecord:
     payload = event.payload
     record = _event_record(event)
     if payload.action == "responded":
@@ -1168,24 +1100,18 @@ def _apply_transition_to_finding(
                 "structured finding response lacks response_decision",
                 record,
             )
-        return (
-            apply_finding_response(
-                finding,
-                FindingResponseDecision(payload.response_decision.upper()),
-                payload.rationale,
-            ),
-            responsibility,
+        return apply_finding_response(
+            finding,
+            FindingResponseDecision(payload.response_decision.upper()),
+            payload.rationale,
         )
     if payload.action == "reclassified":
-        return (
-            apply_reviewer_finding_update(
-                finding,
-                reviewer=finding.origin.reporter,
-                status=finding.status,
-                rationale=payload.rationale,
-                finding_class=FindingClass(payload.severity.value),
-            ),
-            responsibility,
+        return apply_reviewer_finding_update(
+            finding,
+            reviewer=finding.origin.reporter,
+            status=finding.status,
+            rationale=payload.rationale,
+            finding_class=FindingClass(payload.severity.value),
         )
     if payload.action == "escalated":
         if (
@@ -1198,15 +1124,12 @@ def _apply_transition_to_finding(
                 "finding escalation requires an open non-BLOCKER with a latest "
                 "REJECTED implementer response"
             )
-        return (
-            apply_reviewer_finding_update(
-                finding,
-                reviewer=finding.origin.reporter,
-                status=FindingStatus.OPEN,
-                rationale=payload.rationale,
-                finding_class=FindingClass.BLOCKER,
-            ),
-            responsibility,
+        return apply_reviewer_finding_update(
+            finding,
+            reviewer=finding.origin.reporter,
+            status=FindingStatus.OPEN,
+            rationale=payload.rationale,
+            finding_class=FindingClass.BLOCKER,
         )
     if payload.action == "status_changed":
         updated = apply_reviewer_finding_update(
@@ -1216,21 +1139,10 @@ def _apply_transition_to_finding(
             rationale=payload.rationale,
             finding_class=FindingClass(payload.severity.value),
         )
-        return updated, None if is_closed_finding_status(updated.status) else responsibility
+        return updated
     if payload.action == "acceptance_measured":
-        return _apply_acceptance_measurement(event, finding), responsibility
-    if payload.action == "routed":
-        assert payload.responsibility is not None
-        if finding.status is not FindingStatus.OPEN:
-            _fail(
-                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                f"cannot route closed finding {payload.finding_id}",
-                record,
-            )
-        if records is not None and not event.imported:
-            _validate_routed_responsibility(payload.responsibility, record, records)
-        return finding, payload.responsibility
-    return finding, responsibility
+        return _apply_acceptance_measurement(event, finding)
+    return finding
 
 
 def _apply_acceptance_measurement(
@@ -1271,177 +1183,6 @@ def _apply_acceptance_measurement(
     return replace(
         finding,
         acceptance_measurements=(*finding.acceptance_measurements, measurement),
-    )
-
-
-def responsibility_projection_document(
-    reduction: FindingReduction,
-) -> dict[str, dict[str, str | int]]:
-    """Serialize the current typed assignment in canonical Finding-ID order."""
-
-    return {
-        item.finding_id: responsibility_document(item.responsibility)
-        for item in sorted(
-            reduction.responsibilities,
-            key=lambda item: finding_id_sort_key(item.finding_id),
-        )
-    }
-
-
-def _validate_opening_responsibility(
-    event: FindingTransitionProjection,
-    records: Sequence[ArtifactRecord],
-) -> None:
-    payload = event.payload
-    responsibility = payload.responsibility
-    assert responsibility is not None
-    record = _event_record(event)
-    if event.imported:
-        # Imported transitions are immutable historical facts. Their source
-        # run validated the responsibility against its own family binding
-        # before the orchestrator created the digest-bound handoff. Rebinding
-        # them to a child would reject a valid BRANCH_PLANNING route as soon as
-        # the monotonically increasing family cycle advances.
-        return
-    prior = records[: event.sequence - 1]
-    review_step = next(
-        (
-            candidate.payload.step
-            for candidate in reversed(prior)
-            if isinstance(candidate.payload, WorkflowTransitionPayload)
-            and candidate.payload.work_unit_id == payload.work_unit_id
-        ),
-        None,
-    )
-    required_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(review_step)
-    if required_kind is None:
-        _responsibility_fail(
-            f"responsibility-bearing opening has no supported review context; step={review_step!r}",
-            record,
-        )
-    if responsibility.responsibility_kind is not required_kind:
-        review_label = {
-            ResponsibilityKind.SLICE: "Slicereview",
-            ResponsibilityKind.PLAN_REVISION: "Planreview",
-            ResponsibilityKind.BRANCH_PLANNING: "Entdeckungsreview",
-        }[required_kind]
-        _responsibility_fail(
-            f"{review_label} opening requires responsibility kind {required_kind.value}",
-            record,
-        )
-    if required_kind is ResponsibilityKind.SLICE:
-        assert isinstance(responsibility, SliceResponsibility)
-        plan = next(
-            (
-                candidate.payload
-                for candidate in reversed(prior)
-                if isinstance(candidate.payload, PlanPayload)
-            ),
-            None,
-        )
-        unit = next(
-            (
-                candidate.payload
-                for candidate in reversed(prior)
-                if candidate.logical_id == f"work-unit-{payload.work_unit_id}"
-                and isinstance(candidate.payload, WorkUnitPayload)
-            ),
-            None,
-        )
-        if responsibility.target_run_id != record.run_id:
-            _responsibility_fail(
-                "SLICE.target_run_id differs from the opening record run",
-                record,
-            )
-        if plan is None:
-            _responsibility_fail(
-                "SLICE.approved_plan_commit has no approved Plan fact in the run",
-                record,
-            )
-        if responsibility.approved_plan_commit != plan.approved_plan_commit:
-            _responsibility_fail(
-                "SLICE.approved_plan_commit differs from the approved Plan fact",
-                record,
-            )
-        expected_slice = (
-            payload.origin_slice_id if unit is None else unit.slice_id
-        )
-        if responsibility.slice_id != expected_slice:
-            _responsibility_fail(
-                "SLICE.slice_id differs from the opening review Slice",
-                record,
-            )
-        return
-    if required_kind is ResponsibilityKind.PLAN_REVISION:
-        assert isinstance(responsibility, PlanRevisionResponsibility)
-        task = next(
-            (
-                candidate.payload
-                for candidate in reversed(prior)
-                if isinstance(candidate.payload, TaskPayload)
-            ),
-            None,
-        )
-        if responsibility.run_id != record.run_id:
-            _responsibility_fail(
-                "PLAN_REVISION.run_id differs from the opening record run",
-                record,
-            )
-        if task is None or task.work_plan_path is None:
-            _responsibility_fail(
-                "PLAN_REVISION.plan_path has no bound work-plan path in the run",
-                record,
-            )
-        if responsibility.plan_path != task.work_plan_path:
-            _responsibility_fail(
-                "PLAN_REVISION.plan_path differs from the bound work-plan path",
-                record,
-            )
-        return
-    if required_kind is ResponsibilityKind.BRANCH_PLANNING:
-        assert isinstance(responsibility, BranchPlanningResponsibility)
-        _validate_routed_responsibility(responsibility, record, records)
-        return
-    raise AssertionError("unhandled review opening responsibility kind")
-
-
-def _validate_routed_responsibility(
-    responsibility: FindingResponsibility,
-    record: ArtifactRecord,
-    records: Sequence[ArtifactRecord],
-) -> None:
-    if isinstance(responsibility, BranchPlanningResponsibility):
-        profile = next(
-            (
-                item.payload
-                for item in records
-                if item.run_id == record.run_id
-                and isinstance(item.payload, RunProfilePayload)
-            ),
-            None,
-        )
-        binding = None if profile is None else profile.family_binding
-        if binding is None:
-            _responsibility_fail(
-                "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
-                record,
-            )
-        if (
-            responsibility.family_id != binding.family_id
-            or responsibility.cycle_number != binding.cycle_number
-        ):
-            _responsibility_fail(
-                "BRANCH_PLANNING family_id or cycle_number differs from the "
-                "run-bound family identity",
-                record,
-            )
-
-
-def _responsibility_fail(message: str, record: ArtifactRecord) -> None:
-    _fail(
-        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-        f"finding responsibility is invalid: {message}",
-        record,
     )
 
 

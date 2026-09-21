@@ -1785,7 +1785,10 @@ def test_productive_path_count_contract_is_absent_from_live_repository() -> None
         relative = raw_path.decode("utf-8")
         if relative.startswith("inbox/backlog/"):
             continue
-        content = (ROOT / relative).read_bytes()
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
         if retired_option.encode() in content:
             hits.append(f"{relative}:{retired_option}")
         if relative.endswith(".py") and relative.startswith(("src/", "tests/")):

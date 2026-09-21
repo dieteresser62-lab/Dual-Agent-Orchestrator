@@ -4,32 +4,32 @@
     {
       "provider": "claude",
       "form": "convergence",
-      "sha256": "ec7634c2327df74853950f4d54e82315f6ba74352b6e25b14755302f30ce3786"
+      "sha256": "ae44b9a60a48f0b6db2fdb536d43cd73065dbc63b5e411024395203cb0fad096"
     },
     {
       "provider": "claude",
       "form": "initial_slice",
-      "sha256": "acda19a1399b4e69eba09f6c54006a65664adfdb2f46c441818d61c4c5cd3348"
+      "sha256": "15323aa4e20b53153cb57f0d88601eec63fd8e81ba60e95128ccb0c8080bbd83"
     },
     {
       "provider": "claude",
       "form": "plan",
-      "sha256": "04b028ce1ff9ff249b7608a086396bc48a7bce1f9e0ccba51406bfa0c9e0c16d"
+      "sha256": "3892513e7165e3a773f0053eec8c8d62696a71396cfacb4ef3f1a099fcd6510a"
     },
     {
       "provider": "codex",
       "form": "correction",
-      "sha256": "c7ef021624c002191801e99d0aad4c95d211bcf36ec319f4e4005878ea4ec723"
+      "sha256": "558f11bbe60f75ce178894e166d300582175ce74deb84005114243723c41718e"
     },
     {
       "provider": "codex",
       "form": "implementation",
-      "sha256": "6446b4a1b727c75e331e26c597c75dd5c003b52929d4ee7e69ed96e2e5a86652"
+      "sha256": "4009cc8f6d02501dc1b19e2e43f634ad7958849f10a6738be9a27aa127500832"
     },
     {
       "provider": "codex",
       "form": "plan",
-      "sha256": "5aa5387a27c5e22e76999fb22b203732d7b740f175d8100ab6e7ca72e31f29b6"
+      "sha256": "9d44640f791f9f828e74ebb3e6c4f7534a1fe6f66f2deaae7498bc105d7def7d"
     }
   ]
 }

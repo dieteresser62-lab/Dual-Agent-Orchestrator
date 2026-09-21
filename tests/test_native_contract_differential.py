@@ -249,7 +249,6 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     "finding_id": "C-01",
                     "decision": "accepted",
                     "rationale": "The focused regression closes the defect.",
-                    "responsibility_proposal": None,
                 }
             ]
             if kind is NativeCodexRequestKind.CORRECTION
@@ -362,7 +361,6 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
             else []
         ),
         "reclassifications": [],
-        "responsibility_routes": [],
         "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {

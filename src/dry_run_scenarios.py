@@ -992,7 +992,6 @@ class ScriptedWorkflowDriver:
                 cohort_finding_ids=(),
                 newly_opened_finding_ids=("C-01",) if round_number == 1 else (),
                 closed_local_finding_ids=("C-01",) if progress and round_number > 1 else (),
-                forwarded_local_finding_ids=(),
                 attested_remediation_finding_ids=(),
                 progress_made=progress,
                 reason=(
@@ -1146,19 +1145,6 @@ class ScriptedWorkflowDriver:
         document = json.loads(json.dumps(document))
         if document.get("request_id") == "$BOUND_REQUEST_ID":
             document["request_id"] = invocation.native_request.bound_context.request_id
-        routes = document.get("responsibility_routes")
-        if isinstance(routes, list):
-            for route in routes:
-                if not isinstance(route, dict):
-                    continue
-                responsibility = route.get("responsibility")
-                if (
-                    isinstance(responsibility, dict)
-                    and responsibility.get("target_run_id") == "$BOUND_RUN_ID"
-                ):
-                    responsibility["target_run_id"] = (
-                        invocation.native_request.bound_context.context.run_id
-                    )
         validate_native_review_provider_response(document, invocation.native_request)
         canonical = canonical_native_review_json(document)
         return NativeAgentReviewOutput(
@@ -2046,7 +2032,6 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "new_findings": [],
                     "status_changes": [],
                     "reclassifications": [],
-                    "responsibility_routes": [],
                     "plan_treatment_decisions": [],
                     "anchors": [],
                     "review_evidence": {
@@ -2090,7 +2075,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                     "finding_id": finding_id,
                     "decision": "accepted",
                     "rationale": f"The provider-free correction addresses {finding_id}.",
-                    "responsibility_proposal": None,
                 }
                 for finding_id in dispositions
             ],
@@ -2103,7 +2087,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         observations: tuple[str, ...] = (),
         blockers: tuple[str, ...] = (),
         closed: tuple[str, ...] = (),
-        routed: tuple[str, ...] = (),
     ) -> dict[str, object]:
         findings = [
             {
@@ -2139,19 +2122,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 for finding_id in closed
             ],
             "reclassifications": [],
-            "responsibility_routes": [
-                {
-                    "finding_id": finding_id,
-                    "responsibility": {
-                        "responsibility_kind": "SLICE",
-                        "target_run_id": "$BOUND_RUN_ID",
-                        "approved_plan_commit": base,
-                        "slice_id": "2",
-                    },
-                    "rationale": "The second planned Slice owns this finding.",
-                }
-                for finding_id in routed
-            ],
             "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
@@ -2182,7 +2152,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             approved_plan_commit=base,
             planned_slices=(
                 PlannedSlice(1, "Implement the first provider-free Slice.", ("src/first.py",)),
-                PlannedSlice(2, "Correct and close the carried finding.", ("src/second.py",)),
+                PlannedSlice(2, "Implement and review the second Slice.", ("src/second.py",)),
             ),
         ),
         agent_events=(
@@ -2192,11 +2162,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(
-                    approved=True,
-                    observations=("C-01",),
-                    routed=("C-01",),
-                ),
+                review(approved=True),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
@@ -2205,20 +2171,20 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
                 output=codex(  # allowlist:provider
-                    "implementation_result", dispositions=("C-01",), test_files=[]
+                    "implementation_result", test_files=[]
                 ),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=False, blockers=("C-02",), closed=("C-01",)),
+                review(approved=False, blockers=("C-01",)),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
-                codex("correction_result", dispositions=("C-02",), test_files=[]),  # allowlist:provider
+                codex("correction_result", dispositions=("C-01",), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=True, closed=("C-02",)),
+                review(approved=True, closed=("C-01",)),
             ),
         ),
         changes=(
@@ -2308,7 +2274,7 @@ def build_joint_branch_discovery_scenario(
                     "scan_complete": True,
                     "new_findings": [
                         {
-                            "finding_id": "C-03",
+                            "finding_id": "C-02",
                             "finding_class": "OBSERVATION",
                             "affected_paths": ["src/orchestrator.py"],
                             "summary": (
@@ -2326,7 +2292,6 @@ def build_joint_branch_discovery_scenario(
                         }
                     ],
                     "occurrences": [],
-                    "responsibility_routes": [],
                     "review_evidence": {
                         "dimensions": (
                             "correctness, contracts, failure paths, security, resume"
@@ -2335,7 +2300,7 @@ def build_joint_branch_discovery_scenario(
                             "the remediation handoff loses imported finding history"
                         ),
                         "break_condition": (
-                            "the linked PLAN_ONLY import omits C-03"
+                            "the linked PLAN_ONLY import omits C-02"
                         ),
                     },
                     "pre_mortem": (
@@ -2385,7 +2350,6 @@ def build_progressive_correction_scenario(
                     "finding_id": finding_id,
                     "decision": "accepted",
                     "rationale": f"The scripted correction addresses {finding_id}.",
-                    "responsibility_proposal": None,
                 }
                 for finding_id in findings
             ],
@@ -2427,7 +2391,6 @@ def build_progressive_correction_scenario(
                 for finding_id in closed
             ],
             "reclassifications": [],
-            "responsibility_routes": [],
             "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {

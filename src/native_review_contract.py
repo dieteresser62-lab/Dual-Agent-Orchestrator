@@ -39,7 +39,6 @@ from contracts import (
     ValidationStatus,
 )
 from finding_reducer import (
-    REVIEW_OPENING_RESPONSIBILITY_KINDS,
     ReviewerReclassification,
     ReviewerStatusChange,
     apply_reviewer_events,
@@ -47,15 +46,6 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
-from finding_responsibility import (
-    BranchPlanningResponsibility,
-    PlanRevisionResponsibility,
-    ResponsibilityKind,
-    SliceResponsibility,
-    parse_responsibility,
-    responsibility_document,
-    responsibility_json_schema,
-)
 from finding_signature import (
     finding_record_signature,
     finding_signature,
@@ -76,15 +66,12 @@ from native_provider_schema import (
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from rejected_response_shape import RejectedNativeResponseShape
-from route_scope import uncovered_route_paths
 import native_finding_decisions
 from native_finding_decisions import (
     ClosedFindingReviewBinding,
     NativeClosureKind,
     NativeFindingClosure,
     NativeRejectionReason,
-    NativeResponsibilityProposal,
-    NativeResponsibilityRoute,
     PlanTreatmentDecision,
     PlanTreatmentDecisionKind,
     PlanTreatmentKind,
@@ -234,11 +221,11 @@ _NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
         "Return a complete bounded stop request using a valid rule id and rationale."
     ),
     NativeReviewErrorCode.APPROVAL_INVALID: (
-        "For every Finding ID named by the rejection, close it, reject it with "
-        "named evidence, or route it to a named later Slice or to branch planning."
+        "For every Finding ID named by the rejection, close it or escalate it "
+        "to BLOCKER."
     ),
     NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD: (
-        "Return the legacy result shape without closure, routing, or responsibility proposal fields."
+        "Return the active result shape without retired finding-decision fields."
     ),
 }
 
@@ -285,9 +272,6 @@ def native_review_retry_guidance(
         )
         if decision_guidance is not None:
             return decision_guidance
-        route_guidance = _slice_route_scope_retry_guidance(context)
-        if route_guidance is not None:
-            return route_guidance
     if (
         diagnostic
         is OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
@@ -395,16 +379,12 @@ def validate_native_review_disposition_budget(
     reclassifications = document.get("reclassifications")
     if not isinstance(status_changes, list) or not isinstance(reclassifications, list):
         return
-    routes = document.get("responsibility_routes", [])
-    if not isinstance(routes, list):
-        return
     plan_decisions = document.get("plan_treatment_decisions", [])
     if not isinstance(plan_decisions, list):
         return
     actual_items = (
         len(status_changes)
         + len(reclassifications)
-        + len(routes)
         + len(plan_decisions)
     )
     new_finding_capacity = len(_native_finding_id_window(context, size=32))
@@ -418,8 +398,7 @@ def validate_native_review_disposition_budget(
             f"{actual_items} exceeds bound maximum {maximum_items}; "
             f"status_changes={len(status_changes)}, "
             f"reclassifications={len(reclassifications)}, "
-            f"responsibility_routes={len(routes)}"
-            f", plan_treatment_decisions={len(plan_decisions)}"
+            f"plan_treatment_decisions={len(plan_decisions)}"
         )
         error = NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
@@ -504,7 +483,6 @@ class NativeReviewResult:
     anchors: tuple[NativeAnchor, ...]
     evidence: ReviewEvidence | None
     pre_mortem: str | None
-    responsibility_routes: tuple[NativeResponsibilityRoute, ...] = ()
     plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
 
 
@@ -526,7 +504,6 @@ class NativeBranchDiscoveryCompleted:
     occurrences: tuple[NativeFindingOccurrence, ...]
     evidence: ReviewEvidence
     pre_mortem: str
-    responsibility_routes: tuple[NativeResponsibilityRoute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,9 +576,7 @@ class NativeReviewContext:
     plan_artifact_path: str | None = None
     final_review_pending_count: int | None = None
     max_new_findings: int | None = None
-    implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
     planned_slices: tuple[PlannedSlice, ...] = ()
-    branch_planning_target: BranchPlanningResponsibility | None = None
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
     closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
     pre_change_fingerprint: str | None = None
@@ -737,7 +712,6 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "planned slices must contain only typed PlannedSlice values",
             )
-        _validate_branch_planning_target(self.branch_planning_target)
         planned_ids = tuple(item.slice_id for item in self.planned_slices)
         if planned_ids and planned_ids != tuple(range(1, len(planned_ids) + 1)):
             raise NativeReviewContractError(
@@ -803,7 +777,6 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "validation command prefixes must be unique safe argv prefixes",
             )
-        _validate_implementer_responsibility_proposals(self)
         _validate_plan_treatments(self)
         _validate_closed_finding_bindings(self)
 
@@ -822,59 +795,6 @@ class NativeReviewContext:
             separators=(",", ":"),
         ).encode("utf-8")
         return "native-review-request-" + hashlib.sha256(encoded).hexdigest()
-
-
-def _validate_branch_planning_target(
-    target: BranchPlanningResponsibility | None,
-) -> None:
-    if target is not None and not isinstance(
-        target, BranchPlanningResponsibility
-    ):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED.detail,
-            orchestrator_diagnostic=(
-                OrchestratorDiagnostic.REVIEW_CONTEXT_BRANCH_PLANNING_TARGET_TYPED
-            ),
-        )
-
-
-def _validate_implementer_responsibility_proposals(
-    context: NativeReviewContext,
-) -> None:
-    proposals = context.implementer_responsibility_proposals
-    if any(not isinstance(item, NativeResponsibilityProposal) for item in proposals):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "implementer responsibility proposals must be typed, sorted, and unique",
-        )
-    proposal_ids = tuple(item.finding_id for item in proposals)
-    if proposal_ids != sorted_finding_ids(proposal_ids):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "implementer responsibility proposals must be typed, sorted, and unique",
-        )
-    open_ids = set(project_open_set(context.previous_findings).finding_ids)
-    if unknown_proposals := set(proposal_ids) - open_ids:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "implementer responsibility proposal references unoffered finding "
-            f"{sorted_finding_ids(unknown_proposals)[0]}",
-        )
-    for proposal in proposals:
-        try:
-            responsibility_document(proposal.responsibility)
-        except ValueError as exc:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                f"implementer responsibility proposal is invalid: {exc}",
-            ) from exc
-        _require_native_text(
-            proposal.rationale,
-            "implementer responsibility proposal rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.CONTEXT_INVALID,
-        )
 
 
 def _validate_plan_treatments(context: NativeReviewContext) -> None:
@@ -1073,11 +993,6 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                             "$ref": "#/$defs/branch_discovery_occurrence"
                         },
                     },
-                    "responsibility_routes": {
-                        "type": "array",
-                        "maxItems": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
-                        "items": {"$ref": "#/$defs/responsibility_route"},
-                    },
                     "review_evidence": {"$ref": "#/$defs/evidence"},
                     "pre_mortem": {
                         "type": "string",
@@ -1093,7 +1008,6 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                     "scan_complete",
                     "new_findings",
                     "occurrences",
-                    "responsibility_routes",
                     "review_evidence",
                     "pre_mortem",
                 ],
@@ -1189,13 +1103,6 @@ def _branch_discovery_provider_response_schema(
         )
     )
     definitions["bound_branch_discovery_occurrence"] = occurrence
-    route = _bound_review_definition(
-        definitions["responsibility_route"], finding_ids=finding_ids
-    )
-    route["properties"]["rationale"].update(
-        pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
-    )
-    definitions["bound_branch_discovery_responsibility_route"] = route
     completed = json.loads(
         json.dumps(definitions["branch_discovery_completed"]["allOf"][1])
     )
@@ -1228,10 +1135,6 @@ def _branch_discovery_provider_response_schema(
         )
     else:
         _bind_required_empty_array(completed["properties"]["occurrences"])
-    completed["properties"]["responsibility_routes"].update(
-        maxItems=len(finding_ids),
-        items={"$ref": "#/$defs/bound_branch_discovery_responsibility_route"},
-    )
     definitions["bound_branch_discovery_completed"] = completed
     stop = _bound_stop_result_definition(
         definitions["stop_request"], reviewer=context.reviewer
@@ -1339,11 +1242,9 @@ def native_review_provider_response_schema(
         if item.finding_class is FindingClass.BLOCKER
     )
     new_ids = _native_finding_id_window(context, size=32)
-    routable_ids = sorted_finding_ids((*own_open_ids, *new_ids))
     own_disposition_max = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS, len(own_open_ids)
     )
-    disposition_max = min(MAX_NATIVE_REVIEW_DISPOSITIONS, len(routable_ids))
     branch = {
         ApprovalMarker.PLAN: "plan",
         ApprovalMarker.SLICE: (
@@ -1419,11 +1320,6 @@ def native_review_provider_response_schema(
     definitions["bound_denied_finding"] = denied_finding
     definitions["bound_status_change"] = status
     definitions["bound_reclassification"] = reclassification
-    _bind_responsibility_route_definition(
-        definitions,
-        routable_ids,
-        planned_slice_ids=_routable_planned_slice_ids(context),
-    )
 
     approved = _bound_review_result_definition(
         definitions,
@@ -1444,7 +1340,7 @@ def native_review_provider_response_schema(
         own_open,
         same_response_closure_ids,
     )
-    _bind_native_decision_collections(approved, context, disposition_max)
+    _bind_plan_treatment_decision_collection(approved, context)
     if observations_allowed and own_open_ids:
         approved_reclassification = _bound_review_definition(
             reclassification,
@@ -1504,7 +1400,7 @@ def native_review_provider_response_schema(
     else:
         _bind_required_empty_array(denied["properties"]["status_changes"])
         _bind_required_empty_array(denied["properties"]["reclassifications"])
-    _bind_native_decision_collections(denied, context, disposition_max)
+    _bind_plan_treatment_decision_collection(denied, context)
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
             {"type": "null"},
@@ -1569,50 +1465,6 @@ def _native_finding_id_window(
     return tuple(f"{prefix}-{number:02d}" for number in range(start, start + size))
 
 
-def _bind_responsibility_route_definition(
-    definitions: dict[str, Any],
-    own_open_ids: tuple[str, ...],
-    *,
-    planned_slice_ids: tuple[str, ...],
-) -> None:
-    responsibility = definitions["finding_responsibility"]
-    variants = responsibility["oneOf"]
-    slice_responsibility = variants[0]
-    if planned_slice_ids:
-        slice_responsibility["properties"]["slice_id"] = {
-            "type": "string",
-            "enum": list(planned_slice_ids),
-        }
-    else:
-        # Without a plan-bound target set, a SLICE route is not representable.
-        # The other responsibility kinds remain available.
-        responsibility["oneOf"] = variants[1:]
-    route = _bound_review_definition(
-        definitions["responsibility_route"], finding_ids=own_open_ids
-    )
-    route["properties"]["rationale"].update(
-        pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
-    )
-    definitions["bound_responsibility_route"] = route
-
-
-def _routable_planned_slice_ids(context: NativeReviewContext) -> tuple[str, ...]:
-    """Return only plan targets that can discharge the current Slice."""
-
-    planned_ids = tuple(str(item.slice_id) for item in context.planned_slices)
-    if context.approval_marker is not ApprovalMarker.SLICE:
-        return planned_ids
-    try:
-        current = int(context.slice_id)
-    except ValueError:
-        return ()
-    return tuple(
-        str(item.slice_id)
-        for item in context.planned_slices
-        if item.slice_id > current
-    )
-
-
 def _bind_approved_status_changes(
     approved: dict[str, Any],
     status: dict[str, Any],
@@ -1658,24 +1510,6 @@ def _bind_approved_status_changes(
         options.append(option)
     approved["properties"]["status_changes"]["items"] = {"oneOf": options}
     return maximum
-
-
-def _bind_responsibility_route_collection(
-    review: dict[str, Any], disposition_max: int
-) -> None:
-    review["properties"]["responsibility_routes"].update(
-        maxItems=disposition_max,
-        items={"$ref": "#/$defs/bound_responsibility_route"},
-    )
-
-
-def _bind_native_decision_collections(
-    review: dict[str, Any],
-    context: NativeReviewContext,
-    disposition_max: int,
-) -> None:
-    _bind_responsibility_route_collection(review, disposition_max)
-    _bind_plan_treatment_decision_collection(review, context)
 
 
 def _bind_plan_treatment_decision_collection(
@@ -1871,10 +1705,6 @@ def _parse_native_review_response(
             ),
             evidence=discovery_evidence,
             pre_mortem=document["pre_mortem"],
-            responsibility_routes=tuple(
-                _parse_native_responsibility_route(item)
-                for item in document["responsibility_routes"]
-            ),
         )
         assert context.max_new_findings is not None
         if len(discovery.new_findings) == context.max_new_findings:
@@ -1928,10 +1758,6 @@ def _parse_native_review_response(
             )
             for item in document["reclassifications"]
         ),
-        responsibility_routes=tuple(
-            _parse_native_responsibility_route(item)
-            for item in document.get("responsibility_routes", [])
-        ),
         plan_treatment_decisions=tuple(
             PlanTreatmentDecision(
                 item["signature"],
@@ -1953,7 +1779,6 @@ def _parse_native_review_response(
         pre_mortem=document["pre_mortem"],
     )
     response = _coalesce_known_finding_occurrences(response, context)
-    response = _absorb_redundant_route_status_changes(response)
     _validate_response_events(response, context)
     return response
 
@@ -2047,16 +1872,9 @@ def _native_response_to_contract_result(
                 for item in response.occurrences
             ),
             scan_complete=response.scan_complete,
-            responsibility_routes=tuple(
-                sorted(
-                    response.responsibility_routes,
-                    key=lambda route: finding_id_sort_key(route.finding_id),
-                )
-            ),
         )
 
     response = _coalesce_known_finding_occurrences(response, context)
-    response = _absorb_redundant_route_status_changes(response)
     _validate_response_events(response, context)
     findings = _merge_findings(response, context)
     anchors = _convert_anchors(response, context)
@@ -2080,12 +1898,6 @@ def _native_response_to_contract_result(
             (update.finding_id, update.closure)
             for update in response.status_changes
             if update.closure is not None
-        ),
-        responsibility_routes=tuple(
-            sorted(
-                response.responsibility_routes,
-                key=lambda route: finding_id_sort_key(route.finding_id),
-            )
         ),
     )
 
@@ -2181,23 +1993,6 @@ def _parse_native_closure(raw: object) -> NativeFindingClosure | None:
     )
 
 
-def _parse_native_responsibility_route(
-    item: Mapping[str, Any],
-) -> NativeResponsibilityRoute:
-    try:
-        responsibility = parse_responsibility(item["responsibility"])
-    except ValueError as exc:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            f"responsibility route for {item['finding_id']} is invalid: {exc}",
-        ) from exc
-    return NativeResponsibilityRoute(
-        finding_id=item["finding_id"],
-        responsibility=responsibility,
-        rationale=item["rationale"],
-    )
-
-
 def _validate_native_closure(
     finding_id: str, closure: NativeFindingClosure
 ) -> None:
@@ -2254,9 +2049,6 @@ def _validate_native_closure(
 
 def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
-    definitions["finding_responsibility"] = responsibility_json_schema(
-        union_keyword="oneOf"
-    )
     definitions["finding_closure"] = {
         "oneOf": [
             {
@@ -2312,33 +2104,7 @@ def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> Non
         ]
     }
     status["required"].append("closure")
-    definitions["responsibility_route"] = {
-        "type": "object",
-        "properties": {
-            "finding_id": {
-                "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-            },
-            "responsibility": {"$ref": "#/$defs/finding_responsibility"},
-            "rationale": {
-                "type": "string",
-                "pattern": NONBLANK_TEXT_PATTERN,
-                "maxLength": 3000,
-            },
-        },
-        "required": ["finding_id", "responsibility", "rationale"],
-        "additionalProperties": False,
-    }
     result = definitions["review_result"]["allOf"][1]
-    result["properties"]["responsibility_routes"] = {
-        "type": "array",
-        "maxItems": MAX_NATIVE_REVIEW_DISPOSITIONS,
-        "items": {"$ref": "#/$defs/responsibility_route"},
-    }
-    result["required"].append("responsibility_routes")
-    result["anyOf"].append(
-        {"properties": {"responsibility_routes": {"minItems": 1}}}
-    )
     definitions["plan_treatment_decision"] = {
         "type": "object",
         "properties": {
@@ -2408,20 +2174,6 @@ def _validate_active_native_review_field_shapes(
                             NativeReviewErrorCode.FINDING_CONTENT_INVALID,
                             "rejected closure requires named evidence",
                         )
-    routes = document.get("responsibility_routes")
-    if isinstance(routes, list):
-        for item in routes:
-            if not isinstance(item, Mapping) or "responsibility" not in item:
-                continue
-            try:
-                parse_responsibility(item["responsibility"])
-            except ValueError as exc:
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                    "responsibility route is invalid: " + str(exc),
-                ) from exc
-
-
 def _validate_plan_treatment_response_decisions(
     response: NativeReviewResult,
     context: NativeReviewContext,
@@ -2572,48 +2324,14 @@ def reject_passing_typed_acceptance_binding(
     )
 
 
-def _absorb_redundant_route_status_changes(
-    response: NativeReviewResult,
-) -> NativeReviewResult:
-    """Let a route absorb the exact OPEN state that the route already implies."""
-
-    status_counts: dict[str, int] = {}
-    route_counts: dict[str, int] = {}
-    for update in response.status_changes:
-        status_counts[update.finding_id] = status_counts.get(update.finding_id, 0) + 1
-    for route in response.responsibility_routes:
-        route_counts[route.finding_id] = route_counts.get(route.finding_id, 0) + 1
-    reclassified_ids = {item.finding_id for item in response.reclassifications}
-    absorbed_ids = {
-        update.finding_id
-        for update in response.status_changes
-        if not is_closed_finding_status(update.status)
-        and update.closure is None
-        and status_counts[update.finding_id] == 1
-        and route_counts.get(update.finding_id) == 1
-        and update.finding_id not in reclassified_ids
-    }
-    if not absorbed_ids:
-        return response
-    return replace(
-        response,
-        status_changes=tuple(
-            update
-            for update in response.status_changes
-            if update.finding_id not in absorbed_ids
-        ),
-    )
-
-
 def _validate_finding_event_collisions(
     response: NativeReviewResult,
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     """Reject each ambiguous event shape with its own actionable diagnosis."""
 
     new_ids = [item.finding_id for item in response.new_findings]
     status_ids = [item.finding_id for item in response.status_changes]
     class_ids = [item.finding_id for item in response.reclassifications]
-    route_ids = [item.finding_id for item in response.responsibility_routes]
 
     def duplicates(values: list[str]) -> tuple[str, ...]:
         return sorted_finding_ids(
@@ -2642,12 +2360,6 @@ def _validate_finding_event_collisions(
             OrchestratorDiagnostic.REVIEW_FINDING_RECLASSIFICATION_DUPLICATE,
         ),
         (
-            duplicates(route_ids),
-            "finding IDs occur more than once in responsibility_routes: ",
-            "; keep exactly one responsibility_routes entry per Finding ID",
-            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_DUPLICATE,
-        ),
-        (
             sorted_finding_ids(set(new_ids).intersection(class_ids)),
             "finding IDs occur in both new_findings and reclassifications: ",
             "; set the intended finding_class in new_findings only",
@@ -2659,20 +2371,6 @@ def _validate_finding_event_collisions(
             "; use only one of those decision fields per response",
             OrchestratorDiagnostic.REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT,
         ),
-        (
-            sorted_finding_ids(set(route_ids).intersection(status_ids)),
-            "finding IDs occur in both responsibility_routes and status_changes with "
-            "a non-redundant status decision: ",
-            "; use responsibility_routes alone to keep them OPEN and transfer "
-            "responsibility, or status_changes alone",
-            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_STATUS_CONFLICT,
-        ),
-        (
-            sorted_finding_ids(set(route_ids).intersection(class_ids)),
-            "finding IDs occur in both responsibility_routes and reclassifications: ",
-            "; use only one of those decision fields per response",
-            OrchestratorDiagnostic.REVIEW_FINDING_ROUTE_RECLASSIFICATION_CONFLICT,
-        ),
     )
     for finding_ids, prefix, suffix, diagnostic in collision_checks:
         if finding_ids:
@@ -2681,7 +2379,7 @@ def _validate_finding_event_collisions(
                 prefix + ", ".join(finding_ids) + suffix,
                 orchestrator_diagnostic=diagnostic,
             )
-    return new_ids, status_ids, class_ids, route_ids
+    return new_ids, status_ids, class_ids
 
 
 def _validate_response_events(
@@ -2691,7 +2389,6 @@ def _validate_response_events(
         response.new_findings
         or response.status_changes
         or response.reclassifications
-        or response.responsibility_routes
         or response.plan_treatment_decisions
     ) and response.evidence is None:
         raise NativeReviewContractError(
@@ -2699,16 +2396,14 @@ def _validate_response_events(
             "review requires at least one finding event or review evidence",
         )
     _validate_finding_event_content(response)
-    _validate_opening_responsibility_kinds(response, context)
     _validate_plan_treatment_response_decisions(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     previous_open_ids = frozenset(
         project_open_set(context.previous_findings).finding_ids
     )
-    new_ids, status_ids, class_ids, route_ids = (
+    new_ids, status_ids, class_ids = (
         _validate_finding_event_collisions(response)
     )
-    _validate_branch_planning_route_identities(response, context)
     if any(finding_id in previous for finding_id in new_ids):
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
@@ -2727,26 +2422,6 @@ def _validate_response_events(
                     f"status change names new finding {finding_id} without "
                     "opening it in the same response",
                 )
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-                f"finding update references unknown id {finding_id}",
-            )
-        if finding.origin.reporter is not context.reviewer:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-                f"reviewer does not own finding {finding_id}",
-            )
-        if finding_id not in previous_open_ids:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
-                f"finding update references non-open id {finding_id}",
-            )
-    new_id_set = frozenset(new_ids)
-    for finding_id in route_ids:
-        if finding_id in new_id_set:
-            continue
-        finding = previous.get(finding_id)
-        if finding is None:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
                 f"finding update references unknown id {finding_id}",
@@ -2849,7 +2524,7 @@ def _validate_response_events(
                 operator_detail=detail,
             )
         known_signatures[signature] = [finding.finding_id]
-    touched = set(status_ids) | set(class_ids) | set(route_ids)
+    touched = set(status_ids) | set(class_ids)
     if context.approval_marker is ApprovalMarker.PLAN:
         touched.update(
             finding_id
@@ -2876,81 +2551,6 @@ def _validate_response_events(
             NativeReviewErrorCode.ANCHOR_INVALID,
             "native anchors require a bound anchor_origin",
         )
-
-
-def _validate_opening_responsibility_kinds(
-    response: NativeReviewResult,
-    context: NativeReviewContext,
-) -> None:
-    """Mirror the reducer's last-line rule at the retryable response edge."""
-
-    new_ids = frozenset(item.finding_id for item in response.new_findings)
-    opening_routes = tuple(
-        route
-        for route in response.responsibility_routes
-        if route.finding_id in new_ids
-    )
-    if not opening_routes:
-        return
-    required_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(context.operation)
-    if required_kind is None:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "native review context has no supported opening responsibility rule",
-        )
-    for route in opening_routes:
-        responsibility = route.responsibility
-        if required_kind is ResponsibilityKind.SLICE and not isinstance(
-            responsibility, SliceResponsibility
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "slice review finding opening requires responsibility kind SLICE",
-                orchestrator_diagnostic=(
-                    OrchestratorDiagnostic.REVIEW_SLICE_OPENING_RESPONSIBILITY_INVALID
-                ),
-            )
-        if required_kind is ResponsibilityKind.PLAN_REVISION and not isinstance(
-            responsibility, PlanRevisionResponsibility
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "plan review finding opening requires responsibility kind PLAN_REVISION",
-                orchestrator_diagnostic=(
-                    OrchestratorDiagnostic.REVIEW_PLAN_OPENING_RESPONSIBILITY_INVALID
-                ),
-            )
-        if required_kind is ResponsibilityKind.BRANCH_PLANNING and not isinstance(
-            responsibility, BranchPlanningResponsibility
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "branch discovery finding opening requires responsibility kind BRANCH_PLANNING",
-                orchestrator_diagnostic=(
-                    OrchestratorDiagnostic.REVIEW_DISCOVERY_OPENING_RESPONSIBILITY_INVALID
-                ),
-            )
-
-
-def _validate_branch_planning_route_identities(
-    response: NativeReviewResult,
-    context: NativeReviewContext,
-) -> None:
-    """Reject a route that the record reducer would reject at point 67."""
-
-    expected = context.branch_planning_target
-    for route in response.responsibility_routes:
-        if not isinstance(route.responsibility, BranchPlanningResponsibility):
-            continue
-        if expected is None or route.responsibility != expected:
-            diagnostic = (
-                OrchestratorDiagnostic.REVIEW_BRANCH_PLANNING_IDENTITY_INVALID
-            )
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                diagnostic.detail,
-                orchestrator_diagnostic=diagnostic,
-            )
 
 
 def _validate_finding_event_content(response: NativeReviewResult) -> None:
@@ -3016,15 +2616,6 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
             max_length=3000,
             code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
-    for route in response.responsibility_routes:
-        _require_native_text(
-            route.rationale,
-            "responsibility routing rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-
-
 def _validate_branch_discovery_completed(
     response: NativeBranchDiscoveryCompleted,
     context: NativeReviewContext,
@@ -3079,15 +2670,6 @@ def _validate_branch_discovery_completed(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
             "branch discovery occurrences must reference each finding at most once",
         )
-    new_ids = frozenset(item.finding_id for item in response.new_findings)
-    if any(
-        route.finding_id not in new_ids
-        for route in response.responsibility_routes
-    ):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-            "branch discovery responsibility routes may name only findings opened in the same response",
-        )
     _validate_closed_finding_rediscoveries(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     fake = NativeReviewResult(
@@ -3108,7 +2690,6 @@ def _validate_branch_discovery_completed(
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
-        responsibility_routes=response.responsibility_routes,
     )
     _validate_response_events(fake, context)
 
@@ -3220,7 +2801,6 @@ def _merge_branch_discovery_findings(
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
-        responsibility_routes=response.responsibility_routes,
     )
     return _merge_findings(fake, context)
 
@@ -3412,10 +2992,7 @@ def _merge_findings(
                 )
                 for update in response.reclassifications
             ),
-            # During the staged target-model cutover, approved legacy routing
-            # remains authoritative until its dedicated removal Slice. A denied
-            # review has only close-or-escalate semantics already in this Slice.
-            escalate_unclosed_rejections=not response.approved,
+            escalate_unclosed_rejections=True,
         )
     except ValueError as exc:
         raise NativeReviewContractError(
@@ -3480,11 +3057,10 @@ def _validate_decision(
         context.approval_marker is ApprovalMarker.PLAN
         and context.plan_treatments
     ):
-        # E3 routes this complete cohort into the approved PlanAssignment.
-        # These Findings remain open until their assigned Slice (or explicit
-        # No-Code disposition) records the authoritative closure.
+        # The legacy plan-treatment deviation may still carry this complete
+        # cohort into an approved PlanAssignment.  Its removal belongs to a
+        # separate target-model work unit.
         own_open_blockers = ()
-    _validate_slice_route_scopes(response, context, findings)
     if not response.approved:
         if not own_open_blockers:
             raise NativeReviewContractError(
@@ -3493,16 +3069,9 @@ def _validate_decision(
             )
         return
     if context.approval_marker is ApprovalMarker.SLICE:
-        routes_by_id = {
-            item.finding_id: item.responsibility
-            for item in response.responsibility_routes
-        }
         unresolved_ids = sorted_finding_ids(
             finding.finding_id
             for finding in open_findings
-            if not _routes_beyond_current_slice(
-                routes_by_id.get(finding.finding_id), context
-            )
         )
         if unresolved_ids:
             newly_opened_ids = frozenset(
@@ -3522,9 +3091,8 @@ def _validate_decision(
                 + labeled_ids
                 + "; for each ID, add either a status_changes entry with "
                 "status=CLOSED and a typed fixed or evidenced-rejection closure, "
-                "or a responsibility_routes entry to a named later Slice or to "
-                "branch planning; a Finding opened in new_findings may be decided "
-                "in the same response"
+                "or escalate the Finding to BLOCKER; a Finding opened in "
+                "new_findings may be decided in the same response"
             )
             if unresolved_new_ids:
                 raise NativeReviewContractError(
@@ -3574,103 +3142,6 @@ def _validate_decision(
         )
 
 
-def _routes_beyond_current_slice(
-    responsibility: object,
-    context: NativeReviewContext,
-) -> bool:
-    if isinstance(responsibility, BranchPlanningResponsibility):
-        return True
-    if not isinstance(responsibility, SliceResponsibility):
-        return False
-    return (
-        responsibility.target_run_id == context.run_id
-        and responsibility.slice_id in _routable_planned_slice_ids(context)
-    )
-
-
-def _validate_slice_route_scopes(
-    response: NativeReviewResult,
-    context: NativeReviewContext,
-    findings: tuple[FindingRecord, ...],
-) -> None:
-    """Reject a typed Slice route whose approved target scope cannot own it."""
-
-    if context.approval_marker is not ApprovalMarker.SLICE:
-        return
-    findings_by_id = {item.finding_id: item for item in findings}
-    planned_by_id = {str(item.slice_id): item for item in context.planned_slices}
-    for route in response.responsibility_routes:
-        responsibility = route.responsibility
-        if not isinstance(responsibility, SliceResponsibility):
-            continue
-        finding = findings_by_id.get(route.finding_id)
-        target = planned_by_id.get(responsibility.slice_id)
-        if finding is None or target is None:
-            continue
-        uncovered = uncovered_route_paths(
-            target.scope_paths, finding.affected_paths
-        )
-        if uncovered:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.APPROVAL_INVALID,
-                f"route for finding {route.finding_id} cannot target Slice "
-                f"{responsibility.slice_id} because its approved scope does not "
-                f"cover affected_paths: {', '.join(uncovered)}; close "
-                f"{route.finding_id}, reject it with named evidence, route it to a named "
-                "later Slice whose approved scope covers every affected_path, "
-                "or route it to branch planning",
-                orchestrator_diagnostic=OrchestratorDiagnostic.REVIEW_APPROVAL_INVALID,
-            )
-
-
-def _slice_route_scope_retry_guidance(
-    context: NativeReviewContext | None,
-) -> str | None:
-    """Describe invalid target scopes using only request-bound typed facts."""
-
-    if context is None or context.approval_marker is not ApprovalMarker.SLICE:
-        return None
-    targets = {
-        str(item.slice_id): item
-        for item in context.planned_slices
-        if str(item.slice_id) in _routable_planned_slice_ids(context)
-    }
-    clauses: list[str] = []
-    for finding in project_open_set(context.previous_findings).findings:
-        if finding.origin.reporter is not context.reviewer:
-            continue
-        for target_id, target in targets.items():
-            uncovered = uncovered_route_paths(
-                target.scope_paths, finding.affected_paths
-            )
-            if uncovered:
-                clauses.append(
-                    f"{finding.finding_id} -> Slice {target_id} is invalid because "
-                    "its approved scope does not cover affected_paths: "
-                    + ", ".join(uncovered)
-                )
-    if not clauses:
-        return None
-    suffix = (
-        ". Close the affected Finding, reject it with named evidence, route it to "
-        "a named later Slice whose approved scope covers every affected_path, or "
-        "route it to branch planning."
-    )
-    prefix = "Correct the unfulfillable Slice route: "
-    maximum_body = 3000 - len(prefix) - len(suffix)
-    body: list[str] = []
-    body_length = 0
-    for clause in clauses:
-        added = len(clause) + (2 if body else 0)
-        if body_length + added > maximum_body:
-            break
-        body.append(clause)
-        body_length += added
-    if not body:
-        return None
-    return prefix + "; ".join(body) + suffix
-
-
 def _slice_decision_retry_guidance(
     context: NativeReviewContext | None,
     rejected_response_shape: RejectedNativeResponseShape | None,
@@ -3711,21 +3182,7 @@ def _slice_decision_retry_guidance(
     open_ids = (
         set(project_open_set(context.previous_findings).finding_ids) | set(new_ids)
     ) - closed_ids
-    routable_slice_ids = _routable_planned_slice_ids(context)
-    routed_ids = {
-        route.finding_id
-        for route in rejected_response_shape.responsibility_routes
-        if route.target is not None
-        and (
-            route.target.responsibility_kind == ResponsibilityKind.BRANCH_PLANNING.value
-            or (
-                route.target.responsibility_kind == ResponsibilityKind.SLICE.value
-                and route.target.target_run_id == context.run_id
-                and route.target.slice_id in routable_slice_ids
-            )
-        )
-    }
-    unresolved_ids = sorted_finding_ids(open_ids - routed_ids)
+    unresolved_ids = sorted_finding_ids(open_ids)
     if not unresolved_ids:
         return None
     new_id_set = frozenset(new_ids)
@@ -3748,23 +3205,13 @@ def _slice_decision_retry_guidance(
         + "; ".join(groups)
         + ") in the same response. For each listed ID, either add status_changes "
         "with status=CLOSED and closure.kind=fixed, or closure.kind=rejected plus "
-        "rejection_reason and named evidence; otherwise add responsibility_routes "
-        "targeting a named later Slice or BRANCH_PLANNING. A Finding may be opened "
-        "in new_findings and decided in that same response. A route already implies "
-        "status=OPEN, so do not add a confirming OPEN status_changes entry."
+        "rejection_reason and named evidence, or escalate it to BLOCKER. A Finding "
+        "may be opened in new_findings and decided in that same response."
     )
 
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
     """Return the canonical provider-independent domain-context binding."""
-    required_opening_kind = REVIEW_OPENING_RESPONSIBILITY_KINDS.get(
-        context.operation
-    )
-    if required_opening_kind is None:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "native review context has no supported opening responsibility rule",
-        )
     authoritative_ids = (
         context.authoritative_finding_ids
         or tuple(item.finding_id for item in context.previous_findings)
@@ -3774,7 +3221,6 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,
-        "opening_responsibility_kind": required_opening_kind.value,
         "diff_fingerprint": context.diff_fingerprint,
         "reviewer": context.reviewer.value,
         "approval_marker": context.approval_marker.value,
@@ -3808,22 +3254,10 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "red_state_followup_slice": context.red_state_followup_slice,
         "pre_change_fingerprint": context.pre_change_fingerprint,
     }
-    if context.branch_planning_target is not None:
-        binding["branch_planning_target"] = responsibility_document(
-            context.branch_planning_target
-        )
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
     if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
         binding["max_new_findings"] = context.max_new_findings
-    binding["implementer_responsibility_proposals"] = [
-            {
-                "finding_id": item.finding_id,
-                "responsibility": responsibility_document(item.responsibility),
-                "rationale": item.rationale,
-            }
-            for item in context.implementer_responsibility_proposals
-        ]
     binding["planned_slices"] = [
             {
                 "slice_id": item.slice_id,

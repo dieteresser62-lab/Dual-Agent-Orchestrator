@@ -69,30 +69,6 @@ _TRANSLATED_STATIC_RAISE_SCOPES = (
         NativeReviewErrorCode.FINDING_CONTENT_INVALID,
     ),
     _TranslatedStaticRaiseScope(
-        "finding_responsibility.py",
-        "parse_responsibility",
-        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        "responsibility route is invalid: ",
-    ),
-    _TranslatedStaticRaiseScope(
-        "finding_responsibility.py",
-        "SliceResponsibility",
-        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        "responsibility route is invalid: ",
-    ),
-    _TranslatedStaticRaiseScope(
-        "finding_responsibility.py",
-        "PlanRevisionResponsibility",
-        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        "responsibility route is invalid: ",
-    ),
-    _TranslatedStaticRaiseScope(
-        "finding_responsibility.py",
-        "responsibility_document",
-        NativeReviewErrorCode.CONTEXT_INVALID,
-        "implementer responsibility proposal is invalid: ",
-    ),
-    _TranslatedStaticRaiseScope(
         "schema_validation.py",
         "_check_schema_node",
         NativeReviewErrorCode.SCHEMA_INVALID,
@@ -119,8 +95,6 @@ _TRANSLATION_ENTRYPOINTS = frozenset(
         "StopRequest",
         "apply_reviewer_events",
         "check_schema",
-        "parse_responsibility",
-        "responsibility_document",
         "validate_plan_treatment_decisions",
     }
 )
@@ -144,18 +118,6 @@ _EXPECTED_PASSTHROUGH_BOUNDARIES = Counter(
             NativeReviewErrorCode.STOP_CONTENT_INVALID,
             "",
             ("StopRequest",),
-        ): 1,
-        (
-            "_validate_implementer_responsibility_proposals",
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "implementer responsibility proposal is invalid: ",
-            ("responsibility_document",),
-        ): 1,
-        (
-            "_validate_active_native_review_field_shapes",
-            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            "responsibility route is invalid: ",
-            ("parse_responsibility",),
         ): 1,
         (
             "_validate_plan_treatment_response_decisions",

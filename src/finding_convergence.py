@@ -21,7 +21,6 @@ from finding_reducer import (
     is_closed_finding_transition,
     project_slice_exit_findings,
 )
-from finding_responsibility import SliceResponsibility
 from slice_exit import evaluate_slice_exit
 
 
@@ -38,7 +37,6 @@ class SliceConvergenceEvaluation:
     cohort_finding_ids: tuple[str, ...]
     newly_opened_finding_ids: tuple[str, ...]
     closed_local_finding_ids: tuple[str, ...]
-    forwarded_local_finding_ids: tuple[str, ...]
     attested_remediation_finding_ids: tuple[str, ...]
     progress_made: bool
     reason: str
@@ -79,10 +77,8 @@ def evaluate_slice_convergence(
         slice_id=target_slice,
         approved_plan_commit=approved_plan_commit,
     )
-    # E4 and E5 deliberately quantify over the same exhausted, record-derived
-    # Finding set.  In particular, an opening cannot disappear merely because
-    # the reviewer has not assigned its responsibility yet.
-    cohort = frozenset(exit_evaluation.responsibility_finding_ids)
+    # E4 and E5 deliberately quantify over the same record-derived Slice cohort.
+    cohort = frozenset(exit_evaluation.cohort_finding_ids)
     review_position = run_records.index(review_record)
     prior_projection = project_slice_exit_findings(run_records[:review_position])
     prior_local = frozenset(
@@ -90,12 +86,6 @@ def evaluate_slice_convergence(
         for head in prior_projection.heads
         if head.finding_id in cohort
         and head.is_open
-        and _is_current_slice_responsibility(
-            head.responsibility,
-            run_id=run_id,
-            approved_plan_commit=exit_evaluation.approved_plan_commit,
-            slice_id=target_slice,
-        )
     )
     transitions = tuple(
         record
@@ -116,19 +106,6 @@ def evaluate_slice_convergence(
         and is_closed_finding_transition(record)
         and record.payload.finding_id in prior_local
     )
-    forwarded_local = sorted_finding_ids(
-        record.payload.finding_id
-        for record in transitions
-        if record.payload.action == "routed"
-        and record.payload.finding_id in prior_local
-        and record.payload.responsibility is not None
-        and not _is_current_slice_responsibility(
-            record.payload.responsibility,
-            run_id=run_id,
-            approved_plan_commit=exit_evaluation.approved_plan_commit,
-            slice_id=target_slice,
-        )
-    )
     attested_remediation = _attested_remediation_ids(
         run_records,
         review_record=review_record,
@@ -145,20 +122,20 @@ def evaluate_slice_convergence(
     progress = (
         bool(newly_opened)
         if phase is SliceReviewPhase.DISCOVERY
-        else bool(closed_local or forwarded_local or attested_remediation)
+        else bool(closed_local or attested_remediation)
     )
     if progress:
         reason = (
             "the discovery round opened reviewer-owned findings"
             if phase is SliceReviewPhase.DISCOVERY
-            else "the convergence round recorded a closing, forwarding, or attested remediation fact"
+            else "the convergence round recorded a closing or attested remediation fact"
         )
     else:
         reason = (
             "the discovery round opened no findings"
             if phase is SliceReviewPhase.DISCOVERY
             else (
-                "the convergence round closed or forwarded no previously local "
+                "the convergence round closed no previously local "
                 "finding and recorded no attested fingerprint-changing remediation"
             )
         )
@@ -167,7 +144,6 @@ def evaluate_slice_convergence(
         cohort_finding_ids=sorted_finding_ids(cohort),
         newly_opened_finding_ids=newly_opened,
         closed_local_finding_ids=closed_local,
-        forwarded_local_finding_ids=forwarded_local,
         attested_remediation_finding_ids=attested_remediation,
         progress_made=progress,
         reason=reason,
@@ -216,21 +192,6 @@ def _review_round_records(
     if start >= end:
         raise ValueError("Slice convergence review event precedes its Review record")
     return review_record, tuple(records[start + 1 : end])
-
-
-def _is_current_slice_responsibility(
-    responsibility: object,
-    *,
-    run_id: str,
-    approved_plan_commit: str,
-    slice_id: str,
-) -> bool:
-    return bool(
-        isinstance(responsibility, SliceResponsibility)
-        and responsibility.target_run_id == run_id
-        and responsibility.approved_plan_commit == approved_plan_commit
-        and responsibility.slice_id == slice_id
-    )
 
 
 def _attested_remediation_ids(
