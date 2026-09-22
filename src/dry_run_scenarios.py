@@ -1359,6 +1359,17 @@ class ScriptedWorkflowDriver:
     ) -> None:
         self.structured_events.append(("invocation-failure", payload))
 
+    def write_invocation_failure_diagnostic(
+        self,
+        payload: InvocationFailurePayload,
+        provider_text: str,
+        technical_text: str,
+    ) -> None:
+        _ = (provider_text, technical_text)
+        self.structured_events.append(
+            ("invocation-failure-diagnostic", payload.invocation_id)
+        )
+
     def persist_scope_extension(self, state, payload) -> None:
         self.structured_events.append(("scope-extension", (state, payload)))
 

@@ -702,6 +702,13 @@ class WorkflowDriver(Protocol):
         self, payload: InvocationFailurePayload
     ) -> None: ...
 
+    def write_invocation_failure_diagnostic(
+        self,
+        payload: InvocationFailurePayload,
+        provider_text: str,
+        technical_text: str,
+    ) -> None: ...
+
     def persist_scope_extension(
         self,
         state: WorkflowState,
@@ -747,6 +754,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "persist_gate_decision",
         "persist_gate_transition",
         "persist_invocation_failure",
+        "write_invocation_failure_diagnostic",
         "persist_scope_extension",
         "persist_native_codex_contract",  # allowlist:provider -- canonical capability
         "persist_native_review_contract",
@@ -1515,6 +1523,15 @@ class WorkflowEngine:
             workflow_failure_recording.WorkflowFailureRecordingDependencies(
                 current_invocation_fingerprint=(
                     lambda state: self._current_invocation_fingerprint(state)
+                ),
+                write_invocation_failure_diagnostic=(
+                    lambda payload, provider_text, technical_text: (
+                        self.driver.write_invocation_failure_diagnostic(
+                            payload,
+                            provider_text,
+                            technical_text,
+                        )
+                    )
                 ),
                 persist_invocation_failure=lambda payload: self._persist_structured(
                     self.driver.persist_invocation_failure,

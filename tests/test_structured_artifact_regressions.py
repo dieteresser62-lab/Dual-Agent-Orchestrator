@@ -505,6 +505,26 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     assert payload.failure_kind == "output"
     assert payload.diagnostic_code == "PROVIDER-STRUCTURED-OUTPUT"
     assert payload.provider_text_sha256 != payload.technical_text_sha256
+    assert payload.provider_text == provider_text_evidence(error.provider_text)[0]
+    assert payload.technical_text == technical_text_evidence(error.technical_text)[0]
+    cleartext_path = (
+        repository
+        / ".orchestrator"
+        / "logs"
+        / "invocation-failures"
+        / "structured-output-diagnostic-1.json"
+    )
+    cleartext = json.loads(cleartext_path.read_text(encoding="utf-8"))
+    assert cleartext == {
+        "provider_text": error.provider_text,
+        "technical_text": error.technical_text,
+    }
+    assert hashlib.sha256(
+        cleartext["provider_text"].encode("utf-8")
+    ).hexdigest() == payload.provider_text_sha256
+    assert hashlib.sha256(
+        cleartext["technical_text"].encode("utf-8")
+    ).hexdigest() == payload.technical_text_sha256
     diagnostic_path = next((repository / ".orchestrator" / "logs").glob("*.failure.json"))
     diagnostic_text = diagnostic_path.read_text(encoding="utf-8")
     diagnostic = json.loads(diagnostic_text)
@@ -515,6 +535,86 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     assert provider_text not in diagnostic_text
     assert "error_max_structured_output_retries" in caplog.text
     assert provider_text not in caplog.text
+
+    failure_record = next(
+        record
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert error.provider_text.encode("utf-8") not in failure_record.canonical_json()
+    assert error.technical_text.encode("utf-8") not in failure_record.canonical_json()
+
+    cleartext_path.unlink()
+    resumed = resolve_resume_state(repository, state.run_id)
+    assert resumed.state.current_work_unit.invocation_failures[-1].invocation_id == (
+        payload.invocation_id
+    )
+
+
+def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "unwritable-cleartext-diagnostic")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    active = driver.active_state
+    assert active is not None
+    diagnostic_dir = repository / ".orchestrator" / "logs" / "invocation-failures"
+    original_mkdir = Path.mkdir
+
+    def reject_diagnostic_directory(
+        path: Path, *args: object, **kwargs: object
+    ) -> None:
+        if path == diagnostic_dir:
+            raise PermissionError("diagnostic directory is not writable")
+        original_mkdir(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "mkdir", reject_diagnostic_directory)
+    now = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
+    error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        AgentOutputError(
+            "native Claude error",
+            exit_code=1,
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        invocation_id="unwritable-cleartext-diagnostic-1",
+        received_at=now,
+    )
+
+    caplog.set_level("WARNING", logger="workflow")
+    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
+        active,
+        WorkflowHistory(active.current_work_unit_id),
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    payload = next(
+        record.payload
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert payload.diagnostic_code == "PROVIDER-STRUCTURED-OUTPUT"
+    assert payload.provider_text == provider_text_evidence(error.provider_text)[0]
+    assert payload.technical_text == technical_text_evidence(error.technical_text)[0]
+    assert not diagnostic_dir.exists()
+    warnings = tuple(
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING"
+        and "provider invocation diagnostic could not be written" in record.message
+    )
+    assert len(warnings) == 1
+    assert "unwritable-cleartext-diagnostic-1" in warnings[0].message
+    assert "diagnostic directory is not writable" in warnings[0].message
 
 
 def test_code_version_change_is_warned_and_recorded_before_provider_start(

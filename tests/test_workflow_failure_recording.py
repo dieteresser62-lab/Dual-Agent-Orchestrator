@@ -3,16 +3,24 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import workflow_failure_recording as failure_recording_module
 
+from agent_runtime import AgentInvocationError
+from contracts import AgentRole
 from orchestrator_diagnostics import STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
 from workflow_failure_recording import (
     CONTRACT_REJECTION_BUDGET,
     TRANSPORT_FAILURE_BUDGET,
+    WorkflowFailureRecording,
+    WorkflowFailureRecordingDependencies,
     _native_retry_budget,
 )
+from workflow_state import AgentFailureKind
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +38,7 @@ EXPECTED_INTERNAL_IMPORTS = {
 }
 EXPECTED_FAILURE_EDGES = {
     "current_invocation_fingerprint",
+    "write_invocation_failure_diagnostic",
     "persist_invocation_failure",
     "checkpoint",
     "now",
@@ -105,6 +114,13 @@ def _decision_ahead_order(source: str) -> bool:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "persist_invocation_failure"
     )
+    diagnostic = next(
+        node
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "write_invocation_failure_diagnostic"
+    )
     state_change = next(
         node
         for node in ast.walk(method)
@@ -119,7 +135,7 @@ def _decision_ahead_order(source: str) -> bool:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "checkpoint"
     )
-    return persist.lineno < state_change.lineno < checkpoint.lineno
+    return diagnostic.lineno < persist.lineno < state_change.lineno < checkpoint.lineno
 
 
 def test_failure_recording_has_exact_one_way_inventory() -> None:
@@ -146,6 +162,7 @@ def test_failure_recording_has_exact_one_way_inventory() -> None:
     "edge",
     (
         "current_invocation_fingerprint",
+        "write_invocation_failure_diagnostic",
         "persist_invocation_failure",
         "checkpoint",
         "now",
@@ -176,6 +193,102 @@ def test_failure_record_is_appended_before_retry_state_and_mutation_turns_red() 
         1,
     )
     assert not _decision_ahead_order(mutated)
+
+
+def test_diagnostic_exception_escape_mutation_is_killed() -> None:
+    source = textwrap.dedent(inspect.getsource(WorkflowFailureRecording))
+    marker = "        except Exception as exc:\n"
+    assert source.count(marker) == 1
+
+    class _MutationDoesNotCatchPermissionError(Exception):
+        pass
+
+    class StubState:
+        current_step = SimpleNamespace(value="codex_implementation")
+
+        def record_invocation_failure(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return self
+
+    def compiled_owner(owner_source: str):  # type: ignore[no-untyped-def]
+        namespace = dict(vars(failure_recording_module))
+        namespace.update(
+            _MutationDoesNotCatchPermissionError=(
+                _MutationDoesNotCatchPermissionError
+            ),
+            _invocation_retry_decision=lambda **_kwargs: SimpleNamespace(
+                automatic=False,
+                matching_failures=(),
+                exhausted_budget=None,
+                transport_failures=1,
+                max_transport_failures=3,
+                contract_rejections=0,
+                max_contract_rejections=3,
+                response_diagnostics=SimpleNamespace(
+                    provider_subtype="none",
+                    readable_rejection=None,
+                    implementer_readable_rejection=None,
+                ),
+            ),
+            _invocation_failure_documents=lambda **_kwargs: (
+                object(),
+                SimpleNamespace(
+                    invocation_id="diagnostic-mutation",
+                    orchestrator_diagnostic=None,
+                ),
+                "2026-09-09T08:00:00+00:00",
+            ),
+            _log_invocation_failure=lambda **_kwargs: None,
+        )
+        exec(
+            compile(
+                "from __future__ import annotations\n" + owner_source,
+                "<diagnostic-exception-mutant>",
+                "exec",
+            ),
+            namespace,
+        )
+        return namespace["WorkflowFailureRecording"]
+
+    dependencies = WorkflowFailureRecordingDependencies(
+        current_invocation_fingerprint=lambda _state: "f" * 64,
+        write_invocation_failure_diagnostic=lambda *_args: (_ for _ in ()).throw(
+            PermissionError("diagnostic directory is not writable")
+        ),
+        persist_invocation_failure=lambda _payload: None,
+        checkpoint=lambda _state, _history: None,
+        now=lambda: datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc),
+        execution_error=RuntimeError,
+    )
+    error = AgentInvocationError(
+        agent_key="codex",
+        kind=AgentFailureKind.NETWORK,
+        invocation_id="diagnostic-mutation",
+        provider_text="provider output",
+        technical_text="technical output",
+        received_at=datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc),
+    )
+    call = (
+        StubState(),
+        None,
+        None,
+        AgentRole.CODEX,
+        error,
+    )
+
+    baseline_owner = compiled_owner(source)
+    baseline_owner(dependencies).persist_invocation_failure(*call)
+
+    escaped_owner = compiled_owner(
+        source.replace(
+            marker,
+            "        except _MutationDoesNotCatchPermissionError as exc:\n",
+            1,
+        )
+    )
+    with pytest.raises(
+        PermissionError, match="diagnostic directory is not writable"
+    ):
+        escaped_owner(dependencies).persist_invocation_failure(*call)
 
 
 def test_split_counter_proof_kills_shared_counter_mutation() -> None:

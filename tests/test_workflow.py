@@ -16,6 +16,7 @@ from audit_trail import ReviewAuditEvent, managed_slice_document_path
 from artifact_models import (
     InvocationFailurePayload,
     ScopeExtensionPayload,
+    canonical_json,
     provider_text_evidence,
 )
 from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
@@ -479,6 +480,7 @@ class FakeDriver:
     checkpoint_histories: list = field(default_factory=list)
     failure_payloads: list[InvocationFailurePayload] = field(default_factory=list)
     failure_persistence_events: list[str] = field(default_factory=list)
+    diagnostic_failure: Exception | None = None
     require_checkpointed_attestation: bool = False
     authoritative_finding_error: str | None = None
     authoritative_finding_calls: list[tuple[str, tuple[FindingRecord, ...]]] = field(
@@ -748,6 +750,20 @@ class FakeDriver:
         self.failure_persistence_events.append("failure-record")
         self.failure_payloads.append(payload)
         self.structured_events.append(("invocation-failure", payload))
+
+    def write_invocation_failure_diagnostic(
+        self,
+        payload: InvocationFailurePayload,
+        provider_text: str,
+        technical_text: str,
+    ) -> None:
+        if self.diagnostic_failure is not None:
+            raise self.diagnostic_failure
+        _ = (provider_text, technical_text)
+        self.failure_persistence_events.append("failure-diagnostic")
+        self.structured_events.append(
+            ("invocation-failure-diagnostic", payload.invocation_id)
+        )
 
     def persist_scope_extension(self, state, payload) -> None:
         self.structured_events.append(("scope-extension", (state, payload)))
@@ -1615,7 +1631,11 @@ def test_provider_process_failure_reaches_record_with_actual_diagnostics(
         error,
     )
 
-    assert driver.failure_persistence_events == ["failure-record", "checkpoint"]
+    assert driver.failure_persistence_events == [
+        "failure-diagnostic",
+        "failure-record",
+        "checkpoint",
+    ]
     assert persisted.current_work_unit.invocation_failures == (failure,)
     assert failure.failure_kind is AgentFailureKind.PROCESS
     payload = driver.failure_payloads[0]
@@ -1692,7 +1712,11 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
         error,
     )
 
-    assert driver.failure_persistence_events == ["failure-record", "checkpoint"]
+    assert driver.failure_persistence_events == [
+        "failure-diagnostic",
+        "failure-record",
+        "checkpoint",
+    ]
     assert len(driver.failure_payloads) == 1
     payload = driver.failure_payloads[0]
     assert payload.failure_kind == kind.value
@@ -4604,6 +4628,78 @@ def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnosti
     )
     assert "error_max_structured_output_retries" in caplog.text
     assert "native Claude error" not in caplog.text
+
+
+def test_failed_diagnostic_write_preserves_failure_result_and_retry_byte_for_byte(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
+    state = _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    error = _structured_output_failure(
+        "structured-output-unwritable-diagnostic",
+        received_at=now,
+    )
+    baseline_driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    unwritable_driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        diagnostic_failure=PermissionError("diagnostic directory is not writable"),
+    )
+
+    baseline_state, baseline_failure = WorkflowEngine(
+        baseline_driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        state,
+        WorkflowHistory(state.current_work_unit_id),
+        _context(),
+        AgentRole.CLAUDE,
+        error,
+    )
+    caplog.set_level("WARNING", logger="workflow")
+    actual_state, actual_failure = WorkflowEngine(
+        unwritable_driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        state,
+        WorkflowHistory(state.current_work_unit_id),
+        _context(),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    assert canonical_json(unwritable_driver.failure_payloads[0]) == canonical_json(
+        baseline_driver.failure_payloads[0]
+    )
+    assert canonical_json(actual_state.to_dict()) == canonical_json(
+        baseline_state.to_dict()
+    )
+    assert actual_failure == baseline_failure
+    assert actual_failure.automatic_resume is True
+    assert actual_failure.resume_at_utc == baseline_failure.resume_at_utc
+    assert unwritable_driver.failure_payloads[0].auto_resume_count == (
+        baseline_driver.failure_payloads[0].auto_resume_count
+        == 1
+    )
+    assert unwritable_driver.failure_payloads[0].diagnostic_code == (
+        "PROVIDER-STRUCTURED-OUTPUT"
+    )
+    assert unwritable_driver.failure_persistence_events == [
+        "failure-record",
+        "checkpoint",
+    ]
+    warnings = tuple(
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING"
+        and "provider invocation diagnostic could not be written" in record.message
+    )
+    assert len(warnings) == 1
+    assert "structured-output-unwritable-diagnostic" in warnings[0].message
+    assert "diagnostic directory is not writable" in warnings[0].message
 
 
 def test_transport_failures_do_not_consume_contract_rejection_budget(caplog) -> None:

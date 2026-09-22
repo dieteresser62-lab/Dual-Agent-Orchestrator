@@ -49,6 +49,9 @@ class WorkflowFailureRecordingDependencies:
     """Exact engine/driver edges required to record a failed invocation."""
 
     current_invocation_fingerprint: Callable[[WorkflowState], str | None]
+    write_invocation_failure_diagnostic: Callable[
+        [InvocationFailurePayload, str, str], None
+    ]
     persist_invocation_failure: Callable[[InvocationFailurePayload], None]
     checkpoint: Callable[[WorkflowState, Any], None]
     now: Callable[[], datetime]
@@ -700,6 +703,22 @@ class WorkflowFailureRecording:
             decision=decision,
         )
         automatic = decision.automatic
+        # This operator aid is intentionally outside the authoritative record
+        # chain.  A diagnostic I/O failure must never replace the already
+        # classified provider failure or alter its retry decision.
+        try:
+            self._dependencies.write_invocation_failure_diagnostic(
+                payload,
+                error.provider_text,
+                error.technical_text,
+            )
+        except Exception as exc:
+            logger.warning(
+                "provider invocation diagnostic could not be written "
+                "invocation_id=%s error=%s",
+                error.invocation_id,
+                exc,
+            )
         # Decision-ahead authority boundary: the append must complete before
         # workflow status/counters, waits, or provider restarts can change.
         self._dependencies.persist_invocation_failure(payload)

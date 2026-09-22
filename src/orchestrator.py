@@ -1854,6 +1854,28 @@ class ProductionWorkflowDriver:
             path, canonical_json(document).decode("utf-8")
         )
 
+    def write_invocation_failure_diagnostic(
+        self,
+        payload: InvocationFailurePayload,
+        provider_text: str,
+        technical_text: str,
+    ) -> None:
+        """Write non-authoritative cleartext evidence for one failed invocation."""
+
+        document = {
+            "provider_text": provider_text,
+            "technical_text": technical_text,
+        }
+        path = (
+            self.log_dir
+            / "invocation-failures"
+            / f"{payload.invocation_id}.json"
+        )
+        self._write_immutable_file(
+            path,
+            canonical_json(document).decode("utf-8"),
+        )
+
     def persist_gate_decision(
         self, work_unit_id: int, decision: GateDecisionRecord
     ) -> None:
