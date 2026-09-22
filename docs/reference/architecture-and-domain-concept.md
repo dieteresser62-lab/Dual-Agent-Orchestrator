@@ -89,17 +89,37 @@ erzeugt den `APPROVED_PLAN_COMMIT`-gebundenen Implementierungs-Handoff.
 ### 6.2 Implementierung und Korrektur
 
 Codex bearbeitet ausschließlich den aktiven Sliceschutzraum. Der Orchestrator
-ermittelt den kanonischen Diff und führt die Matrix aus. Claude prüft in Runde
-eins den Slice und in Korrekturrunden nur das gebundene Delta. Ein Blocker
-führt zu einer neuen Codex-Korrekturrunde; eine positive Entscheidung erlaubt
-den exakt einmaligen lokalen Commit.
+ermittelt den kanonischen Diff und führt die Validierungsmatrix aus. Claude
+prüft den vollständigen Slice-Diff, gemessen ab dem unveränderlichen
+Slice-Start.
+
+Claude eröffnet Findings in zwei Klassen. Codex beantwortet jedes offene
+Finding genau einmal begründet: Ein `BLOCKER` muss gelöst werden, ein
+gewöhnliches `FINDING` darf gelöst oder abgelehnt werden. Eine Annahme ohne
+fingerprintändernde Repositoryänderung ist ungültig und wird an der
+Vertragsgrenze zurückgewiesen.
+
+Die Eskalation ist kein eigener Zug: Ein gewöhnliches Finding, das Claude in
+einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion
+zum `BLOCKER`. Die einzige Commitbedingung lautet, dass die recordabgeleitete
+Findingmenge des Slices keinen offenen Blocker enthält.
+
+Jede Prüfrunde nach der ersten ist eine Konvergenzrunde und muss einen
+bekannten Befund schließen oder eine attestierte, fingerprintändernde
+Behebung nachweisen. Eine stehende Runde oder das konfigurierte Rundenlimit
+beendet den Slice negativ ohne Commit.
 
 ### 6.3 Abschluss
 
-Codex prüft die Vollständigkeit gegen den gesamten Branchdiff. Nach erneuter
-Orchestratorvalidierung reviewt Claude den vollständigen Branch. Jeder offene
-Defekt wird Blocker und erzeugt eine begrenzte Korrektur-Work-Unit. Abschluss
-ist nur bei null offenen Findings möglich.
+Der Abnahmereview ist die letzte Arbeitseinheit desselben `IMPLEMENT`-Laufs.
+Claude liest den vollständigen Diff ab `git merge-base master <zielbranch>`
+und meldet dort nur neue Findings oder das erneute Auftreten bekannter
+Signaturen; er fordert keine Sonderkorrektur an.
+
+Bleibt Restarbeit, entsteht daraus ein gewöhnliches Inbox-Dokument ohne
+erzwungene Korrelation zum abgeschlossenen Lauf, und der Prozess beginnt von
+vorn. Am konfigurierten Abnahmelimit endet die Aufgabe ohne neues Dokument
+und ohne Rücknahme.
 
 ## 7. Sicherheits- und Vertrauensgrenzen
 

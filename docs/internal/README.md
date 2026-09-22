@@ -3,6 +3,13 @@
 Dieses Verzeichnis trennt aktive Vorhaben von abgeschlossenen historischen
 Unterlagen.
 
+> **Wie der Orchestrator tatsächlich arbeitet**, steht nicht hier, sondern in
+> [`docs/reference/ablauf-des-orchestrators.md`](../reference/ablauf-des-orchestrators.md).
+> Dieses Verzeichnis enthält Arbeits- und Auditunterlagen; das Zielmodell
+> unten beschreibt den **Sollstand** für den laufenden Umbau, die Referenz
+> den erreichten **Ist-Stand**. Weichen beide voneinander ab, ist das ein
+> Befund, kein Widerspruch in der Dokumentation.
+
 ## Aktive Dokumente
 
 - [Zielmodell: vereinfachter Orchestrator](zielmodell-vereinfachter-orchestrator.md) —

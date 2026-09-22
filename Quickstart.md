@@ -1,6 +1,6 @@
 # Schnellstart
 
-Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
+Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
 
 ## 1. Voraussetzungen prüfen
 
@@ -88,8 +88,8 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 5. Derselbe Watch-Prozess übernimmt den Handoff unmittelbar und beginnt ohne zweite Planungsrunde mit Slice 1.
 6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Codex implementiert, der Orchestrator validiert, Claude reviewt und der Orchestrator erstellt den lokalen Slice-Commit.
 7. Technische Korrekturen an bereits freigegebenen Vorgängerslices können über eine eng geprüfte `REMEDIATION_PATHS`-Erweiterung automatisch in den laufenden Slice aufgenommen werden.
-8. Nach dem letzten Slice prüft Codex die Vollständigkeit und Claude den vollständigen Branch. Claude muss dabei alle eigenen offenen Findings schließen oder als Blocker in einen automatischen, begrenzten Korrekturslice geben. Neue bloße Observations sind im Abschlussreview nicht zulässig; nicht umsetzungsrelevante Restrisiken gehören in die Reviewevidenz.
-9. Erst wenn kein Finding mehr offen ist, endet der Lauf mit Exitcode 0 und die ursprüngliche Aufgabe wird nach `outbox/done/` verschoben.
+8. Nach dem letzten Slice liest Claude im Abnahmereview den vollständigen Branch ab `git merge-base master <zielbranch>`. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
+9. Findet der Abnahmereview Restarbeit, erzeugt der Orchestrator daraus eine gewöhnliche neue Inbox-Aufgabe, und der gesamte Prozess beginnt von vorn — Planung, Umsetzung, Prüfung, Commit. Findet er nichts mehr, endet der Lauf mit Exitcode 0 und die Aufgabe wird nach `outbox/done/` verschoben. Der Zyklus ist durch `max_acceptance_reviews` begrenzt (Vorgabe 6).
 
 Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
@@ -154,7 +154,7 @@ run_task --watch --resume \
   --gate-rationale "Persistierten Gate-Grund und Fingerprint geprüft"
 ```
 
-Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Findings und Blocker verändern die konfigurierte Validierungsmatrix nicht; zusätzliche agentenseitige `VALIDATE:`-Befehle begründen weder eine Erweiterung noch einen Benutzerhalt.
+Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Findings und Blocker verändern die konfigurierte Validierungsmatrix nicht — kein Befund kann sie erweitern oder anhalten.
 
 Die Exitcodes 2 und 3 kennzeichnen Quota- beziehungsweise Agentenfehler. Eindeutig belegte, transiente Netzwerkfehler werden standardmäßig höchstens zweimal nach 5 beziehungsweise 10 Sekunden im exakt gleichen Rollenschritt wiederholt. Fachliche Agentenantworten werden dabei nicht als technische Diagnose interpretiert. Auth-, Runtime-, Output- und Prozessfehler halten weiterhin fortsetzbar an. Nach Wiederherstellung des Providers oder Programms wird derselbe Schritt fortgesetzt; eine andere Rolle wird nicht als Ersatz verwendet. Eine bereits vollständig ausgeführte rote Matrix wird nur mit `--retry-failed-validation` erneut ausgeführt.
 
@@ -169,4 +169,4 @@ git log --oneline --decorate -n 15
 git status --short
 ```
 
-Der Zielbranch enthält einen lokalen Plancommit, die freigegebenen Slice- und gegebenenfalls Korrekturcommits sowie die abschließende Auditprojektion. Arbeitsplan, Slice-Auditdokumente und Gesamtreview liegen unter den erzeugten Pfaden in `docs/internal/`. Die abgearbeitete Inbox-Datei liegt mit UTC-Zeitstempel unter `outbox/done/`. Push, Pull Request, Merge, Release und Deployment bleiben bewusste nachgelagerte Benutzeraktionen.
+Der Zielbranch enthält einen lokalen Plancommit, je einen Commit für jeden freigegebenen Slice und die abschließende Auditprojektion. Hat der Abnahmereview eine Folgeaufgabe erzeugt, wiederholt sich das für deren Slices auf demselben Branch. Arbeitsplan, Slice-Auditdokumente und Gesamtreview liegen unter den erzeugten Pfaden in `docs/internal/`. Die abgearbeitete Inbox-Datei liegt mit UTC-Zeitstempel unter `outbox/done/`. Push, Pull Request, Merge, Release und Deployment bleiben bewusste nachgelagerte Benutzeraktionen.

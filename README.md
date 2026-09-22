@@ -4,7 +4,7 @@ Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als P
 
 ## Überblick
 
-Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice prüfen Codex und Claude die vollständige Branchänderung, bevor der Lauf abgeschlossen ist.
+Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 ![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
 
@@ -21,7 +21,7 @@ Der normale Ablauf ist:
 5. Codex einen branchweiten Vollständigkeitsbericht gegen die Branchbasis erstellen
    lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude
    für die Abschlussentscheidung übergeben.
-6. Im Abschlussreview muss Claude alle offenen Findings schließen oder zu einem Blocker hochstufen. Blocker werden in einem begrenzten Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt. Erfolgreich endet der Lauf erst bei null offenen Findings.
+6. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
 
 Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
 abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
@@ -34,6 +34,7 @@ Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und c
 
 ## Referenzdokumentation
 
+- **[Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — der Einstieg.** Erklärt den vollständigen Ablauf in Schichten: zuerst ohne Fachbegriffe, dann ein protokollierter echter Lauf als Beispiel, dann die Regeln so genau, dass man danach prüfen kann.
 - [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md) beschreibt Systemgrenze, Domänenmodell, Invarianten, Komponenten, Zustandsmaschine, Vertrauensgrenzen und betriebliche Eigenschaften.
 - [Marktvergleich](docs/reference/market-comparison.md) ordnet den Orchestrator anhand aktueller offizieller Produktdokumentation gegenüber repräsentativen Coding-Agenten und Agentenplattformen ein.
 
@@ -143,7 +144,7 @@ Beim Resume scannt der Orchestrator die vollständige Recordkette, rekonstruiert
 
 Innerhalb eines laufenden Prozesses hält der Artifact-Store einen rein abgeleiteten Append-Index für Idempotenz, Revisionen, Record-IDs und den validierten Head. Ein gewöhnlicher Append prüft damit nur den neuen Record und den unveränderten Prefix-Nachweis statt die gesamte Kette erneut zu lesen. Der Index wird weder persistiert noch als Recoverybeleg verwendet. Fehlt `head.json`, weichen Head- oder Verzeichnisnachweis ab oder wird der Store neu geöffnet, wird der Index verworfen und ausschließlich aus einem vollständigen, fail-closed validierten Recordscan rekonstruiert. Ausdrückliche Replay-, Resume- und Diagnose-Ladevorgänge scannen weiterhin die ganze Kette.
 
-Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Implementierungs- oder Korrekturslices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
+Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Slices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
 
 JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Codex-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Codex-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet Codex nicht erneut.
 
@@ -173,7 +174,7 @@ Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. 
 
 ## Validierung und Reviewisolation
 
-Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Nur ein offener `BLOCKER` darf sie mit einem strukturierten `VALIDATE`-Befehl aus einer bereits konfigurierten Befehlsfamilie erweitern. Eine `OBSERVATION` bleibt als Hinweis und Abnahmetext erhalten, erweitert die Matrix aber nicht und kann den Lauf deshalb auch nicht wegen eines fremden Befehls anhalten. Besteht der erste Matrixdurchgang, bleibt es bei diesem einen Durchgang. Scheitert er, legt der Orchestrator anhand seiner gemessenen Gesamtlaufzeit einmalig die Größe einer Flackerprobe fest: innerhalb eines 30-Sekunden-Budgets höchstens fünf Gesamtdurchgänge, mindestens aber die vorgeschriebene eine Wiederholung. Spätere Ergebnisse ändern diese Zahl nicht. Die Attestierung bleibt rot, sobald mindestens ein Durchgang scheitert, nennt das Verhältnis der roten zu allen Durchgängen und bewahrt die nummerierten Roh- und Kompaktausgaben jedes Durchgangs im vorhandenen Validierungsinhalt. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und Claude erhält die gebundene Evidenz.
+Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Kein Finding kann sie erweitern oder anhalten — weder ein gewöhnliches `FINDING` noch ein `BLOCKER`. Jedes Finding verwendet eine Prosa-Akzeptanz; die Validierungsmatrix bleibt davon unabhängig. Besteht der erste Matrixdurchgang, bleibt es bei diesem einen Durchgang. Scheitert er, legt der Orchestrator anhand seiner gemessenen Gesamtlaufzeit einmalig die Größe einer Flackerprobe fest: innerhalb eines 30-Sekunden-Budgets höchstens fünf Gesamtdurchgänge, mindestens aber die vorgeschriebene eine Wiederholung. Spätere Ergebnisse ändern diese Zahl nicht. Die Attestierung bleibt rot, sobald mindestens ein Durchgang scheitert, nennt das Verhältnis der roten zu allen Durchgängen und bewahrt die nummerierten Roh- und Kompaktausgaben jedes Durchgangs im vorhandenen Validierungsinhalt. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und Claude erhält die gebundene Evidenz.
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
@@ -211,12 +212,20 @@ Die wichtigsten Gates sind:
 - Abweichungen bei Branch, HEAD, Diff-Fingerprint oder Validierungsattestierung;
 - fehlende oder nicht verfügbare Validierung;
 - geänderte strukturierte Ankerwerte;
-- vier Rückgaben des Implementierers in einem Arbeitsblock;
+- erschöpfte Wiederholungsbudgets einer Arbeitseinheit (`max_transport_failures` und `max_contract_rejections`, Vorgabe je 3);
 - fehlende Implementierungsänderungen;
 - fehlerhafte, fehlende oder widersprüchliche Reviewurteile;
 - Quota-, Authentifizierungs-, Binärprogramm-, Berechtigungs-, Netzwerk-, Prozess- oder Timeoutfehler.
 
-Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Eine offene Observation darf während der Slice-Folge sichtbar bleiben. Der Orchestrator trägt den vollständigen Finding-Lebenszyklus in jeden folgenden Arbeitsblock; bei älteren fortgesetzten States werden zuvor je Slice wiederverwendete IDs deterministisch auf freie reviewer-eigene IDs abgebildet. Im branchweiten Abschlussreview muss Claude jedes eigene offene `C-*`-Finding schließen oder zu einem Blocker hochstufen. Neue reine Observations sind dort unzulässig: nicht umsetzungsrelevante Ideen und Restrisiken gehören in `REVIEW_EVIDENCE`, handlungsbedürftige Defekte werden Blocker und erzeugen automatisch einen Korrekturslice. Testdateien werden weiterhin im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren. Ein versehentlich mit `VALIDATE:` beginnender Abnahmetest einer Observation wird mit Warnung ignoriert; bei einem Blocker bleiben fehlerhafte oder nicht konfigurierte Befehle fail-closed.
+Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen und keinen reviewer-eigenen offenen Blocker.
+
+Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `C-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
+
+Eine Eskalation wird nicht ausgesprochen, sondern geschieht: Ein gewöhnliches Finding, das Claude in einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion zum `BLOCKER`. Es gibt keinen Reklassifizierungszug und keine Observation-Klasse. Umgekehrt ist eine Freigabe mit einem eigenen offenen Finding widersprüchlich und wird zurückgewiesen — entweder im selben Zug schließen oder ablehnen.
+
+Jedes Finding gehört unveränderlich zu dem Slice, in dem es eröffnet wurde. Die einzige Commitbedingung lautet, dass die aus den Records abgeleitete Findingmenge dieses Slices keinen offenen Blocker enthält. Die erste Prüfung eines Slices entdeckt; jede weitere abgelehnte Prüfung ist eine Konvergenzrunde und muss einen bekannten Befund schließen oder eine attestierte, fingerprintändernde Behebung nachweisen. Eine Runde ohne beides beendet den Slice negativ, ebenso das Rundenlimit `max_rounds_per_loop`.
+
+Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `C-`-Kennung schließen.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
@@ -503,7 +512,7 @@ getrennten Varianten `plan_result`, `implementation_result`,
 `correction_result`, `final_report_result` oder `stop_result`. Claude erhält
 `native-agent-review-request-v2` und antwortet gemäß
 `native-agent-review-result-v2`; sein request-spezifisches Writerschema bindet
-Freigabe, Findings, Statusänderungen, Reklassifizierungen, Reviewevidenz,
+Freigabe, Findings, Statusänderungen, Reviewevidenz,
 Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
 persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder
 erfinden noch ersetzen.
@@ -545,3 +554,22 @@ Korrekturvalidierung. Den vollständigen Crash-Harness führt der Betreiber nach
 der letzten relevanten Änderung auf dem exakten Branch-HEAD und vor dem
 branchweiten Finalreview separat aus; der Orchestrator erzwingt dieses
 Betreiber-Gate nicht.
+
+### Diagnosewerkzeuge
+
+Beide arbeiten ausschließlich lesend auf einer vorhandenen Recordkette.
+
+```bash
+python3 scripts/verify_legacy_chain.py <artefaktverzeichnis>
+python3 scripts/baseline_findingfluss.py <artefaktverzeichnis>
+```
+
+`verify_legacy_chain.py` prüft eine archivierte structured-v2-Kette. Der
+installierte Reducer weist eine Kette mit fremder Reducer-Semantik
+fail-closed ab und verweist auf dieses Werkzeug; es interpretiert die Kette
+nicht und setzt sie nicht fort, sondern belegt nur ihren Zustand.
+
+`baseline_findingfluss.py` rekonstruiert den Findingfluss eines Laufs aus
+seiner Recordkette: wie viele der am Laufende offenen Findings in einem
+Slicereview eröffnet wurden, wie viele davon ein späterer Slice fachlich
+hätte tragen können und wie viele erstmals im branchweiten Review entstanden.

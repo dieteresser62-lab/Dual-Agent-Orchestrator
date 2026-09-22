@@ -860,7 +860,7 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
     for term in (
         "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude",
         "canonical diff", "validation", "local Slice NN commit",
-        "Branch-wide final review", "correction work unit", "STATUS: DONE",
+        "Acceptance review", "ordinary Inbox document", "STATUS: DONE",
     ):
         assert term in diagram
 

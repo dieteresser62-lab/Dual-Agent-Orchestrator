@@ -74,11 +74,18 @@ while (A planned slice remains?) is (yes)
     :Append validated records before any workflow decision;
     :Dual-write the State-v3 mirror and prove semantic equality;
     :Collect canonical diff and run validation once per fingerprint;
-    :Claude reviews the bound diff and attestation;
-    while (Claude has an open blocker?) is (yes)
-      :Codex corrects and answers findings;
+    :Claude reviews the complete Slice diff from the immutable Slice start;
+    while (An open blocker remains in this Slice?) is (yes)
+      :Codex answers every open finding once: solve a BLOCKER, solve or reject a FINDING;
+      :Reject an accepted disposition without a fingerprint-changing change;
       :Validate the new fingerprint;
-      :Claude reviews the correction delta;
+      :Claude reviews the complete Slice diff again;
+      :An unclosed ordinary FINDING becomes a BLOCKER by canonical reduction;
+      if (Round closed a known finding or proved remediation?) then (no)
+        :End the Slice negatively without a commit;
+        stop
+      else (yes)
+      endif
     endwhile (no)
     if (Enabled manual gate or true policy stop?) then (yes)
       :Persist awaiting_user_decision and return exit 4;
@@ -91,16 +98,20 @@ while (A planned slice remains?) is (yes)
   }
 endwhile (no)
 
-partition "Branch-wide final review" {
-  :Codex checks completeness against the full branch diff;
+partition "Acceptance review (last work unit of the same run)" {
   :Validate and attest the branch fingerprint;
-  :Claude reviews the complete branch and pre-mortem;
-  while (Any final finding remains open?) is (yes)
-    :Create a bounded correction work unit;
-    :Codex corrects, validation runs, and Claude reviews;
-    :Create a local correction commit;
-    :Repeat the complete branch review;
-  endwhile (no)
+  :Claude reads the complete diff from git merge-base master <target-branch>;
+  :Report only new findings or recurrences of known signatures;
+  if (Work remains?) then (yes)
+    if (Acceptance-review limit reached?) then (yes)
+      :Fail the task without a new document and without rollback;
+      stop
+    else (no)
+      :Write an ordinary Inbox document describing the remaining work;
+      :The watch picks it up and the whole process starts over;
+    endif
+  else (no)
+  endif
 }
 
 :Persist completed State v3;
