@@ -195,8 +195,8 @@ _NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
         "Return a complete bounded stop request using a valid rule id and rationale."
     ),
     NativeReviewErrorCode.APPROVAL_INVALID: (
-        "For every Finding ID named by the rejection, close it or escalate it "
-        "to BLOCKER."
+        "For every Finding ID named by the rejection, close it, or leave it open "
+        "and deny the review; the orchestrator then records the escalation to BLOCKER."
     ),
     NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD: (
         "Return the active result shape without retired finding-decision fields."
@@ -2339,7 +2339,8 @@ def _validate_decision(
                 + labeled_ids
                 + "; for each ID, add either a status_changes entry with "
                 "status=CLOSED and a typed fixed or evidenced-rejection closure, "
-                "or escalate the Finding to BLOCKER; a Finding opened in "
+                "or leave it open and deny the review; the orchestrator then "
+                "records the escalation to BLOCKER; a Finding opened in "
                 "new_findings may be decided in the same response"
             )
             if unresolved_new_ids:
@@ -2459,8 +2460,9 @@ def _slice_decision_retry_guidance(
         + "; ".join(groups)
         + ") in the same response. For each listed ID, either add status_changes "
         "with status=CLOSED and closure.kind=fixed, or closure.kind=rejected plus "
-        "rejection_reason and named evidence, or escalate it to BLOCKER. A Finding "
-        "may be opened in new_findings and decided in that same response."
+        "rejection_reason and named evidence, or leave it open and deny the review; "
+        "the orchestrator then records the escalation to BLOCKER. A Finding may be "
+        "opened in new_findings and decided in that same response."
     )
 
 

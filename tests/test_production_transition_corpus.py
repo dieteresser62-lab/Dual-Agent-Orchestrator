@@ -943,4 +943,4 @@ def test_target_record_sequence_baseline_is_exact() -> None:
         text=True,
     ).strip()
     assert working_blob == TARGET_RECORD_SEQUENCE_BLOB
-    assert working_blob != head_blob
+    assert working_blob == head_blob

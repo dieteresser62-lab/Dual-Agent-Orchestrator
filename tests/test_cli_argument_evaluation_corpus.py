@@ -884,7 +884,7 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     sequence_blob = anchor["workflow_record_sequence_blob"]
     assert _git("rev-parse", f"{commit}:{sequence_path}") == sequence_blob
     assert _git("hash-object", str(ROOT / sequence_path)) == TARGET_RECORD_SEQUENCE_BLOB
-    assert _git("diff", "--", sequence_path) != ""
+    assert _git("diff", "--", sequence_path) == ""
 
     pre_cut_tree = ast.parse(_git("show", f"{commit}:{source_path}"))
     active_source = SOURCE_PATH.read_text(encoding="utf-8")

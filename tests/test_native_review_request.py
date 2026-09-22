@@ -544,6 +544,11 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     assert "C-02 (existing before this response)" in raised.value.detail
     assert "status_changes entry with status=CLOSED" in raised.value.detail
     assert "typed fixed or evidenced-rejection closure" in raised.value.detail
+    assert "leave it open and deny the review" in raised.value.detail
+    assert (
+        "the orchestrator then records the escalation to BLOCKER"
+        in raised.value.detail
+    )
 
     sparse_disposition = json.loads(json.dumps(approved))
     sparse_disposition["status_changes"] = []

@@ -5,6 +5,8 @@ from dataclasses import replace
 import hashlib
 
 import pytest
+import finding_reducer
+import native_review_contract
 
 from contracts import (
     AgentRole,
@@ -216,10 +218,20 @@ def _finding(
     )
 
 
-def test_unclosed_implementer_rejection_is_record_bound_blocker_escalation() -> None:
+CANARY_30_APPROVAL_REJECTION_DETAIL = (
+    "approval leaves open findings assigned to the current Slice: "
+    "C-03 (existing before this response); for each ID, add either a "
+    "status_changes entry with status=CLOSED and a typed fixed or "
+    "evidenced-rejection closure, or leave it open and deny the review; "
+    "the orchestrator then records the escalation to BLOCKER; a Finding "
+    "opened in new_findings may be decided in the same response"
+)
+
+
+def _assert_canary_30_review_paths() -> None:
     finding = apply_finding_response(
         _finding(
-            "C-01",
+            "C-03",
             AgentRole.CLAUDE,
             finding_class=FindingClass.FINDING,
         ),
@@ -237,11 +249,48 @@ def test_unclosed_implementer_rejection_is_record_bound_blocker_escalation() -> 
     assert escalated.finding_class is FindingClass.BLOCKER
     assert escalated.status is FindingStatus.OPEN
     assert [(item.finding.finding_id, item.action) for item in transitions] == [
-        ("C-01", "escalated")
+        ("C-03", "escalated")
     ]
     assert transitions[0].rationale == (
         "The reviewer did not close the Finding; it is escalated to BLOCKER."
     )
+
+    try:
+        parse_native_contract_result(_review(context, approved=True), context)
+    except NativeReviewContractError as error:
+        assert error.code is NativeReviewErrorCode.APPROVAL_INVALID
+        assert error.detail == CANARY_30_APPROVAL_REJECTION_DETAIL
+    else:
+        raise AssertionError("approval with the open Canary-30 Finding was accepted")
+
+
+def test_canary_30_denial_escalates_and_approval_names_the_denial_path() -> None:
+    _assert_canary_30_review_paths()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("drop_automatic_escalation", "accept_approval_with_open_finding"),
+)
+def test_canary_30_proof_kills_both_contract_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    if mutation == "drop_automatic_escalation":
+        monkeypatch.setattr(
+            finding_reducer,
+            "_escalate_unclosed_findings",
+            lambda findings, *, reviewer: dict(findings),
+        )
+    else:
+        monkeypatch.setattr(
+            native_review_contract,
+            "_validate_decision",
+            lambda response, context, findings: None,
+        )
+
+    with pytest.raises(AssertionError):
+        _assert_canary_30_review_paths()
 
 
 def _fixed_document(context: NativeReviewContext) -> dict[str, object]:
@@ -514,6 +563,8 @@ def test_approval_retry_guidance_labels_existing_and_same_response_findings() ->
     assert "opened in the rejected response: C-02" in guidance
     assert "status_changes" in guidance
     assert "status=CLOSED" in guidance
+    assert "leave it open and deny the review" in guidance
+    assert "the orchestrator then records the escalation to BLOCKER" in guidance
     assert "opened in new_findings and decided in that same response" in guidance
 
 
@@ -557,6 +608,11 @@ def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
     assert "C-01 (opened in this response)" in raised.value.detail
     assert "C-02 (opened in this response)" in raised.value.detail
     assert "status_changes" in raised.value.detail
+    assert "leave it open and deny the review" in raised.value.detail
+    assert (
+        "the orchestrator then records the escalation to BLOCKER"
+        in raised.value.detail
+    )
     assert "may be decided in the same response" in raised.value.detail
 
 

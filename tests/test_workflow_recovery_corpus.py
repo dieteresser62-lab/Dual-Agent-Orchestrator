@@ -97,7 +97,6 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "881e944fea9442012aecb7c20b519ea5a2b83bbf"
 SOURCE_BLOB = "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d"
 PRE_B54_COMMIT = "e538d96be18e6857250f6a86ab6f6c499e40d0b0"
-HISTORICAL_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
@@ -2305,7 +2304,7 @@ def test_b54_entries_and_helpers_are_below_the_b32_threshold() -> None:
     ) not in size_baseline["functions"]
 
 
-def test_historical_and_target_record_sequence_baselines_are_exact() -> None:
+def test_target_record_sequence_baseline_is_exact() -> None:
     actual_blob = subprocess.run(
         ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
         cwd=ROOT,
@@ -2324,5 +2323,4 @@ def test_historical_and_target_record_sequence_baselines_are_exact() -> None:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert head_blob == HISTORICAL_RECORD_SEQUENCE_BLOB
-    assert actual_blob == RECORD_SEQUENCE_BLOB
+    assert actual_blob == head_blob == RECORD_SEQUENCE_BLOB
