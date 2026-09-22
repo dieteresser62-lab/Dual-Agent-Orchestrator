@@ -439,11 +439,17 @@ Zwei Eigenschaften sind dabei entscheidend:
 - **Aufrufen statt nachbeschreiben.** Eine zweite Beschreibung einer Regel
   könnte den Widerspruch prinzipiell nicht finden — sie wäre selbst eine
   siebte Stelle.
-- **Beabsichtigte Strengedifferenzen benennen.** Der Commitpfad ist
-  absichtlich strenger als der Reviewvertrag: Er verlangt „kein offener
-  Blocker", während eine Ablehnung schon bei einem offenen Finding zulässig
-  ist. Steht das nicht als gewollt im Fixture, gleicht es beim nächsten Umbau
-  jemand an — und weicht damit die eine Commitbedingung auf.
+- **Beabsichtigte Prüfungsunterschiede benennen.** Die Commitgrenze in
+  `git_service.py` prüft Zustimmung und „keine offenen Blocker" — offene
+  *Findings* prüft sie **nicht**. Das ist richtig: Der Reviewvertrag lässt
+  eine Zustimmung mit offenem Finding gar nicht erst entstehen, eine zweite
+  Prüfung wäre Wiederholung statt Sicherheit.
+
+  Für sich allein betrachtet ist die Commitgrenze damit **unvollständig**,
+  im Zusammenspiel korrekt. Steht das nicht als gewollt im Fixture, meldet das
+  Orakel es als Widerspruch — und beim nächsten Umbau gleicht es jemand an
+  und fügt eine überflüssige Prüfung hinzu, oder er lockert die falsche
+  Seite.
 
 ## Vorgehen
 
