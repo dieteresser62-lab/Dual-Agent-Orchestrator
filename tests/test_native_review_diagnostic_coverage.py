@@ -39,6 +39,11 @@ _TRANSLATED_STATIC_RAISE_SCOPES = (
     ),
     _TranslatedStaticRaiseScope(
         "contracts.py",
+        "_validate_finding_generation_identity",
+        NativeReviewErrorCode.FINDING_ID_INVALID,
+    ),
+    _TranslatedStaticRaiseScope(
+        "contracts.py",
         "ReviewEvidence",
         NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
     ),
@@ -88,6 +93,7 @@ _TRANSLATION_ENTRYPOINTS = frozenset(
         "FindingRecord",
         "ReviewEvidence",
         "StopRequest",
+        "_validate_finding_generation_identity",
         "apply_reviewer_events",
         "check_schema",
     }
@@ -124,6 +130,12 @@ _EXPECTED_PASSTHROUGH_BOUNDARIES = Counter(
             NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
             "",
             ("apply_reviewer_events",),
+        ): 1,
+        (
+            "_validate_native_finding_generation_identities",
+            NativeReviewErrorCode.FINDING_ID_INVALID,
+            "",
+            ("_validate_finding_generation_identity",),
         ): 1,
         (
             "_convert_anchors",

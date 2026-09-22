@@ -751,6 +751,26 @@ class FinalReviewFindingPayload:
             self.acceptance_test, "final review finding acceptance_test"
         )
         _require_paths(self.affected_paths, allow_empty=True)
+        if (
+            self.predecessor_finding_ref is None
+            and self.evidence_anchor_sha256 is not None
+        ):
+            raise ArtifactValidationError(
+                "final review predecessor_finding_ref and evidence_anchor_sha256 must "
+                "be provided together or both omitted; predecessor_finding_ref is "
+                "missing, so either provide predecessor_finding_ref with "
+                "evidence_anchor_sha256 or omit evidence_anchor_sha256"
+            )
+        if (
+            self.predecessor_finding_ref is not None
+            and self.evidence_anchor_sha256 is None
+        ):
+            raise ArtifactValidationError(
+                "final review predecessor_finding_ref and evidence_anchor_sha256 must "
+                "be provided together or both omitted; evidence_anchor_sha256 is "
+                "missing, so either provide evidence_anchor_sha256 with "
+                "predecessor_finding_ref or omit predecessor_finding_ref"
+            )
         if self.predecessor_finding_ref is not None:
             _require_finding_id(
                 self.predecessor_finding_ref,
@@ -763,10 +783,6 @@ class FinalReviewFindingPayload:
             _require_sha256(
                 self.evidence_anchor_sha256,
                 "final review generation evidence anchor",
-            )
-        elif self.evidence_anchor_sha256 is not None:
-            raise ArtifactValidationError(
-                "final review evidence anchor requires a predecessor"
             )
 
 
@@ -1310,10 +1326,16 @@ class ProviderInputMeasurementPayload:
         for value in (self.technical_limit_chars, self.technical_limit_bytes):
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ArtifactValidationError("technical limits must be positive or null")
-        if (self.technical_limit_chars is None) != (self.technical_limit_bytes is None):
-            raise ArtifactValidationError("technical limits must be supplied together")
-        if (self.technical_limit_chars is None) != (self.technical_limit_source is None):
-            raise ArtifactValidationError("technical limit source must match technical limits")
+        technical_limit_presence = (
+            self.technical_limit_chars is not None,
+            self.technical_limit_bytes is not None,
+            self.technical_limit_source is not None,
+        )
+        if any(technical_limit_presence) and not all(technical_limit_presence):
+            raise ArtifactValidationError(
+                "technical_limit_chars, technical_limit_bytes, and "
+                "technical_limit_source must be provided together or all omitted"
+            )
         if self.technical_limit_source is not None:
             _require_text(self.technical_limit_source, "technical_limit_source")
         if not isinstance(self.allowed, bool):

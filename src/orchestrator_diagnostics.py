@@ -387,14 +387,27 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_PREDECESSOR_FINDING_REFERENCE_INVALID = (
         "finding-id-invalid: predecessor finding reference is invalid"
     )
+    REVIEW_PREDECESSOR_AND_EVIDENCE_ANCHOR_INVALID = (
+        "finding-id-invalid: predecessor finding reference is invalid; "
+        "predecessor_finding_ref and evidence_anchor_sha256 must be provided together "
+        "or both omitted; a valid evidence_anchor_sha256 is missing, so either provide "
+        "evidence_anchor_sha256 with predecessor_finding_ref or omit "
+        "predecessor_finding_ref"
+    )
     REVIEW_SELF_PREDECESSOR_FORBIDDEN = (
         "finding-id-invalid: finding cannot be its own predecessor"
     )
     REVIEW_NEW_GENERATION_ANCHOR_REQUIRED = (
-        "finding-id-invalid: new Finding generation requires its evidence anchor digest"
+        "finding-id-invalid: predecessor_finding_ref and evidence_anchor_sha256 must be "
+        "provided together or both omitted; a valid evidence_anchor_sha256 is missing, "
+        "so either provide evidence_anchor_sha256 with predecessor_finding_ref or omit "
+        "predecessor_finding_ref"
     )
     REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED = (
-        "finding-id-invalid: evidence anchor digest requires a predecessor Finding reference"
+        "finding-id-invalid: predecessor_finding_ref and evidence_anchor_sha256 must be "
+        "provided together or both omitted; predecessor_finding_ref is missing, so "
+        "either provide predecessor_finding_ref with evidence_anchor_sha256 or omit "
+        "evidence_anchor_sha256"
     )
     REVIEW_EVIDENCE_DIMENSIONS_REQUIRED = (
         "review-content-missing: review evidence requires checked dimensions"

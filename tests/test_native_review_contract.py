@@ -58,6 +58,18 @@ from workflow_state import WorkUnitKind
 
 
 FINGERPRINT = "a" * 64
+MISSING_ANCHOR_DETAIL = (
+    "predecessor_finding_ref and evidence_anchor_sha256 must be provided together "
+    "or both omitted; a valid evidence_anchor_sha256 is missing, so either provide "
+    "evidence_anchor_sha256 with predecessor_finding_ref or omit "
+    "predecessor_finding_ref"
+)
+MISSING_PREDECESSOR_DETAIL = (
+    "predecessor_finding_ref and evidence_anchor_sha256 must be provided together "
+    "or both omitted; predecessor_finding_ref is missing, so either provide "
+    "predecessor_finding_ref with evidence_anchor_sha256 or omit "
+    "evidence_anchor_sha256"
+)
 
 
 def test_review_contract_diagnostic_is_exact_or_value_free() -> None:
@@ -111,20 +123,78 @@ def test_evidence_anchor_without_predecessor_uses_precise_value_free_diagnostic(
             "affected_paths": [],
         }
     ]
-    response = parse_native_review_response(document, context)
-
     with pytest.raises(NativeReviewContractError) as raised:
-        native_response_to_contract_result(response, context)
+        parse_native_contract_result(document, context)
 
     error = raised.value
     diagnostic = OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
     assert error.code is NativeReviewErrorCode.FINDING_ID_INVALID
-    assert error.detail == (
-        "evidence anchor digest requires a predecessor Finding reference"
-    )
+    assert error.detail == MISSING_PREDECESSOR_DETAIL
     assert error.orchestrator_diagnostic is diagnostic
     assert provider_digest not in diagnostic.text
     assert native_review_retry_guidance(error.code, diagnostic) == diagnostic.text
+
+
+def test_canary_35_first_response_names_the_entire_generation_pair_rule() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "The rediscovered defect names its predecessor.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Bind the generation to its predecessor evidence.",
+            },
+            "predecessor_finding_ref": "C-99",
+            "affected_paths": [],
+        }
+    ]
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    error = raised.value
+    diagnostic = OrchestratorDiagnostic.REVIEW_NEW_GENERATION_ANCHOR_REQUIRED
+    assert error.code is NativeReviewErrorCode.FINDING_ID_INVALID
+    assert error.detail == MISSING_ANCHOR_DETAIL
+    assert error.orchestrator_diagnostic is diagnostic
+    assert "evidence_anchor_sha256" in native_review_retry_guidance(
+        error.code, diagnostic
+    )
+    assert "predecessor_finding_ref" in native_review_retry_guidance(
+        error.code, diagnostic
+    )
+
+
+def test_native_finding_identity_reports_two_independent_form_errors() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "Malformed generation identity",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Reject both independently malformed generation fields.",
+            },
+            "predecessor_finding_ref": "not-a-finding-id",
+            "evidence_anchor_sha256": "not-a-digest",
+            "affected_paths": [],
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    error = raised.value
+    assert error.code is NativeReviewErrorCode.FINDING_ID_INVALID
+    assert error.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.REVIEW_PREDECESSOR_AND_EVIDENCE_ANCHOR_INVALID
+    )
+    assert "predecessor finding reference is invalid" in error.detail
+    assert "a valid evidence_anchor_sha256 is missing" in error.detail
 
 
 def _attestation() -> ValidationAttestation:

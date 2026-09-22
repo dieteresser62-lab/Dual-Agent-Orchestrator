@@ -248,13 +248,17 @@ def measure_provider_input(
             or any(value is None for value in technical_values)
         ):
             raise ProviderInputBudgetError(
-                "technical limits require chars, bytes, and a source together"
+                "technical_limit_chars, technical_limit_bytes, and "
+                "technical_limit_source must be provided together or all omitted"
             )
         for value in technical_values:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ProviderInputBudgetError("technical limits must be positive integers")
     elif technical_limit_source is not None:
-        raise ProviderInputBudgetError("technical limit source requires technical limits")
+        raise ProviderInputBudgetError(
+            "technical_limit_chars, technical_limit_bytes, and "
+            "technical_limit_source must be provided together or all omitted"
+        )
 
     component_sizes = tuple(
         ProviderInputComponentSize(

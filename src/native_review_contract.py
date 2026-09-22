@@ -36,6 +36,7 @@ from contracts import (
     SOURCE_FINDING_ID_PATTERN,
     StopRequest,
     ValidationAttestation,
+    _validate_finding_generation_identity,
 )
 from finding_reducer import (
     ReviewerStatusChange,
@@ -1328,6 +1329,7 @@ def _bound_stop_result_definition(
 def validate_native_review_document(document: Mapping[str, Any]) -> None:
     """Validate only the closed transport shape, without local context."""
     _validate_active_native_review_field_shapes(document)
+    _validate_native_finding_generation_identities(document)
     schema = load_native_review_schema()
     try:
         validate_schema_document(document, schema)
@@ -1339,6 +1341,33 @@ def validate_native_review_document(document: Mapping[str, Any]) -> None:
             NativeReviewErrorCode.SCHEMA_INVALID,
             f"schema validation failed at {location}: {detail}",
         ) from None
+
+
+def _validate_native_finding_generation_identities(
+    document: Mapping[str, Any],
+) -> None:
+    """Report all independent generation-field form errors for one Finding."""
+
+    raw_findings = document.get("new_findings")
+    if not isinstance(raw_findings, list):
+        return
+    for item in raw_findings:
+        if not isinstance(item, Mapping) or not (
+            "predecessor_finding_ref" in item
+            or "evidence_anchor_sha256" in item
+        ):
+            continue
+        try:
+            _validate_finding_generation_identity(
+                item.get("finding_id"),
+                item.get("predecessor_finding_ref"),
+                item.get("evidence_anchor_sha256"),
+            )
+        except ValueError as exc:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_ID_INVALID,
+                str(exc),
+            ) from exc
 
 
 def parse_native_review_response(

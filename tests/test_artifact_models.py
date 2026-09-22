@@ -49,6 +49,7 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     ProviderUsagePayload,
+    FinalReviewFindingPayload,
     FinalReviewPreflightPayload,
     canonical_json,
     load_schema,
@@ -80,6 +81,99 @@ PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
 TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES = technical_text_evidence(
     "technical diagnostic"
 )
+
+
+@pytest.mark.parametrize(
+    ("generation_fields", "missing_field"),
+    (
+        ({"predecessor_finding_ref": "C-01"}, "evidence_anchor_sha256"),
+        ({"evidence_anchor_sha256": DIGEST}, "predecessor_finding_ref"),
+    ),
+)
+def test_final_review_finding_generation_pair_diagnostic_is_complete(
+    generation_fields: dict[str, str],
+    missing_field: str,
+) -> None:
+    with pytest.raises(ArtifactValidationError) as raised:
+        FinalReviewFindingPayload(
+            finding_id="C-02",
+            severity=FindingSeverity.FINDING,
+            summary="Rediscovered defect",
+            acceptance_test="The generation identity is complete.",
+            **generation_fields,
+        )
+
+    detail = str(raised.value)
+    assert "predecessor_finding_ref" in detail
+    assert "evidence_anchor_sha256" in detail
+    assert "provided together or both omitted" in detail
+    assert f"{missing_field} is missing" in detail
+
+
+def test_final_review_finding_generation_pair_accepts_both_or_neither() -> None:
+    absent = FinalReviewFindingPayload(
+        finding_id="C-02",
+        severity=FindingSeverity.FINDING,
+        summary="New defect",
+        acceptance_test="The defect is fixed.",
+    )
+    complete = FinalReviewFindingPayload(
+        finding_id="C-02",
+        severity=FindingSeverity.FINDING,
+        summary="Rediscovered defect",
+        acceptance_test="The generation identity is complete.",
+        predecessor_finding_ref="C-01",
+        evidence_anchor_sha256=DIGEST,
+    )
+
+    assert absent.predecessor_finding_ref is None
+    assert complete.evidence_anchor_sha256 == DIGEST
+
+
+@pytest.mark.parametrize(
+    "technical_fields",
+    (
+        {"technical_limit_chars": 5},
+        {"technical_limit_source": "catalog-v1:test"},
+        {"technical_limit_chars": 5, "technical_limit_bytes": 5},
+    ),
+)
+def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
+    technical_fields: dict[str, object],
+) -> None:
+    measurement = ProviderInputMeasurementPayload(
+        Role.CODEX,
+        Role.CODEX,
+        "codex_final_review",
+        "work-01",
+        DIGEST,
+        "b" * 64,
+        "c" * 64,
+        "d" * 64,
+        (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
+        3,
+        3,
+        10,
+        10,
+        None,
+        None,
+        None,
+        10,
+        10,
+        True,
+        (),
+        0,
+        0,
+        "stdin_prompt",
+    )
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        replace(measurement, **technical_fields)
+
+    assert str(raised.value) == (
+        "technical_limit_chars, technical_limit_bytes, and technical_limit_source "
+        "must be provided together or all omitted"
+    )
 
 
 def test_run_profile_record_fields_are_role_keyed() -> None:

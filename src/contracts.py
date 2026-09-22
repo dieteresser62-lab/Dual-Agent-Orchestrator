@@ -176,23 +176,59 @@ class FindingRecord:
                 )
         if self.status is FindingStatus.CLOSED and not (self.status_rationale or "").strip():
             raise ValueError("closed finding requires a status rationale")
-        if self.predecessor_finding_ref is not None:
-            if not SOURCE_FINDING_ID_PATTERN.fullmatch(
-                self.predecessor_finding_ref
-            ):
-                raise ValueError("predecessor finding reference is invalid")
-            if self.predecessor_finding_ref == self.finding_id:
-                raise ValueError("finding cannot be its own predecessor")
-            if not isinstance(self.evidence_anchor_sha256, str) or not SHA256_PATTERN.fullmatch(
-                self.evidence_anchor_sha256
-            ):
-                raise ValueError(
-                    "new Finding generation requires its evidence anchor digest"
-                )
-        elif self.evidence_anchor_sha256 is not None:
+        _validate_finding_generation_identity(
+            self.finding_id,
+            self.predecessor_finding_ref,
+            self.evidence_anchor_sha256,
+        )
+
+
+def _validate_finding_generation_identity(
+    finding_id: object,
+    predecessor_finding_ref: object | None,
+    evidence_anchor_sha256: object | None,
+) -> None:
+    """Validate one generation identity without hiding independent form errors."""
+
+    if predecessor_finding_ref is None:
+        if evidence_anchor_sha256 is not None:
             raise ValueError(
-                "evidence anchor digest requires a predecessor Finding reference"
+                "predecessor_finding_ref and evidence_anchor_sha256 must be provided "
+                "together or both omitted; predecessor_finding_ref is missing, so "
+                "either provide predecessor_finding_ref with evidence_anchor_sha256 "
+                "or omit evidence_anchor_sha256"
             )
+        return
+
+    predecessor_invalid = (
+        not isinstance(predecessor_finding_ref, str)
+        or SOURCE_FINDING_ID_PATTERN.fullmatch(predecessor_finding_ref) is None
+    )
+    anchor_invalid = (
+        not isinstance(evidence_anchor_sha256, str)
+        or SHA256_PATTERN.fullmatch(evidence_anchor_sha256) is None
+    )
+    if predecessor_invalid and anchor_invalid:
+        raise ValueError(
+            "predecessor finding reference is invalid; predecessor_finding_ref and "
+            "evidence_anchor_sha256 must be provided together or both omitted; a valid "
+            "evidence_anchor_sha256 is missing, so either provide "
+            "evidence_anchor_sha256 with predecessor_finding_ref or omit "
+            "predecessor_finding_ref"
+        )
+    if predecessor_invalid:
+        raise ValueError("predecessor finding reference is invalid")
+    if predecessor_finding_ref == finding_id:
+        raise ValueError("finding cannot be its own predecessor")
+    if anchor_invalid:
+        raise ValueError(
+            "predecessor_finding_ref and evidence_anchor_sha256 must be provided "
+            "together or both omitted; a valid evidence_anchor_sha256 is missing, so "
+            "either provide evidence_anchor_sha256 with predecessor_finding_ref or "
+            "omit predecessor_finding_ref"
+        )
+
+
 @dataclass(frozen=True)
 class FindingOccurrence:
     finding_id: str

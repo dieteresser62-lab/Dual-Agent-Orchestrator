@@ -143,6 +143,34 @@ def test_measurement_sums_named_components_and_technical_limit_only_tightens() -
     assert result.allowed
 
 
+@pytest.mark.parametrize(
+    "technical_fields",
+    (
+        {"technical_limit_chars": 3},
+        {"technical_limit_source": "catalog-v1:test"},
+        {"technical_limit_chars": 3, "technical_limit_bytes": 5},
+    ),
+)
+def test_technical_limit_pair_rejection_names_the_complete_three_field_rule(
+    technical_fields: dict[str, object],
+) -> None:
+    with pytest.raises(ProviderInputBudgetError) as raised:
+        measure_provider_input(
+            _prepared("abc"),
+            provider="codex",
+            role="codex",
+            operation="codex_implementation",
+            binding_fingerprint="binding",
+            policy=_policy(20, 20),
+            **technical_fields,
+        )
+
+    assert str(raised.value) == (
+        "technical_limit_chars, technical_limit_bytes, and technical_limit_source "
+        "must be provided together or all omitted"
+    )
+
+
 def test_policy_rejects_duplicates_and_incomplete_tables() -> None:
     rule = ProviderInputBudgetRule(
         "codex", "codex", "codex_implementation", 10, 10

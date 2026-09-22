@@ -4612,7 +4612,12 @@ def test_transport_failures_do_not_consume_contract_rejection_budget(caplog) -> 
         NativeReviewErrorCode.FINDING_ID_INVALID,
         "review-anchor-without-predecessor",
         received_at=now[0],
-        detail="evidence anchor digest requires a predecessor Finding reference",
+        detail=(
+            "predecessor_finding_ref and evidence_anchor_sha256 must be provided "
+            "together or both omitted; predecessor_finding_ref is missing, so either "
+            "provide predecessor_finding_ref with evidence_anchor_sha256 or omit "
+            "evidence_anchor_sha256"
+        ),
         diagnostic=(
             OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
         ),
@@ -5100,7 +5105,12 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
 def test_evidence_anchor_retry_replaces_the_finding_numbering_guidance() -> None:
     now = datetime(2026, 9, 20, 22, 30, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)
-    detail = "evidence anchor digest requires a predecessor Finding reference"
+    detail = (
+        "predecessor_finding_ref and evidence_anchor_sha256 must be provided together "
+        "or both omitted; predecessor_finding_ref is missing, so either provide "
+        "predecessor_finding_ref with evidence_anchor_sha256 or omit "
+        "evidence_anchor_sha256"
+    )
     diagnostic = OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
     driver = FakeDriver(
         snapshots=[changes],
