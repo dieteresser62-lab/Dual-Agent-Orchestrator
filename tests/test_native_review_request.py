@@ -164,12 +164,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "840709e23d3b5e8539741d465b172595c6e5717f1fdc6a7a6a323e66dcd1ff95"
+        "195353b47801aa00ef0c856397abdf44848383fbeb480777a35f6ad155ff51fc"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "497bece0d6204d13d17d4708d9a1cf87181702da2dac34ead2700e97e90e82d2"
+        "5e215e1e6bb8520ec065149af641cc16130ed6db156f1af739e0521afd23c82d"
     )
 
 
@@ -379,7 +379,6 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
         "decision": decision,
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, resume",
@@ -401,7 +400,7 @@ def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> 
         context,
         operation="another-free-text-name",
         round_number=2,
-        allow_new_observations=False,
+        allow_new_findings=False,
     )
     final_review = replace(
         context,
@@ -423,7 +422,7 @@ def test_writer_projection_defensively_copies_the_same_reader_instance() -> None
     native_review_provider_response_schema(_context(), base_schema=base)
     between = json.dumps(base, sort_keys=True, separators=(",", ":"))
     native_review_provider_response_schema(
-        replace(_context(), round_number=2, allow_new_observations=False),
+        replace(_context(), round_number=2, allow_new_findings=False),
         base_schema=base,
     )
 
@@ -431,7 +430,7 @@ def test_writer_projection_defensively_copies_the_same_reader_instance() -> None
     assert json.dumps(base, sort_keys=True, separators=(",", ":")) == before
 
 
-def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observations() -> None:
+def test_writer_schema_bounds_touched_findings_anchors_and_convergence_findings() -> None:
     prior = _prior_finding()
     initial = replace(_context(), previous_findings=(prior,), anchor_origin=None)
     schema = native_review_provider_response_schema(initial)
@@ -480,14 +479,14 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observati
         validate_schema_document({"result": anchored}, schema)
 
     convergence = replace(
-        _context(), round_number=2, allow_new_observations=False
+        _context(), round_number=2, allow_new_findings=False
     )
     convergence_schema = native_review_provider_response_schema(convergence)
     denied = _writer_response(decision="denied")
     denied["new_findings"] = [
         {
             "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
+            "finding_class": "FINDING",
             "summary": "Late non-blocking idea",
             "acceptance_test": {"kind": "prose", "text": "Follow up later"},
             "affected_paths": [],
@@ -496,7 +495,8 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observati
     with pytest.raises(SchemaMismatch):
         validate_schema_document({"result": denied}, convergence_schema)
     denied["new_findings"][0]["finding_class"] = "BLOCKER"
-    validate_schema_document({"result": denied}, convergence_schema)
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": denied}, convergence_schema)
 
 
 def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> None:
@@ -505,7 +505,7 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
     approved["new_findings"] = [
         {
             "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
+            "finding_class": "FINDING",
             "summary": "Cross-cutting follow-up",
             "acceptance_test": {"kind": "prose", "text": "Address in a later Slice"},
             "affected_paths": [],
@@ -518,7 +518,7 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
 def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them() -> None:
     blocker = _prior_finding("C-01")
     observation = _prior_finding(
-        "C-02", finding_class=FindingClass.OBSERVATION
+        "C-02", finding_class=FindingClass.FINDING
     )
     context = replace(
         _context(), previous_findings=(blocker, observation)
@@ -534,14 +534,6 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
             "closure": None,
         }
     ]
-    approved["reclassifications"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "rationale": "The residual risk is non-blocking.",
-        }
-    ]
-
     validate_schema_document(
         {"result": approved}, bundle.provider_response_schema
     )
@@ -565,7 +557,7 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     assert sparse_raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
     convergence_context = replace(
-        context, round_number=2, allow_new_observations=False
+        context, round_number=2, allow_new_findings=False
     )
     convergence_bundle = build_native_review_request(
         replace(_spec(), context=convergence_context)
@@ -574,10 +566,13 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     convergence_candidate["request_id"] = (
         convergence_bundle.bound_context.request_id
     )
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(
-            {"result": convergence_candidate},
-            convergence_bundle.provider_response_schema,
+    validate_schema_document(
+        {"result": convergence_candidate},
+        convergence_bundle.provider_response_schema,
+    )
+    with pytest.raises(NativeReviewContractError):
+        parse_bound_native_contract_result(
+            convergence_candidate, convergence_bundle.bound_context
         )
 
 
@@ -614,7 +609,7 @@ def test_denied_writer_response_may_include_nonblank_pre_mortem() -> None:
         )
 
 
-def test_initial_denial_can_add_observation_only_under_observation_policy() -> None:
+def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> None:
     blocker = _prior_finding("C-01")
     context = replace(_context(), previous_findings=(blocker,))
     bundle = build_native_review_request(replace(_spec(), context=context))
@@ -623,7 +618,7 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
     denied["new_findings"] = [
         {
             "finding_id": "C-02",
-            "finding_class": "OBSERVATION",
+            "finding_class": "FINDING",
             "summary": "Non-blocking follow-up discovered during denial.",
             "acceptance_test": {
                 "kind": "prose",
@@ -643,11 +638,11 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
         for item in result.findings
     ) == (
         ("C-01", FindingClass.BLOCKER, FindingStatus.OPEN),
-        ("C-02", FindingClass.OBSERVATION, FindingStatus.OPEN),
+        ("C-02", FindingClass.FINDING, FindingStatus.OPEN),
     )
 
     convergence_context = replace(
-        context, round_number=2, allow_new_observations=False
+        context, round_number=2, allow_new_findings=False
     )
     convergence_bundle = build_native_review_request(
         replace(_spec(), context=convergence_context)
@@ -663,29 +658,28 @@ def test_initial_denial_can_add_observation_only_under_observation_policy() -> N
         )
 
     no_prior_bundle = build_native_review_request(_spec())
-    observation_only = _writer_response(decision="denied")
-    observation_only["request_id"] = no_prior_bundle.bound_context.request_id
-    observation_only["new_findings"] = [
+    ordinary_only = _writer_response(decision="denied")
+    ordinary_only["request_id"] = no_prior_bundle.bound_context.request_id
+    ordinary_only["new_findings"] = [
         {
             "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "summary": "Observation alone cannot justify denial.",
+            "finding_class": "FINDING",
+            "summary": "An ordinary Finding awaits implementer disposition.",
             "acceptance_test": {
                 "kind": "prose",
-                "text": "Keep the resulting-blocker fold fail-closed.",
+                "text": "Keep the Finding open for the correction round.",
             },
             "affected_paths": [],
         }
     ]
     validate_schema_document(
-        {"result": observation_only},
+        {"result": ordinary_only},
         no_prior_bundle.provider_response_schema,
     )
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_bound_native_contract_result(
-            observation_only, no_prior_bundle.bound_context
-        )
-    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+    ordinary_result = parse_bound_native_contract_result(
+        ordinary_only, no_prior_bundle.bound_context
+    )
+    assert ordinary_result.findings[0].finding_class is FindingClass.FINDING
 
 
 def test_writer_schema_forces_denial_without_attestation_or_test_approval() -> None:
@@ -754,7 +748,7 @@ def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() 
         replace(
             base,
             context=replace(
-                base.context, round_number=2, allow_new_observations=False
+                base.context, round_number=2, allow_new_findings=False
             ),
         ),
         replace(
@@ -796,10 +790,10 @@ def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
 
 def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> None:
     observation_one = _prior_finding(
-        "C-01", finding_class=FindingClass.OBSERVATION
+        "C-01", finding_class=FindingClass.FINDING
     )
     observation_two = _prior_finding(
-        "C-02", finding_class=FindingClass.OBSERVATION
+        "C-02", finding_class=FindingClass.FINDING
     )
     blocker = _prior_finding("C-01")
     duplicate_context = replace(
@@ -955,7 +949,6 @@ def _response(request_id: str) -> dict[str, object]:
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, failure paths, resume",
@@ -1176,7 +1169,7 @@ def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
 def test_request_names_signatures_for_known_open_findings_outside_offer() -> None:
     first = _prior_finding("C-01")
     offered = replace(
-        _prior_finding("C-02", finding_class=FindingClass.OBSERVATION),
+        _prior_finding("C-02", finding_class=FindingClass.FINDING),
         summary="A different issue affects src/other.py.",
         acceptance_test="Preserve valid data in src/other.py.",
     )

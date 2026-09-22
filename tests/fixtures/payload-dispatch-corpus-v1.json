@@ -26,7 +26,7 @@
           "effort": "max"
         },
         "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "reducer_version": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
+        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
       }
     },
     {
@@ -273,7 +273,7 @@
         "reporter": "claude",
         "actor": "claude",
         "action": "opened",
-        "severity": "OBSERVATION",
+        "severity": "FINDING",
         "finding_status": "open",
         "rationale": "Carry the finding.",
         "work_unit_id": "source-work-unit",

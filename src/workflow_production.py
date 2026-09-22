@@ -300,6 +300,7 @@ def _create_production_state(
     prepared_branch_base: str | None,
     managed_audit_path: str | None,
     agent_settings: dict[str, Any],
+    max_rounds_per_loop: int,
     fresh_state: Callable[..., WorkflowState],
 ) -> WorkflowState:
     return fresh_state(
@@ -317,6 +318,7 @@ def _create_production_state(
             agent_settings["claude"].model,
             agent_settings["claude"].effort,
         ),
+        max_rounds_per_loop=max_rounds_per_loop,
     )
 
 
@@ -515,6 +517,11 @@ def run_production_workflow(
             else:
                 raise
     effective_resume = bool(args.resume and not new_watch_task)
+    workflow_config = getattr(args.repo_config, "workflow", None)
+    max_rounds_per_loop = getattr(workflow_config, "max_rounds_per_loop", 6)
+    max_acceptance_reviews = getattr(
+        workflow_config, "max_acceptance_reviews", 6
+    )
     if effective_resume:
         state = _validate_resumed_state(loaded, task_file, task_contract)
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
@@ -535,6 +542,7 @@ def run_production_workflow(
             prepared_branch_base=prepared_branch_base,
             managed_audit_path=managed_audit_path,
             agent_settings=args.agent_settings,
+            max_rounds_per_loop=max_rounds_per_loop,
             fresh_state=dependencies.fresh_state,
         )
     state = dependencies.attach_managed_audit_paths(state)
@@ -549,6 +557,7 @@ def run_production_workflow(
         agent_live_stream_channels=args.agent_live_stream_channels,
         repo_root=root,
         strict_preflight=bool(args.strict_preflight),
+        max_acceptance_reviews=max_acceptance_reviews,
         provider_input_budget=args.repo_config.provider_input_budget,
     )
     driver: ProductionWorkflowLoopDriver = dependencies.driver_factory(

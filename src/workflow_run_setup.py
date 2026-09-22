@@ -276,6 +276,7 @@ def _fresh_state(
     audit_report_path: str | None = None,
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
+    max_rounds_per_loop: int = 6,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -311,6 +312,7 @@ def _fresh_state(
             codex_profile=codex_profile,
             claude_profile=claude_profile,
         ),
+        max_rounds_per_loop=max_rounds_per_loop,
     )
     if task_contract.approved_plan_commit is not None:
         assert task_contract.work_plan_path is not None

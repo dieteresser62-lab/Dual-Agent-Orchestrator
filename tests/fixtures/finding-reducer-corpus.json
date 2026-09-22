@@ -7,7 +7,7 @@
       "transition": "review ledger -> correction attribution",
       "events": [
         {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "OBSERVATION"},
+        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
         {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
       ],
       "request": {"finding_ids": ["C-01"], "open_only": true},
@@ -19,8 +19,8 @@
       "transition": "complete ledger -> bounded correction request",
       "events": [
         {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "OBSERVATION"},
-        {"op": "close", "finding_id": "C-02", "work_unit": "3", "class": "OBSERVATION"},
+        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
+        {"op": "close", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
         {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
       ],
       "request": {"finding_ids": ["C-01"], "open_only": true},
@@ -108,7 +108,7 @@
       "transition": "denial closes one lineage and preserves an omitted open finding",
       "events": [
         {"op": "open", "finding_id": "C-07", "work_unit": "2"},
-        {"op": "open", "finding_id": "C-08", "work_unit": "2", "class": "OBSERVATION"},
+        {"op": "open", "finding_id": "C-08", "work_unit": "2", "class": "FINDING"},
         {"op": "review", "work_unit": "2", "verdict": "denied", "finding_ids": ["C-07"]},
         {"op": "close", "finding_id": "C-07", "work_unit": "2"}
       ],

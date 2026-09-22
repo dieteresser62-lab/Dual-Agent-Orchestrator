@@ -53,7 +53,7 @@ def evaluate_slice_exit(
     slice_id: int | str,
     approved_plan_commit: str | None = None,
 ) -> SliceExitEvaluation:
-    """Evaluate all six E4 conditions without I/O or projection-state input.
+    """Evaluate the single Slice-commit condition from authoritative records.
 
     The caller supplies an already selected record prefix.  Consequently the
     result is stable for that exact prefix and recovery can derive it again
@@ -70,23 +70,9 @@ def evaluate_slice_exit(
     )
     finding_projection = project_slice_exit_findings(run_records)
     heads = {item.finding_id: item for item in finding_projection.heads}
-    start_unit = next(
-        (
-            record.payload
-            for record in run_records
-            if isinstance(record.payload, WorkUnitPayload)
-            and record.payload.slice_id == target_slice_id
-        ),
-        None,
-    )
-    boundary_reasons = (
-        ()
-        if start_unit is not None
-        else (f"Slice {target_slice_id} has no record-bound start Work Unit",)
-    )
     # Findings are immutably owned by the Slice in which they were opened. The
-    # Work Unit contribution preserves the fail-closed case where a bound
-    # Finding has no opening record.
+    # Work Unit contribution keeps the quantified cohort lossless; authoritative
+    # replay rejects a bound Finding without its opening transition beforehand.
     cohort_ids = slice_commit_decision_finding_ids(
         tuple(
             item.finding_id
@@ -96,43 +82,17 @@ def evaluate_slice_exit(
         _work_unit_bound_finding_ids(run_records, target_slice_id),
     )
 
-    condition_1_reasons: list[str] = []
-    condition_2_reasons: list[str] = list(boundary_reasons)
-    condition_3_reasons: list[str] = []
-    condition_4_reasons: list[str] = []
-    condition_5_reasons: list[str] = []
-    condition_6_reasons: list[str] = list(boundary_reasons)
+    blocker_reasons: list[str] = []
 
     for finding_id in cohort_ids:
         head = heads.get(finding_id)
         if head is None:
-            reason = f"{finding_id} is bound to Slice {target_slice_id} but has no opening record"
-            condition_2_reasons.append(reason)
-            condition_6_reasons.append(reason)
             continue
 
         if head.is_open and head.severity is FindingSeverity.BLOCKER:
-            condition_1_reasons.append(f"open BLOCKER {finding_id} remains in A_s")
-        if head.invalid_downgrade is not None:
-            condition_1_reasons.append(
-                f"{finding_id} was reclassified from BLOCKER to OBSERVATION "
-                "without earlier record-bound evidence"
-            )
+            blocker_reasons.append(f"open BLOCKER {finding_id} remains in A_s")
 
-        if head.is_closed:
-            if not head.has_complete_closure_record:
-                condition_6_reasons.append(
-                    f"closure decision for {finding_id} has no complete transition record"
-                )
-
-    conditions = (
-        _condition(1, condition_1_reasons),
-        _condition(2, condition_2_reasons),
-        _condition(3, condition_3_reasons),
-        _condition(4, condition_4_reasons),
-        _condition(5, condition_5_reasons),
-        _condition(6, condition_6_reasons),
-    )
+    conditions = (_condition(1, blocker_reasons),)
     status = (
         SliceExitStatus.VIOLATED
         if any(item.status is SliceExitStatus.VIOLATED for item in conditions)
@@ -184,14 +144,12 @@ def workflow_completion_blocking_finding_ids(
     blocked: list[str] = []
     for finding_id in total_finding_ids:
         head = heads.get(finding_id)
-        if head is None:
-            blocked.append(finding_id)
-            continue
-        if head.is_closed:
-            if not head.has_complete_closure_record:
-                blocked.append(head.finding_id)
-            continue
-        blocked.append(head.finding_id)
+        if (
+            head is not None
+            and head.is_open
+            and head.severity is FindingSeverity.BLOCKER
+        ):
+            blocked.append(head.finding_id)
     return sorted_finding_ids(blocked)
 
 

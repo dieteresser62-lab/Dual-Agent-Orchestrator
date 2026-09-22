@@ -51,7 +51,6 @@ from contracts import (
 )
 from finding_reducer import (
     FindingResponseEvent,
-    ReviewerReclassification,
     ReviewerStatusChange,
     apply_finding_responses,
     apply_reviewer_events,
@@ -67,8 +66,6 @@ from native_finding_decisions import (
 from finding_planning import MAX_ACCEPTANCE_REVIEWS
 from native_review_contract import (
     NativeFinding,
-    NativeProseAcceptance,
-    NativeReclassification,
     NativeReviewContext,
     NativeReviewResult,
     NativeStatusChange,
@@ -578,7 +575,7 @@ def _context(
         round_number=round_number,
         previous_findings=previous,
         validation_attestation=attestation or _attestation(fingerprint=fingerprint),
-        allow_new_observations=True,
+        allow_new_findings=True,
         anchor_origin=(None if approval is ApprovalMarker.PLAN else "approved-plan"),
         planned_slices=planned_slices,
     )
@@ -593,7 +590,6 @@ def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str,
         "decision": "approved" if approved else "denied",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "target reachability and record agreement",
@@ -610,7 +606,6 @@ def _typed_response(
     approved: bool,
     new_findings: tuple[NativeFinding, ...] = (),
     status_changes: tuple[NativeStatusChange, ...] = (),
-    reclassifications: tuple[NativeReclassification, ...] = (),
 ) -> NativeReviewResult:
     return NativeReviewResult(
         request_id=context.request_id,
@@ -618,7 +613,6 @@ def _typed_response(
         approved=approved,
         new_findings=new_findings,
         status_changes=status_changes,
-        reclassifications=reclassifications,
         anchors=(),
         evidence=None,
         pre_mortem="A later rule change could create a newly unreachable state.",
@@ -677,7 +671,7 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     # Target moves: closing implemented/rejected Findings, escalating an
     # unresolved Finding, and closing/retaining a Blocker.
     accepted = _finding(
-        CurrentFindingClass.OBSERVATION,
+        CurrentFindingClass.FINDING,
         decision=FindingResponseDecision.ACCEPTED,
     )
     context = _context((accepted,))
@@ -702,11 +696,11 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         document,
         _typed_response(context, approved=True, status_changes=(status,)),
         expected_status=FindingStatus.CLOSED,
-        expected_class=CurrentFindingClass.OBSERVATION,
+        expected_class=CurrentFindingClass.FINDING,
     )
 
     rejected = _finding(
-        CurrentFindingClass.OBSERVATION,
+        CurrentFindingClass.FINDING,
         decision=FindingResponseDecision.REJECTED,
     )
     context = _context((rejected,))
@@ -739,35 +733,11 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         document,
         _typed_response(context, approved=True, status_changes=(status,)),
         expected_status=FindingStatus.CLOSED,
-        expected_class=CurrentFindingClass.OBSERVATION,
+        expected_class=CurrentFindingClass.FINDING,
     )
 
-    context = _context((rejected,))
-    reclassification = NativeReclassification(
-        "C-01", CurrentFindingClass.BLOCKER, "The rejection does not answer the defect."
-    )
-    document = _base_document(context, approved=False)
-    document["reclassifications"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "BLOCKER",
-            "rationale": reclassification.rationale,
-        }
-    ]
-    add(
-        "explicit-escalation",
-        "implementierung.finding.review.rejection_invalid.first_review",
-        Move.ESCALATE,
-        context,
-        document,
-        _typed_response(context, approved=False, reclassifications=(reclassification,)),
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.BLOCKER,
-    )
-
-    # The target requires this escalation by construction.  Today's contract
-    # cannot derive it from a rejected disposition when the reviewer does not
-    # send an explicit reclassification.
+    # An unclosed ordinary Finding escalates by construction; there is no
+    # reviewer-authored reclassification move.
     context = _context((rejected,))
     document = _base_document(context, approved=False)
     add(
@@ -836,68 +806,8 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     return tuple(probes)
 
 
-def _legacy_finding_review_probes() -> tuple[ReviewProbe, ...]:
-    probes: list[ReviewProbe] = []
-    add = _ReviewProbeCollector(probes)
-    closure = NativeFindingClosure(NativeClosureKind.FIXED)
-
-    # OBSERVATION itself is an implementation class absent from the target.
-    context = _context((), round_number=1)
-    native = NativeFinding(
-        "C-01",
-        CurrentFindingClass.OBSERVATION,
-        "The legacy non-blocking class remains available.",
-        NativeProseAcceptance("The response-local observation is checked."),
-    )
-    status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "Checked in the same response.", closure
-    )
-    document = _base_document(context, approved=True)
-    document["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "OBSERVATION",
-            "summary": native.summary,
-            "acceptance_test": {
-                "kind": "prose",
-                "text": native.acceptance_test.text,
-            },
-            "affected_paths": [],
-        }
-    ]
-    document["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "CLOSED",
-            "rationale": status.rationale,
-            "closure": {"kind": "fixed"},
-        }
-    ]
-    add(
-        "observation-class",
-        "implementierung.finding.review.fixed.first_review",
-        "OBSERVATION",
-        context,
-        document,
-        _typed_response(
-            context,
-            approved=True,
-            new_findings=(native,),
-            status_changes=(status,),
-        ),
-        target_viable=False,
-        expected_status=FindingStatus.CLOSED,
-        expected_class=CurrentFindingClass.OBSERVATION,
-        locations=("src/contracts.py", "src/native_review_contract.py"),  # allowlist:provider -- measured code location
-    )
-    return tuple(probes)
-
-
 def _review_probes() -> tuple[ReviewProbe, ...]:
-    return (
-        *_core_review_probes(),
-        *_legacy_finding_review_probes(),
-    )
+    return _core_review_probes()
 
 
 def _new_record(
@@ -987,20 +897,13 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
         ReviewerStatusChange(item.finding_id, item.status, item.rationale)
         for item in probe.typed_response.status_changes
     )
-    reclassifications = tuple(
-        ReviewerReclassification(
-            item.finding_id, item.finding_class, item.rationale
-        )
-        for item in probe.typed_response.reclassifications
-    )
     try:
         current = apply_reviewer_events(
             probe.context.previous_findings,
             reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
             opened=opened,
             status_changes=statuses,
-            reclassifications=reclassifications,
-            escalate_unclosed_rejections=not probe.typed_response.approved,
+            escalate_unclosed_findings=not probe.typed_response.approved,
         )
         closures = {
             item.finding_id: item.closure
@@ -1070,6 +973,28 @@ def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
 def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     outcomes: list[ProbeOutcome] = []
 
+    observation_present = (
+        "OBSERVATION" in CurrentFindingClass.__members__
+        or "OBSERVATION" in FindingSeverity.__members__
+    )
+    outcomes.append(
+        ProbeOutcome(
+            "observation-class",
+            "implementierung.finding.review.fixed.first_review",
+            "OBSERVATION",
+            False,
+            observation_present,
+            observation_present,
+            "FindingClass exposes OBSERVATION"
+            if observation_present
+            else "FindingClass contains only FINDING and BLOCKER",
+            "FindingSeverity exposes OBSERVATION"
+            if observation_present
+            else "FindingSeverity contains only FINDING and BLOCKER",
+            ("src/contracts.py", "src/native_review_contract.py"),
+        )
+    )
+
     # Plan approval must reject an open cohort, and the record vocabulary must
     # offer no cross-run PlanAssignment that could carry it forward.
     plan_finding = _finding(CurrentFindingClass.BLOCKER)
@@ -1123,7 +1048,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
 
     # Complete dispositions: call the same domain helper used by the native
     # Codex result path and observe whether it rejects an omitted open Finding.
-    prior = (_finding(CurrentFindingClass.OBSERVATION),)
+    prior = (_finding(CurrentFindingClass.FINDING),)
     try:
         _apply_dispositions(
             prior,
@@ -1154,28 +1079,37 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     )
 
     blocker = (_finding(CurrentFindingClass.BLOCKER),)
-    rejected = _apply_dispositions(
-        blocker,
-        (
-            NativeFindingDisposition(
-                "C-01",
-                FindingResponseDecision.REJECTED,
-                "The implementation disputes the blocker.",
+    try:
+        _apply_dispositions(
+            blocker,
+            (
+                NativeFindingDisposition(
+                    "C-01",
+                    FindingResponseDecision.REJECTED,
+                    "The implementation disputes the blocker.",
+                ),
             ),
-        ),
-        work_unit_id=WORK_UNIT_ID,
-        round_number=1,
-    )
+            work_unit_id=WORK_UNIT_ID,
+            round_number=1,
+        )
+    except ValueError as exc:
+        blocker_rejection_accepted = False
+        blocker_rejection_detail = f"native Codex domain path rejects it: {exc}"
+    else:
+        blocker_rejection_accepted = True
+        blocker_rejection_detail = "native Codex domain path accepts it"
     outcomes.append(
         ProbeOutcome(
             "blocker-rejection",
             "implementierung.blocker.implementer",
             Move.REJECT.value,
             False,
-            rejected[0].responses[-1].decision is FindingResponseDecision.REJECTED,
-            True,
-            "native Codex domain path accepts REJECTED for a BLOCKER",  # allowlist:provider -- measured result
-            "Finding response records accept the rejection",
+            blocker_rejection_accepted,
+            blocker_rejection_accepted,
+            blocker_rejection_detail,
+            "Finding response records reject the blocker rejection"
+            if not blocker_rejection_accepted
+            else "Finding response records accept the blocker rejection",
             ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
         )
     )
@@ -1229,19 +1163,11 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         )
     )
 
-    # Later review requests bind the preceding reviewer fingerprint rather than
-    # the immutable Slice start.
+    # Later review requests must retain the immutable Slice-start baseline.
     previous = "b" * 64
     slice_start = "d" * 64
-    collected: list[tuple[str, str]] = []
-    engine = SimpleNamespace(
-        driver=SimpleNamespace(
-            collect_correction_delta=lambda start, end: (
-                collected.append((start, end)) or "correction delta"
-            )
-        )
-    )
-    evidence_kind, _ = WorkflowEngine._select_review_evidence(
+    engine = SimpleNamespace(driver=SimpleNamespace())
+    evidence_kind, selected_evidence = WorkflowEngine._select_review_evidence(
         engine,
         SimpleNamespace(current_slice=SimpleNamespace(start_fingerprint=slice_start)),
         SimpleNamespace(approved_plan_text=None),
@@ -1252,17 +1178,20 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         False,
         False,
     )
-    selected = collected[0][0] if collected else None
+    uses_correction_baseline = not (
+        evidence_kind is EvidenceKind.FULL_SLICE
+        and selected_evidence == "full diff"
+    )
     outcomes.append(
         ProbeOutcome(
             "correction-review-baseline",
             "implementierung.blocker.review.unresolved.fingerprint_changed",
             "KORREKTURDELTA-ALS-AUSGANGSSTAND",
             False,
-            evidence_kind is EvidenceKind.CORRECTION_DELTA and selected == previous,
-            evidence_kind is EvidenceKind.CORRECTION_DELTA and selected == previous,
-            f"review context selected prior-review fingerprint {selected}",
-            "the request binding persists that selected fingerprint",
+            uses_correction_baseline,
+            uses_correction_baseline,
+            f"review context selected {evidence_kind.value}",
+            "the request binding carries the same selected evidence",
             ("src/workflow_recovery.py", "src/workflow_requests.py", "src/workflow.py"),
         )
     )
@@ -1298,8 +1227,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         )
     )
 
-    # Call the actual Slice-exit evaluator.  Even an empty prefix produces the
-    # complete six-condition contract; the target has only the blocker test.
+    # Call the actual Slice-exit evaluator.  The target has only the blocker test.
     exit_evaluation = evaluate_slice_exit((), run_id=RUN_ID, slice_id="1")
     six_conditions = tuple(item.number for item in exit_evaluation.conditions)
     outcomes.append(

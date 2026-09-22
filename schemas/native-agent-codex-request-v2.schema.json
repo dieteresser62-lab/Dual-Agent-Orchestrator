@@ -196,7 +196,7 @@
         "type": "object",
         "properties": {
           "finding_id": { "type": "string", "pattern": "^C-(0[1-9]|[1-9][0-9]*)$" },
-          "finding_class": { "enum": ["BLOCKER", "OBSERVATION"] },
+          "finding_class": { "enum": ["BLOCKER", "FINDING"] },
           "summary": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
           "acceptance_test": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
           "reporter": { "enum": ["claude"] }

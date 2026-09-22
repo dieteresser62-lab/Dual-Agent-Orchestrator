@@ -605,7 +605,7 @@ def _review_context_request_projection(
         "validation_attestation": context_binding["validation_attestation"],
         "test_files": context_binding["test_files"],
         "test_changes_approved": context_binding["test_changes_approved"],
-        "allow_new_observations": context_binding["allow_new_observations"],
+        "allow_new_findings": context_binding["allow_new_findings"],
         "anchor_origin": context_binding["anchor_origin"],
         "red_state_followup_slice": context_binding[
             "red_state_followup_slice"
@@ -652,7 +652,7 @@ def _validate_plan_disposition_capacity(spec: NativeReviewRequestSpec) -> None:
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.CONTEXT_INVALID,
             "PLAN_DISPOSITION_LIMIT: plan review requires "
-            f"{disposition_count} status, reclassification, or routing decisions; "
+            f"{disposition_count} status decisions; "
             f"the bound maximum is {MAX_NATIVE_REVIEW_DISPOSITIONS}",
         )
 

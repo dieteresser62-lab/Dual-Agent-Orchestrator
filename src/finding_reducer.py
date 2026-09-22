@@ -121,7 +121,7 @@ class FindingRequestProjection:
 
 @dataclass(frozen=True, slots=True)
 class FindingStatusTransitionsProjection:
-    """Reviewer-owned opening, status, and reclassification transitions."""
+    """Reviewer-owned opening, status, and escalation transitions."""
 
     transitions: tuple[FindingTransitionProjection, ...]
 
@@ -155,7 +155,6 @@ class SliceExitFindingHeadProjection:
     affected_paths: tuple[str, ...]
     origin_slice_id: str
     last_status_change: FindingTransitionProjection | None
-    invalid_downgrade: FindingTransitionProjection | None
 
     @property
     def is_open(self) -> bool:
@@ -193,7 +192,6 @@ class _MutableSliceExitFindingHead:
     origin_slice_id: str
     last_status_change: FindingTransitionProjection | None = None
     has_record_evidence: bool = False
-    invalid_downgrade: FindingTransitionProjection | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,13 +242,6 @@ class FindingReduction:
 class ReviewerStatusChange:
     finding_id: str
     status: FindingStatus
-    rationale: str
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewerReclassification:
-    finding_id: str
-    finding_class: FindingClass
     rationale: str
 
 
@@ -334,13 +325,7 @@ def project_slice_exit_findings(
         elif payload.action == "status_changed":
             head.status = payload.finding_status
             head.last_status_change = event
-        elif payload.action in {"reclassified", "escalated"}:
-            if (
-                head.severity is FindingSeverity.BLOCKER
-                and payload.severity is FindingSeverity.OBSERVATION
-                and not head.has_record_evidence
-            ):
-                head.invalid_downgrade = event
+        elif payload.action == "escalated":
             head.severity = payload.severity
     return SliceExitFindingProjection(
         events,
@@ -354,7 +339,6 @@ def project_slice_exit_findings(
                 affected_paths=head.affected_paths,
                 origin_slice_id=head.origin_slice_id,
                 last_status_change=head.last_status_change,
-                invalid_downgrade=head.invalid_downgrade,
             )
             for finding_id, head in sorted(
                 mutable.items(), key=lambda item: finding_id_sort_key(item[0])
@@ -610,8 +594,14 @@ def apply_finding_responses(
         raise ValueError(f"missing disposition for {missing[0]}")
     by_id = {item.finding_id: item for item in canonical}
     for response in responses:
+        finding = by_id[response.finding_id]
+        if (
+            finding.finding_class is FindingClass.BLOCKER
+            and response.decision is FindingResponseDecision.REJECTED
+        ):
+            raise ValueError(f"BLOCKER {response.finding_id} cannot be rejected")
         by_id[response.finding_id] = apply_finding_response(
-            by_id[response.finding_id], response.decision, response.rationale
+            finding, response.decision, response.rationale
         )
     return tuple(by_id[key] for key in sorted(by_id, key=finding_id_sort_key))
 
@@ -631,8 +621,7 @@ def apply_reviewer_events(
     reviewer: AgentRole,
     opened: Sequence[FindingRecord] = (),
     status_changes: Sequence[ReviewerStatusChange] = (),
-    reclassifications: Sequence[ReviewerReclassification] = (),
-    escalate_unclosed_rejections: bool = True,
+    escalate_unclosed_findings: bool = True,
 ) -> tuple[FindingRecord, ...]:
     """Apply reviewer-owned transitions with one canonical implementation."""
     findings = {item.finding_id: item for item in _canonical_findings(prior)}
@@ -652,31 +641,20 @@ def apply_reviewer_events(
             status=update.status,
             rationale=update.rationale,
         )
-    for update in reclassifications:
-        finding = findings.get(update.finding_id)
-        if finding is None:
-            raise ValueError(f"finding update references unknown id {update.finding_id}")
-        findings[update.finding_id] = apply_reviewer_finding_update(
-            finding,
-            reviewer=reviewer,
-            status=finding.status,
-            rationale=update.rationale,
-            finding_class=update.finding_class,
-        )
-    if escalate_unclosed_rejections:
-        findings = _escalate_unclosed_rejected_findings(
+    if escalate_unclosed_findings:
+        findings = _escalate_unclosed_findings(
             findings,
             reviewer=reviewer,
         )
     return tuple(findings[key] for key in sorted(findings, key=finding_id_sort_key))
 
 
-def _escalate_unclosed_rejected_findings(
+def _escalate_unclosed_findings(
     findings: Mapping[str, FindingRecord],
     *,
     reviewer: AgentRole,
 ) -> dict[str, FindingRecord]:
-    """Turn every unclosed implementer rejection into a reviewer-owned BLOCKER."""
+    """Turn every unclosed ordinary Finding into a reviewer-owned BLOCKER."""
 
     escalated = dict(findings)
     for finding_id, finding in findings.items():
@@ -685,18 +663,14 @@ def _escalate_unclosed_rejected_findings(
             or finding.finding_class is FindingClass.BLOCKER
             or finding.origin.reporter is not reviewer
             or not finding.responses
-            or finding.responses[-1].decision is not FindingResponseDecision.REJECTED
         ):
             continue
-        escalated[finding_id] = apply_reviewer_finding_update(
+        escalated[finding_id] = replace(
             finding,
-            reviewer=reviewer,
-            status=FindingStatus.OPEN,
-            rationale=(
-                "The implementer rejection was not accepted by the reviewer; "
-                "the Finding is escalated to BLOCKER."
-            ),
             finding_class=FindingClass.BLOCKER,
+            status_rationale=(
+                "The reviewer did not close the Finding; it is escalated to BLOCKER."
+            ),
         )
     return escalated
 
@@ -745,11 +719,11 @@ def project_reviewer_persistence_transitions(
         class_changed = prior.finding_class is not finding.finding_class
         rationale_changed = prior.status_rationale != finding.status_rationale
         if class_changed:
-            action = (
-                "escalated"
-                if _is_rejection_escalation(prior, finding)
-                else "reclassified"
-            )
+            if not _is_finding_escalation(prior, finding):
+                raise ValueError(
+                    f"finding class changed without disposition escalation: {finding.finding_id}"
+                )
+            action = "escalated"
             result.append(
                 FindingPersistenceTransition(
                     finding,
@@ -783,7 +757,7 @@ def project_reviewer_persistence_transitions(
     return tuple(result)
 
 
-def _is_rejection_escalation(
+def _is_finding_escalation(
     previous: FindingRecord,
     current: FindingRecord,
 ) -> bool:
@@ -793,7 +767,6 @@ def _is_rejection_escalation(
         and previous.finding_class is not FindingClass.BLOCKER
         and current.finding_class is FindingClass.BLOCKER
         and bool(previous.responses)
-        and previous.responses[-1].decision is FindingResponseDecision.REJECTED
     )
 
 
@@ -847,13 +820,6 @@ def merge_history_snapshots(
                 if finding.responses[: len(previous.responses)] != previous.responses:
                     raise ValueError(
                         f"finding response history regressed: {finding.finding_id}"
-                    )
-                if (
-                    finding.class_history[: len(previous.class_history)]
-                    != previous.class_history
-                ):
-                    raise ValueError(
-                        f"finding class history regressed: {finding.finding_id}"
                     )
             latest[finding.finding_id] = finding
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
@@ -1003,7 +969,7 @@ def _reduce_lineages(
             )
         finding = findings[lineage_key]
         if payload.reporter.value != finding.origin.reporter.value or (
-            payload.action not in {"reclassified", "escalated"}
+            payload.action != "escalated"
             and payload.severity.value != finding.finding_class.value
         ):
             _fail(
@@ -1050,31 +1016,20 @@ def _apply_transition_to_finding(
             FindingResponseDecision(payload.response_decision.upper()),
             payload.rationale,
         )
-    if payload.action == "reclassified":
-        return apply_reviewer_finding_update(
-            finding,
-            reviewer=finding.origin.reporter,
-            status=finding.status,
-            rationale=payload.rationale,
-            finding_class=FindingClass(payload.severity.value),
-        )
     if payload.action == "escalated":
         if (
             finding.status is not FindingStatus.OPEN
             or finding.finding_class is FindingClass.BLOCKER
             or not finding.responses
-            or finding.responses[-1].decision is not FindingResponseDecision.REJECTED
         ):
             raise ValueError(
-                "finding escalation requires an open non-BLOCKER with a latest "
-                "REJECTED implementer response"
+                "finding escalation requires a dispositioned open non-BLOCKER"
             )
-        return apply_reviewer_finding_update(
+        return replace(
             finding,
-            reviewer=finding.origin.reporter,
-            status=FindingStatus.OPEN,
-            rationale=payload.rationale,
             finding_class=FindingClass.BLOCKER,
+            status=FindingStatus.OPEN,
+            status_rationale=payload.rationale,
         )
     if payload.action == "status_changed":
         updated = apply_reviewer_finding_update(
@@ -1082,7 +1037,6 @@ def _apply_transition_to_finding(
             reviewer=finding.origin.reporter,
             status=FindingStatus(payload.finding_status.upper()),
             rationale=payload.rationale,
-            finding_class=FindingClass(payload.severity.value),
         )
         return updated
     return finding

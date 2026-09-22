@@ -617,6 +617,8 @@ command = ["npm", "run", "build:engine"]
 manual_slice_gate = true
 plan_gate = false
 test_change_gate = true
+max_rounds_per_loop = 5
+max_acceptance_reviews = 7
 """.strip(),
     )
 
@@ -643,6 +645,8 @@ test_change_gate = true
     assert config.workflow.manual_slice_gate is True
     assert config.workflow.plan_gate is False
     assert config.workflow.test_change_gate is True
+    assert config.workflow.max_rounds_per_loop == 5
+    assert config.workflow.max_acceptance_reviews == 7
 
 
 @pytest.mark.parametrize(
@@ -652,6 +656,8 @@ test_change_gate = true
         ("[workflow]\nmanual_slice_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nplan_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\ntest_change_gate = \"yes\"\n", "must be a boolean"),
+        ("[workflow]\nmax_rounds_per_loop = 0\n", "must be a positive integer"),
+        ("[workflow]\nmax_acceptance_reviews = 0\n", "must be a positive integer"),
         ("[paths]\nproductive = [\"../outside/**\"]\n", "must not escape"),
         ("[paths]\nproductive = [\"C:/outside/**\"]\n", "must be relative"),
         ("[paths]\nproductive = [\"src\\\\**\"]\n", "platform-neutral separator"),

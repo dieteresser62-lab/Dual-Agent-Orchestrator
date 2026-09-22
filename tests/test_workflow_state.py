@@ -22,8 +22,7 @@ from workflow import (
 from workflow_state import (
     AgentProfileBinding,
     AgentFailureKind,
-    DEFAULT_MAX_CODEX_RETURNS,
-    IMPLEMENTER_RETURN_SAFETY_LIMIT,
+    DEFAULT_LOOP_ROUND_LIMIT,
     GateRecord,
     GateDecisionRecord,
     GateReason,
@@ -102,7 +101,7 @@ def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
     assert state.current_step is WorkflowStep.CODEX_PLAN
     assert state.current_work_unit.round_number == 1
     assert state.current_work_unit.codex_return_count == 0
-    assert state.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
+    assert state.current_work_unit.max_codex_returns == DEFAULT_LOOP_ROUND_LIMIT
     assert state.current_work_unit.gate.status is GateStatus.CLEAR
     assert state.branch_base == "a" * 40
     assert state.current_slice.start_commit == "a" * 40
@@ -191,7 +190,7 @@ def test_stop_request_resume_starts_a_new_semantic_round() -> None:
     resumed = halted.resume_after_user_decision()
 
     assert resumed.current_step is WorkflowStep.CODEX_PLAN_REVISION
-    assert resumed.current_work_unit.round_number == 2
+    assert resumed.current_work_unit.round_number == 1
     assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
 
 
@@ -309,7 +308,7 @@ def test_legacy_unexpected_path_stop_becomes_fingerprint_bound_user_gate() -> No
         state
     )
 
-    assert reframed.current_work_unit.round_number == 2
+    assert reframed.current_work_unit.round_number == 1
     assert reframed.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
     assert reframed.current_work_unit.gate.fingerprint == "b" * 64
     assert reframed.current_work_unit.gate.paths == ("src/runtime-hotfix.py",)
@@ -579,9 +578,9 @@ def test_resume_cursor_preserves_every_persistable_step(step: WorkflowStep) -> N
     assert cursor.round_number == 1
 
 
-def test_review_denials_continue_beyond_four_while_progress_is_made() -> None:
+def test_review_denials_stop_at_configured_loop_round_limit() -> None:
     state = make_state()
-    for expected_count in range(1, DEFAULT_MAX_CODEX_RETURNS + 2):
+    for expected_count in range(1, DEFAULT_LOOP_ROUND_LIMIT + 1):
         state = state.record_review_denial(
             reviewer=Reviewer.CLAUDE,
             open_findings=("C-01",),
@@ -592,14 +591,14 @@ def test_review_denials_continue_beyond_four_while_progress_is_made() -> None:
         assert state.current_work_unit.codex_return_count == expected_count
 
     unit = state.current_work_unit
-    assert unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 2
-    assert unit.status is WorkUnitStatus.IN_PROGRESS
+    assert unit.round_number == DEFAULT_LOOP_ROUND_LIMIT
+    assert unit.status is WorkUnitStatus.COMPLETED
     assert unit.gate.status is GateStatus.CLEAR
     assert unit.gate.reason is GateReason.NONE
-    assert unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS * 2
+    assert unit.max_codex_returns == DEFAULT_LOOP_ROUND_LIMIT
     assert unit.reviewer is Reviewer.CLAUDE
     assert unit.open_findings == ("C-01",)
-    assert state.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert state.current_step is WorkflowStep.COMPLETED
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
     assert state.current_slice.commit_ref is None
 
@@ -643,57 +642,6 @@ def test_recomposition_advances_only_request_sequence_until_review_is_recorded()
 
     assert recorded.current_work_unit.round_number == 2
     assert recorded.current_work_unit.request_sequence == 4
-
-
-def test_review_denial_safety_limit_completes_despite_continued_progress() -> None:
-    base = make_state()
-    current = replace(
-        base.current_work_unit,
-        round_number=IMPLEMENTER_RETURN_SAFETY_LIMIT,
-        codex_return_count=IMPLEMENTER_RETURN_SAFETY_LIMIT - 1,
-        max_codex_returns=IMPLEMENTER_RETURN_SAFETY_LIMIT,
-    )
-    state = replace(base, work_units=(current,))
-
-    stopped = state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
-        progress_made=True,
-    )
-
-    assert stopped.current_work_unit.status is WorkUnitStatus.COMPLETED
-    assert stopped.current_work_unit.gate == GateRecord()
-    assert stopped.current_work_unit.codex_return_count == IMPLEMENTER_RETURN_SAFETY_LIMIT
-
-
-def test_review_denial_can_advance_past_return_limit_number_after_stop_rounds() -> None:
-    base = make_state()
-    state = replace(
-        base,
-        current_step=WorkflowStep.CLAUDE_PLAN_REVIEW,
-        work_units=(
-            replace(
-                base.current_work_unit,
-                current_step=WorkflowStep.CLAUDE_PLAN_REVIEW,
-                round_number=DEFAULT_MAX_CODEX_RETURNS,
-                codex_return_count=2,
-            ),
-        ),
-    )
-
-    denied = state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
-        progress_made=True,
-    )
-
-    assert denied.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
-    assert denied.current_work_unit.codex_return_count == 3
-    assert denied.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
-    assert denied.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert denied.current_step is WorkflowStep.CODEX_PLAN_REVISION
 
 
 def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
@@ -925,50 +873,6 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     assert loaded.current_work_unit.gate.status is GateStatus.WAITING_FOR_RETRY
     assert loaded.current_work_unit.gate.reason is GateReason.INSTANCE_FAILURE
     assert loaded.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
-
-
-def test_review_denial_recovers_state_cleared_by_legacy_iteration_resume() -> None:
-    base = make_state()
-    legacy_unit = replace(
-        base.current_work_unit,
-        status=WorkUnitStatus.AWAITING_USER_DECISION,
-        current_step=WorkflowStep.CODEX_CORRECTION,
-        round_number=DEFAULT_MAX_CODEX_RETURNS,
-        codex_return_count=DEFAULT_MAX_CODEX_RETURNS,
-        gate=GateRecord(
-            status=GateStatus.AWAITING_USER_DECISION,
-            reason=GateReason.ITERATION_LIMIT,
-            detail="review denied by claude after 4 Codex returns",
-        ),
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-    )
-    state = replace(
-        base,
-        current_step=WorkflowStep.CODEX_CORRECTION,
-        work_units=(legacy_unit,),
-        slices=(
-            replace(base.current_slice, status=SliceStatus.AWAITING_USER_DECISION),
-            *base.slices[1:],
-        ),
-    )
-
-    with pytest.raises(WorkflowStateValidationError, match="automatic resolution"):
-        state.resume_after_user_decision()
-    continued = state.continue_retired_iteration_limit(progress_made=True)
-    recovered = continued.record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-02",),
-        return_step=WorkflowStep.CODEX_CORRECTION,
-        progress_made=True,
-    )
-
-    assert recovered.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert recovered.current_work_unit.gate.status is GateStatus.CLEAR
-    assert recovered.current_work_unit.codex_return_count == DEFAULT_MAX_CODEX_RETURNS + 1
-    assert recovered.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
-    assert recovered.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS * 2
-    assert recovered.current_work_unit.open_findings == ("C-02",)
 
 
 def test_review_denial_requires_findings_and_unique_records() -> None:

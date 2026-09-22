@@ -458,18 +458,6 @@ class OrchestratorDiagnostic(StrEnum):
         "finding-event-conflict: duplicate finding_id in status_changes; keep exactly "
         "one status_changes entry per Finding ID"
     )
-    REVIEW_FINDING_RECLASSIFICATION_DUPLICATE = (
-        "finding-event-conflict: duplicate finding_id in reclassifications; keep "
-        "exactly one reclassifications entry per Finding ID"
-    )
-    REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT = (
-        "finding-event-conflict: one Finding ID occurs in new_findings and "
-        "reclassifications; set the intended class in new_findings only"
-    )
-    REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT = (
-        "finding-event-conflict: one Finding ID occurs in status_changes and "
-        "reclassifications; use only one of those decision fields per response"
-    )
     REVIEW_FINDING_ID_REUSE_FORBIDDEN = (
         "finding-event-conflict: new finding reuses a previous finding id"
     )
@@ -516,11 +504,11 @@ class OrchestratorDiagnostic(StrEnum):
         "finding-content-invalid: new Finding generation carries another evidence anchor"
     )
     REVIEW_ANCHOR_IDS_UNIQUE = "anchor-invalid: native anchor ids must be unique"
-    REVIEW_OBSERVATION_CHANGE_FORBIDDEN = (
-        "approval-invalid: review cannot introduce or reclassify to OBSERVATION"
+    REVIEW_FINDING_INTRODUCTION_FORBIDDEN = (
+        "approval-invalid: review cannot introduce a FINDING in a convergence round"
     )
     REVIEW_DENIAL_REQUIRES_BLOCKER = (
-        "approval-invalid: denied review requires an open own BLOCKER"
+        "approval-invalid: denied review requires an open own Finding or BLOCKER"
     )
     REVIEW_APPROVAL_ATTESTATION_REQUIRED = (
         "approval-invalid: approval requires a complete PASS attestation or named red-state follow-up"
@@ -532,7 +520,7 @@ class OrchestratorDiagnostic(StrEnum):
         "approval-invalid: approval requires pre_mortem"
     )
     REVIEW_APPROVAL_OPEN_BLOCKER_FORBIDDEN = (
-        "approval-invalid: approval is invalid while an own BLOCKER is open"
+        "approval-invalid: approval is invalid while an own Finding or BLOCKER is open"
     )
     REVIEW_APPROVAL_NEW_FINDINGS_UNDECIDED = (
         "approval-invalid: approved Slice review leaves Findings opened in this response "

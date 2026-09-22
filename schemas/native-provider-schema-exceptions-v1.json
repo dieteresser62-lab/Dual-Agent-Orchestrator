@@ -16,7 +16,7 @@
       "provider": "claude",
       "operations": ["plan", "slice"],
       "error_code": "finding-event-conflict",
-      "local_invariant": "A finding identifier is unique within each event array; a new finding may pair only with one closing status change, and routing cannot conflict with status or reclassification.",
+      "local_invariant": "A finding identifier is unique within each event array; a new finding may pair only with one closing status change.",
       "missing_schema_feature": "cross_array_and_cross_item_uniqueness",
       "provider_evidence": "The supported writer subset has no cross-array relation and cannot compare finding_id properties across generated array items.",
       "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
@@ -48,7 +48,7 @@
       "error_code": "approval-invalid",
       "local_invariant": "A denial leaves an own BLOCKER open; an approval leaves no own BLOCKER open and no open Finding in the current Slice after every finding transition is applied.",
       "missing_schema_feature": "cross_array_state_transition_fold",
-      "provider_evidence": "The writer schema constrains each event and cardinality but cannot fold prior finding state together with generated status and reclassification arrays.",
+      "provider_evidence": "The writer schema constrains each event and cardinality but cannot fold prior finding state together with generated status changes.",
       "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {

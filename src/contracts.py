@@ -45,7 +45,7 @@ class ReadinessMarker(str, Enum):
 
 class FindingClass(str, Enum):
     BLOCKER = "BLOCKER"
-    OBSERVATION = "OBSERVATION"
+    FINDING = "FINDING"
 
 
 class FindingStatus(str, Enum):
@@ -143,7 +143,6 @@ class FindingRecord:
     origin: FindingOrigin
     responses: tuple[FindingResponse, ...] = ()
     status_rationale: str | None = None
-    class_history: tuple[FindingClass, ...] = ()
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
     affected_paths: tuple[str, ...] = ()
@@ -222,8 +221,8 @@ class ReviewEvidence:
 
     @property
     def finding_class(self) -> FindingClass:
-        """Review evidence is the required non-blocking observation record."""
-        return FindingClass.OBSERVATION
+        """Review evidence is not a lifecycle Finding."""
+        return FindingClass.FINDING
 
     def __post_init__(self) -> None:
         if not self.dimensions.strip():
@@ -420,7 +419,7 @@ class StepContract:
     red_state_followup_slice: str | None = None
     anchor_origin: str | None = None
     existing_finding_ids: tuple[str, ...] = ()
-    allow_new_observations: bool = True
+    allow_new_findings: bool = True
     request_sequence: int | None = None
 
     def __post_init__(self) -> None:
@@ -458,8 +457,8 @@ class StepContract:
         for finding_id in self.existing_finding_ids:
             if not SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id):
                 raise ValueError(f"invalid existing finding id {finding_id}")
-        if not isinstance(self.allow_new_observations, bool):
-            raise ValueError("new-observation policy must be boolean")
+        if not isinstance(self.allow_new_findings, bool):
+            raise ValueError("new-Finding policy must be boolean")
 
 
 @dataclass(frozen=True)
@@ -713,7 +712,6 @@ def apply_reviewer_finding_update(
     reviewer: AgentRole,
     status: FindingStatus,
     rationale: str,
-    finding_class: FindingClass | None = None,
 ) -> FindingRecord:
     if reviewer is not finding.origin.reporter:
         raise ValueError("only the reporting reviewer may update or close a finding")
@@ -723,16 +721,10 @@ def apply_reviewer_finding_update(
         )
     if not rationale.strip():
         raise ValueError("finding update requires a rationale")
-    next_class = finding_class or finding.finding_class
-    class_history = finding.class_history
-    if next_class is not finding.finding_class:
-        class_history = (*class_history, finding.finding_class)
     return replace(
         finding,
-        finding_class=next_class,
         status=status,
         status_rationale=rationale,
-        class_history=class_history,
     )
 
 

@@ -68,31 +68,6 @@ def test_rejected_closure_projects_reason_and_named_evidence() -> None:
     assert restored.payload == payload
 
 
-def test_blocker_downgrade_without_record_evidence_is_rejected() -> None:
-    records = _slice_with_opening(severity=FindingSeverity.BLOCKER)
-    records.append(
-        _record(
-            len(records) + 1,
-            FindingTransitionPayload(
-                finding_id="C-01",
-                reporter=Role.CLAUDE,
-                actor=Role.CLAUDE,
-                action="reclassified",
-                severity=FindingSeverity.OBSERVATION,
-                finding_status="open",
-                rationale="Downgrade without prior record-bound evidence",
-                work_unit_id="6",
-            ),
-            records,
-        )
-    )
-
-    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
-
-    assert result.condition(1).status is SliceExitStatus.VIOLATED
-    assert "without earlier record-bound evidence" in result.condition(1).reasons[0]
-
-
 def test_recorded_fixed_closure_satisfies_slice_exit() -> None:
     records = _slice_with_opening()
     records.append(_record(len(records) + 1, _closure("C-01", "fixed"), records))
@@ -137,24 +112,6 @@ def test_origin_slice_is_immutable_cohort_fact() -> None:
     assert current.status is SliceExitStatus.SATISFIED
 
 
-def test_work_unit_binding_without_opening_fails_closed() -> None:
-    records = _base_records()
-    records.append(
-        _record(
-            len(records) + 1,
-            WorkUnitPayload("6", 1, ("src/fix.py",), open_finding_ids=("C-01",)),
-            records,
-            logical_id="work-unit-6",
-        )
-    )
-
-    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
-
-    assert result.cohort_finding_ids == ("C-01",)
-    assert result.condition(2).status is SliceExitStatus.VIOLATED
-    assert "has no opening record" in result.condition(2).reasons[0]
-
-
 def test_completion_blocks_open_finding_and_accepts_recorded_closure() -> None:
     records = _slice_with_opening()
 
@@ -175,7 +132,6 @@ def _review(*status_changes: NativeStatusChange) -> NativeReviewResult:
         approved=False,
         new_findings=(),
         status_changes=status_changes,
-        reclassifications=(),
         anchors=(),
         evidence=None,
         pre_mortem="A partial repair could leave the blocker reproducible.",
@@ -185,7 +141,7 @@ def _review(*status_changes: NativeStatusChange) -> NativeReviewResult:
 def _finding() -> FindingRecord:
     return FindingRecord(
         "C-01",
-        FindingClass.OBSERVATION,
+        FindingClass.FINDING,
         FindingStatus.OPEN,
         "Repair src/fix.py",
         "src/fix.py passes its regression test",
@@ -211,7 +167,7 @@ def _base_records() -> list[ArtifactRecord]:
 
 
 def _slice_with_opening(
-    *, severity: FindingSeverity = FindingSeverity.OBSERVATION
+    *, severity: FindingSeverity = FindingSeverity.BLOCKER
 ) -> list[ArtifactRecord]:
     records = _base_records()
     records.append(
@@ -258,7 +214,7 @@ def _closure(finding_id: str, kind: str) -> FindingTransitionPayload:
         reporter=Role.CLAUDE,
         actor=Role.CLAUDE,
         action="status_changed",
-        severity=FindingSeverity.OBSERVATION,
+        severity=FindingSeverity.BLOCKER,
         finding_status="closed",
         rationale="The reviewer records the final decision",
         work_unit_id="6",

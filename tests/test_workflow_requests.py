@@ -51,7 +51,7 @@ PRE_CUT_CODEX_REQUEST_SHA256 = (
     "ae33d70f3575b9d63db88e899ef297747fc79063b6d4e844fdb316da85c76cdc"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "d0285f6176b83a4029a7690c6df8ba1d5ac94ce5c693bbe0ad7861571b38449a"
+    "1b0dc0c9479a690055eea95445dd8e6813096020085be3c78d6cfac352085b26"
 )
 
 
@@ -270,7 +270,7 @@ def test_canonical_requests_match_the_cutover_bytes() -> None:
 def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Current Slice finding",
         acceptance_test="The finding receives a valid exit decision.",

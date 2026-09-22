@@ -42,13 +42,6 @@ def _rejected_review_document() -> dict[str, object]:
                 },
             }
         ],
-        "reclassifications": [
-            {
-                "finding_id": "C-04",
-                "finding_class": "OBSERVATION",
-                "rationale": "PROVIDER RECLASSIFICATION MUST NOT SURVIVE",
-            }
-        ],
         "anchors": [],
         "review_evidence": {
             "dimensions": "PROVIDER DIMENSIONS MUST NOT SURVIVE",
@@ -73,7 +66,6 @@ def test_rejected_review_shape_distinguishes_dispositions_and_statuses() -> None
     assert shape.status_changes[0].status == "CLOSED"
     assert shape.status_changes[0].closure_kind == "rejected"
     assert shape.status_changes[0].rejection_reason == "no_defect"
-    assert shape.reclassifications[0].finding_class == "OBSERVATION"
 
 
 def test_rejected_review_shape_roundtrip_contains_no_provider_prose_or_unknown_key() -> None:

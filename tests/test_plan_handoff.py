@@ -7,6 +7,7 @@ import pytest
 from contracts import PlannedSlice
 from plan_handoff import (
     PlanHandoffError,
+    acceptance_review_number,
     extract_implementation_slices,
     extract_slice_requirements,
     followup_task_path,
@@ -203,3 +204,14 @@ def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
     assert "The regression is covered and passes." in rendered
     assert "source-run" not in rendered
     assert "ar1-" not in rendered
+    assert "ACCEPTANCE_REVIEW_NUMBER: 2" in rendered
+    assert acceptance_review_number(rendered) == 2
+
+
+def test_acceptance_review_number_defaults_to_first_review_and_rejects_duplicates() -> None:
+    assert acceptance_review_number("ordinary implementation task") == 1
+
+    with pytest.raises(PlanHandoffError, match="at most one"):
+        acceptance_review_number(
+            "ACCEPTANCE_REVIEW_NUMBER: 2\nACCEPTANCE_REVIEW_NUMBER: 3\n"
+        )

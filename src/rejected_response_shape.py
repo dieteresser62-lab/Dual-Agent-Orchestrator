@@ -25,7 +25,6 @@ _KNOWN_FIELDS = frozenset(
         "occurrences",
         "pre_mortem",
         "rationale",
-        "reclassifications",
         "ready",
         "remediation_paths",
         "request_id",
@@ -66,7 +65,7 @@ _RELEASE_DECISIONS = frozenset(
 )
 _FINDING_DECISIONS = frozenset({"accepted", "rejected"})
 _FINDING_STATUSES = frozenset({"CLOSED", "OPEN"})
-_FINDING_CLASSES = frozenset({"BLOCKER", "OBSERVATION"})
+_FINDING_CLASSES = frozenset({"BLOCKER", "FINDING"})
 _CLOSURE_KINDS = frozenset({"fixed", "rejected"})
 _REJECTION_REASONS = frozenset(
     {"already_fixed", "no_defect", "out_of_scope"}
@@ -159,20 +158,6 @@ class RejectedStatusChangeShape:
 
 
 @dataclass(frozen=True, slots=True)
-class RejectedReclassificationShape:
-    finding_id: str
-    finding_class: str | None
-
-    def __post_init__(self) -> None:
-        _require_finding_id(self.finding_id, "reclassification finding_id")
-        _require_optional_enum(
-            self.finding_class,
-            _FINDING_CLASSES,
-            "reclassification finding class",
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class RejectedNativeResponseShape:
     fields: tuple[RejectedResponseFieldShape, ...]
     unknown_field_count: int
@@ -180,7 +165,6 @@ class RejectedNativeResponseShape:
     release_decision: str | None
     finding_dispositions: tuple[RejectedFindingDispositionShape, ...]
     status_changes: tuple[RejectedStatusChangeShape, ...]
-    reclassifications: tuple[RejectedReclassificationShape, ...]
 
     def __post_init__(self) -> None:
         if (
@@ -306,17 +290,6 @@ def extract_rejected_native_response_shape(
             )
         )
 
-    reclassifications: list[RejectedReclassificationShape] = []
-    for item in _mapping_items(document.get("reclassifications")):
-        finding_id = _safe_finding_id(item.get("finding_id"))
-        if finding_id is not None:
-            reclassifications.append(
-                RejectedReclassificationShape(
-                    finding_id,
-                    _safe_enum(item.get("finding_class"), _FINDING_CLASSES),
-                )
-            )
-
     return RejectedNativeResponseShape(
         fields=fields,
         unknown_field_count=unknown_field_count,
@@ -324,7 +297,6 @@ def extract_rejected_native_response_shape(
         release_decision=release_decision,
         finding_dispositions=tuple(finding_dispositions),
         status_changes=tuple(status_changes),
-        reclassifications=tuple(reclassifications),
     )
 
 
@@ -359,7 +331,6 @@ def rejected_native_response_shape_from_document(
         "release_decision",
         "finding_dispositions",
         "status_changes",
-        "reclassifications",
     }
     if set(raw) != required:
         raise ValueError("rejected response shape fields differ from its contract")
@@ -400,11 +371,6 @@ def rejected_native_response_shape_from_document(
         )
         statuses.append(RejectedStatusChangeShape(**item))
 
-    reclassifications: list[RejectedReclassificationShape] = []
-    for item in mappings("reclassifications"):
-        exact(item, {"finding_id", "finding_class"}, "reclassification shape")
-        reclassifications.append(RejectedReclassificationShape(**item))
-
     return RejectedNativeResponseShape(
         fields=tuple(fields),
         unknown_field_count=raw["unknown_field_count"],
@@ -412,14 +378,12 @@ def rejected_native_response_shape_from_document(
         release_decision=raw["release_decision"],
         finding_dispositions=tuple(dispositions),
         status_changes=tuple(statuses),
-        reclassifications=tuple(reclassifications),
     )
 
 
 __all__ = [
     "RejectedFindingDispositionShape",
     "RejectedNativeResponseShape",
-    "RejectedReclassificationShape",
     "RejectedResponseFieldShape",
     "RejectedStatusChangeShape",
     "extract_rejected_native_response_shape",

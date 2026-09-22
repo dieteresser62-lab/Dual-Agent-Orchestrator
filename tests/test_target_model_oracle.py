@@ -71,7 +71,7 @@ def test_mutation_u1_automatic_rejection_escalation_is_missing(
     with monkeypatch.context() as patch:
         patch.setattr(
             finding_reducer,
-            "_escalate_unclosed_rejected_findings",
+            "_escalate_unclosed_findings",
             lambda findings, *, reviewer: dict(findings),
         )
         _assert_mutation_is_new(

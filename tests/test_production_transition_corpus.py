@@ -41,7 +41,7 @@ RUNTIME_BASELINE = ROOT / "tests/fixtures/production-transition-runtime-pre-b48-
 RECORD_SEQUENCE_BASELINE = (
     ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
 )
-TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+TARGET_RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 B48_HELPERS = frozenset(

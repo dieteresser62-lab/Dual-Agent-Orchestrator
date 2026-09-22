@@ -181,10 +181,10 @@ def test_s5_correction_diff_starts_with_marker_and_builds_review_packet() -> Non
             ),
         )
     )
-    review_diff = driver.collect_correction_delta("3" * 64, correction.fingerprint)
+    review_diff = correction.full_diff
 
     packet = build_review_packet(
-        purpose="correction",
+        purpose="slice",
         fingerprint=correction.fingerprint,
         start_fingerprint="3" * 64,
         paths=correction.paths,

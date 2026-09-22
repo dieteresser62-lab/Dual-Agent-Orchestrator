@@ -36,7 +36,7 @@ B65_HELPERS = (
 B65_CAUGHT_CALL = "resolve_agent_settings"
 B65_BOUND_CALLS = (B65_CAUGHT_CALL, *B65_HELPERS)
 TARGET_RECORD_SEQUENCE_PATH = "tests/fixtures/workflow-record-sequence-baseline-v1.json"
-TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+TARGET_RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 B81_AGENTS_FILE_EXPLICIT_VALUE = (
     "any((token == '--agents-file' or token.startswith('--agents-file=') "
     "for token in raw_argv))"

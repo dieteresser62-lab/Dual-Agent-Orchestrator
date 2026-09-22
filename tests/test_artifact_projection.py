@@ -625,7 +625,7 @@ def test_slice_projection_accepts_chain_subsequence_and_excludes_other_work_unit
             reporter=Role.CLAUDE,
             actor=Role.CLAUDE,
             action="opened",
-            severity=FindingSeverity.OBSERVATION,
+            severity=FindingSeverity.FINDING,
             finding_status="open",
             rationale="Cross-Slice follow-up",
         ),

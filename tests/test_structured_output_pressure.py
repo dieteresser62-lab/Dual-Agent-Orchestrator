@@ -69,7 +69,7 @@ def _finding() -> FindingRecord:
 def _observation(finding_id: str = "C-02") -> FindingRecord:
     return FindingRecord(
         finding_id,
-        FindingClass.OBSERVATION,
+        FindingClass.FINDING,
         FindingStatus.OPEN,
         "Bound open observation.",
         "The focused regression passes.",
@@ -105,7 +105,7 @@ def _context(form: str) -> NativeReviewContext:
         validation_attestation=_attestation(),
         test_files=(),
         test_changes_approved=True,
-        allow_new_observations=form != "convergence",
+        allow_new_findings=form != "convergence",
         anchor_origin="docs/internal/approved-plan.md",
     )
 
@@ -156,7 +156,7 @@ def _context_variants() -> dict[str, NativeReviewContext]:
         f"{marker}-round-{round_number}-observations-{int(allow)}-{ledger_name}": replace(
             base,
             round_number=round_number,
-            allow_new_observations=allow,
+            allow_new_findings=allow,
             previous_findings=ledger,
         )
         for marker, base in bases.items()
@@ -182,12 +182,12 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
     )
     observations_allowed = (
         marker is not ApprovalMarker.FINAL_REVIEW
-        and context.allow_new_observations
+        and context.allow_new_findings
     )
     slice_initial = (
         marker is ApprovalMarker.SLICE
         and context.round_number == 1
-        and context.allow_new_observations
+        and context.allow_new_findings
     )
     scopes = {"all"}
     if marker is not ApprovalMarker.FINAL_REVIEW:
@@ -198,7 +198,7 @@ def _context_scope(context: NativeReviewContext) -> set[str]:
             scopes.add("plan_open")
     elif marker is ApprovalMarker.SLICE:
         scopes.add("slice_initial" if slice_initial else "slice_convergence")
-        if own_open or context.allow_new_observations:
+        if own_open or context.allow_new_findings:
             scopes.add(
                 "slice_initial_open" if slice_initial else "slice_convergence_open"
             )
@@ -327,17 +327,6 @@ def test_schema_inventory_fails_closed_on_new_or_removed_bounded_site() -> None:
     ]["maxLength"]
     with pytest.raises(AssertionError, match="missing bounded writer sites"):
         _assert_schema_inventory(manifest, schemas)
-
-
-def test_open_observation_context_binds_exact_reclassification_length_edge() -> None:
-    context_name = "slice-round-2-observations-1-observation"
-    schemas = _writer_schemas()
-    pointer = "$defs/bound_approved_reclassification/properties/rationale"
-    fragments = _bounded_fragments(schemas)[(context_name, pointer, 3000)]
-    assert len(fragments) == 1
-    validate_schema_document("x" * 3000, fragments[0])
-    with pytest.raises(SchemaMismatch, match="at most 3000"):
-        validate_schema_document("x" * 3001, fragments[0])
 
 
 @pytest.mark.parametrize("percentage", (50, 80, 95, 100, 101))

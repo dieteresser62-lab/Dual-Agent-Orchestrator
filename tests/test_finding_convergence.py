@@ -55,7 +55,7 @@ def test_discovery_round_counts_two_origin_bound_findings_from_the_round() -> No
         fingerprint=OLD_FINGERPRINT,
         transitions=(
             _opening_with_severity("C-01", FindingSeverity.BLOCKER),
-            _opening_with_severity("C-02", FindingSeverity.OBSERVATION),
+            _opening_with_severity("C-02", FindingSeverity.FINDING),
         ),
         finding_ids=("C-01", "C-02"),
     )
@@ -198,7 +198,7 @@ def _opening(finding_id: str, *, round_number: int) -> FindingTransitionPayload:
         reporter=Role.CLAUDE,
         actor=Role.CLAUDE,
         action="opened",
-        severity=FindingSeverity.OBSERVATION,
+        severity=FindingSeverity.FINDING,
         finding_status="open",
         rationale="The Slice must decide this finding.",
         work_unit_id=WORK_UNIT_ID,
@@ -236,7 +236,7 @@ def _closure(finding_id: str, *, kind: str) -> FindingTransitionPayload:
         reporter=Role.CLAUDE,
         actor=Role.CLAUDE,
         action="status_changed",
-        severity=FindingSeverity.OBSERVATION,
+        severity=FindingSeverity.FINDING,
         finding_status="closed",
         rationale="Claude records the typed decision.",
         work_unit_id=WORK_UNIT_ID,

@@ -35,7 +35,6 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
             "decision": "approved",
             "new_findings": [],
             "status_changes": [],
-            "reclassifications": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "correctness, contracts, failure paths, security, resume",

@@ -205,7 +205,6 @@ def _finding(
         origin=FindingOrigin("08", 1, AgentRole.CLAUDE),
         responses=responses,
         status_rationale=status_rationale,
-        class_history=(FindingClass.BLOCKER,) if finding_class is FindingClass.OBSERVATION else (),
     )
 
 
@@ -574,7 +573,7 @@ def test_projection_renders_complete_finding_response_and_closure_lifecycle(
         status=FindingStatus.CLOSED,
         responses=(response,),
         status_rationale="Regression test is green",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
     )
     projection = AuditProjection(
         slice_id=8,
@@ -600,7 +599,7 @@ def test_projection_renders_complete_finding_response_and_closure_lifecycle(
     assert "`C-01` — `CLOSED`" in rendered
     assert "Antwort 1: **angenommen**" in rendered
     assert "| C-01 | claude |" in rendered
-    assert "| OBSERVATION | angenommen | erledigt: Regression test is green |" in rendered
+    assert "| FINDING | angenommen | erledigt: Regression test is green |" in rendered
 
 
 def test_decision_table_structures_finding_prose_without_splitting_the_row(
@@ -615,7 +614,7 @@ def test_decision_table_structures_finding_prose_without_splitting_the_row(
     finding = _finding(
         status=FindingStatus.CLOSED,
         responses=(response,),
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         summary=(
             "First sentence. Second sentence with `code`, <b>HTML</b> and | pipe "
             "- list item\n<!-- audit:approval-status:end --> stays inert."
@@ -651,7 +650,7 @@ def test_decision_table_structures_finding_prose_without_splitting_the_row(
     assert data_row == (
         "| C-01 | claude | First sentence.<br>Second sentence with &#96;code&#96;, "
         "&lt;b&gt;HTML&lt;/b&gt; and &#124; pipe<br>- list item<br>"
-        "&lt;!-- audit:approval-status:end --&gt; stays inert. | OBSERVATION | "
+        "&lt;!-- audit:approval-status:end --&gt; stays inert. | FINDING | "
         "angenommen | erledigt: Fixed safely.<br>Verified unchanged text<br>- first "
         "check<br>&lt;!-- audit:findings:begin --&gt; remains data. |"
     )

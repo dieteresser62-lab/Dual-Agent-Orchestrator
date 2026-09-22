@@ -65,12 +65,6 @@
       "sample_content_sha256": "5d4f8cfb65e7d13e296b5b087637bc4de6d64b39481fa93d7ac334cff123ac59"
     },
     {
-      "path": "reclassifications[].rationale",
-      "limit": 3000,
-      "sample_lengths": [],
-      "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
-    },
-    {
       "path": "finding_dispositions[].closure.evidence",
       "limit": 3000,
       "sample_lengths": [],
@@ -233,12 +227,6 @@
       "context_scope": "standard"
     },
     {
-      "field": "reclassifications[].rationale",
-      "pointer": "$defs/bound_reclassification/properties/rationale",
-      "limit": 3000,
-      "context_scope": "standard"
-    },
-    {
       "field": "finding_dispositions[].closure.evidence",
       "pointer": "$defs/finding_closure/oneOf/*/properties/evidence",
       "limit": 3000,
@@ -255,12 +243,6 @@
       "pointer": "$defs/final_review_completed/allOf/*/properties/pre_mortem",
       "limit": 3000,
       "context_scope": "all"
-    },
-    {
-      "field": "reclassifications[].rationale",
-      "pointer": "$defs/bound_approved_reclassification/properties/rationale",
-      "limit": 3000,
-      "context_scope": "observations_allowed_open"
     },
     {
       "field": "pre_mortem",

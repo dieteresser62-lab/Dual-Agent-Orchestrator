@@ -759,17 +759,6 @@ def _project_work_unit_round_and_kind(
         if event.work_unit_id == unit.work_unit_id
         and event.round_number is not None
     ]
-    gate_history = tuple(
-        record.payload
-        for record in records
-        if isinstance(record.payload, GateTransitionPayload)
-        and record.payload.work_unit_id == unit.work_unit_id
-    )
-    resumed_gate_round = 1 + sum(
-        previous.gate_status != "clear" and current.gate_status == "clear"
-        for previous, current in zip(gate_history, gate_history[1:])
-    )
-    round_candidates.append(resumed_gate_round)
     round_candidates += [definition.round_number] if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)) else []
     round_candidates.extend(round_number for round_number, _ in workflow_policy_counter_candidates(records, unit.work_unit_id))
     round_number = max(round_candidates, default=1)
@@ -895,6 +884,16 @@ def _project_work_unit_document(
     round_number, kind = _project_work_unit_round_and_kind(
         replay, unit, definition, transitions, records
     )
+    gate_history = tuple(
+        record.payload
+        for record in records
+        if isinstance(record.payload, GateTransitionPayload)
+        and record.payload.work_unit_id == unit.work_unit_id
+    )
+    resumed_request_sequence = 1 + sum(
+        previous.gate_status != "clear" and current.gate_status == "clear"
+        for previous, current in zip(gate_history, gate_history[1:])
+    )
     policy = authority.policies.get(unit.work_unit_id)
     gate = authority.gates.get(unit.work_unit_id)
     decisions = tuple(
@@ -946,12 +945,23 @@ def _project_work_unit_document(
         "status": projected_status,
         "current_step": unit.step,
         "round_number": round_number,
-        "request_sequence": max((round_number, *(sequence for _, sequence in workflow_policy_counter_candidates(records, unit.work_unit_id)))),
+        "request_sequence": max(
+            (
+                round_number,
+                resumed_request_sequence,
+                *(
+                    sequence
+                    for _, sequence in workflow_policy_counter_candidates(
+                        records, unit.work_unit_id
+                    )
+                ),
+            )
+        ),
         "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
             0 if policy is None else policy.implementer_return_count
         ),
         "max_codex_returns": (  # allowlist:provider -- canonical state-v3 field
-            4 if policy is None else policy.max_implementer_returns
+            6 if policy is None else policy.max_implementer_returns
         ),
         "gate": gate_document,
         "reviewer": (

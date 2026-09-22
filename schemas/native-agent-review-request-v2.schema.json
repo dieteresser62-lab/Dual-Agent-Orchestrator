@@ -48,7 +48,7 @@
         "finding_class": {
           "enum": [
             "BLOCKER",
-            "OBSERVATION"
+            "FINDING"
           ]
         },
         "status": {
@@ -107,16 +107,6 @@
             "string",
             "null"
           ]
-        },
-        "class_history": {
-          "type": "array",
-          "maxItems": 64,
-          "items": {
-            "enum": [
-              "BLOCKER",
-              "OBSERVATION"
-            ]
-          }
         }
       },
       "required": [
@@ -128,8 +118,7 @@
         "affected_paths",
         "origin",
         "responses",
-        "status_rationale",
-        "class_history"
+        "status_rationale"
       ],
       "additionalProperties": false
     },
@@ -317,7 +306,7 @@
         "test_changes_approved": {
           "type": "boolean"
         },
-        "allow_new_observations": {
+        "allow_new_findings": {
           "type": "boolean"
         },
         "anchor_origin": {
@@ -373,7 +362,7 @@
         "validation_attestation",
         "test_files",
         "test_changes_approved",
-        "allow_new_observations",
+        "allow_new_findings",
         "anchor_origin",
         "red_state_followup_slice"
       ],

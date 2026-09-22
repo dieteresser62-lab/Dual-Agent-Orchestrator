@@ -435,7 +435,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
     )
     carried_finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A finding outside the compact request remains in the ledger.",
         acceptance_test="The request-bound review still authorizes the commit.",

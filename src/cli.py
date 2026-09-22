@@ -49,6 +49,8 @@ class WorkflowConfig:
     manual_slice_gate: bool = False
     plan_gate: bool = False
     test_change_gate: bool = False
+    max_rounds_per_loop: int = 6
+    max_acceptance_reviews: int = 6
 
 
 @dataclass(frozen=True)
@@ -272,7 +274,13 @@ def _load_workflow(data: object) -> WorkflowConfig:
     table = _require_table(data, "[workflow]")
     _reject_unknown_keys(
         table,
-        {"manual_slice_gate", "plan_gate", "test_change_gate"},
+        {
+            "manual_slice_gate",
+            "plan_gate",
+            "test_change_gate",
+            "max_rounds_per_loop",
+            "max_acceptance_reviews",
+        },
         "[workflow]",
     )
     manual_slice_gate = table.get("manual_slice_gate", False)
@@ -288,6 +296,14 @@ def _load_workflow(data: object) -> WorkflowConfig:
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
         test_change_gate=test_change_gate,
+        max_rounds_per_loop=_positive_config_int(
+            table.get("max_rounds_per_loop", 6),
+            "workflow.max_rounds_per_loop",
+        ),
+        max_acceptance_reviews=_positive_config_int(
+            table.get("max_acceptance_reviews", 6),
+            "workflow.max_acceptance_reviews",
+        ),
     )
 
 

@@ -26,7 +26,6 @@ def _review() -> dict[str, object]:
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "schema and lifecycle",

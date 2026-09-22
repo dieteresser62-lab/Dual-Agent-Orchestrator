@@ -660,7 +660,6 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness and resume",
@@ -757,13 +756,13 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
     assert "schema-invalid" in raised.value.technical_text
     assert "variant 'bound_slice_initial_approved' failed" in raised.value.technical_text
     assert (
-        "result.new_findings.0.finding_class: must equal 'OBSERVATION'"
+        "result.new_findings.0.finding_class: must equal 'FINDING'"
         in raised.value.technical_text
     )
     assert raised.value.orchestrator_diagnostic is (
         OrchestratorDiagnostic.REVIEW_SCHEMA_INVALID
     )
-    assert "OBSERVATION" not in raised.value.orchestrator_diagnostic.text
+    assert "FINDING" not in raised.value.orchestrator_diagnostic.text
     assert persisted == [returned["canonical"]]
 
 
@@ -935,7 +934,6 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
             "decision": "denied",
             "new_findings": [{"finding_id": "C-01"}],
             "status_changes": [],
-            "reclassifications": [],
         }
     )
 
@@ -945,7 +943,6 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
         "request_id=native-review-request-" + "a" * 64,
         "new_findings=1",
         "status_changes=0",
-        "reclassifications=0",
     )
     summary = _compact_usage_metadata(
         {

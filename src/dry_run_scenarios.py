@@ -429,7 +429,7 @@ class ScriptedInitialState:
     kind: WorkUnitKind = WorkUnitKind.SLICE
     branch: str = "feature/dry-run"
     slice_count: int = 1
-    max_codex_returns: int = 4
+    max_codex_returns: int = 6
     scope_paths: tuple[str, ...] = ()
     execution_mode: str = "IMPLEMENT"
     work_plan_path: str | None = None
@@ -503,7 +503,7 @@ class ScriptedInitialState:
             branch=_string(raw.get("branch", "feature/dry-run"), "scenario.initial.branch"),
             slice_count=_positive_int(raw.get("slice_count", 1), "scenario.initial.slice_count"),
             max_codex_returns=_positive_int(
-                raw.get("max_codex_returns", 4),
+                raw.get("max_codex_returns", 6),
                 "scenario.initial.max_codex_returns",
             ),
             scope_paths=_string_tuple(
@@ -1196,30 +1196,6 @@ class ScriptedWorkflowDriver:
             f"changes:{match.work_unit_id}:request-{match.request_sequence}"
         )
         return match.workflow_changes
-
-    def collect_correction_delta(
-        self, previous_fingerprint: str, current_fingerprint: str
-    ) -> str:
-        self.calls.append(f"delta:{previous_fingerprint[:8]}:{current_fingerprint[:8]}")
-        if self._active_identity is None:
-            raise DryRunScenarioError(
-                "scripted correction delta has no active work unit"
-            )
-        match = next(
-            (
-                item
-                for item in self.scenario.changes
-                if (item.work_unit_id, item.request_sequence)
-                == self._active_identity
-                and item.fingerprint == current_fingerprint
-            ),
-            None,
-        )
-        if match is None:
-            raise DryRunScenarioError(
-                "scripted correction delta lacks its fingerprint-bound change"
-            )
-        return match.full_diff
 
     def path_exists_at_commit(self, commit: str, path: str) -> bool:
         _ = (commit, path)
@@ -2024,7 +2000,6 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "decision": "approved",
                     "new_findings": [],
                     "status_changes": [],
-                    "reclassifications": [],
                     "anchors": [],
                     "review_evidence": {
                         "dimensions": "plan contract, scope, failure paths, handoff",
@@ -2087,7 +2062,7 @@ def _s5_review_result(
             },
         }
         for finding_class, identities in (
-            ("OBSERVATION", observations),
+            ("FINDING", observations),
             ("BLOCKER", blockers),
         )
         for finding_id in identities
@@ -2108,7 +2083,6 @@ def _s5_review_result(
             }
             for finding_id in closed
         ],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, security, resume",
@@ -2287,10 +2261,8 @@ def build_s5_long_run_scenario() -> DryRunScenario:
     )
 
 
-def build_progressive_correction_scenario(
-    *, stalled: bool = False
-) -> DryRunScenario:
-    """Exercise same-Slice convergence beyond four returns or at a fixed point."""
+def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunScenario:
+    """Exercise all six same-Slice rounds or stop at a fixed point."""
 
     base, slice_commit = "a" * 40, "b" * 40
     scope = ("src/runtime.py",)
@@ -2353,7 +2325,6 @@ def build_progressive_correction_scenario(
                 }
                 for finding_id in closed
             ],
-            "reclassifications": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "progress, terminal verdict, persistence, resume",
@@ -2377,7 +2348,7 @@ def build_progressive_correction_scenario(
             implementer_result("correction_result", ("C-01",)),
         ),
     ]
-    correction_rounds = 1 if stalled else 6
+    correction_rounds = 1 if stalled else 5
     for round_number in range(1, correction_rounds + 1):
         if stalled:
             events.append(
@@ -2388,24 +2359,18 @@ def build_progressive_correction_scenario(
                 )
             )
             continue
-        current_id = f"C-{round_number:02d}"
         if round_number < correction_rounds:
-            next_id = f"C-{round_number + 1:02d}"
             events.extend(
                 (
                     ScriptedAgentEvent(
                         reviewer_role, 2, round_number + 1,
                         slice_review_step,
-                        review(
-                            approved=False,
-                            opened=(next_id,),
-                            closed=(current_id,),
-                        ),
+                        review(approved=False),
                     ),
                     ScriptedAgentEvent(
                         implementer_role, 2, round_number + 2,
                         correction_step,
-                        implementer_result("correction_result", (next_id,)),
+                        implementer_result("correction_result", ("C-01",)),
                     ),
                 )
             )
@@ -2414,7 +2379,7 @@ def build_progressive_correction_scenario(
                 ScriptedAgentEvent(
                     reviewer_role, 2, round_number + 1,
                     slice_review_step,
-                    review(approved=True, closed=(current_id,)),
+                    review(approved=True, closed=("C-01",)),
                 )
             )
     final_fingerprint = "9" * 64
@@ -2483,7 +2448,15 @@ def build_progressive_correction_scenario(
             for fingerprint in validation_fingerprints
         ),
         commits=(
-            *((ScriptedCommit(1, "8" * 64, slice_commit),) if not stalled else ()),
+            *(
+                (
+                    ScriptedCommit(
+                        1, str(correction_rounds + 2) * 64, slice_commit
+                    ),
+                )
+                if not stalled
+                else ()
+            ),
         ),
     )
 

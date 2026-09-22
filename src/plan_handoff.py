@@ -350,15 +350,49 @@ def followup_task_path(source_task_path: Path) -> Path:
     )
 
 
+_ACCEPTANCE_REVIEW_NUMBER = re.compile(
+    r"(?m)^ACCEPTANCE_REVIEW_NUMBER: ([1-9][0-9]*)$"
+)
+
+
+class AcceptanceReviewLimitReached(RuntimeError):
+    """Terminal negative result after the configured outer review limit."""
+
+    def __init__(self, review_number: int, limit: int) -> None:
+        self.review_number = review_number
+        self.limit = limit
+        super().__init__(
+            "acceptance review limit reached: "
+            f"review={review_number} limit={limit}; no follow-up task was created"
+        )
+
+
+def acceptance_review_number(document: str) -> int:
+    """Read the counter carried as ordinary task text, not as run correlation."""
+
+    matches = tuple(_ACCEPTANCE_REVIEW_NUMBER.finditer(document))
+    if not matches:
+        return 1
+    values = tuple(int(match.group(1)) for match in matches)
+    if len(values) != 1:
+        raise PlanHandoffError(
+            "task document must contain at most one ACCEPTANCE_REVIEW_NUMBER"
+        )
+    return values[0]
+
+
 def render_followup_task(
     *,
     target_branch: str,
     findings: tuple[object, ...],
+    acceptance_review_number: int = 2,
 ) -> str:
     """Render final-review findings as self-contained, correlation-free prose."""
 
     if not findings:
         raise PlanHandoffError("a follow-up work document requires findings")
+    if acceptance_review_number < 2:
+        raise PlanHandoffError("a follow-up task must target acceptance review 2 or later")
     sections: list[str] = []
     for index, finding in enumerate(findings, start=1):
         summary = str(getattr(finding, "summary", "")).strip()
@@ -385,6 +419,7 @@ def render_followup_task(
         "Der vollstaendige Abnahmereview hat die folgenden Befunde ergeben. "
         "Plane ihre Behebung wie bei jedem anderen Arbeitsauftrag von Grund auf.\n\n"
         f"Zielbranch: `{target_branch}`\n\n"
+        f"ACCEPTANCE_REVIEW_NUMBER: {acceptance_review_number}\n\n"
         + "\n\n".join(sections)
         + "\n"
     )
@@ -396,6 +431,7 @@ def render_implementation_task(
     target_branch: str,
     approved_plan_commit: str,
     slices: tuple[PlannedSlice, ...],
+    acceptance_review_number: int = 1,
 ) -> str:
     if not slices:
         raise PlanHandoffError("implementation handoff requires at least one Slice")
@@ -411,6 +447,7 @@ def render_implementation_task(
         f"APPROVED_PLAN_COMMIT: {approved_plan_commit}\n"
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
+        f"ACCEPTANCE_REVIEW_NUMBER: {acceptance_review_number}\n\n"
         "Der Arbeitsplan ist bereits von Claude geprüft und vom "
         "Orchestrator lokal commitgebunden freigegeben. Ein konfiguriertes manuelles "
         "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder reviewe ihn "  # allowlist:german
@@ -436,11 +473,16 @@ def write_implementation_handoff(
     except (OSError, UnicodeError) as exc:
         raise PlanHandoffError(f"approved work plan could not be read: {exc}") from exc
     slices = extract_implementation_slices(markdown, plan_stem=plan.stem)
+    try:
+        plan_task_text = plan_task_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PlanHandoffError(f"plan task could not be read: {exc}") from exc
     content = render_implementation_task(
         work_plan_path=work_plan_path,
         target_branch=target_branch,
         approved_plan_commit=approved_plan_commit,
         slices=slices,
+        acceptance_review_number=acceptance_review_number(plan_task_text),
     )
     target = implementation_task_path(plan_task_path)
     if target.exists():

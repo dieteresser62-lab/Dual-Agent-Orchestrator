@@ -200,7 +200,7 @@ def _test_native_review_output(
     context = invocation.native_request.bound_context.context
     findings = list(invocation.previous_findings)
     for finding_id, kind, summary, acceptance in re.findall(
-        r"^NEW_FINDING: (C-\d+) \| (BLOCKER|OBSERVATION) \| ([^|]+) \| (.+)$",
+        r"^NEW_FINDING: (C-\d+) \| (BLOCKER|FINDING) \| ([^|]+) \| (.+)$",
         text,
         re.MULTILINE,
     ):
@@ -570,11 +570,6 @@ class FakeDriver:
             f"no snapshot at or after index {index} starts at {start_commit}"
         )
 
-    def collect_correction_delta(
-        self, previous_fingerprint: str, current_fingerprint: str
-    ) -> str:
-        return self.deltas[(previous_fingerprint, current_fingerprint)]
-
     def path_exists_at_commit(self, commit: str, path: str) -> bool:
         return (commit, path) in self.paths_existing_at_commits
 
@@ -867,7 +862,7 @@ def _with_open_findings(
 def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -> None:
     open_finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Imported finding remains open.",
         acceptance_test="The next Slice binds the same identity.",
@@ -937,7 +932,7 @@ def _combined_native_slice_state() -> WorkflowState:
 def test_recomposed_request_round_builds_slice_packet_and_keeps_open_findings() -> None:
     finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="A carried observation remains visible.",
         acceptance_test="The next Slice review receives the carried ledger.",
@@ -1223,8 +1218,8 @@ def _negative_convergence() -> SliceConvergenceEvaluation:
         attested_remediation_finding_ids=(),
         progress_made=False,
         reason=(
-            "the convergence round closed or forwarded no previously local "
-            "finding and recorded no attested fingerprint-changing remediation"
+            "the convergence round closed no previously known finding and "
+            "recorded no attested fingerprint-changing remediation"
         ),
     )
 
@@ -1253,7 +1248,7 @@ def _discovery_convergence() -> SliceConvergenceEvaluation:
     )
 
 
-def test_retired_iteration_gate_continues_from_persisted_progress() -> None:
+def test_retired_iteration_gate_terminates_without_extending_the_round_limit() -> None:
     prior = FindingRecord(
         finding_id="C-01",
         finding_class=FindingClass.BLOCKER,
@@ -1290,9 +1285,9 @@ def test_retired_iteration_gate_continues_from_persisted_progress() -> None:
 
     resolved = resolve_retired_iteration_limit(state, history)
 
-    assert resolved.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resolved.current_work_unit.status is WorkUnitStatus.COMPLETED
     assert resolved.current_work_unit.gate.status is GateStatus.CLEAR
-    assert resolved.current_work_unit.max_codex_returns == 8
+    assert resolved.current_work_unit.max_codex_returns == 4
     assert resolved.current_work_unit.codex_return_count == 4
 
 
@@ -1324,9 +1319,9 @@ def test_review_denial_round_builds_correction_packet_with_affected_findings() -
 
     assert advanced.current_step is WorkflowStep.SLICE_COMMIT
     review = driver.reviewer_calls[0]
-    assert review.evidence_kind is EvidenceKind.CORRECTION_DELTA
+    assert review.evidence_kind is EvidenceKind.FULL_SLICE
     assert review.review_packet is not None
-    assert review.review_packet.purpose == "correction"
+    assert review.review_packet.purpose == "slice"
     packet = json.loads(review.review_packet.canonical_bytes)
     assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
 
@@ -1367,9 +1362,9 @@ def test_recomposition_after_review_denial_keeps_correction_semantics() -> None:
     assert [call.round_number for call in driver.codex_calls] == [2, 2]
     assert [call.request_sequence for call in driver.codex_calls] == [2, 3]
     review = driver.reviewer_calls[0]
-    assert review.evidence_kind is EvidenceKind.CORRECTION_DELTA
+    assert review.evidence_kind is EvidenceKind.FULL_SLICE
     assert review.review_packet is not None
-    assert review.review_packet.purpose == "correction"
+    assert review.review_packet.purpose == "slice"
     packet = json.loads(review.review_packet.canonical_bytes)
     assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
 
@@ -1384,7 +1379,7 @@ def test_native_implementation_package_matches_request_open_findings(
     )
     open_finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Imported lifecycle reaches Codex.",
         acceptance_test="Codex dispositions bind this exact finding.",
@@ -2381,7 +2376,7 @@ def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -
         FindingRecord(
             finding_id=f"C-{index:02d}",
             finding_class=(
-                FindingClass.BLOCKER if index == 3 else FindingClass.OBSERVATION
+                FindingClass.BLOCKER if index == 3 else FindingClass.FINDING
             ),
             status=FindingStatus.OPEN,
             summary=f"Finding {index}",
@@ -2553,7 +2548,7 @@ Implement TARGET-GOAL-SENTINEL only.
         ),
         contract=correction_contract,
         request_kind=NativeCodexRequestKind.CORRECTION,
-        correction_delta="CURRENT-DELTA-SENTINEL",
+        current_slice_diff="CURRENT-DELTA-SENTINEL",
         correction_fingerprint="c" * 64,
         correction_findings=(affected, unrelated),
     )
@@ -3267,7 +3262,7 @@ def test_subset_merge_diagnostics_name_the_actual_review_type(
 ) -> None:
     authoritative = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Existing finding",
         acceptance_test="Keep its identity stable.",
@@ -3304,7 +3299,7 @@ def test_subset_merge_diagnostics_name_the_actual_review_type(
 def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
     authoritative = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Earlier finding",
         acceptance_test="The number remains reserved.",
@@ -3434,7 +3429,7 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
     ledger = tuple(
         FindingRecord(
             finding_id=f"C-{number:02d}",
-            finding_class=FindingClass.OBSERVATION,
+            finding_class=FindingClass.FINDING,
             status=(FindingStatus.CLOSED if number == 23 else FindingStatus.OPEN),
             summary=f"Finding {number}",
             acceptance_test=f"Finding {number} remains reserved.",
@@ -3476,7 +3471,7 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
                 (
                     "REVIEWER: claude",
                     f"TEST_FILES_TOUCHED: {TEST_FILE}",
-                    "NEW_FINDING: C-66 | OBSERVATION | new issue | verify later",
+                    "NEW_FINDING: C-66 | FINDING | new issue | verify later",
                     "REVIEW_EVIDENCE: chain numbering | stale subset | C-01 is reused",
                     "PRE_MORTEM: a reduced request could reset the sequence",
                     "SLICE_APPROVAL: 01 | YES",
@@ -5018,12 +5013,11 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
         "new_findings": [
             {
                 "finding_id": "C-01",
-                "finding_class": "OBSERVATION",
+                "finding_class": "FINDING",
                 "summary": "provider summary must not survive",
             }
         ],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {},
         "pre_mortem": "provider pre-mortem must not survive",
@@ -5250,7 +5244,6 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
                         "closure": None,
                     }
                 ],
-                "reclassifications": [],
                 "anchors": [],
                 "review_evidence": {
                     "dimensions": "provider dimensions must not survive",
@@ -5571,7 +5564,7 @@ def test_branch_mismatch_halts_before_first_agent() -> None:
 def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
     finding = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="domain choice remains unresolved",
         acceptance_test="user selects one policy",

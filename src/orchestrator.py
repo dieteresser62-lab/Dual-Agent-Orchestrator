@@ -79,7 +79,12 @@ from git_service import (
     GitTransactionError,
     path_exists_at_commit,
 )
-from plan_handoff import followup_task_path, render_followup_task
+from plan_handoff import (
+    AcceptanceReviewLimitReached,
+    acceptance_review_number,
+    followup_task_path,
+    render_followup_task,
+)
 from repo_changes import (
     FinalReviewEvidenceSnapshot,
     RepositoryChangeError,
@@ -1882,6 +1887,18 @@ class ProductionWorkflowDriver:
             )
         source_task = Path(state.task_file).resolve()
         try:
+            source_text = source_task.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise WorkflowExecutionError(
+                f"acceptance review task could not be read: {exc}"
+            ) from exc
+        review_number = acceptance_review_number(source_text)
+        if review_number >= self.config.max_acceptance_reviews:
+            raise AcceptanceReviewLimitReached(
+                review_number,
+                self.config.max_acceptance_reviews,
+            )
+        try:
             source_task.relative_to(self.root)
         except ValueError:
             source_task = self.root / "inbox" / source_task.name
@@ -1889,6 +1906,7 @@ class ProductionWorkflowDriver:
         content = render_followup_task(
             target_branch=state.target_branch or state.branch,
             findings=findings,
+            acceptance_review_number=review_number + 1,
         )
         self._write_side_effect_file(
             target,
@@ -2261,14 +2279,6 @@ class ProductionWorkflowDriver:
             ):
                 return payload.operation[1]
         return None
-
-    def collect_correction_delta(
-        self, previous_fingerprint: str, current_fingerprint: str
-    ) -> str:
-        current = self._rendered_changes.get(current_fingerprint)
-        if current is None:
-            raise WorkflowExecutionError("current correction fingerprint was not collected")
-        return current.full_diff
 
     def path_exists_at_commit(self, commit: str, path: str) -> bool:
         return path_exists_at_commit(

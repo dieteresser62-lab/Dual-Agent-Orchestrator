@@ -255,7 +255,7 @@ def _append_policy_gate(
     resume_step: str | None = None,
 ):
     bridge.append(
-        WorkflowPolicyPayload(work_unit_id, 0, 4),
+        WorkflowPolicyPayload(work_unit_id, 0, 6),
         logical_id=f"workflow-policy-{work_unit_id}",
         idempotency_key=f"workflow-policy:{work_unit_id}:1",
         fingerprint_sha256=FINGERPRINT,
@@ -1248,7 +1248,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.CLAUDE,
             Role.CLAUDE,
             "opened",
-            FindingSeverity.OBSERVATION,
+            FindingSeverity.FINDING,
             "open",
             "the first Slice review records an observation",
             "5",
@@ -1318,7 +1318,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.CLAUDE,
             Role.CODEX,
             "responded",
-            FindingSeverity.OBSERVATION,
+            FindingSeverity.FINDING,
             "open",
             "Codex accepts the observation",
             "6",
@@ -1335,7 +1335,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.CLAUDE,
             Role.CLAUDE,
             "status_changed",
-            FindingSeverity.OBSERVATION,
+            FindingSeverity.FINDING,
             "closed",
             "the accepted observation is resolved",
             "6",
@@ -1351,7 +1351,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.CLAUDE,
             Role.CLAUDE,
             "opened",
-            FindingSeverity.OBSERVATION,
+            FindingSeverity.FINDING,
             "open",
             "the second Slice review records another observation",
             "6",
@@ -1434,7 +1434,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     cached = json.loads(state_file.read_text(encoding="utf-8"))
     assert cached["reducer_version"] == (
-        "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
+        "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
     )
     assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
 
@@ -2050,7 +2050,7 @@ def test_retired_runtime_history_events_cannot_return_to_state() -> None:
                 "current_step": "codex_plan",
                 "round_number": 1,
                 "codex_return_count": 0,
-                "max_codex_returns": 4,
+                "max_codex_returns": 6,
                 "gate": {
                     "status": "clear", "reason": "none", "detail": None,
                     "fingerprint": None, "paths": [], "resume_step": None,

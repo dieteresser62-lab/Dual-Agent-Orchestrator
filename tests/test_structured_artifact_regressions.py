@@ -934,7 +934,7 @@ def _pending_reviewer_recovery_case(
     )
     prior_finding = FindingRecord(
         finding_id="C-07",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="pre-existing observation",
         acceptance_test="Carry the observation through review.",

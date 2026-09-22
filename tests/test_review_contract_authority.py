@@ -103,7 +103,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
             reporter=Role.CLAUDE,
             actor=Role.CLAUDE,
             action="opened",
-            severity=FindingSeverity.OBSERVATION,
+            severity=FindingSeverity.FINDING,
             finding_status="open",
             rationale="Cross-cutting follow-up remains visible.",
             work_unit_id="7",
@@ -171,7 +171,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
         "A partial append could separate the review from its bindings."
     )
     assert contract.result.anchors[0].anchor_id == "anchor-r7"
-    assert contract.result.findings[0].finding_class is FindingClass.OBSERVATION
+    assert contract.result.findings[0].finding_class is FindingClass.FINDING
     assert contract.result.validation is not None
     assert contract.result.validation.attestation_id == attestation.logical_id
     assert contract.result.validation.passed

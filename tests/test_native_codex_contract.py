@@ -1010,6 +1010,33 @@ def test_implementation_result_applies_each_supplied_finding_disposition() -> No
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
 
 
+def test_implementation_result_rejects_a_blocker_rejection() -> None:
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=(_finding(),),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "implementation_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "rejected",
+                "rationale": "The implementer disputes the reviewer-owned blocker.",
+            }
+        ],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert "BLOCKER C-01 cannot be rejected" in raised.value.detail
+
+
 def test_implementation_dispositions_cover_every_open_finding() -> None:
     findings = tuple(
         replace(_finding(), finding_id=f"C-{number:02d}")

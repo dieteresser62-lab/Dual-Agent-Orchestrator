@@ -171,7 +171,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
     )
     open_finding = FindingRecord(
         finding_id="C-02",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Open imported finding",
         acceptance_test="Codex receives the exact imported acceptance test.",
@@ -189,7 +189,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
     assert json.loads(package.canonical_json)["slice"]["open_findings"] == [
         {
             "finding_id": "C-02",
-            "finding_class": "OBSERVATION",
+            "finding_class": "FINDING",
             "reporter": "claude",
             "summary": "Open imported finding",
             "acceptance_test": "Codex receives the exact imported acceptance test.",

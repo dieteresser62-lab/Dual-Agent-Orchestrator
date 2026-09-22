@@ -124,7 +124,7 @@ def _opening_payload(event: dict[str, Any]) -> FindingTransitionPayload:
     )
 
 
-def test_escalation_record_requires_and_replays_latest_rejected_response() -> None:
+def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
     records = list(
         _build_case(
             {
@@ -133,33 +133,13 @@ def test_escalation_record_requires_and_replays_latest_rejected_response() -> No
                         "op": "open",
                         "finding_id": "C-01",
                         "work_unit": "2",
-                        "class": "OBSERVATION",
+                        "class": "FINDING",
                     }
                 ]
             }
         )
     )
     revisions = {("finding_transition", "finding-C-01"): 1}
-    escalation = FindingTransitionPayload(
-        finding_id="C-01",
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
-        action="escalated",
-        severity=FindingSeverity.BLOCKER,
-        finding_status="open",
-        rationale="The reviewer did not accept the implementer rejection.",
-        work_unit_id="2",
-    )
-    _append(records, revisions, "finding-C-01", escalation)
-
-    with pytest.raises(
-        ArtifactReplayError,
-        match="latest REJECTED implementer response",
-    ):
-        reduce_findings(replay_artifacts(records, RUN_ID))
-
-    records = records[:-1]
-    revisions[("finding_transition", "finding-C-01")] = 1
     _append(
         records,
         revisions,
@@ -169,12 +149,22 @@ def test_escalation_record_requires_and_replays_latest_rejected_response() -> No
             reporter=Role.CLAUDE,
             actor=Role.CODEX,
             action="responded",
-            severity=FindingSeverity.OBSERVATION,
+            severity=FindingSeverity.FINDING,
             finding_status="open",
-            rationale="The implementer rejects this Finding with a reason.",
+            rationale="The implementer reports the Finding as addressed.",
             work_unit_id="2",
-            response_decision="rejected",
+            response_decision="accepted",
         ),
+    )
+    escalation = FindingTransitionPayload(
+        finding_id="C-01",
+        reporter=Role.CLAUDE,
+        actor=Role.CLAUDE,
+        action="escalated",
+        severity=FindingSeverity.BLOCKER,
+        finding_status="open",
+        rationale="The reviewer did not verify the implemented fix.",
+        work_unit_id="2",
     )
     _append(records, revisions, "finding-C-01", escalation)
 

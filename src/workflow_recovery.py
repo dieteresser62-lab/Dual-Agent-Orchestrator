@@ -1697,9 +1697,9 @@ class WorkflowRecovery:
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
             test_changes_approved=context.test_changes_approved,
-            allow_new_observations=(
+            allow_new_findings=(
                 unit.kind is not WorkUnitKind.SLICE
-                or unit.codex_return_count == 0
+                or unit.round_number == 1
             ),
             red_state_followup_slice=context.red_state_followup_slice,
             final_review_pending_count=final_review_pending_count,

@@ -507,6 +507,7 @@ class OrchestratorConfig:
     repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
     strict_preflight: bool = False
     phase_progress_threshold_seconds: float = 30.0
+    max_acceptance_reviews: int = 6
     provider_input_budget: ProviderInputBudgetPolicy = field(
         default_factory=default_provider_input_budget_policy
     )
@@ -610,7 +611,6 @@ def _compact_result_lines(output: str) -> tuple[str, ...]:
     for field in (
         "new_findings",
         "status_changes",
-        "reclassifications",
         "finding_dispositions",
     ):
         value = document.get(field)

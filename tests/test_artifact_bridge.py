@@ -505,7 +505,7 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
 def test_request_bound_review_payload_matches_only_its_complete_ledger_projection() -> None:
     carried = FindingRecord(
         finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A prior finding remains in the complete ledger.",
         acceptance_test="The compact review need not receive it again.",
@@ -514,7 +514,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
     )
     reviewed = FindingRecord(
         finding_id="C-79",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="The compact request includes this finding.",
         acceptance_test="The request-bound payload names C-79.",
@@ -560,7 +560,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
 def test_legacy_lexical_review_payload_matches_natural_result_projection() -> None:
     base = FindingRecord(
         finding_id="C-62",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Historical finding.",
         acceptance_test="The chain remains replayable.",

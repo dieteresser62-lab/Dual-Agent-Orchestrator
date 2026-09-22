@@ -38,7 +38,6 @@ from contracts import (
     ValidationAttestation,
 )
 from finding_reducer import (
-    ReviewerReclassification,
     ReviewerStatusChange,
     apply_reviewer_events,
     is_closed_finding_status,
@@ -344,10 +343,9 @@ def validate_native_review_disposition_budget(
     """Reject a combined disposition overflow before applying reviewer effects."""
 
     status_changes = document.get("status_changes")
-    reclassifications = document.get("reclassifications")
-    if not isinstance(status_changes, list) or not isinstance(reclassifications, list):
+    if not isinstance(status_changes, list):
         return
-    actual_items = len(status_changes) + len(reclassifications)
+    actual_items = len(status_changes)
     new_finding_capacity = len(_native_finding_id_window(context, size=32))
     maximum_items = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS,
@@ -357,8 +355,7 @@ def validate_native_review_disposition_budget(
         diagnostic = (
             "review disposition count "
             f"{actual_items} exceeds bound maximum {maximum_items}; "
-            f"status_changes={len(status_changes)}, "
-            f"reclassifications={len(reclassifications)}"
+            f"status_changes={len(status_changes)}"
         )
         error = NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
@@ -404,13 +401,6 @@ class NativeStatusChange:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeReclassification:
-    finding_id: str
-    finding_class: FindingClass
-    rationale: str
-
-
-@dataclass(frozen=True, slots=True)
 class NativeAnchor:
     anchor_id: str
     input_fixture: str
@@ -425,7 +415,6 @@ class NativeReviewResult:
     approved: bool
     new_findings: tuple[NativeFinding, ...]
     status_changes: tuple[NativeStatusChange, ...]
-    reclassifications: tuple[NativeReclassification, ...]
     anchors: tuple[NativeAnchor, ...]
     evidence: ReviewEvidence | None
     pre_mortem: str | None
@@ -514,7 +503,7 @@ class NativeReviewContext:
     validation_attestation: ValidationAttestation | None = None
     test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
-    allow_new_observations: bool = True
+    allow_new_findings: bool = True
     anchor_origin: str | None = None
     red_state_followup_slice: str | None = None
     plan_artifact_path: str | None = None
@@ -1037,11 +1026,6 @@ def native_review_provider_response_schema(
     )
     own_open = project_open_set(own_findings).findings
     own_open_ids = tuple(item.finding_id for item in own_open)
-    own_open_blockers = tuple(
-        item
-        for item in own_open
-        if item.finding_class is FindingClass.BLOCKER
-    )
     new_ids = _native_finding_id_window(context, size=32)
     own_disposition_max = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS, len(own_open_ids)
@@ -1050,7 +1034,7 @@ def native_review_provider_response_schema(
         ApprovalMarker.PLAN: "plan",
         ApprovalMarker.SLICE: (
             "slice_initial"
-            if context.round_number == 1 and context.allow_new_observations
+            if context.round_number == 1 and context.allow_new_findings
             else "slice_convergence"
         ),
     }[context.approval_marker]
@@ -1064,19 +1048,19 @@ def native_review_provider_response_schema(
     denied_finding["properties"]["summary"]["pattern"] = NONBLANK_TEXT_PATTERN
     approved_finding["properties"]["summary"]["maxLength"] = 3000
     denied_finding["properties"]["summary"]["maxLength"] = 3000
-    observations_allowed = context.allow_new_observations
+    findings_allowed = context.allow_new_findings
     same_response_closure_ids = (
         new_ids
         if context.approval_marker is ApprovalMarker.SLICE
-        and observations_allowed
+        and findings_allowed
         else ()
     )
     approved_finding["properties"]["finding_class"] = (
-        {"type": "string", "const": FindingClass.OBSERVATION.value}
-        if observations_allowed
+        {"type": "string", "const": FindingClass.FINDING.value}
+        if findings_allowed
         else {"type": "string", "const": FindingClass.BLOCKER.value}
     )
-    if not observations_allowed:
+    if not findings_allowed:
         # The approved branch below forbids all new findings.  Keeping a typed
         # item definition still makes the branch self-contained for providers.
         approved_new_max = 0
@@ -1087,10 +1071,10 @@ def native_review_provider_response_schema(
             "type": "string",
             "enum": [
                 FindingClass.BLOCKER.value,
-                FindingClass.OBSERVATION.value,
+                FindingClass.FINDING.value,
             ],
         }
-        if observations_allowed
+        if findings_allowed
         else {
             "type": "string",
             "const": FindingClass.BLOCKER.value,
@@ -1101,26 +1085,12 @@ def native_review_provider_response_schema(
         definitions["status_change"],
         finding_ids=own_open_ids,
     )
-    reclassification = _bound_review_definition(
-        definitions["reclassification"],
-        finding_ids=own_open_ids,
-    )
     status["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
     status["properties"]["rationale"]["maxLength"] = 3000
-    reclassification["properties"]["rationale"]["pattern"] = (
-        NONBLANK_TEXT_PATTERN
-    )
-    reclassification["properties"]["rationale"]["maxLength"] = 3000
-    if not observations_allowed:
-        reclassification["properties"]["finding_class"] = {
-            "type": "string",
-            "const": FindingClass.BLOCKER.value,
-        }
 
     definitions["bound_approved_finding"] = approved_finding
     definitions["bound_denied_finding"] = denied_finding
     definitions["bound_status_change"] = status
-    definitions["bound_reclassification"] = reclassification
 
     approved = _bound_review_result_definition(
         definitions,
@@ -1141,29 +1111,11 @@ def native_review_provider_response_schema(
         own_open,
         same_response_closure_ids,
     )
-    if observations_allowed and own_open_ids:
-        approved_reclassification = _bound_review_definition(
-            reclassification,
-            finding_ids=own_open_ids,
-        )
-        approved_reclassification["properties"]["finding_class"] = {
-            "type": "string",
-            "const": FindingClass.OBSERVATION.value,
-        }
-        definitions["bound_approved_reclassification"] = (
-            approved_reclassification
-        )
+    if findings_allowed and own_open_ids:
         approved["properties"]["status_changes"].update(
             minItems=0,
             maxItems=approved_status_max,
         )
-        approved["properties"]["reclassifications"].update(
-            minItems=0,
-            maxItems=own_disposition_max,
-            items={"$ref": "#/$defs/bound_approved_reclassification"},
-        )
-    else:
-        _bind_required_empty_array(approved["properties"]["reclassifications"])
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
     }
@@ -1179,27 +1131,21 @@ def native_review_provider_response_schema(
         decision="denied",
         anchor_count=64 if context.anchor_origin is not None else 0,
     )
-    denied["properties"]["new_findings"].update(
-        minItems=(
-            0
-            if own_open_blockers
-            else 1
-        ),
-        maxItems=len(new_ids),
-        items={"$ref": "#/$defs/bound_denied_finding"},
-    )
+    if findings_allowed:
+        denied["properties"]["new_findings"].update(
+            minItems=(0 if own_open else 1),
+            maxItems=len(new_ids),
+            items={"$ref": "#/$defs/bound_denied_finding"},
+        )
+    else:
+        _bind_required_empty_array(denied["properties"]["new_findings"])
     if own_disposition_max:
         denied["properties"]["status_changes"].update(
             maxItems=own_disposition_max,
             items={"$ref": "#/$defs/bound_status_change"},
         )
-        denied["properties"]["reclassifications"].update(
-            maxItems=own_disposition_max,
-            items={"$ref": "#/$defs/bound_reclassification"},
-        )
     else:
         _bind_required_empty_array(denied["properties"]["status_changes"])
-        _bind_required_empty_array(denied["properties"]["reclassifications"])
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
             {"type": "null"},
@@ -1507,14 +1453,6 @@ def _parse_native_review_response(
                 closure=_parse_native_closure(item.get("closure")),
             )
             for item in document["status_changes"]
-        ),
-        reclassifications=tuple(
-            NativeReclassification(
-                finding_id=item["finding_id"],
-                finding_class=FindingClass(item["finding_class"]),
-                rationale=item["rationale"],
-            )
-            for item in document["reclassifications"]
         ),
         anchors=tuple(
             NativeAnchor(
@@ -1849,12 +1787,11 @@ def _validate_active_native_review_field_shapes(
                         )
 def _validate_finding_event_collisions(
     response: NativeReviewResult,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str]]:
     """Reject each ambiguous event shape with its own actionable diagnosis."""
 
     new_ids = [item.finding_id for item in response.new_findings]
     status_ids = [item.finding_id for item in response.status_changes]
-    class_ids = [item.finding_id for item in response.reclassifications]
 
     def duplicates(values: list[str]) -> tuple[str, ...]:
         return sorted_finding_ids(
@@ -1876,24 +1813,6 @@ def _validate_finding_event_collisions(
             "; keep exactly one status_changes entry per Finding ID",
             OrchestratorDiagnostic.REVIEW_FINDING_STATUS_DUPLICATE,
         ),
-        (
-            duplicates(class_ids),
-            "finding IDs occur more than once in reclassifications: ",
-            "; keep exactly one reclassifications entry per Finding ID",
-            OrchestratorDiagnostic.REVIEW_FINDING_RECLASSIFICATION_DUPLICATE,
-        ),
-        (
-            sorted_finding_ids(set(new_ids).intersection(class_ids)),
-            "finding IDs occur in both new_findings and reclassifications: ",
-            "; set the intended finding_class in new_findings only",
-            OrchestratorDiagnostic.REVIEW_FINDING_NEW_RECLASSIFICATION_CONFLICT,
-        ),
-        (
-            sorted_finding_ids(set(status_ids).intersection(class_ids)),
-            "finding IDs occur in both status_changes and reclassifications: ",
-            "; use only one of those decision fields per response",
-            OrchestratorDiagnostic.REVIEW_FINDING_STATUS_RECLASSIFICATION_CONFLICT,
-        ),
     )
     for finding_ids, prefix, suffix, diagnostic in collision_checks:
         if finding_ids:
@@ -1902,7 +1821,7 @@ def _validate_finding_event_collisions(
                 prefix + ", ".join(finding_ids) + suffix,
                 orchestrator_diagnostic=diagnostic,
             )
-    return new_ids, status_ids, class_ids
+    return new_ids, status_ids
 
 
 def _validate_response_events(
@@ -1911,7 +1830,6 @@ def _validate_response_events(
     if not (
         response.new_findings
         or response.status_changes
-        or response.reclassifications
     ) and response.evidence is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
@@ -1922,7 +1840,7 @@ def _validate_response_events(
     previous_open_ids = frozenset(
         project_open_set(context.previous_findings).finding_ids
     )
-    new_ids, status_ids, class_ids = (
+    new_ids, status_ids = (
         _validate_finding_event_collisions(response)
     )
     if any(finding_id in previous for finding_id in new_ids):
@@ -1932,7 +1850,7 @@ def _validate_response_events(
         )
     new_by_id = {item.finding_id: item for item in response.new_findings}
     possible_new_ids = frozenset(_native_finding_id_window(context, size=32))
-    for finding_id in (*status_ids, *class_ids):
+    for finding_id in status_ids:
         finding = previous.get(finding_id)
         if finding is None and finding_id in new_by_id and finding_id in status_ids:
             continue
@@ -2014,7 +1932,7 @@ def _validate_response_events(
                 operator_detail=detail,
             )
         known_signatures[signature] = [finding.finding_id]
-    touched = set(status_ids) | set(class_ids)
+    touched = set(status_ids)
     missing_dispositions = tuple(
         finding.finding_id
         for finding in context.previous_findings
@@ -2070,13 +1988,6 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
             )
         if update.closure is not None:
             _validate_native_closure(update.finding_id, update.closure)
-    for update in response.reclassifications:
-        _require_native_text(
-            update.rationale,
-            "finding reclassification rationale",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
 def _validate_final_review_completed(
     response: NativeFinalReviewCompleted,
     context: NativeReviewContext,
@@ -2146,7 +2057,6 @@ def _validate_final_review_completed(
             for item in response.occurrences
             if not is_closed_finding_status(previous[item.finding_id].status)
         ),
-        reclassifications=(),
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
@@ -2173,7 +2083,6 @@ def _merge_final_review_findings(
             for item in response.occurrences
             if not is_closed_finding_status(previous[item.finding_id].status)
         ),
-        reclassifications=(),
         anchors=(),
         evidence=response.evidence,
         pre_mortem=response.pre_mortem,
@@ -2271,10 +2180,8 @@ def _coalesce_known_finding_occurrences(
         return response
 
     status_by_id = {item.finding_id: item for item in response.status_changes}
-    class_by_id = {item.finding_id: item for item in response.reclassifications}
     for target_id, notes in occurrence_notes.items():
         status_change = status_by_id.get(target_id)
-        reclassification = class_by_id.get(target_id)
         if status_change is not None and is_closed_finding_status(
             status_change.status
         ):
@@ -2283,20 +2190,12 @@ def _coalesce_known_finding_occurrences(
                 f"finding {target_id} cannot be closed while the same response "
                 "reports an additional occurrence",
             )
-        if status_change is not None and reclassification is not None:
-            return response
         occurrence_rationale = "\n\n".join(notes)
         if status_change is not None:
             status_by_id[target_id] = NativeStatusChange(
                 target_id,
                 FindingStatus.OPEN,
                 status_change.rationale + "\n\n" + occurrence_rationale,
-            )
-        elif reclassification is not None:
-            class_by_id[target_id] = NativeReclassification(
-                target_id,
-                reclassification.finding_class,
-                reclassification.rationale + "\n\n" + occurrence_rationale,
             )
         else:
             status_by_id[target_id] = NativeStatusChange(
@@ -2313,10 +2212,6 @@ def _coalesce_known_finding_occurrences(
         status_changes=tuple(
             status_by_id[finding_id]
             for finding_id in sorted_finding_ids(status_by_id)
-        ),
-        reclassifications=tuple(
-            class_by_id[finding_id]
-            for finding_id in sorted_finding_ids(class_by_id)
         ),
     )
 
@@ -2360,15 +2255,7 @@ def _merge_findings(
                 )
                 for update in response.status_changes
             ),
-            reclassifications=tuple(
-                ReviewerReclassification(
-                    update.finding_id,
-                    update.finding_class,
-                    update.rationale,
-                )
-                for update in response.reclassifications
-            ),
-            escalate_unclosed_rejections=True,
+            escalate_unclosed_findings=True,
         )
     except ValueError as exc:
         raise NativeReviewContractError(
@@ -2411,29 +2298,22 @@ def _validate_decision(
     context: NativeReviewContext,
     findings: tuple[FindingRecord, ...],
 ) -> None:
-    previous_by_id = {item.finding_id: item for item in context.previous_findings}
-    if not context.allow_new_observations:
-        for finding in findings:
-            if finding.finding_class is not FindingClass.OBSERVATION:
-                continue
-            previous = previous_by_id.get(finding.finding_id)
-            if previous is None or previous.finding_class is not FindingClass.OBSERVATION:
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.APPROVAL_INVALID,
-                    "review cannot introduce or reclassify to OBSERVATION",
-                )
+    if not context.allow_new_findings and response.new_findings:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "review cannot introduce a FINDING in a convergence round",
+        )
     open_findings = project_open_set(findings).findings
-    own_open_blockers = tuple(
+    own_open_findings = tuple(
         item
         for item in open_findings
-        if item.finding_class is FindingClass.BLOCKER
-        and item.origin.reporter is context.reviewer
+        if item.origin.reporter is context.reviewer
     )
     if not response.approved:
-        if not own_open_blockers:
+        if not own_open_findings:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.APPROVAL_INVALID,
-                "denied review requires an open own BLOCKER",
+                "denied review requires an open own Finding or BLOCKER",
             )
         return
     if context.approval_marker is ApprovalMarker.SLICE:
@@ -2509,10 +2389,10 @@ def _validate_decision(
         max_length=3000,
         code=NativeReviewErrorCode.APPROVAL_INVALID,
     )
-    if own_open_blockers:
+    if own_open_findings:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "approval is invalid while an own BLOCKER is open",
+            "approval is invalid while an own Finding or BLOCKER is open",
         )
 
 
@@ -2620,7 +2500,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         ),
         "test_files": list(context.test_files),
         "test_changes_approved": context.test_changes_approved,
-        "allow_new_observations": context.allow_new_observations,
+        "allow_new_findings": context.allow_new_findings,
         "anchor_origin": context.anchor_origin,
         "red_state_followup_slice": context.red_state_followup_slice,
     }
@@ -2711,7 +2591,6 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
             for item in finding.responses
         ],
         "status_rationale": finding.status_rationale,
-        "class_history": [item.value for item in finding.class_history],
     }
     if finding.predecessor_finding_ref is not None:
         binding["predecessor_finding_ref"] = finding.predecessor_finding_ref

@@ -31,7 +31,7 @@ PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b59-v1.json"
 CORPUS = ROOT / "tests/fixtures/process-boundary-corpus-v1.json"
 B60_PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b60-v1.json"
 AGENT_SOURCE = ROOT / "src/agent_runtime.py"
-TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+TARGET_RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 
 
 def _load_json(path: Path) -> dict[str, Any]:

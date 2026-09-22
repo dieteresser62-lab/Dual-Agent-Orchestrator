@@ -20,8 +20,7 @@ from rejected_response_shape import (
 
 
 STATE_VERSION = 3
-DEFAULT_MAX_CODEX_RETURNS = 4
-IMPLEMENTER_RETURN_SAFETY_LIMIT = 256
+DEFAULT_LOOP_ROUND_LIMIT = 6
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 TECHNICAL_TEXT_MARKER_PATTERN = re.compile(
     r"^\[technical text redacted; sha256=[0-9a-f]{64}; "
@@ -1008,7 +1007,7 @@ class WorkUnitRecord:
     round_number: int = 1
     request_sequence: int | None = None
     codex_return_count: int = 0
-    max_codex_returns: int = DEFAULT_MAX_CODEX_RETURNS
+    max_codex_returns: int = DEFAULT_LOOP_ROUND_LIMIT
     gate: GateRecord = GateRecord()
     reviewer: Reviewer | None = None
     open_findings: tuple[str, ...] = ()
@@ -1031,9 +1030,8 @@ class WorkUnitRecord:
             raise WorkflowStateValidationError("codex_return_count must be an integer")
         if not 0 <= self.codex_return_count <= self.max_codex_returns:
             raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
-        # A workflow round is the accepted domain-review round, not a physical
-        # provider attempt or a recomposed-request identity. Only
-        # ``codex_return_count`` is bounded by ``max_codex_returns``.
+        if self.round_number > self.max_codex_returns:
+            raise WorkflowStateValidationError("round_number exceeds its configured limit")
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
         expected_gate_status = {
@@ -1655,6 +1653,7 @@ class WorkflowState:
             kind=kind,
             status=WorkUnitStatus.IN_PROGRESS,
             current_step=step,
+            max_codex_returns=self.current_work_unit.max_codex_returns,
         )
         slices = tuple(
             target_slice if item.slice_id == slice_id else item for item in self.slices
@@ -1692,6 +1691,7 @@ class WorkflowState:
             kind=WorkUnitKind.FINAL_REVIEW,
             status=WorkUnitStatus.IN_PROGRESS,
             current_step=WorkflowStep.CLAUDE_FINAL_REVIEW,
+            max_codex_returns=self.current_work_unit.max_codex_returns,
         )
         return replace(
             self,
@@ -2204,26 +2204,9 @@ class WorkflowState:
             raise WorkflowStateValidationError("review progress must be boolean")
         current = self.current_work_unit
         next_count = current.codex_return_count + 1  # allowlist:provider -- persisted counter
-        if next_count > IMPLEMENTER_RETURN_SAFETY_LIMIT:
-            raise WorkflowStateValidationError(
-                "review denial exceeds the implementer return safety limit"
-            )
-        safety_limit_reached = next_count == IMPLEMENTER_RETURN_SAFETY_LIMIT
-        continue_rounds = progress_made and not safety_limit_reached
-        next_max = current.max_codex_returns
-        if continue_rounds and next_count >= next_max:
-            next_max = min(
-                IMPLEMENTER_RETURN_SAFETY_LIMIT,
-                max(next_count + 1, next_max + DEFAULT_MAX_CODEX_RETURNS),
-            )
-        elif next_count > next_max:
-            # A legacy iteration gate can be cleared automatically before this
-            # method observes its next denial. Preserve the exact return count by
-            # extending the old policy block rather than saturating the counter.
-            next_max = min(
-                IMPLEMENTER_RETURN_SAFETY_LIMIT,
-                max(next_count, next_max + DEFAULT_MAX_CODEX_RETURNS),
-            )
+        continue_rounds = (
+            progress_made and current.round_number < current.max_codex_returns
+        )
         updated_unit = replace(
             current,
             status=(WorkUnitStatus.IN_PROGRESS if continue_rounds else WorkUnitStatus.COMPLETED),
@@ -2235,7 +2218,6 @@ class WorkflowState:
                 else current.request_sequence
             ),
             codex_return_count=next_count,
-            max_codex_returns=next_max,
             gate=GateRecord(),
             reviewer=reviewer,
             open_findings=open_findings,
@@ -2259,28 +2241,11 @@ class WorkflowState:
             return self
         if not isinstance(progress_made, bool):
             raise WorkflowStateValidationError("review progress must be boolean")
-        if (
-            not progress_made
-            or current.max_codex_returns >= IMPLEMENTER_RETURN_SAFETY_LIMIT
-        ):
-            return self._replace_current_unit(
-                replace(
-                    current,
-                    status=WorkUnitStatus.COMPLETED,
-                    current_step=WorkflowStep.COMPLETED,
-                    gate=GateRecord(),
-                ),
-                slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
-                updated_at=updated_at,
-            )
         return self._replace_current_unit(
             replace(
                 current,
-                status=WorkUnitStatus.IN_PROGRESS,
-                max_codex_returns=min(
-                    IMPLEMENTER_RETURN_SAFETY_LIMIT,
-                    current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS,
-                ),
+                status=WorkUnitStatus.COMPLETED,
+                current_step=WorkflowStep.COMPLETED,
                 gate=GateRecord(),
             ),
             slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
@@ -2543,11 +2508,6 @@ class WorkflowState:
         updated_unit = replace(
             current,
             status=WorkUnitStatus.IN_PROGRESS,
-            round_number=(
-                current.round_number + 1
-                if continuing_stop_request
-                else current.round_number
-            ),
             request_sequence=(
                 current.request_sequence + 1
                 if continuing_stop_request
@@ -2837,10 +2797,12 @@ def init_workflow_state(
     audit_report_path: str | None = None,
     target_branch: str | None = None,
     protocol_binding: ProtocolBinding | None = None,
+    max_rounds_per_loop: int = DEFAULT_LOOP_ROUND_LIMIT,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
     _require_non_empty(first_slice_start_commit, "first_slice_start_commit")
+    _require_positive_int(max_rounds_per_loop, "max_rounds_per_loop")
     stamp = timestamp or _now_iso()
     slices = tuple(
         SliceRecord(
@@ -2864,6 +2826,7 @@ def init_workflow_state(
         kind=WorkUnitKind.PLAN,
         status=WorkUnitStatus.IN_PROGRESS,
         current_step=WorkflowStep.CODEX_PLAN,
+        max_codex_returns=max_rounds_per_loop,
     )
     return WorkflowState(
         version=STATE_VERSION,

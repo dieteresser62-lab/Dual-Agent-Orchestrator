@@ -121,7 +121,7 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"}
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-class-round-exit-v1"}
       }
     },    "workflow_transition": {
       "type": "object", "additionalProperties": false,
@@ -228,7 +228,7 @@
     "final_review_finding": {
       "type": "object", "additionalProperties": false,
       "required": ["finding_id", "severity", "summary", "acceptance_test", "affected_paths"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}}
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "FINDING"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}}
     },
     "final_review_occurrence": {
       "type": "object", "additionalProperties": false,
@@ -275,7 +275,7 @@
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified", "escalated"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "closure_kind": {"enum": ["fixed", "rejected"]}, "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "closure_evidence": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}},
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "escalated"]}, "severity": {"enum": ["BLOCKER", "FINDING"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "closure_kind": {"enum": ["fixed", "rejected"]}, "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "closure_evidence": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}},
       "allOf": [{"if": {"properties": {"action": {"const": "opened"}}, "required": ["action"]}, "then": {"required": ["affected_paths"]}}]
     },    "validation_request": {
       "type": "object", "additionalProperties": false, "required": ["commands", "requested_by"],
@@ -391,7 +391,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["name", "value_kind", "item_count"],
       "properties": {
-        "name": {"enum": ["anchors", "decision", "finding_dispositions", "new_findings", "occurrences", "pre_mortem", "rationale", "reclassifications", "ready", "remediation_paths", "request_id", "result_type", "review_evidence", "reviewer", "rule_id", "scan_complete", "schema_version", "slice_plan", "status_changes", "test_files"]},
+        "name": {"enum": ["anchors", "decision", "finding_dispositions", "new_findings", "occurrences", "pre_mortem", "rationale", "ready", "remediation_paths", "request_id", "result_type", "review_evidence", "reviewer", "rule_id", "scan_complete", "schema_version", "slice_plan", "status_changes", "test_files"]},
         "value_kind": {"enum": ["array", "boolean", "integer", "null", "number", "object", "string"]},
         "item_count": {"type": ["integer", "null"], "minimum": 0}
       }
@@ -414,24 +414,16 @@
         "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed", null]}
       }
     },
-    "rejected_reclassification_shape": {
+    "rejected_native_response_shape": {
       "type": "object", "additionalProperties": false,
-      "required": ["finding_id", "finding_class"],
-      "properties": {
-        "finding_id": {"$ref": "#/$defs/finding_id"},
-        "finding_class": {"enum": ["BLOCKER", "OBSERVATION", null]}
-      }
-    },    "rejected_native_response_shape": {
-      "type": "object", "additionalProperties": false,
-      "required": ["fields", "unknown_field_count", "result_type", "release_decision", "finding_dispositions", "status_changes", "reclassifications"],
+      "required": ["fields", "unknown_field_count", "result_type", "release_decision", "finding_dispositions", "status_changes"],
       "properties": {
         "fields": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/rejected_response_field_shape"}},
         "unknown_field_count": {"type": "integer", "minimum": 0},
         "result_type": {"enum": ["final_review_completed", "correction_result", "implementation_result", "plan_result", "review_result", "stop_request", "stop_result", null]},
         "release_decision": {"enum": ["approved", "denied", "not_ready", "ready", "scan_complete", "scan_incomplete", null]},
         "finding_dispositions": {"type": "array", "items": {"$ref": "#/$defs/rejected_finding_disposition_shape"}},
-        "status_changes": {"type": "array", "items": {"$ref": "#/$defs/rejected_status_change_shape"}},
-        "reclassifications": {"type": "array", "items": {"$ref": "#/$defs/rejected_reclassification_shape"}}
+        "status_changes": {"type": "array", "items": {"$ref": "#/$defs/rejected_status_change_shape"}}
       }
     },
     "invocation_failure": {
@@ -463,7 +455,7 @@
             "approval-invalid: FINAL_REVIEW_COMPLETED requires a final review request",
             "approval-invalid: FINAL_REVIEW_COMPLETED requires its dedicated request marker",
             "approval-invalid: approved Slice review leaves Findings opened in this response without a same-response closure or escalation",
-            "approval-invalid: approval is invalid while an own BLOCKER is open",
+            "approval-invalid: approval is invalid while an own Finding or BLOCKER is open",
             "approval-invalid: approval requires a complete PASS attestation or named red-state follow-up",
             "approval-invalid: approval requires pre_mortem",
             "approval-invalid: approval with test changes requires prior approval",
@@ -471,9 +463,9 @@
             "approval-invalid: final review completion requires a complete PASS attestation",
             "approval-invalid: final review completion requires scan_complete=true",
             "approval-invalid: final review completion with test changes requires prior approval",
-            "approval-invalid: denied review requires an open own BLOCKER",
+            "approval-invalid: denied review requires an open own Finding or BLOCKER",
             "approval-invalid: native review decision must satisfy its approval contract",
-            "approval-invalid: review cannot introduce or reclassify to OBSERVATION",
+            "approval-invalid: review cannot introduce a FINDING in a convergence round",
             "classified-halt: a repository-owned error rule halted the run",
             "context-invalid: anchor_origin must be non-empty when present",
             "context-invalid: authoritative finding ids must be sorted and unique",
@@ -526,9 +518,6 @@
             "finding-event-conflict: new finding reuses a previous finding id",
             "finding-event-conflict: duplicate finding_id in new_findings; keep exactly one new_findings entry per Finding ID",
             "finding-event-conflict: duplicate finding_id in status_changes; keep exactly one status_changes entry per Finding ID",
-            "finding-event-conflict: duplicate finding_id in reclassifications; keep exactly one reclassifications entry per Finding ID",
-            "finding-event-conflict: one Finding ID occurs in new_findings and reclassifications; set the intended class in new_findings only",
-            "finding-event-conflict: one Finding ID occurs in status_changes and reclassifications; use only one of those decision fields per response",
             "finding-id-invalid: closed finding requires a status rationale",
             "finding-id-invalid: evidence anchor digest requires a predecessor Finding reference",
             "finding-id-invalid: finding acceptance test must not be empty",

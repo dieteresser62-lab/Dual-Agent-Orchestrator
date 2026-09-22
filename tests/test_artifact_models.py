@@ -92,7 +92,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
     }
     assert not {"codex", "claude"} & set(asdict(profile))
 
@@ -110,6 +110,24 @@ def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
             RoleProfilePayload("implementer-model", "medium"),
             RoleProfilePayload("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION,
+        )
+
+
+def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed() -> None:
+    assert artifact_models.PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION == (
+        "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
+    )
+
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+    ):
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            reducer_version=(
+                artifact_models.PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION
+            ),
         )
 
 
@@ -924,7 +942,7 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
 
     for mutation in (
         lambda: replace(escalation, actor=Role.CODEX),
-        lambda: replace(escalation, severity=FindingSeverity.OBSERVATION),
+        lambda: replace(escalation, severity=FindingSeverity.FINDING),
         lambda: replace(escalation, finding_status="closed"),
     ):
         with pytest.raises(ArtifactValidationError):

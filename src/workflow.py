@@ -109,7 +109,6 @@ from validation_matrix import (
 )
 from workflow_state import (
     AgentFailureKind,
-    IMPLEMENTER_RETURN_SAFETY_LIMIT,
     GateDecisionRecord,
     GateReason,
     GateStatus,
@@ -318,7 +317,6 @@ class WorkflowDriverContractError(WorkflowExecutionError):
 
 class EvidenceKind(str, Enum):
     FULL_SLICE = "full_slice"
-    CORRECTION_DELTA = "correction_delta"
     FULL_BRANCH = "full_branch"
 
 
@@ -638,10 +636,6 @@ class WorkflowDriver(Protocol):
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
-    def collect_correction_delta(
-        self, previous_fingerprint: str, current_fingerprint: str
-    ) -> str: ...
-
     def path_exists_at_commit(self, commit: str, path: str) -> bool: ...
 
     def detect_test_changes(
@@ -737,7 +731,6 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "carry_forward_native_findings",
         "checkpoint",
         "collect_changes",
-        "collect_correction_delta",
         "commit_slice",
         "detect_test_changes",
         "evaluate_slice_finding_convergence",
@@ -922,7 +915,6 @@ def _finding_to_dict(item: FindingRecord) -> dict[str, object]:
             for response in item.responses
         ],
         "status_rationale": item.status_rationale,
-        "class_history": [value.value for value in item.class_history],
     }
 
 
@@ -954,9 +946,6 @@ def _finding_from_dict(raw: object) -> FindingRecord:
         ),
         status_rationale=(
             None if raw.get("status_rationale") is None else str(raw["status_rationale"])
-        ),
-        class_history=tuple(
-            FindingClass(str(value)) for value in _json_list(raw.get("class_history", []))
         ),
     )
 
@@ -1317,16 +1306,16 @@ class WorkflowRunResult:
                 f"reset={reset} continuations={failure.auto_resume_count}"
             )
         remaining = project_open_set(self.history.findings).finding_ids
-        safety_limit_reached = (
-            self.state.current_work_unit.codex_return_count  # allowlist:provider -- persisted counter
-            >= IMPLEMENTER_RETURN_SAFETY_LIMIT
+        round_limit_reached = (
+            self.state.current_work_unit.round_number
+            >= self.state.current_work_unit.max_codex_returns
         )
         return (
             "SLICE-REVIEW-DENIED | "
             + (
-                "the Slice-review safety limit was reached despite continued "
+                "the configured review-round limit was reached despite continued "
                 "disposition progress"
-                if safety_limit_reached
+                if round_limit_reached
                 else (
                     "the discovery round opened no findings"
                     if (
@@ -1334,9 +1323,8 @@ class WorkflowRunResult:
                         and self.state.current_work_unit.round_number == 1
                     )
                     else (
-                        "the convergence round closed or forwarded no previously "
-                        "local finding and recorded no attested fingerprint-changing "
-                        "remediation"
+                        "the convergence round closed no previously known finding "
+                        "and recorded no attested fingerprint-changing remediation"
                     )
                 )
             )
@@ -1408,7 +1396,7 @@ def _uses_correction_finding_authority(state: WorkflowState) -> bool:
 
     return (
         state.current_step is WorkflowStep.CODEX_CORRECTION
-        or project_implementer_return_policy(state.current_work_unit)[0] > 0
+        or state.current_work_unit.round_number > 1
     )
 
 
@@ -1937,7 +1925,7 @@ class WorkflowEngine:
         additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
             state
         )
-        correction_delta: str | None = None
+        current_slice_diff: str | None = None
         correction_fingerprint: str | None = None
         if is_correction_request:
             correction_start = state.current_slice.start_fingerprint
@@ -1953,7 +1941,7 @@ class WorkflowEngine:
             # commit. Its full diff is therefore the canonical current delta;
             # asking the driver to reconstruct the same delta a second time
             # would add another mutable input surface.
-            correction_delta = correction_changes.full_diff
+            current_slice_diff = correction_changes.full_diff
         native_request = workflow_requests.native_codex_request(
             state=state,
             context=context,
@@ -1962,7 +1950,7 @@ class WorkflowEngine:
             request_kind=request_kind,
             execution_error=WorkflowExecutionError,
             additional_authorized_paths=additional_authorized_paths,
-            correction_delta=correction_delta,
+            current_slice_diff=current_slice_diff,
             correction_fingerprint=correction_fingerprint,
             correction_findings=history.findings if is_correction_request else None,
         )
@@ -1996,7 +1984,7 @@ class WorkflowEngine:
                     request_kind=request_kind,
                     execution_error=WorkflowExecutionError,
                     additional_authorized_paths=additional_authorized_paths,
-                    correction_delta=correction_delta,
+                    current_slice_diff=current_slice_diff,
                     correction_fingerprint=correction_fingerprint,
                     correction_findings=history.findings,
                 )
@@ -2474,27 +2462,6 @@ class WorkflowEngine:
         if is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
             review_diff = changes.full_diff
-        elif (
-            context.approved_plan_text is not None
-            and project_implementer_return_policy(unit)[0] > 0
-        ):
-            evidence_kind = EvidenceKind.CORRECTION_DELTA
-            correction_start = state.current_slice.start_fingerprint
-            if correction_start is None:
-                raise WorkflowExecutionError(
-                    "correction review requires a persisted start fingerprint"
-                )
-            review_diff = self.driver.collect_correction_delta(
-                correction_start, changes.fingerprint
-            )
-        elif reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
-            # Compatibility for historical and synthetic contexts that predate
-            # canonical packets. New persisted plan-bound runs use the shared
-            # start-fingerprint delta above for both reviewers.
-            evidence_kind = EvidenceKind.CORRECTION_DELTA
-            review_diff = self.driver.collect_correction_delta(
-                history.last_claude_fingerprint, changes.fingerprint
-            )
         else:
             evidence_kind = EvidenceKind.FULL_SLICE
             review_diff = changes.full_diff
@@ -2913,7 +2880,7 @@ class WorkflowEngine:
             existing_finding_ids=sorted_finding_ids(
                 finding.finding_id for finding in finding_ledger
             ),
-            allow_new_observations=not _uses_correction_finding_authority(state),
+            allow_new_findings=not _uses_correction_finding_authority(state),
         )
         review_packet: ReviewPacket | None = None
         evidence_kind, review_diff = self._select_review_evidence(
@@ -2936,11 +2903,7 @@ class WorkflowEngine:
                 raise WorkflowExecutionError(
                     "Slice review packet requires a persisted start fingerprint"
                 )
-            packet_purpose = (
-                "correction"
-                if evidence_kind is EvidenceKind.CORRECTION_DELTA
-                else "slice"
-            )
+            packet_purpose = "slice"
             try:
                 review_packet = self._build_review_dispatch_packet(
                     context,

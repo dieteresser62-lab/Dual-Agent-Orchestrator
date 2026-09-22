@@ -98,6 +98,7 @@ from contracts import (
     ValidationStatus,
     ReviewEvidence,
 )
+from error_classification import classify_exception
 from finding_reducer import reduce_findings
 from git_service import GitTransactionError
 from inbox_watcher import (
@@ -131,7 +132,7 @@ from workflow import (
     WorkflowRunResult,
 )
 from workflow import WorkflowExecutionError
-from plan_handoff import PlanHandoffError
+from plan_handoff import AcceptanceReviewLimitReached, PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state, write_workflow_checkpoint
 from task_contract import TaskContractError, TaskMode, parse_task_contract
 from workflow_state import (
@@ -557,7 +558,6 @@ def _native_review_approval(
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "plan correctness and handoff contract",
@@ -619,7 +619,7 @@ def _native_final_review_output(
         else [
             {
                 "finding_id": finding_id,
-                "finding_class": "OBSERVATION",
+                "finding_class": "FINDING",
                 "summary": "The completed branch still needs remediation.",
                 "predecessor_finding_ref": None,
                 "evidence_anchor_sha256": None,
@@ -653,29 +653,6 @@ def _native_final_review_output(
         request_id=bundle.bound_context.request_id,
         context=bundle.bound_context.context,
     )
-
-
-def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
-    fingerprint = "f" * 64
-    unified_diff = (
-        "diff --git a/src/core.py b/src/core.py\n"
-        "--- a/src/core.py\n"
-        "+++ b/src/core.py\n"
-        "@@ -1 +1 @@\n"
-        "-old\n"
-        "+new\n"
-    )
-    driver = object.__new__(ProductionWorkflowDriver)
-    driver._rendered_changes = {
-        fingerprint: WorkflowChanges(
-            start_commit="a" * 40,
-            fingerprint=fingerprint,
-            paths=("src/core.py",),
-            full_diff=unified_diff,
-        )
-    }
-
-    assert driver.collect_correction_delta("e" * 64, fingerprint) == unified_diff
 
 
 def _repository(tmp_path: Path, branch: str) -> Path:
@@ -2887,7 +2864,7 @@ def test_r9_resume_reconciles_one_durable_transition_without_its_event(
     assert resumed.active_state == project_workflow_state(replay).state
 
 
-def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
+def test_r2_policy_records_denial_count_against_the_fixed_configured_limit(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/r2-policy")
@@ -2941,16 +2918,10 @@ def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
         )
         driver.bind_work_unit(denied)
 
-    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 3, 4)
-    before_resume = len(policies())
-    unit = replace(denied.current_work_unit, max_codex_returns=8)
-    resumed = replace(denied, work_units=(*denied.work_units[:-1], unit))
-    driver.bind_work_unit(resumed)
-
-    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 3, 8)
-    assert len(policies()) == before_resume + 1
-    driver.bind_work_unit(resumed)
-    assert len(policies()) == before_resume + 1
+    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 3, 6)
+    before_rebind = len(policies())
+    driver.bind_work_unit(denied)
+    assert len(policies()) == before_rebind
 
 
 def test_r3_slice_boundary_precedes_reader_and_keeps_measured_start_after_tree_change(
@@ -3371,7 +3342,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         "new_findings": [
             {
                 "finding_id": "C-01",
-                "finding_class": "OBSERVATION",
+                "finding_class": "FINDING",
                 "affected_paths": ["src/runtime.py"],
                 "summary": "Keep recovery transaction completeness visible.",
                 "acceptance_test": {
@@ -3388,7 +3359,6 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
                 "closure": {"kind": "fixed"},
             }
         ],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "persistence and recovery",
@@ -4251,7 +4221,6 @@ def test_invalid_review_subset_publishes_no_review_or_finding_fact(
     ("transition_identity", "action"),
     (
         ("opened", "opened"),
-        ("reclassified", "reclassified"),
         ("status_changed", "status_changed"),
     ),
 )
@@ -4264,15 +4233,7 @@ def test_structured_finding_transition_reuses_semantically_identical_old_key(
     previous: tuple[FindingRecord, ...] = ()
     current = finding
     rationale = finding.summary
-    if transition_identity == "reclassified":
-        previous = (finding,)
-        current = replace(
-            finding,
-            finding_class=FindingClass.OBSERVATION,
-            status_rationale="The issue is non-blocking.",
-        )
-        rationale = current.status_rationale or current.summary
-    elif transition_identity == "status_changed":
+    if transition_identity == "status_changed":
         previous = (finding,)
         current = replace(
             finding,
@@ -4485,55 +4446,6 @@ def test_structured_finding_transition_rejects_reused_id_in_later_work_unit(
     assert len({item.idempotency_key for item in records}) == 1
     assert replay_findings(replay, state.current_work_unit_id) == (finding,)
     assert replay_findings(replay, next_state.current_work_unit_id) == ()
-
-
-def test_structured_reclassification_and_status_change_have_distinct_keys(
-    tmp_path: Path,
-) -> None:
-    driver, state, finding = _finding_transition_driver(
-        tmp_path, "reclassify-and-close"
-    )
-    changed = replace(
-        finding,
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.CLOSED,
-        status_rationale="The issue is fixed and no longer blocking.",
-    )
-    driver._persist_review_finding_transitions(
-        _finding_review(finding),
-        fingerprint="d" * 64,
-        round_number=1,
-        previous_findings=(),
-        structured=True,
-    )
-    driver._persist_review_finding_transitions(
-        _finding_review(changed),
-        fingerprint="e" * 64,
-        round_number=2,
-        previous_findings=(finding,),
-        structured=True,
-    )
-
-    bridge = driver._artifact_bridge
-    assert bridge is not None
-    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
-    records = tuple(
-        item
-        for item in replay.records
-        if isinstance(item.payload, FindingTransitionPayload)
-    )
-    assert tuple(item.payload.action for item in records) == (
-        "opened",
-        "reclassified",
-        "status_changed",
-    )
-    assert len({item.idempotency_key for item in records}) == 3
-    projected = replay_findings(replay, state.current_work_unit_id)
-    assert len(projected) == 1
-    assert projected[0].finding_class is FindingClass.OBSERVATION
-    assert projected[0].status is FindingStatus.CLOSED
-    assert projected[0].status_rationale == changed.status_rationale
-    assert projected[0].class_history == (FindingClass.BLOCKER,)
 
 
 def test_native_codex_record_ahead_recovery_completes_finding_responses(
@@ -6485,6 +6397,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
     assert "`src/one.py`" in followup_text
     assert "C-01" not in followup_text
     assert result.state.run_id not in followup_text
+    assert "ACCEPTANCE_REVIEW_NUMBER: 2" in followup_text
     file_results = tuple(
         record.payload
         for record in chain
@@ -6512,6 +6425,80 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
         for record in resumed_chain
     ) == 1
     assert len(list(followup.parent.glob("task-followup.md"))) == 1
+
+
+def test_sixth_acceptance_review_keeps_evidence_and_creates_no_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/acceptance-limit")
+    task = repository / "inbox" / "task.md"
+    task.parent.mkdir()
+    _write_task(task, "feature/acceptance-limit", "src/one.py")
+    task.write_text(
+        task.read_text(encoding="utf-8")
+        + "\nACCEPTANCE_REVIEW_NUMBER: 6\n",
+        encoding="utf-8",
+    )
+    audit_path = workflow_audit_projection._managed_audit_path(
+        task, hashlib.sha256(task.read_bytes()).hexdigest()
+    )
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            target = repository / "src" / "one.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("value = 0\n", encoding="utf-8")
+            return _native_plan_output(
+                invocation,
+                summary="add implementation",
+                scope_paths=(audit_path, "src/one.py"),
+            )
+        target = repository / "src" / "one.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        return _native_implementation_output(invocation)
+
+    def review(
+        driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        if invocation.step is WorkflowStep.CLAUDE_FINAL_REVIEW:
+            return _native_final_review_output(driver, invocation, finding_id="C-01")
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(
+        AcceptanceReviewLimitReached, match="review=6 limit=6"
+    ) as raised:
+        run_production_workflow(task, _args(repository, task))
+
+    persisted = json.loads(
+        (repository / ".orchestrator" / "state.json").read_text(encoding="utf-8")
+    )["state"]
+    chain = ArtifactStore(repository, persisted["run_id"]).load_chain()
+    assert sum(
+        isinstance(record.payload, FinalReviewCompletedPayload)
+        for record in chain
+    ) == 1
+    assert not (repository / "inbox" / "task-followup.md").exists()
+    persisted_audit_path = repository / persisted["audit_report_path"]
+    assert persisted_audit_path.is_file()
+    assert "The completed branch still needs remediation." in persisted_audit_path.read_text(
+        encoding="utf-8"
+    )
+    assert _git(repository, "show", "HEAD:src/one.py") == "value = 1"
+    watch_result = WatchTaskResult.from_failure(
+        classify_exception(raised.value),
+        run_id=persisted["run_id"],
+        records_written=True,
+        protocol_mode="structured-v2",
+    )
+    assert watch_result.disposition is WatchTaskDisposition.REJECTED
+    assert watch_result.exit_code == 5
+    assert watch_result.resume_available is False
 
 
 

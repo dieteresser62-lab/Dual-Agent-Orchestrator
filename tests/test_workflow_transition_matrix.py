@@ -654,7 +654,7 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "record_user_gate_decision", "GateRecord"): 1,
         ("workflow_state.py", "reopen_legacy_quota_resume_diff_gate", "GateRecord"): 1,
         ("workflow_state.py", "record_review_denial", "GateRecord"): 1,
-        ("workflow_state.py", "continue_retired_iteration_limit", "GateRecord"): 2,
+        ("workflow_state.py", "continue_retired_iteration_limit", "GateRecord"): 1,
         ("workflow_state.py", "record_invocation_failure", "GateRecord"): 1,
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
         ("workflow_state.py", "complete_quota_automation_verdict", "GateRecord"): 1,
@@ -672,7 +672,7 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "record_user_gate_decision"): 1,
         ("workflow_state.py", "reopen_legacy_quota_resume_diff_gate"): 1,
         ("workflow_state.py", "record_review_denial"): 1,
-        ("workflow_state.py", "continue_retired_iteration_limit"): 2,
+        ("workflow_state.py", "continue_retired_iteration_limit"): 1,
         ("workflow_state.py", "record_invocation_failure"): 1,
         ("workflow_state.py", "complete_quota_automation_verdict"): 1,
         ("workflow_state.py", "await_bootstrap_resume"): 1,
@@ -1637,7 +1637,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    c02_closed = _finding("C-02", FindingClass.OBSERVATION, FindingStatus.CLOSED)
+    c02_closed = _finding("C-02", FindingClass.FINDING, FindingStatus.CLOSED)
     c03_open = _finding(
         "C-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
     )
@@ -1646,7 +1646,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    historical = _finding("C-99", FindingClass.OBSERVATION, FindingStatus.OPEN)
+    historical = _finding("C-99", FindingClass.FINDING, FindingStatus.OPEN)
 
     def assert_case(
         case_id: str,
@@ -2141,7 +2141,7 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
         detail="CODEX-NOT-READY | ready=false does not document a blocker",
     )
     resumed = policy.resume_after_user_decision()
-    assert resumed.current_work_unit.round_number == 2
+    assert resumed.current_work_unit.round_number == 1
     assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
 
     bootstrap = _slice_state().await_bootstrap_resume(
@@ -2587,13 +2587,13 @@ def _ledger_case(
     assert bridge is not None
 
     c01 = _finding("C-01", FindingClass.BLOCKER, FindingStatus.OPEN)
-    c02_open = _finding("C-02", FindingClass.OBSERVATION, FindingStatus.OPEN)
+    c02_open = _finding("C-02", FindingClass.FINDING, FindingStatus.OPEN)
     c02_closed = replace(
         c02_open,
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    historical = _finding("C-99", FindingClass.OBSERVATION, FindingStatus.OPEN)
+    historical = _finding("C-99", FindingClass.FINDING, FindingStatus.OPEN)
     for finding in (c01, c02_open):
         _append_finding(
             bridge,
@@ -2651,9 +2651,9 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
 
     assert _ledger_literal(replay_findings(replay)) == (
         "C-01:open:blocker",
-        "C-02:closed:observation",
+        "C-02:closed:finding",
         "C-03:open:blocker",
-        "C-99:open:observation",
+        "C-99:open:finding",
     )
     assert _ledger_literal(
         driver.authoritative_native_findings(state, correction_mirror)
@@ -2662,9 +2662,9 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         driver.carry_forward_native_findings(state, correction_mirror)
     ) == (
         "C-01:open:blocker",
-        "C-02:closed:observation",
+        "C-02:closed:finding",
         "C-03:open:blocker",
-        "C-99:open:observation",
+        "C-99:open:finding",
     )
 
     # Rebinding a manipulated projection is cache-only: it neither duplicates
@@ -2739,9 +2739,9 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     # Keep the independently expected full ledger visibly bound to this case.
     assert _ledger_literal(full_ledger) == (
         "C-01:open:blocker",
-        "C-02:closed:observation",
+        "C-02:closed:finding",
         "C-03:open:blocker",
-        "C-99:open:observation",
+        "C-99:open:finding",
     )
 
 

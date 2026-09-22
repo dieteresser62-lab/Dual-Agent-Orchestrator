@@ -44,7 +44,7 @@
           "type": "string",
           "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
         },
-        "finding_class": { "enum": ["BLOCKER", "OBSERVATION"] },
+        "finding_class": { "enum": ["BLOCKER", "FINDING"] },
         "summary": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" },
         "acceptance_test": { "$ref": "#/$defs/acceptance_test" },
         "affected_paths": {
@@ -68,19 +68,6 @@
         "rationale": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" }
       },
       "required": ["finding_id", "status", "rationale"],
-      "additionalProperties": false
-    },
-    "reclassification": {
-      "type": "object",
-      "properties": {
-        "finding_id": {
-          "type": "string",
-          "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
-        },
-        "finding_class": { "enum": ["BLOCKER", "OBSERVATION"] },
-        "rationale": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" }
-      },
-      "required": ["finding_id", "finding_class", "rationale"],
       "additionalProperties": false
     },
     "anchor": {
@@ -131,11 +118,6 @@
               "maxItems": 32,
               "items": { "$ref": "#/$defs/status_change" }
             },
-            "reclassifications": {
-              "type": "array",
-              "maxItems": 32,
-              "items": { "$ref": "#/$defs/reclassification" }
-            },
             "anchors": {
               "type": "array",
               "maxItems": 64,
@@ -164,7 +146,6 @@
             "decision",
             "new_findings",
             "status_changes",
-            "reclassifications",
             "anchors",
             "review_evidence",
             "pre_mortem"
@@ -173,7 +154,6 @@
           "anyOf": [
             { "properties": { "new_findings": { "minItems": 1 } } },
             { "properties": { "status_changes": { "minItems": 1 } } },
-            { "properties": { "reclassifications": { "minItems": 1 } } },
             { "properties": { "review_evidence": { "$ref": "#/$defs/evidence" } } }
           ]
         }

@@ -58,6 +58,7 @@ from native_review_contract import (
     NativeReviewRejectionSource,
 )
 from orchestrator import ProductionWorkflowDriver
+from plan_handoff import AcceptanceReviewLimitReached
 from provider_input_budget import ProviderInputBudgetExceeded
 from task_contract import TaskContractError, parse_task_contract
 from workflow import (
@@ -342,6 +343,7 @@ def test_central_inventory_classifies_all_49_project_error_types_exactly_once() 
         f"{ProviderInputBudgetExceeded.__module__}.ProviderInputBudgetExceeded",
         f"{ProviderRequestRoundRequired.__module__}.ProviderRequestRoundRequired",
         f"{ScriptedInterruption.__module__}.ScriptedInterruption",
+        "plan_handoff.AcceptanceReviewLimitReached",
     }
     assert set(ERROR_CLASSIFICATIONS.values())
     assert all(
@@ -480,6 +482,18 @@ def test_terminal_rejection_is_promoted_after_record_start() -> None:
     assert after.failure_class is FailureClass.RESUMABLE_HALT
     assert after.promoted_after_record_start is True
     assert after.diagnostic_code == "TASK-CONTRACT-AFTER-RECORD-START"
+
+
+def test_acceptance_review_limit_remains_terminal_after_record_start() -> None:
+    failure = classify_exception(
+        AcceptanceReviewLimitReached(review_number=6, limit=6)
+    )
+
+    after = enforce_record_start_boundary(failure, records_written=True)
+
+    assert after.failure_class is FailureClass.TERMINAL_REJECTION
+    assert after.promoted_after_record_start is False
+    assert after.diagnostic_code == "ACCEPTANCE-REVIEW-LIMIT"
 
 
 @pytest.mark.parametrize(

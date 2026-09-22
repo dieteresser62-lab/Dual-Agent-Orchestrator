@@ -47,6 +47,9 @@ from rejected_response_shape import (
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
+)
+PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
 )
 PRE_TARGET_RUN_CHAIN_REMOVAL_REDUCER_VERSION = (
@@ -135,7 +138,7 @@ class Role(StrEnum):
 
 class FindingSeverity(StrEnum):
     BLOCKER = "BLOCKER"
-    OBSERVATION = "OBSERVATION"
+    FINDING = "FINDING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -939,13 +942,13 @@ class FindingTransitionPayload:
         if self.reporter is not Role.CLAUDE:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {
-            "opened", "responded", "status_changed", "reclassified", "escalated",
+            "opened", "responded", "status_changed", "escalated",
         }:
             raise ArtifactValidationError("finding action is invalid")
         if self.finding_status not in {"open", "closed"}:
             raise ArtifactValidationError("finding_status is invalid")
         if self.action in {
-            "opened", "status_changed", "reclassified", "escalated"
+            "opened", "status_changed", "escalated"
         } and self.actor != self.reporter:
             raise ArtifactValidationError("only the reporting reviewer may mutate a finding")
         if self.action == "escalated" and (
@@ -959,6 +962,12 @@ class FindingTransitionPayload:
             raise ArtifactValidationError("only codex may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
             raise ArtifactValidationError("a codex response cannot close a finding")
+        if (
+            self.action == "responded"
+            and self.severity is FindingSeverity.BLOCKER
+            and self.response_decision == "rejected"
+        ):
+            raise ArtifactValidationError("a BLOCKER cannot be rejected")
         _require_text(self.rationale, "rationale")
         if self.work_unit_id is not None:
             _require_identifier(self.work_unit_id, "work_unit_id")

@@ -96,7 +96,7 @@ def native_codex_request(
     execution_error: type[RuntimeError],
     work_context: str | None = None,
     additional_authorized_paths: tuple[str, ...] = (),
-    correction_delta: str | None = None,
+    current_slice_diff: str | None = None,
     correction_fingerprint: str | None = None,
     correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeCodexRequestBundle:
@@ -229,7 +229,7 @@ def native_codex_request(
             )
             request_assignment = "Implement only the bound Slice execution package."
         elif request_kind is NativeCodexRequestKind.CORRECTION:
-            if correction_delta is None or correction_fingerprint is None:
+            if current_slice_diff is None or correction_fingerprint is None:
                 raise execution_error(
                     "native correction request lacks its current delta binding"
                 )
@@ -237,7 +237,7 @@ def native_codex_request(
                 current_fingerprint=correction_fingerprint,
                 authorized_paths=tuple(sorted(set(authorized_paths))),
                 findings=native_findings,
-                current_delta=correction_delta,
+                current_delta=current_slice_diff,
             )
             evidence.append(
                 NativeCodexEvidenceInput(
@@ -329,10 +329,11 @@ def _native_review_acceptance_criteria(
     )
     correction_criterion = (
         "This review is part of an implementer correction sequence. A denied "
-        "round continues only when it closes a finding, reclassifies one, or "
-        "opens a new finding. A denied round with none of those record-derived "
-        "transitions is the terminal review verdict for every still-open finding."
-        if project_implementer_return_policy(state.current_work_unit)[0] > 0
+        "round continues only when it closes a previously known finding or "
+        "records attested fingerprint-changing remediation. A denied round with "
+        "neither form of progress is the terminal review verdict for every "
+        "still-open finding."
+        if state.current_work_unit.round_number > 1
         else None
     )
     discovery_capacity_criterion = (
@@ -374,9 +375,7 @@ def _review_request_finding_inputs(
 ) -> tuple[tuple[FindingRecord, ...], str | None, tuple[str, ...]]:
     """Select review Findings from the caller's record-backed correction view."""
 
-    correction_sequence = project_implementer_return_policy(
-        state.current_work_unit
-    )[0] > 0
+    correction_sequence = state.current_work_unit.round_number > 1
     if correction_findings is None:
         if correction_sequence:
             raise execution_error(
@@ -501,7 +500,7 @@ def native_review_request(
         validation_attestation=contract.validation_attestation,
         test_files=expected_test_files,
         test_changes_approved=contract.test_changes_approved,
-        allow_new_observations=contract.allow_new_observations,
+        allow_new_findings=contract.allow_new_findings,
         anchor_origin=contract.anchor_origin,
         red_state_followup_slice=contract.red_state_followup_slice,
         plan_artifact_path=plan_artifact_path,

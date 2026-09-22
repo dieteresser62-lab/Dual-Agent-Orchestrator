@@ -320,7 +320,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         previous_findings=(
             (
                 _finding(
-                    FindingClass.OBSERVATION
+                    FindingClass.FINDING
                     if form == "final_observation"
                     else FindingClass.BLOCKER
                 ),
@@ -331,7 +331,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         validation_attestation=_attestation(),
         test_files=("tests/test_native_contract_differential.py",),
         test_changes_approved=True,
-        allow_new_observations=not convergence,
+        allow_new_findings=not convergence,
         anchor_origin=None if form == "final_review" else "docs/internal/plan.md",
     )
     return BoundNativeReviewContext(
@@ -375,7 +375,6 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
             if bound.context.previous_findings
             else []
         ),
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, resume",
@@ -500,7 +499,7 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
     template = _review_bound("convergence")
     closed = FindingRecord(
         "C-01",
-        FindingClass.OBSERVATION,
+        FindingClass.FINDING,
         FindingStatus.CLOSED,
         "Already resolved.",
         "Keep it closed.",
@@ -527,22 +526,11 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
     mutations = (
         {
             "status_changes": [
-                    {
-                        "finding_id": "C-01",
-                        "status": "OPEN",
-                        "rationale": "Reopen the resolved finding.",
-                        "closure": None,
-                    }
-            ],
-            "reclassifications": [],
-        },
-        {
-            "status_changes": [],
-            "reclassifications": [
                 {
                     "finding_id": "C-01",
-                    "finding_class": "BLOCKER",
-                    "rationale": "Reclassify the resolved finding.",
+                    "status": "OPEN",
+                    "rationale": "Reopen the resolved finding.",
+                    "closure": None,
                 }
             ],
         },
@@ -601,7 +589,6 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
                 "closure": None,
             }
         ],
-        reclassifications=[],
         pre_mortem=None,
     )
     with pytest.raises(SchemaMismatch):

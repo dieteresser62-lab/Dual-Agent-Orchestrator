@@ -154,7 +154,7 @@ run_task --watch --resume \
   --gate-rationale "Persistierten Gate-Grund und Fingerprint geprüft"
 ```
 
-Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Ein `VALIDATE:`-Befehl an einer nicht blockierenden `OBSERVATION` erzeugt höchstens eine Warnung und keinen Benutzerhalt. Nur offene `BLOCKER` dürfen innerhalb einer konfigurierten Befehlsfamilie zusätzliche Validierung anfordern.
+Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Findings und Blocker verändern die konfigurierte Validierungsmatrix nicht; zusätzliche agentenseitige `VALIDATE:`-Befehle begründen weder eine Erweiterung noch einen Benutzerhalt.
 
 Die Exitcodes 2 und 3 kennzeichnen Quota- beziehungsweise Agentenfehler. Eindeutig belegte, transiente Netzwerkfehler werden standardmäßig höchstens zweimal nach 5 beziehungsweise 10 Sekunden im exakt gleichen Rollenschritt wiederholt. Fachliche Agentenantworten werden dabei nicht als technische Diagnose interpretiert. Auth-, Runtime-, Output- und Prozessfehler halten weiterhin fortsetzbar an. Nach Wiederherstellung des Providers oder Programms wird derselbe Schritt fortgesetzt; eine andere Rolle wird nicht als Ersatz verwendet. Eine bereits vollständig ausgeführte rote Matrix wird nur mit `--retry-failed-validation` erneut ausgeführt.
 

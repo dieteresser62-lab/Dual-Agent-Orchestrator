@@ -59,18 +59,6 @@ def test_only_reporting_reviewer_can_update_a_finding() -> None:
         )
 
 
-def test_reclassification_preserves_class_history() -> None:
-    updated = apply_reviewer_finding_update(
-        _finding(),
-        reviewer=AgentRole.CLAUDE,
-        status=FindingStatus.OPEN,
-        rationale="Reduced to follow-up risk.",
-        finding_class=FindingClass.OBSERVATION,
-    )
-    assert updated.finding_class is FindingClass.OBSERVATION
-    assert updated.class_history == (FindingClass.BLOCKER,)
-
-
 def test_anchor_comparison_is_typed_and_deterministic() -> None:
     approved = (AnchorRecord("a", "plan", "input", "expected", "exact"),)
     current = (

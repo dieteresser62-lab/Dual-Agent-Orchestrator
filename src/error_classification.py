@@ -57,7 +57,7 @@ from orchestrator_diagnostics import (
     OrchestratorDiagnostic,
 )
 from path_policy import PathPolicyError
-from plan_handoff import PlanHandoffError
+from plan_handoff import AcceptanceReviewLimitReached, PlanHandoffError
 from provider_input_budget import ProviderInputBudgetError, ProviderInputBudgetExceeded
 from provider_input_efficiency import ProviderInputEfficiencyError
 from repo_changes import NotGitRepositoryError, RepositoryChangeError
@@ -117,10 +117,17 @@ _HALT = FailureClass.RESUMABLE_HALT
 _TRANSIENT = FailureClass.TRANSIENT
 _REJECT = FailureClass.TERMINAL_REJECTION
 
+# Most terminal rejections describe invalid input and therefore become a
+# resumable halt once an authoritative record chain exists.  Reaching the
+# configured acceptance-review ceiling is different: it is the intended,
+# record-backed terminal outcome of a completed outer loop and must still be
+# routed to the failed outbox.
+_RECORD_BACKED_TERMINAL_REJECTIONS = frozenset({"ACCEPTANCE-REVIEW-LIMIT"})
+
 
 # Authoritative inventory: all 48 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
-# the six project exceptions whose names do not end in ``Error``.  Subclasses
+# the seven project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
 # This keeps the complete assignment readable and auditable in one place.
 ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
@@ -146,6 +153,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     DryRunScenarioError: _entry(_REJECT, "DRY-RUN-SCENARIO"),
     ScriptedInterruption: _entry(_HALT, "SCRIPTED-INTERRUPTION"),
     FinalReviewPreflightDenied: _entry(_HALT, "FINAL-REVIEW-PREFLIGHT-DENIED"),
+    AcceptanceReviewLimitReached: _entry(_REJECT, "ACCEPTANCE-REVIEW-LIMIT"),
     GitTransactionError: _entry(_HALT, "GIT-TRANSACTION"),
     NativeImplementerContractError: _entry(_HALT, "NATIVE-IMPLEMENTER-CONTRACT"),
     NativeImplementerRequestError: _entry(_HALT, "NATIVE-IMPLEMENTER-REQUEST"),
@@ -382,6 +390,7 @@ def enforce_record_start_boundary(
     if (
         records_written
         and failure.failure_class is FailureClass.TERMINAL_REJECTION
+        and failure.diagnostic_code not in _RECORD_BACKED_TERMINAL_REJECTIONS
     ):
         return replace(
             failure,

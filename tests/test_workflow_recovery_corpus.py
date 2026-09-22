@@ -97,8 +97,8 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "881e944fea9442012aecb7c20b519ea5a2b83bbf"
 SOURCE_BLOB = "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d"
 PRE_B54_COMMIT = "e538d96be18e6857250f6a86ab6f6c499e40d0b0"
-HISTORICAL_RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
-RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+HISTORICAL_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
@@ -107,13 +107,13 @@ IMPLEMENTER_REQUEST_ID = (
     "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-0fe7a370d6cedd7e726fe51c6aea1b48fe1b4da5257abe3b33b94ca25a97b918"
+    "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
     "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "33f599e463f7f8abab3704d33b5bbf242a39f84b8d2e27421352e425123912e3"
+    "1b0cbd085b9a1245aab05c32043535257c932ff03375cedfa7d30b480e26aee4"
 )
 
 RECOVERY_HELPERS = {
@@ -991,7 +991,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
 ) -> None:
     finding = FindingRecord(
         finding_id="C-02",
-        finding_class=FindingClass.OBSERVATION,
+        finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="A finding opened in an earlier work unit remains open.",
         acceptance_test="Recovery accepts its request-bound disposition.",
@@ -1324,7 +1324,6 @@ def _reviewer_base() -> dict[str, object]:
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "recovery identity and idempotency",

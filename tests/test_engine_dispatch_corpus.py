@@ -35,7 +35,7 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "b762dde73296b94a61f028328d09409a07922f2e"
 SOURCE_BLOB = "6eef6884f82c4ae0b184f40bc4222384562d0351"
 PRE_B52_COMMIT = "b0134099e27fe05a1d6036b2b1578de51ad7ce91"
-RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
+RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 
 
 DISPATCH_HELPERS = {
@@ -121,13 +121,6 @@ SCENARIOS: tuple[dict[str, str], ...] = (
         "trigger_mode": "driver-contract-injection",
         "error_type": "WorkflowExecutionError",
         "message": "validation attestation is incomplete and cannot be overridden",
-    },
-    {
-        "scenario_id": "review-correction-missing-start-fingerprint",
-        "path": "review",
-        "trigger_mode": "state-contract-injection",
-        "error_type": "WorkflowExecutionError",
-        "message": "correction review requires a persisted start fingerprint",
     },
     {
         "scenario_id": "review-slice-packet-missing-start-fingerprint",
@@ -768,20 +761,6 @@ def _run_review_scenario(
         reviewer = AgentRole.CODEX
     elif scenario_id == "review-incomplete-attestation":
         driver.invalid_attestation = "incomplete"
-    elif scenario_id == "review-correction-missing-start-fingerprint":
-        state = _plan_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
-        unit = replace(
-            state.current_work_unit,
-            round_number=2,
-            codex_return_count=1,
-        )
-        state = replace(state, work_units=(*state.work_units[:-1], unit))
-        context = replace(
-            context,
-            approved_plan_text="# Approved plan",
-            task_scope_patterns=("docs/internal/plan.md",),
-        )
-        driver.snapshots = [_changes("b", "docs/internal/plan.md")]
     elif scenario_id == "review-slice-packet-missing-start-fingerprint":
         state = _plan_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
         context = replace(
@@ -1025,7 +1004,7 @@ def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None
     assert _static_document() == baseline
     codex, review = baseline["layers"]
     assert (len(codex["conditions"]), len(codex["aborts"])) == (22, 7)
-    assert (len(review["conditions"]), len(review["aborts"])) == (16, 7)
+    assert (len(review["conditions"]), len(review["aborts"])) == (13, 6)
     assert len(codex["checkpoints"]) == 5
     assert len(review["checkpoints"]) == 5
     assert review["catchers"] == [
@@ -1068,12 +1047,12 @@ def test_runtime_corpus_is_built_once_and_each_rejection_matches(
     baseline = json.loads(RUNTIME_BASELINE.read_text("utf-8"))
     _assert_runtime_matches(runtime_corpus, baseline)
     assert _RUNTIME_BUILD_COUNT == 1
-    assert len(runtime_corpus["scenarios"]) == 14
+    assert len(runtime_corpus["scenarios"]) == 13
     assert [item["scenario_id"] for item in runtime_corpus["scenarios"]] == [
         item["scenario_id"] for item in SCENARIOS
     ]
     assert sum(item["path"] == "codex" for item in runtime_corpus["scenarios"]) == 7
-    assert sum(item["path"] == "review" for item in runtime_corpus["scenarios"]) == 7
+    assert sum(item["path"] == "review" for item in runtime_corpus["scenarios"]) == 6
     for scenario in runtime_corpus["scenarios"]:
         assert scenario["reachable"] is True
         assert scenario["structural_reason"] is None

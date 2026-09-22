@@ -252,7 +252,6 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness",

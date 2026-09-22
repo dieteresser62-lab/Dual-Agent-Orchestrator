@@ -78,10 +78,10 @@ EXPECTED_SCENARIOS = {
 SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
     "synthetic invocation failure"
 )[0]
-FINAL_CORRECTION_OBSERVATIONS = tuple(f"C-{index:02d}" for index in range(1, 26))
+FINAL_CORRECTION_FINDINGS = tuple(f"C-{index:02d}" for index in range(1, 26))
 FINAL_CORRECTION_BLOCKERS = ("C-26", "C-27", "C-28", "C-29")
 FINAL_CORRECTION_FINDINGS = (
-    *FINAL_CORRECTION_OBSERVATIONS,
+    *FINAL_CORRECTION_FINDINGS,
     *FINAL_CORRECTION_BLOCKERS,
 )
 
@@ -237,7 +237,7 @@ def _review_result(
             {
                 "finding_id": finding_id,
                 "finding_class": (
-                    "OBSERVATION"
+                    "FINDING"
                     if finding_id in new_observations
                     else "BLOCKER"
                 ),
@@ -260,7 +260,6 @@ def _review_result(
             }
             for finding_id in closed_findings
         ],
-        "reclassifications": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, security, resume",
@@ -360,7 +359,7 @@ def _correction_scenario(kind: str) -> DryRunScenario:
                 _review_result(
                     approved=True,
                     new_observations=(
-                        FINAL_CORRECTION_OBSERVATIONS
+                        FINAL_CORRECTION_FINDINGS
                         if kind == "final-correction"
                         else ()
                     ),
@@ -371,7 +370,7 @@ def _correction_scenario(kind: str) -> DryRunScenario:
                 _codex_result(
                     "final_report_result",
                     findings=(
-                        FINAL_CORRECTION_OBSERVATIONS
+                        FINAL_CORRECTION_FINDINGS
                         if kind == "final-correction"
                         else ()
                     ),
@@ -428,7 +427,7 @@ def _correction_scenario(kind: str) -> DryRunScenario:
                     _codex_result(
                         "final_report_result",
                         findings=(
-                            FINAL_CORRECTION_OBSERVATIONS
+                            FINAL_CORRECTION_FINDINGS
                             if kind == "final-correction"
                             else ()
                         ),
@@ -440,7 +439,7 @@ def _correction_scenario(kind: str) -> DryRunScenario:
                     _review_result(
                         approved=True,
                         closed_findings=(
-                            FINAL_CORRECTION_OBSERVATIONS
+                            FINAL_CORRECTION_FINDINGS
                             if kind == "final-correction"
                             else ()
                         ),
@@ -546,7 +545,7 @@ def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -
     assert result.history.findings == ()
 
 
-def test_provider_free_correction_continues_beyond_four_returns(tmp_path: Path) -> None:
+def test_provider_free_correction_uses_all_six_rounds(tmp_path: Path) -> None:
     task = tmp_path / "progressive-correction.md"
     task.write_text("provider-free progressive correction", encoding="utf-8")
 
@@ -560,8 +559,9 @@ def test_provider_free_correction_continues_beyond_four_returns(tmp_path: Path) 
     assert correction.kind is WorkUnitKind.FINAL_REVIEW
     corrected_slice = report.result.state.work_units[-2]
     assert corrected_slice.kind is WorkUnitKind.SLICE
-    assert corrected_slice.codex_return_count == 6
-    assert corrected_slice.max_codex_returns == 8
+    assert corrected_slice.round_number == 6
+    assert corrected_slice.codex_return_count == 5
+    assert corrected_slice.max_codex_returns == 6
     assert correction.gate.status is GateStatus.CLEAR
     assert sum(call.startswith("commit:") for call in report.calls) == 1
     assert all(
@@ -702,7 +702,7 @@ def _run_correction_journey(
             and all(
                 item.status is FindingStatus.OPEN
                 for item in history.findings
-                if item.finding_id in FINAL_CORRECTION_OBSERVATIONS
+                if item.finding_id in FINAL_CORRECTION_FINDINGS
             )
             for history in correction_histories
         )
@@ -766,7 +766,7 @@ def _run_correction_journey(
         )
         assert all(
             origins[finding_id] == "01"
-            for finding_id in FINAL_CORRECTION_OBSERVATIONS
+            for finding_id in FINAL_CORRECTION_FINDINGS
         )
 
         review = next(
@@ -920,7 +920,7 @@ def test_provider_free_resilience_scenario(
     if scenario_id == "happy-path":
         test_provider_free_happy_path_completes_implementation_run(tmp_path)
     elif scenario_id == "slice-correction":
-        test_provider_free_correction_continues_beyond_four_returns(tmp_path)
+        test_provider_free_correction_uses_all_six_rounds(tmp_path)
     elif scenario_id in {"exact-structured-output-retry", "structured-output-near-miss"}:
         _run_structured_output_probe(scenario_id)
     elif scenario_id == "record-ahead-resume":
