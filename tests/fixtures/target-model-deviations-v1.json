@@ -34,5 +34,40 @@
     "finding": "103",
     "reason": "Ein in derselben Antwort geoeffnetes Finding ist eine Mitteilungsluecke, keine Erreichbarkeitsluecke."
   },
+  "beabsichtigte_strengedifferenzen": [
+    {
+      "id": "review-approval-vs-commit-blocker-boundary",
+      "probes": [
+        "commit-boundary-open-finding"
+      ],
+      "erwartete_schichtwerte": {
+        "Reviewvertrag": "ABGELEHNT",
+        "Findingreduktion": "AKZEPTIERT",
+        "Commitgrenze": "AKZEPTIERT"
+      },
+      "strengere_schicht": "src/native_review_contract.py: Reviewzustimmung schliesst jedes eigene Finding",
+      "weniger_strenge_schicht": "src/git_service.py: Commitgrenze verbietet nur offene Blocker",
+      "grund": "Die Commitgrenze des Zielmodells lautet bewusst 'kein offener Blocker'. Eine Umstellung auf alle offenen Findings wuerde diese eigenstaendige Commitbedingung verschaerfen."
+    },
+    {
+      "id": "review-denial-vs-commit-authorization",
+      "probes": [
+        "automatic-rejection-escalation",
+        "denied-new-finding-audit-parity",
+        "retain-blocker"
+      ],
+      "erwartete_schichtwerte": {
+        "Reviewvertrag": "AKZEPTIERT",
+        "Findingreduktion": "AKZEPTIERT",
+        "Auditprojektion": "AKZEPTIERT",
+        "Commitgrenze": "ABGELEHNT",
+        "Recordpersistenz": "AKZEPTIERT",
+        "Workflowdispatch": "AKZEPTIERT"
+      },
+      "strengere_schicht": "src/git_service.py: Commitautorisierung verlangt eine freigegebene Review",
+      "weniger_strenge_schicht": "src/native_review_contract.py: eine Ablehnung mit offenem Finding ist gueltig",
+      "grund": "Der Reviewer darf ein Finding offen lassen und ablehnen; dieser Zustand muss anschliessend korrigiert werden und darf nicht committen. Die Ablehnung an der Commitgrenze ist deshalb beabsichtigt."
+    }
+  ],
   "abweichungen": []
 }

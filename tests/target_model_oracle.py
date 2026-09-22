@@ -24,6 +24,8 @@ from typing import Callable, Iterable, Mapping, Sequence
 import native_finding_decisions
 import native_review_contract
 import artifact_models
+import git_service
+import workflow_persistence
 from audit_trail import (
     AuditProjection,
     ReviewAuditEvent,
@@ -39,6 +41,7 @@ from artifact_models import (
     FingerprintKind,
     Role,
     RoleProfilePayload,
+    RunIdentityPayload,
     RunProfilePayload,
 )
 from contracts import (
@@ -85,6 +88,7 @@ from slice_exit import evaluate_slice_exit
 from workflow_state import (
     Reviewer,
     WorkflowStep,
+    WorkUnitKind,
     WorkUnitStatus,
     init_workflow_state,
 )
@@ -461,6 +465,35 @@ class ProbeOutcome:
     audit_accepts: bool | None = None
     audit_detail: str = "not applicable to this policy probe"
     forced_class: DeviationClass | None = None
+    commit_accepts: bool | None = None
+    commit_detail: str = "not applicable before an approving review"
+    persistence_accepts: bool | None = None
+    persistence_detail: str = "not applicable to this policy probe"
+    workflow_accepts: bool | None = None
+    workflow_detail: str = "not applicable to this policy probe"
+
+
+@dataclass(frozen=True, slots=True)
+class IntentionalDifference:
+    difference_id: str
+    probe_ids: tuple[str, ...]
+    expected_layer_results: tuple[tuple[str, bool], ...]
+    stricter_layer: str
+    permissive_layer: str
+    rationale: str
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "id": self.difference_id,
+            "probes": list(self.probe_ids),
+            "erwartete_schichtwerte": {
+                layer: "AKZEPTIERT" if accepts else "ABGELEHNT"
+                for layer, accepts in self.expected_layer_results
+            },
+            "strengere_schicht": self.stricter_layer,
+            "weniger_strenge_schicht": self.permissive_layer,
+            "grund": self.rationale,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -490,6 +523,7 @@ class OracleReport:
     skipped_situations: tuple[tuple[str, str], ...]
     deviations: tuple[Deviation, ...]
     probe_outcomes: tuple[ProbeOutcome, ...]
+    intentional_differences: tuple[IntentionalDifference, ...]
 
 
 class OracleRegression(AssertionError):
@@ -500,6 +534,50 @@ FINGERPRINT = "a" * 64
 POST_FINGERPRINT = "c" * 64
 RUN_ID = "target-model-oracle"
 WORK_UNIT_ID = "1"
+
+INTENTIONAL_DIFFERENCES = (
+    IntentionalDifference(
+        difference_id="review-approval-vs-commit-blocker-boundary",
+        probe_ids=("commit-boundary-open-finding",),
+        expected_layer_results=(
+            ("Reviewvertrag", False),
+            ("Findingreduktion", True),
+            ("Commitgrenze", True),
+        ),
+        stricter_layer="src/native_review_contract.py: Reviewzustimmung schliesst jedes eigene Finding",
+        permissive_layer="src/git_service.py: Commitgrenze verbietet nur offene Blocker",
+        rationale=(
+            "Die Commitgrenze des Zielmodells lautet bewusst 'kein offener "
+            "Blocker'. Eine Umstellung auf alle offenen Findings wuerde diese "
+            "eigenstaendige Commitbedingung verschaerfen."
+        ),
+    ),
+    IntentionalDifference(
+        difference_id="review-denial-vs-commit-authorization",
+        probe_ids=(
+            "automatic-rejection-escalation",
+            "denied-new-finding-audit-parity",
+            "retain-blocker",
+        ),
+        expected_layer_results=(
+            ("Reviewvertrag", True),
+            ("Findingreduktion", True),
+            ("Auditprojektion", True),
+            ("Commitgrenze", False),
+            ("Recordpersistenz", True),
+            ("Workflowdispatch", True),
+        ),
+        stricter_layer="src/git_service.py: Commitautorisierung verlangt eine freigegebene Review",
+        permissive_layer="src/native_review_contract.py: eine Ablehnung mit offenem Finding ist gueltig",
+        rationale=(
+            "Der Reviewer darf ein Finding offen lassen und ablehnen; dieser "
+            "Zustand muss anschliessend korrigiert werden und darf nicht committen. "
+            "Die Ablehnung an der Commitgrenze ist deshalb beabsichtigt."
+        ),
+    ),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewProbe:
     probe_id: str
@@ -652,7 +730,14 @@ class _ReviewProbeCollector:
         target_viable: bool | None = None,
         expected_status: FindingStatus | None = None,
         expected_class: CurrentFindingClass | None = None,
-        locations: tuple[str, ...] = ("src/native_review_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+        locations: tuple[str, ...] = (  # allowlist:provider -- measured code locations
+            "src/native_review_contract.py",
+            "src/finding_reducer.py",
+            "src/audit_trail.py",
+            "src/git_service.py",
+            "src/workflow_persistence.py",
+            "src/workflow.py",
+        ),
     ) -> None:
         self.probes.append(
             ReviewProbe(
@@ -759,7 +844,13 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         _typed_response(context, approved=False),
         expected_status=FindingStatus.OPEN,
         expected_class=CurrentFindingClass.BLOCKER,
-        locations=("src/native_review_contract.py", "src/finding_reducer.py"),
+        locations=(
+            "src/native_review_contract.py",
+            "src/finding_reducer.py",
+            "src/audit_trail.py",
+            "src/workflow_persistence.py",
+            "src/workflow.py",
+        ),
     )
 
     # A newly discovered ordinary Finding is denied before it has an
@@ -800,6 +891,8 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
             "src/native_review_contract.py",
             "src/audit_trail.py",
             "src/finding_reducer.py",
+            "src/workflow_persistence.py",
+            "src/workflow.py",
         ),
     )
 
@@ -881,36 +974,25 @@ def _new_record(
     )
 
 
-def _native_opening_record(finding: NativeFinding) -> FindingRecord:
-    return FindingRecord(
-        finding_id=finding.finding_id,
-        finding_class=finding.finding_class,
-        status=FindingStatus.OPEN,
-        summary=finding.summary,
-        acceptance_test=finding.acceptance_test.text,
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
-        affected_paths=finding.affected_paths,
-    )
-
-
-def _semantic_match(
-    findings: Sequence[FindingRecord],
+def _finding_record_prefix(
     probe: ReviewProbe,
-) -> bool:
-    if probe.expected_status is None and probe.expected_class is None:
-        return True
-    finding = next((item for item in findings if item.finding_id == "C-01"), None)
-    if finding is None:
-        return False
-    if probe.expected_status is not None and finding.status is not probe.expected_status:
-        return False
-    if probe.expected_class is not None and finding.finding_class is not probe.expected_class:
-        return False
-    return True
-
-
-def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
+    *,
+    replayable: bool,
+) -> list[ArtifactRecord]:
     records: list[ArtifactRecord] = []
+    if replayable:
+        _new_record(
+            records,
+            "run-identity",
+            RunIdentityPayload(
+                "task.md",
+                "feature/oracle",
+                "b" * 40,
+                "b" * 40,
+                "IMPLEMENT",
+                None,
+            ),
+        )
     _new_record(
         records,
         "run-profile",
@@ -943,6 +1025,39 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
                     response_decision=response.decision,
                 ),
             )
+    return records
+
+
+def _native_opening_record(finding: NativeFinding) -> FindingRecord:
+    return FindingRecord(
+        finding_id=finding.finding_id,
+        finding_class=finding.finding_class,
+        status=FindingStatus.OPEN,
+        summary=finding.summary,
+        acceptance_test=finding.acceptance_test.text,
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        affected_paths=finding.affected_paths,
+    )
+
+
+def _semantic_match(
+    findings: Sequence[FindingRecord],
+    probe: ReviewProbe,
+) -> bool:
+    if probe.expected_status is None and probe.expected_class is None:
+        return True
+    finding = next((item for item in findings if item.finding_id == "C-01"), None)
+    if finding is None:
+        return False
+    if probe.expected_status is not None and finding.status is not probe.expected_status:
+        return False
+    if probe.expected_class is not None and finding.finding_class is not probe.expected_class:
+        return False
+    return True
+
+
+def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
+    records = _finding_record_prefix(probe, replayable=False)
     opened = tuple(_native_opening_record(item) for item in probe.typed_response.new_findings)
     statuses = tuple(
         ReviewerStatusChange(item.finding_id, item.status, item.rationale)
@@ -1048,10 +1163,203 @@ def _audit_probe(
         return False, f"{type(exc).__name__}: {exc}"
 
 
+def _commit_probe(
+    probe: ReviewProbe,
+    result: ContractResult | None,
+) -> tuple[bool | None, str]:
+    if result is None:
+        return None, "commit path was not reached because the contract rejected"
+    authorization = git_service.CommitAuthorization(
+        slice_id=1,
+        diff_fingerprint=FINGERPRINT,
+        attestation=result.validation or _attestation(),
+        claude_review=result,
+        findings=result.findings,
+    )
+    try:
+        git_service._validate_authorization(  # allowlist:private -- executable oracle boundary
+            authorization,
+            FINGERPRINT,
+        )
+    except git_service.GitTransactionError as exc:
+        return False, f"Git commit authorization rejected: {exc}"
+    return True, "Git commit authorization accepted the approving review"
+
+
+class _OracleRecordStore:
+    def __init__(self, records: list[ArtifactRecord]) -> None:
+        self._records = records
+
+    def current_chain(self) -> tuple[ArtifactRecord, ...]:
+        return tuple(self._records)
+
+
+class _OraclePersistenceBridge:
+    def __init__(self, records: list[ArtifactRecord]) -> None:
+        self.records = records
+        self.store = _OracleRecordStore(records)
+
+    def append(
+        self,
+        payload: object,
+        *,
+        logical_id: str,
+        idempotency_key: str,
+        fingerprint_sha256: str,
+        **_kwargs: object,
+    ) -> ArtifactRecord:
+        _ = (idempotency_key, fingerprint_sha256)
+        _new_record(self.records, logical_id, payload)
+        return self.records[-1]
+
+
+def _unavailable_persistence_edge(*_args: object, **_kwargs: object) -> object:
+    raise AssertionError("the oracle persistence probe used an unrelated edge")
+
+
+def _persistence_probe(
+    probe: ReviewProbe,
+    result: ContractResult | None,
+) -> tuple[bool, str]:
+    if result is None:
+        return False, "persistence was not reached because the contract rejected"
+    records = _finding_record_prefix(probe, replayable=True)
+    bridge = _OraclePersistenceBridge(records)
+    state = init_workflow_state(
+        run_id=RUN_ID,
+        task_file="/repo/task.md",
+        branch="feature/oracle",
+        branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
+        slice_count=1,
+    )
+    dependencies = workflow_persistence.WorkflowPersistenceDependencies(
+        artifact_bridge=lambda: bridge,  # type: ignore[arg-type]
+        active_state=lambda: state,
+        artifact_fingerprint=lambda: FINGERPRINT,
+        append_workflow_transition=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        gate_transition_payload=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        append_gate_decision_binding=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        append_workflow_event=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        native_agent_request_path=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        native_agent_request_bundle_json=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        materialize_review_packet=_unavailable_persistence_edge,  # type: ignore[arg-type]
+        canonical_agent_result=_unavailable_persistence_edge,  # type: ignore[arg-type]
+    )
+    persistence = workflow_persistence.WorkflowPersistence(dependencies)
+    try:
+        persistence._persist_review_finding_transitions(  # allowlist:private -- executable oracle boundary
+            result,
+            fingerprint=FINGERPRINT,
+            round_number=probe.context.round_number,
+            previous_findings=probe.context.previous_findings,
+            structured=True,
+        )
+        reduced = reduce_finding_records(records)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    matched = _semantic_match(reduced.ledger.findings, probe)
+    return matched, (
+        "workflow persistence wrote records that reduce to the requested semantic state"
+        if matched
+        else "workflow persistence wrote records that miss the requested semantic state"
+    )
+
+
+class _OracleWorkflowDriver:
+    def checkpoint(self, _state: object, _history: object) -> None:
+        return None
+
+    def evaluate_slice_finding_convergence(
+        self,
+        _state: object,
+        *,
+        round_number: int,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            phase=SimpleNamespace(value=(
+                "discovery" if round_number == 1 else "convergence"
+            )),
+            progress_made=True,
+            newly_opened_finding_ids=("C-01",),
+            closed_local_finding_ids=(),
+            attested_remediation_finding_ids=(),
+            reason="the oracle supplies a progressing record-backed review round",
+        )
+
+
+def _workflow_probe(
+    probe: ReviewProbe,
+    result: ContractResult | None,
+) -> tuple[bool, str]:
+    if result is None:
+        return False, "workflow dispatch was not reached because the contract rejected"
+    state = init_workflow_state(
+        run_id=RUN_ID,
+        task_file="/repo/task.md",
+        branch="feature/oracle",
+        branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
+        slice_count=1,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+    )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=probe.context.previous_findings,
+    )
+    try:
+        dispatched, dispatched_history = WorkflowEngine(
+            _OracleWorkflowDriver()  # type: ignore[arg-type]
+        )._apply_review_result(  # allowlist:private -- executable oracle boundary
+            state=state,
+            context=SimpleNamespace(),  # only stop/plan branches inspect context
+            history=history,
+            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+            result=result,
+            fingerprint=FINGERPRINT,
+            round_number=probe.context.round_number,
+            is_plan_review=False,
+            is_final_review=False,
+            finding_ledger=probe.context.previous_findings,
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    expected_step = (
+        WorkflowStep.SLICE_COMMIT
+        if result.approval is True
+        else WorkflowStep.CODEX_CORRECTION
+    )
+    expected_open_ids = (
+        ()
+        if result.approval is True
+        else tuple(item.finding_id for item in result.own_open_findings)
+    )
+    matched = (
+        _semantic_match(dispatched_history.findings, probe)
+        and dispatched.current_step is expected_step
+        and dispatched.current_work_unit.open_findings == expected_open_ids
+    )
+    return matched, (
+        f"workflow dispatched the review to {expected_step.value}"
+        if matched
+        else (
+            "workflow dispatch missed the requested semantic state: "
+            f"step={dispatched.current_step.value}, "
+            f"open_findings={dispatched.current_work_unit.open_findings}"
+        )
+    )
+
+
 def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
     result, contract_accepts, contract_detail = _contract_probe_result(probe)
     records_accept, records_detail = _record_probe(probe)
     audit_accepts, audit_detail = _audit_probe(probe, result)
+    commit_accepts, commit_detail = _commit_probe(probe, result)
+    persistence_accepts, persistence_detail = _persistence_probe(probe, result)
+    workflow_accepts, workflow_detail = _workflow_probe(probe, result)
     return ProbeOutcome(
         probe_id=probe.probe_id,
         situation_id=probe.situation_id,
@@ -1064,6 +1372,12 @@ def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
         locations=probe.locations,
         audit_accepts=audit_accepts,
         audit_detail=audit_detail,
+        commit_accepts=commit_accepts,
+        commit_detail=commit_detail,
+        persistence_accepts=persistence_accepts,
+        persistence_detail=persistence_detail,
+        workflow_accepts=workflow_accepts,
+        workflow_detail=workflow_detail,
     )
 
 
@@ -1089,6 +1403,63 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             if observation_present
             else "FindingSeverity contains only FINDING and BLOCKER",
             ("src/contracts.py", "src/native_review_contract.py"),
+        )
+    )
+
+    # The review contract is intentionally stricter at approval time than the
+    # downstream commit boundary.  Exercise both real paths: the former rejects
+    # an approving response with an open FINDING, while git_service admits the
+    # same typed authorization because the sole Finding condition is no open
+    # BLOCKER.  The exact asymmetry is frozen below rather than silently waived.
+    open_finding = _finding(CurrentFindingClass.FINDING)
+    boundary_context = _context((open_finding,))
+    boundary_probe = ReviewProbe(
+        "commit-boundary-open-finding",
+        "implementierung.finding.review.unresolved.first_review",
+        Move.COMMIT_OR_ACCEPT,
+        boundary_context,
+        _base_document(boundary_context, approved=True),
+        _typed_response(boundary_context, approved=True),
+        True,
+        FindingStatus.OPEN,
+        CurrentFindingClass.FINDING,
+        (
+            "src/native_review_contract.py",
+            "src/finding_reducer.py",
+            "src/git_service.py",
+        ),
+    )
+    boundary_contract_accepts, boundary_contract_detail = _contract_probe(
+        boundary_probe
+    )
+    boundary_records_accept, boundary_records_detail = _record_probe(
+        boundary_probe
+    )
+    clean_result, clean_accepted, _ = _contract_probe_result(
+        _review_probes()[0]
+    )
+    if clean_result is None or not clean_accepted:
+        raise OracleRegression(
+            "commit-boundary probe lacks its valid approving control result"
+        )
+    boundary_result = replace(clean_result, findings=(open_finding,))
+    boundary_commit_accepts, boundary_commit_detail = _commit_probe(
+        boundary_probe,
+        boundary_result,
+    )
+    outcomes.append(
+        ProbeOutcome(
+            probe_id=boundary_probe.probe_id,
+            situation_id=boundary_probe.situation_id,
+            move=Move.COMMIT_OR_ACCEPT.value,
+            target_viable=True,
+            contract_accepts=boundary_contract_accepts,
+            records_accept=boundary_records_accept,
+            contract_detail=boundary_contract_detail,
+            records_detail=boundary_records_detail,
+            locations=boundary_probe.locations,
+            commit_accepts=boundary_commit_accepts,
+            commit_detail=boundary_commit_detail,
         )
     )
 
@@ -1343,13 +1714,71 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     return tuple(outcomes)
 
 
+def _layer_results(outcome: ProbeOutcome) -> tuple[tuple[str, bool], ...]:
+    optional = (
+        ("Auditprojektion", outcome.audit_accepts),
+        ("Commitgrenze", outcome.commit_accepts),
+        ("Recordpersistenz", outcome.persistence_accepts),
+        ("Workflowdispatch", outcome.workflow_accepts),
+    )
+    return (
+        ("Reviewvertrag", outcome.contract_accepts),
+        ("Findingreduktion", outcome.records_accept),
+        *tuple((layer, value) for layer, value in optional if value is not None),
+    )
+
+
+def _layer_details(outcome: ProbeOutcome) -> tuple[tuple[str, str], ...]:
+    optional = (
+        ("Auditprojektion", outcome.audit_accepts, outcome.audit_detail),
+        ("Commitgrenze", outcome.commit_accepts, outcome.commit_detail),
+        (
+            "Recordpersistenz",
+            outcome.persistence_accepts,
+            outcome.persistence_detail,
+        ),
+        ("Workflowdispatch", outcome.workflow_accepts, outcome.workflow_detail),
+    )
+    return (
+        ("Reviewvertrag", outcome.contract_detail),
+        ("Findingreduktion", outcome.records_detail),
+        *tuple(
+            (layer, detail)
+            for layer, value, detail in optional
+            if value is not None
+        ),
+    )
+
+
+def _intentional_difference_for(
+    outcome: ProbeOutcome,
+) -> IntentionalDifference | None:
+    return next(
+        (
+            item
+            for item in INTENTIONAL_DIFFERENCES
+            if outcome.probe_id in item.probe_ids
+        ),
+        None,
+    )
+
+
 def _deviation_for(outcome: ProbeOutcome) -> Deviation | None:
     deviation_class = outcome.forced_class
-    layer_results = [outcome.contract_accepts, outcome.records_accept]
-    if outcome.audit_accepts is not None:
-        layer_results.append(outcome.audit_accepts)
+    named_results = _layer_results(outcome)
+    layer_results = tuple(value for _, value in named_results)
+    intentional = _intentional_difference_for(outcome)
     if deviation_class is None:
-        if len(set(layer_results)) != 1:
+        if outcome.target_viable and not any(layer_results):
+            deviation_class = DeviationClass.FEHLEND
+        elif (
+            intentional is not None
+            and named_results != intentional.expected_layer_results
+        ):
+            deviation_class = DeviationClass.UNEINIG
+        elif intentional is not None:
+            return None
+        elif len(set(layer_results)) != 1:
             deviation_class = DeviationClass.UNEINIG
         elif outcome.target_viable and not all(layer_results):
             deviation_class = DeviationClass.FEHLEND
@@ -1362,14 +1791,9 @@ def _deviation_for(outcome: ProbeOutcome) -> Deviation | None:
         deviation_class,
         outcome.situation_id,
         outcome.move,
-        (
-            f"Vertrag: {outcome.contract_detail}; "
-            f"Recordschicht: {outcome.records_detail}"
-            + (
-                f"; Audit layer: {outcome.audit_detail}"
-                if outcome.audit_accepts is not None
-                else ""
-            )
+        "; ".join(
+            f"{layer}: {detail}"
+            for layer, detail in _layer_details(outcome)
         ),
         outcome.locations,
     )
@@ -1406,6 +1830,7 @@ def run_target_model_oracle() -> OracleReport:
         skipped_situations=skipped,
         deviations=deviations,
         probe_outcomes=outcomes,
+        intentional_differences=INTENTIONAL_DIFFERENCES,
     )
 
 
@@ -1475,6 +1900,9 @@ def frozen_document(report: OracleReport) -> dict[str, object]:
                 "Mitteilungsluecke, keine Erreichbarkeitsluecke."
             ),
         },
+        "beabsichtigte_strengedifferenzen": [
+            item.to_document() for item in report.intentional_differences
+        ],
         "abweichungen": [item.to_document() for item in report.deviations],
     }
 
@@ -1482,6 +1910,8 @@ def frozen_document(report: OracleReport) -> dict[str, object]:
 __all__ = [
     "Deviation",
     "DeviationClass",
+    "INTENTIONAL_DIFFERENCES",
+    "IntentionalDifference",
     "Move",
     "OracleRegression",
     "TARGET_MODEL",
