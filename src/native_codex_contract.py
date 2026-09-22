@@ -25,6 +25,7 @@ from contracts import (
 from finding_reducer import (
     FindingResponseEvent,
     apply_finding_responses,
+    project_finding_response_delta,
     project_open_set,
 )
 from finding_order import sorted_finding_ids
@@ -741,6 +742,74 @@ def parse_bound_native_codex_contract_result(
 ) -> CodexContractResult:
     return native_codex_response_to_contract_result(
         parse_native_codex_response(document, bound_context), bound_context
+    )
+
+
+def validate_native_correction_fingerprint(  # allowlist:provider -- native correction boundary
+    result: CodexContractResult,  # allowlist:provider -- parsed result type
+    context: NativeCodexContext,  # allowlist:provider -- bound request type
+    resulting_fingerprint: str,
+) -> None:
+    """Reject an accepted correction that changed no repository fingerprint.
+
+    One fingerprint can prove only that the correction changed *something*.
+    Attribution of individual Findings to diff hunks remains reviewer-owned.
+    """
+
+    if not isinstance(result, CodexContractResult) or not isinstance(  # allowlist:provider -- parsed result type
+        context, NativeCodexContext  # allowlist:provider -- bound request type
+    ):
+        raise NativeCodexContractError(  # allowlist:provider -- typed rejection
+            NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+            "correction fingerprint validation requires typed result and context",
+        )
+    _require_sha256(
+        resulting_fingerprint,
+        "resulting_fingerprint",
+        NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+    )
+    if context.request_kind is not NativeCodexRequestKind.CORRECTION:  # allowlist:provider -- request kind
+        return
+    try:
+        response_delta = project_finding_response_delta(
+            context.previous_findings, result.findings
+        )
+    except ValueError as exc:
+        raise NativeCodexContractError(  # allowlist:provider -- typed rejection
+            NativeCodexErrorCode.FINDING_REFERENCE_INVALID,  # allowlist:provider -- error vocabulary
+            str(exc),
+        ) from exc
+    accepted_ids = sorted_finding_ids(
+        item.finding.finding_id
+        for item in response_delta
+        if _accepted_correction_without_change(
+            item.response.decision,
+            context.current_fingerprint,
+            resulting_fingerprint,
+        )
+    )
+    if not accepted_ids:
+        return
+    raise NativeCodexContractError(  # allowlist:provider -- typed rejection
+        NativeCodexErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
+        "correction result accepted finding IDs "
+        f"{', '.join(accepted_ids)} but made no fingerprint-changing repository "
+        "change; accepting a finding requires a change; resolve the accepted "
+        "findings or reject them",
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.IMPLEMENTER_ACCEPTED_CORRECTION_REQUIRES_CHANGE
+        ),
+    )
+
+
+def _accepted_correction_without_change(
+    decision: FindingResponseDecision,
+    request_fingerprint: str,
+    resulting_fingerprint: str,
+) -> bool:
+    return (
+        decision is FindingResponseDecision.ACCEPTED
+        and request_fingerprint == resulting_fingerprint
     )
 
 

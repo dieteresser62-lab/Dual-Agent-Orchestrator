@@ -554,6 +554,7 @@
             "request-mismatch: parsed response does not match bound request",
             "request-mismatch: response request_id does not match bound context",
             "request-mismatch: response request_id does not match bound request",
+            "result-content-invalid: an accepted correction finding disposition requires a fingerprint-changing repository change; resolve the accepted finding or reject it",
             "result-content-invalid: native implementer result content must satisfy its closed contract",
             "result-kind-mismatch: native implementer result kind must match its bound request",
             "result-kind-mismatch: unsupported Co\u0064ex response variant",

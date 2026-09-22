@@ -1393,6 +1393,7 @@ class WorkflowRecovery:
             canonical_json=canonical,
             request_id=recovery_bound.request_id,
             response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            context=recovery_bound.context,
             recovered_finding_comparison=self._finding_comparison_at_recovery(
                 request_ledger,
                 recovery_bound.context.previous_findings,
@@ -1545,6 +1546,7 @@ class WorkflowRecovery:
             canonical_json=canonical,
             request_id=recovery_bound.request_id,
             response_sha256=response_sha256,
+            context=recovery_bound.context,
             recovered_finding_comparison=(
                 request_ledger
                 and self._finding_comparison_at_recovery(

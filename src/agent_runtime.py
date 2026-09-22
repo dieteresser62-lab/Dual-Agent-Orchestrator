@@ -37,6 +37,7 @@ from contracts import (
     ValidationAttestation,
 )
 from native_codex_contract import (
+    NativeCodexContext,
     NativeCodexContractError,
     NativeCodexErrorCode,
     find_native_implementer_contract_error,
@@ -1696,6 +1697,7 @@ class NativeAgentCodexOutput:
     canonical_json: str
     request_id: str
     response_sha256: str
+    context: NativeCodexContext | None = field(default=None, compare=False)
     recovered_finding_comparison: RecoveredFindingComparison | None = field(
         default=None,
         compare=False,
@@ -1785,6 +1787,7 @@ def run_native_codex_agent(
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
         response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        context=bundle.bound_context.context,
     )
 
 

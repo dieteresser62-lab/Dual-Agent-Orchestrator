@@ -60,6 +60,7 @@ from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
 )
+from native_codex_contract import validate_native_correction_fingerprint  # allowlist:provider -- native result boundary
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -162,6 +163,7 @@ from workflow_state import (
     SliceStatus,
     ProtocolMode,
     WorkflowState,
+    WorkflowStep,
     WorkUnitRecord,
     WorkUnitKind,
     WorkUnitStatus,
@@ -1720,6 +1722,17 @@ class ProductionWorkflowDriver:
         *,
         recovery_fingerprint: str | None = None,
     ) -> None:
+        state = self.active_state
+        if state is not None and state.current_step is WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- canonical step
+            if output.context is None:
+                raise WorkflowExecutionError(
+                    "native Codex correction persistence lacks its request context"  # allowlist:provider -- canonical role
+                )
+            validate_native_correction_fingerprint(
+                output.result,
+                output.context,
+                recovery_fingerprint or self._artifact_fingerprint(),
+            )
         self._persistence_boundary().persist_native_implementer_contract(
             output,
             request_sequence,

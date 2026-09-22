@@ -103,6 +103,11 @@ class OrchestratorDiagnostic(StrEnum):
     IMPLEMENTER_RESULT_CONTENT_INVALID = (
         "result-content-invalid: native implementer result content must satisfy its closed contract"
     )
+    IMPLEMENTER_ACCEPTED_CORRECTION_REQUIRES_CHANGE = (
+        "result-content-invalid: an accepted correction finding disposition requires "
+        "a fingerprint-changing repository change; resolve the accepted finding or "
+        "reject it"
+    )
     IMPLEMENTER_FINDING_REFERENCE_INVALID = (
         "finding-reference-invalid: native implementer finding references must match the offered open findings"
     )

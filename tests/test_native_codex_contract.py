@@ -40,6 +40,7 @@ from native_codex_contract import (
     native_codex_provider_response_schema,
     parse_native_codex_response,
     parse_bound_native_codex_contract_result,
+    validate_native_correction_fingerprint,
 )
 from native_provider_schema import (
     NativeProviderSchemaError,
@@ -228,6 +229,139 @@ def test_canary_33_proof_kills_measurement_stage_offer_mutations(
 
     with pytest.raises(AssertionError):
         _assert_canary_33_measurement_stage_offer()
+
+
+def _canary_34_correction_guard_accepts(
+    decision: FindingResponseDecision,
+    resulting_fingerprint: str,
+) -> tuple[bool, NativeCodexContractError | None]:
+    finding = replace(
+        _finding(),
+        finding_class=(
+            FindingClass.FINDING
+            if decision is FindingResponseDecision.REJECTED
+            else FindingClass.BLOCKER
+        ),
+    )
+    bound = _bound(
+        NativeCodexRequestKind.CORRECTION,
+        findings=(finding,),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": decision.value.lower(),
+                "rationale": "Resolve the offered finding according to the decision.",
+            }
+        ],
+    }
+    result = parse_bound_native_codex_contract_result(document, bound)
+    try:
+        validate_native_correction_fingerprint(
+            result,
+            bound.context,
+            resulting_fingerprint,
+        )
+    except NativeCodexContractError as error:
+        return False, error
+    return True, None
+
+
+def _assert_canary_34_correction_guard() -> None:
+    unchanged = "a" * 64
+    changed = "c" * 64
+    outcomes = (
+        _canary_34_correction_guard_accepts(
+            FindingResponseDecision.ACCEPTED, unchanged
+        )[0],
+        _canary_34_correction_guard_accepts(
+            FindingResponseDecision.ACCEPTED, changed
+        )[0],
+        _canary_34_correction_guard_accepts(
+            FindingResponseDecision.REJECTED, unchanged
+        )[0],
+    )
+    assert outcomes == (False, True, True)
+
+
+def test_canary_34_rejects_accepted_correction_without_fingerprint_change() -> None:
+    accepted, error = _canary_34_correction_guard_accepts(
+        FindingResponseDecision.ACCEPTED,
+        "a" * 64,
+    )
+
+    assert not accepted
+    assert error is not None
+    assert error.code is NativeCodexErrorCode.RESULT_CONTENT_INVALID
+    assert error.detail == (
+        "correction result accepted finding IDs C-01 but made no "
+        "fingerprint-changing repository change; accepting a finding requires a "
+        "change; resolve the accepted findings or reject them"
+    )
+    assert str(error) == (
+        "result-content-invalid: correction result accepted finding IDs C-01 but "
+        "made no fingerprint-changing repository change; accepting a finding "
+        "requires a change; resolve the accepted findings or reject them"
+    )
+
+
+def test_canary_34_accepts_accepted_correction_with_fingerprint_change() -> None:
+    accepted, error = _canary_34_correction_guard_accepts(
+        FindingResponseDecision.ACCEPTED,
+        "c" * 64,
+    )
+
+    assert accepted
+    assert error is None
+
+
+def test_canary_34_accepts_rejected_only_correction_without_change() -> None:
+    accepted, error = _canary_34_correction_guard_accepts(
+        FindingResponseDecision.REJECTED,
+        "a" * 64,
+    )
+
+    assert accepted
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "allow_accepted_unchanged",
+        "reject_accepted_changed",
+        "reject_rejected_unchanged",
+    ),
+)
+def test_canary_34_proof_kills_each_correction_guard_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    def mutant(
+        decision: FindingResponseDecision,
+        request_fingerprint: str,
+        resulting_fingerprint: str,
+    ) -> bool:
+        if mutation == "allow_accepted_unchanged":
+            return False
+        if mutation == "reject_accepted_changed":
+            return decision is FindingResponseDecision.ACCEPTED
+        return request_fingerprint == resulting_fingerprint
+
+    monkeypatch.setattr(
+        native_codex_contract,
+        "_accepted_correction_without_change",
+        mutant,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_canary_34_correction_guard()
 
 
 def test_native_codex_schema_is_checked_and_canonical() -> None:

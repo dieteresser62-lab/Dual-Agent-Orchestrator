@@ -1112,6 +1112,7 @@ class ScriptedWorkflowDriver:
             canonical_json=canonical,
             request_id=invocation.native_request.bound_context.request_id,
             response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            context=invocation.native_request.bound_context.context,
         )
 
     def recover_pending_native_codex(  # allowlist:provider -- canonical capability

@@ -88,6 +88,8 @@ from contracts import (
     FindingClass,
     FindingOrigin,
     FindingRecord,
+    FindingResponse,
+    FindingResponseDecision,
     FindingStatus,
     PlannedSlice,
     ReadinessMarker,
@@ -490,6 +492,7 @@ def test_rejected_reviewer_response_uses_side_effect_ledger_and_exact_bytes(
 from plan_handoff import render_implementation_task
 from native_codex_contract import (
     NativeCodexContext,
+    NativeCodexContractError,
     NativeCodexRequestKind,
     canonical_native_codex_json,
     parse_bound_native_codex_contract_result,
@@ -4008,6 +4011,70 @@ def _finding_transition_driver(
     return driver, state, finding
 
 
+def test_correction_persistence_rejects_accepted_unchanged_fingerprint(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(
+        tmp_path, "accepted-correction-without-change"
+    )
+    correction_state = state.with_current_step(WorkflowStep.CODEX_CORRECTION)
+    driver.active_state = correction_state
+    request_fingerprint = driver._artifact_fingerprint()
+    contract = CodexStepContract(
+        "accepted-correction-without-change",
+        ReadinessMarker.IMPLEMENTATION,
+        "01",
+        1,
+        require_test_files_record=True,
+        expected_test_files=(),
+        test_changes_approved=True,
+    )
+    context = NativeCodexContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=WorkflowStep.CODEX_CORRECTION.value,
+        current_fingerprint=request_fingerprint,
+        request_kind=NativeCodexRequestKind.CORRECTION,
+        contract=contract,
+        previous_findings=(finding,),
+    )
+    canonical = '{"result_type":"correction_result"}'
+    output = NativeAgentCodexOutput(
+        result=CodexContractResult(
+            ready=True,
+            stopped=False,
+            stop_request=None,
+            validation=None,
+            test_files=(),
+            findings=(
+                replace(
+                    finding,
+                    responses=(
+                        FindingResponse(
+                            FindingResponseDecision.ACCEPTED,
+                            "The finding is accepted without a repository change.",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        canonical_json=canonical,
+        request_id=f"native-codex-request-{'b' * 64}",
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        context=context,
+    )
+
+    with pytest.raises(NativeCodexContractError, match=r"accepted finding IDs C-01"):
+        driver.persist_native_codex_contract(output, 1, (finding,))
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    assert not any(
+        isinstance(record.payload, AgentResultPayload)
+        for record in bridge.store.load_chain()
+    )
+
+
 def _request_time_review_persistence_case(
     tmp_path: Path, run_id: str
 ) -> tuple[
@@ -4557,6 +4624,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
         response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        context=bundle.bound_context.context,
     )
     invocation = CodexInvocation(
         state.current_work_unit_id,
@@ -4648,6 +4716,11 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
         return original_append(self, payload, **kwargs)
 
     monkeypatch.setattr(type(bridge), "append", append_with_mid_persistence_crash)
+    (repository / "src").mkdir()
+    (repository / "src" / "runtime.py").write_text(
+        "recovery correction changed the bound implementation\n",
+        encoding="utf-8",
+    )
     with pytest.raises(RuntimeError, match="crash after AgentResult"):
         driver.persist_native_codex_contract(output, 1, (finding,))
 

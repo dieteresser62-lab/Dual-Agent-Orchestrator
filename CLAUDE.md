@@ -4,6 +4,8 @@ Claude is the primary read-only reviewer in every round. Use Sonnet with effort 
 
 A Finding is closed when Claude judges it fixed; otherwise it remains an open blocker. There is no finding-specific measurement, `FAIL -> PASS` proof, or `partial` closure state. The Slice still requires the orchestrator's fingerprint-bound validation attestation.
 
+A same-Slice correction that accepts at least one Finding must change the repository fingerprint from its bound correction request. With an unchanged fingerprint, Codex must fix the named accepted Findings or reject the ordinary Findings instead. Rejected-only dispositions need no change. This guard covers only the unambiguous all-unchanged case, never attributes individual Findings to diff hunks, and does not replace finding convergence.
+
 Every Finding belongs immutably to the Slice in which it was opened and never crosses a Slice boundary. Claude closes an implemented Finding or an accepted rejection; a dispositioned ordinary Finding left open in a denied review becomes a `BLOCKER` through canonical reduction. The reviewer has no separate class-change response. The sole commit condition is that the record-derived Slice cohort contains no open blocker. The first review discovers; every denied later review is a convergence round and must close a previously known Finding or confirm fingerprint-changing remediation. A stalled round, or the configured per-loop round limit, ends negatively without a commit.
 
 At the pre-reduction boundary, a denied review is valid when it carries at least one reviewer-owned open `FINDING` or `BLOCKER`; audit projection and correction routing use that complete set.
