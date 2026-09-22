@@ -137,34 +137,6 @@ class FindingResponse:
 
 
 @dataclass(frozen=True)
-class FindingAcceptanceMeasurement:
-    """One orchestrator-measured typed acceptance result at an exact fingerprint."""
-
-    fingerprint: str
-    command: ValidationCommandSpec
-    status: ValidationStatus
-    exit_code: int
-    output_sha256: str
-    attestation_id: str
-
-    def __post_init__(self) -> None:
-        if not SHA256_PATTERN.fullmatch(self.fingerprint):
-            raise ValueError("finding acceptance measurement requires a SHA-256 fingerprint")
-        if not isinstance(self.command, ValidationCommandSpec) or not self.command.argv:
-            raise ValueError("finding acceptance measurement requires typed argv")
-        if not isinstance(self.status, ValidationStatus):
-            raise ValueError("finding acceptance measurement status must be typed")
-        if self.status is ValidationStatus.PASS and self.exit_code != 0:
-            raise ValueError("passing finding acceptance measurement requires exit code 0")
-        if self.status is ValidationStatus.FAIL and self.exit_code == 0:
-            raise ValueError("failing finding acceptance measurement requires non-zero exit code")
-        if not SHA256_PATTERN.fullmatch(self.output_sha256):
-            raise ValueError("finding acceptance measurement requires an output digest")
-        if not isinstance(self.attestation_id, str) or not self.attestation_id.strip():
-            raise ValueError("finding acceptance measurement requires an attestation id")
-
-
-@dataclass(frozen=True)
 class FindingRecord:
     finding_id: str
     finding_class: FindingClass
@@ -177,7 +149,6 @@ class FindingRecord:
     class_history: tuple[FindingClass, ...] = ()
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
-    acceptance_measurements: tuple[FindingAcceptanceMeasurement, ...] = ()
     affected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -226,21 +197,6 @@ class FindingRecord:
             raise ValueError(
                 "evidence anchor digest requires a predecessor Finding reference"
             )
-        if any(
-            not isinstance(item, FindingAcceptanceMeasurement)
-            for item in self.acceptance_measurements
-        ):
-            raise ValueError("finding acceptance measurements must be typed")
-        identities = tuple(
-            (item.fingerprint, item.command.argv)
-            for item in self.acceptance_measurements
-        )
-        if len(identities) != len(set(identities)):
-            raise ValueError(
-                "finding acceptance measurements must be unique by fingerprint and command"
-            )
-
-
 @dataclass(frozen=True)
 class FindingOccurrence:
     finding_id: str

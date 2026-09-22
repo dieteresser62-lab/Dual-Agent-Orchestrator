@@ -537,7 +537,6 @@ def finding_payload(
             else closure.rejection_reason.value
         ),
         closure_evidence=None if closure is None else closure.evidence,
-        remaining_work=None if closure is None else closure.remaining,
         predecessor_finding_ref=(
             finding.predecessor_finding_ref
             if structured and action == "opened"

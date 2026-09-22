@@ -74,7 +74,6 @@ from contracts import (
     AgentRole,
     ApprovalMarker,
     ContractResult,
-    FindingAcceptanceMeasurement,
     FindingRecord,
     ValidationAttestation,
 )
@@ -1848,52 +1847,6 @@ class WorkflowPersistence:
                 f"{request.attempt_number}"
             ),
             fingerprint_sha256=request.diff_fingerprint,
-        )
-
-    def persist_finding_acceptance_measurement(
-        self,
-        finding: FindingRecord,
-        measurement: FindingAcceptanceMeasurement,
-    ) -> None:
-        """Append one orchestrator-owned, fingerprint-bound test fact."""
-
-        bridge = self._artifact_bridge
-        state = self.active_state
-        if bridge is None:
-            return
-        if state is None:
-            raise WorkflowExecutionError(
-                "finding acceptance measurement lacks an active work unit"
-            )
-        command_digest = hashlib.sha256(
-            "\0".join(measurement.command.argv).encode("utf-8")
-        ).hexdigest()
-        bridge.append(
-            FindingTransitionPayload(
-                finding_id=finding.finding_id,
-                reporter=Role(finding.origin.reporter.value),
-                actor=Role.ORCHESTRATOR,
-                action="acceptance_measured",
-                severity=FindingSeverity(finding.finding_class.value),
-                finding_status="open",
-                rationale=(
-                    "orchestrator measured the typed acceptance command at "
-                    f"fingerprint {measurement.fingerprint}"
-                ),
-                work_unit_id=str(state.current_work_unit_id),
-                acceptance_command=command_payload(measurement.command),
-                acceptance_outcome=measurement.status.value.lower(),
-                acceptance_exit_code=measurement.exit_code,
-                acceptance_output_sha256=measurement.output_sha256,
-                acceptance_attestation_id=measurement.attestation_id,
-                acceptance_fingerprint=measurement.fingerprint,
-            ),
-            logical_id=f"finding-{finding.finding_id}",
-            idempotency_key=(
-                f"finding-acceptance:{finding.finding_id}:"
-                f"{measurement.fingerprint}:{command_digest}"
-            ),
-            fingerprint_sha256=measurement.fingerprint,
         )
 
     def persist_invocation_failure(

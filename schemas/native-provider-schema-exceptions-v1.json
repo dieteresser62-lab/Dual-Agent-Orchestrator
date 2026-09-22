@@ -2,16 +2,6 @@
   "schema_version": "native-provider-schema-exceptions-v1",
   "exceptions": [
     {
-      "exception_id": "claude-acceptance-command-family",
-      "provider": "claude",
-      "operations": ["plan", "slice"],
-      "error_code": "acceptance-invalid",
-      "local_invariant": "A BLOCKER validation command belongs to one of the request-bound configured argv families.",
-      "missing_schema_feature": "positional_tuple_and_argv_prefix_relation",
-      "provider_evidence": "Claude Code 2.1.241 rejects prefixItems, so a generated argv array cannot be constrained to one of the request-bound multi-token prefixes.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
-    },
-    {
       "exception_id": "claude-anchor-id-uniqueness",
       "provider": "claude",
       "operations": ["plan", "slice"],

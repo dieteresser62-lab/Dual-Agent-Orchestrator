@@ -152,13 +152,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_FINDING_SIGNATURE_DUPLICATE = (
         "finding-signature-duplicate: native review findings must not duplicate a known signature"
     )
-    REVIEW_ACCEPTANCE_INVALID = (
-        "acceptance-invalid: native review acceptance evidence must satisfy its bound contract"
-    )
-    REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING = (
-        "acceptance-invalid: typed BLOCKER acceptance command already passes at the "
-        "current fingerprint; bind a command that fails now"
-    )
     REVIEW_ANCHOR_INVALID = (
         "anchor-invalid: native review anchors must satisfy their bound contract"
     )
@@ -336,9 +329,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_ATTESTATION_FINGERPRINT_MISMATCH = (
         "context-invalid: validation attestation fingerprint does not match context"
     )
-    REVIEW_CONTEXT_PRE_CHANGE_FINGERPRINT_INVALID = (
-        "context-invalid: pre_change_fingerprint must be lowercase SHA-256"
-    )
     REVIEW_CONTEXT_PREVIOUS_FINDINGS_SORTED = (
         "context-invalid: previous findings must be sorted and unique"
     )
@@ -389,9 +379,6 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_CONTEXT_FINAL_COUNT_SCOPE_INVALID = (
         "context-invalid: final_review_pending_count is valid only for a final review"
-    )
-    REVIEW_CONTEXT_VALIDATION_PREFIXES_INVALID = (
-        "context-invalid: validation command prefixes must be unique safe argv prefixes"
     )
     REVIEW_CONTEXT_SLICE_COMMIT_DECISION_SET_MISMATCH = (
         "context-invalid: communicated Slice-commit decision Finding set differs from the "
@@ -512,13 +499,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED = (
         "finding-id-invalid: evidence anchor digest requires a predecessor Finding reference"
     )
-    REVIEW_FINDING_ACCEPTANCE_MEASUREMENTS_TYPED = (
-        "finding-id-invalid: finding acceptance measurements must be typed"
-    )
-    REVIEW_FINDING_ACCEPTANCE_MEASUREMENTS_UNIQUE = (
-        "finding-id-invalid: finding acceptance measurements must be unique by "
-        "fingerprint and command"
-    )
     REVIEW_EVIDENCE_DIMENSIONS_REQUIRED = (
         "review-content-missing: review evidence requires checked dimensions"
     )
@@ -585,9 +565,6 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_IMPLEMENTATION_TREATMENT_CLOSURE_FORBIDDEN = (
         "finding-content-invalid: implementation treatment cannot close its Finding in plan review"
     )
-    REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN = (
-        "finding-content-invalid: partial finding decision must remain OPEN"
-    )
     REVIEW_CONTENT_EVENT_OR_EVIDENCE_REQUIRED = (
         "review-content-missing: review requires at least one finding event or review evidence"
     )
@@ -614,17 +591,8 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_FINDING_ID_REUSE_FORBIDDEN = (
         "finding-event-conflict: new finding reuses a previous finding id"
     )
-    REVIEW_OBSERVATION_VALIDATION_FORBIDDEN = (
-        "acceptance-invalid: OBSERVATION cannot request a validation command"
-    )
-    REVIEW_VALIDATION_COMMAND_FAMILY_INVALID = (
-        "acceptance-invalid: validation command is outside configured families"
-    )
     REVIEW_ANCHOR_ORIGIN_REQUIRED = (
         "anchor-invalid: native anchors require a bound anchor_origin"
-    )
-    REVIEW_PROSE_ACCEPTANCE_PREFIX_RESERVED = (
-        "acceptance-invalid: prose acceptance must not use the reserved typed VALIDATE prefix"
     )
     REVIEW_DISCOVERY_MARKER_REQUIRED = (
         "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker"

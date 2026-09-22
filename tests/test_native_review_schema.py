@@ -116,28 +116,22 @@ def test_schema_error_names_variants_and_their_concrete_conditions() -> None:
     assert "rule_id: is required" in detail
 
 
-def test_schema_rejects_open_shell_string_and_empty_argv() -> None:
-    shell = _review()
-    shell["decision"] = "denied"
-    shell["new_findings"] = [
+def test_schema_rejects_finding_specific_validation_command() -> None:
+    review = _review()
+    review["decision"] = "denied"
+    review["new_findings"] = [
         {
             "finding_id": "C-01",
             "finding_class": "BLOCKER",
-            "summary": "Unsafe command surface",
+            "summary": "Finding commands are retired",
             "acceptance_test": {
                 "kind": "validation_command",
-                "command": "pytest -q",
+                "argv": ["python3", "-m", "pytest"],
             },
             "affected_paths": [],
         }
     ]
-    _assert_schema_error(shell)
-
-    empty = deepcopy(shell)
-    acceptance = empty["new_findings"][0]["acceptance_test"]  # type: ignore[index]
-    acceptance.pop("command")
-    acceptance["argv"] = []
-    _assert_schema_error(empty)
+    _assert_schema_error(review)
 
 
 def test_schema_rejects_stop_request_with_review_fields() -> None:

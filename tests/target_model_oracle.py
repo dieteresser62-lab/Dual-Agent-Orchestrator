@@ -18,11 +18,11 @@ from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Iterable, Mapping, Sequence
 
 import native_finding_decisions
 import native_review_contract
-import workflow_recovery
 from artifact_bridge import finding_payload
 from artifact_models import (
     ArtifactRecord,
@@ -74,10 +74,9 @@ from native_review_contract import (
     NativeReviewContext,
     NativeReviewResult,
     NativeStatusChange,
-    NativeValidationAcceptance,
     parse_native_contract_result,
 )
-from workflow import WorkflowHistory
+from workflow import EvidenceKind, WorkflowEngine, WorkflowHistory
 from finding_signature import finding_record_signature
 from slice_exit import evaluate_slice_exit
 from workflow_state import (
@@ -496,15 +495,6 @@ FINGERPRINT = "a" * 64
 POST_FINGERPRINT = "c" * 64
 RUN_ID = "target-model-oracle"
 WORK_UNIT_ID = "1"
-TYPED_ARGV = (
-    "python3",
-    "-m",
-    "pytest",
-    "tests/test_target_model_oracle.py",
-    "-q",
-)
-
-
 @dataclass(frozen=True, slots=True)
 class ReviewProbe:
     probe_id: str
@@ -522,7 +512,6 @@ class ReviewProbe:
 def _attestation(
     *,
     fingerprint: str = FINGERPRINT,
-    typed_status: ValidationStatus | None = None,
 ) -> ValidationAttestation:
     default = ValidationCommandSpec(
         argv=("python3", "-m", "pytest", "tests/", "-v")
@@ -531,25 +520,13 @@ def _attestation(
     records = (
         ValidationRecord(ValidationStatus.PASS, default.display, 0, "passed"),
     )
-    if typed_status is not None:
-        typed = ValidationCommandSpec(argv=TYPED_ARGV)
-        specs = (*specs, typed)
-        records = (
-            *records,
-            ValidationRecord(
-                typed_status,
-                typed.display,
-                0 if typed_status is ValidationStatus.PASS else 1,
-                typed_status.value.lower(),
-            ),
-        )
     return ValidationAttestation(
-        attestation_id=f"oracle-{fingerprint[:8]}-{typed_status or 'plain'}",
+        attestation_id=f"oracle-{fingerprint[:8]}-plain",
         diff_fingerprint=fingerprint,
         expected_commands=tuple(item.display for item in specs),
         records=records,
         output_digest=hashlib.sha256(
-            f"{fingerprint}:{typed_status}".encode("utf-8")
+            f"{fingerprint}:plain".encode("utf-8")
         ).hexdigest(),
         summary="provider-free oracle attestation",
         command_specs=specs,
@@ -560,23 +537,15 @@ def _finding(
     finding_class: CurrentFindingClass,
     *,
     decision: FindingResponseDecision | None = None,
-    typed: bool = False,
-    measurements: tuple = (),
 ) -> FindingRecord:
     finding = FindingRecord(
         finding_id="C-01",
         finding_class=finding_class,
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
-        acceptance_test=(
-            "VALIDATE:"
-            + json.dumps(list(TYPED_ARGV), separators=(",", ":"))
-            if typed
-            else "The reported behavior is corrected."
-        ),
+        acceptance_test="The reported behavior is corrected.",
         origin=FindingOrigin("1", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
         affected_paths=("src/native_review_contract.py",),
-        acceptance_measurements=measurements,
     )
     if decision is None:
         return finding
@@ -599,7 +568,6 @@ def _context(
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
     fingerprint: str = FINGERPRINT,
-    pre_change_fingerprint: str | None = None,
     plan_treatments: tuple[PlanTreatmentProposal, ...] = (),
 ) -> NativeReviewContext:
     return NativeReviewContext(
@@ -615,9 +583,7 @@ def _context(
         validation_attestation=attestation or _attestation(fingerprint=fingerprint),
         allow_new_observations=True,
         anchor_origin=(None if approval is ApprovalMarker.PLAN else "approved-plan"),
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
         planned_slices=planned_slices,
-        pre_change_fingerprint=pre_change_fingerprint,
         plan_treatments=plan_treatments,
     )
 
@@ -943,88 +909,7 @@ def _plan_review_probes() -> tuple[ReviewProbe, ...]:
 def _legacy_finding_review_probes() -> tuple[ReviewProbe, ...]:
     probes: list[ReviewProbe] = []
     add = _ReviewProbeCollector(probes)
-    blocker = _finding(
-        CurrentFindingClass.BLOCKER,
-        decision=FindingResponseDecision.ACCEPTED,
-    )
     closure = NativeFindingClosure(NativeClosureKind.FIXED)
-
-    context = _context((blocker,))
-    partial = NativeFindingClosure(
-        NativeClosureKind.PARTIAL,
-        evidence="Part of the defect is corrected.",
-        remaining="Complete the remaining repair.",
-    )
-    status = NativeStatusChange(
-        "C-01", FindingStatus.OPEN, "The repair is partial.", partial
-    )
-    document = _base_document(context, approved=False)
-    document["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "OPEN",
-            "rationale": status.rationale,
-            "closure": {
-                "kind": "partial",
-                "evidence": partial.evidence,
-                "remaining": partial.remaining,
-            },
-        }
-    ]
-    add(
-        "partial-closure",
-        "implementierung.blocker.review.unresolved.first_review",
-        "PARTIAL",
-        context,
-        document,
-        _typed_response(context, approved=False, status_changes=(status,)),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.BLOCKER,
-        locations=("src/native_review_contract.py", "src/artifact_models.py"),  # allowlist:provider -- measured code location
-    )
-
-    context = _context(
-        (),
-        round_number=1,
-        attestation=_attestation(typed_status=ValidationStatus.FAIL),
-    )
-    native = NativeFinding(
-        "C-01",
-        CurrentFindingClass.BLOCKER,
-        "A typed acceptance command describes the defect.",
-        NativeValidationAcceptance(TYPED_ARGV),
-        affected_paths=("tests/test_target_model_oracle.py",),
-    )
-    document = _base_document(context, approved=False)
-    document["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "BLOCKER",
-            "summary": native.summary,
-            "acceptance_test": {
-                "kind": "validation_command",
-                "argv": list(TYPED_ARGV),
-            },
-            "affected_paths": ["tests/test_target_model_oracle.py"],
-        }
-    ]
-    add(
-        "typed-acceptance-command",
-        "implementierung.blocker.review.unresolved.first_review",
-        "TYPISIERTER-ABNAHMEBEFEHL",
-        context,
-        document,
-        _typed_response(context, approved=False, new_findings=(native,)),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.BLOCKER,
-        locations=(
-            "src/native_review_contract.py",  # allowlist:provider -- measured code location
-            "src/validation_matrix.py",
-            "src/finding_reducer.py",
-        ),
-    )
 
     # OBSERVATION itself is an implementation class absent from the target.
     context = _context((), round_number=1)
@@ -1107,18 +992,12 @@ def _new_record(
 
 
 def _native_opening_record(finding: NativeFinding) -> FindingRecord:
-    acceptance = (
-        finding.acceptance_test.text
-        if isinstance(finding.acceptance_test, NativeProseAcceptance)
-        else "VALIDATE:"
-        + json.dumps(list(finding.acceptance_test.argv), separators=(",", ":"))
-    )
     return FindingRecord(
         finding_id=finding.finding_id,
         finding_class=finding.finding_class,
         status=FindingStatus.OPEN,
         summary=finding.summary,
-        acceptance_test=acceptance,
+        acceptance_test=finding.acceptance_test.text,
         origin=FindingOrigin("1", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
         affected_paths=finding.affected_paths,
     )
@@ -1374,19 +1253,34 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     # the immutable Slice start.
     previous = "b" * 64
     slice_start = "d" * 64
-    selected = workflow_recovery._review_pre_change_fingerprint(
-        ApprovalMarker.SLICE,
-        WorkflowHistory(1, last_claude_fingerprint=previous),  # allowlist:provider -- current persisted field
-        slice_start,
+    collected: list[tuple[str, str]] = []
+    engine = SimpleNamespace(
+        driver=SimpleNamespace(
+            collect_correction_delta=lambda start, end: (
+                collected.append((start, end)) or "correction delta"
+            )
+        )
     )
+    evidence_kind, _ = WorkflowEngine._select_review_evidence(
+        engine,
+        SimpleNamespace(current_slice=SimpleNamespace(start_fingerprint=slice_start)),
+        SimpleNamespace(approved_plan_text=None),
+        WorkflowHistory(1, last_claude_fingerprint=previous),  # allowlist:provider -- current persisted field
+        AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        SimpleNamespace(),
+        SimpleNamespace(fingerprint=POST_FINGERPRINT, full_diff="full diff"),
+        False,
+        False,
+    )
+    selected = collected[0][0] if collected else None
     outcomes.append(
         ProbeOutcome(
             "correction-review-baseline",
             "implementierung.blocker.review.unresolved.fingerprint_changed",
             "KORREKTURDELTA-ALS-AUSGANGSSTAND",
             False,
-            selected == previous,
-            selected == previous,
+            evidence_kind is EvidenceKind.CORRECTION_DELTA and selected == previous,
+            evidence_kind is EvidenceKind.CORRECTION_DELTA and selected == previous,
             f"review context selected prior-review fingerprint {selected}",
             "the request binding persists that selected fingerprint",
             ("src/workflow_recovery.py", "src/workflow_requests.py", "src/workflow.py"),
@@ -1438,96 +1332,6 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     return tuple(outcomes)
 
 
-def _typed_green_reachability_probe() -> ProbeOutcome | None:
-    """Reproduce finding 106 only if its currently blocked state is reachable."""
-
-    context = _context(
-        (),
-        round_number=1,
-        attestation=_attestation(typed_status=ValidationStatus.PASS),
-    )
-    native = NativeFinding(
-        "C-01",
-        CurrentFindingClass.BLOCKER,
-        "The typed command is already green.",
-        NativeValidationAcceptance(TYPED_ARGV),
-        affected_paths=("tests/test_target_model_oracle.py",),
-    )
-    document = _base_document(context, approved=False)
-    document["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "BLOCKER",
-            "summary": native.summary,
-            "acceptance_test": {
-                "kind": "validation_command",
-                "argv": list(TYPED_ARGV),
-            },
-            "affected_paths": ["tests/test_target_model_oracle.py"],
-        }
-    ]
-    try:
-        opened = parse_native_contract_result(document, context)
-    except (TypeError, ValueError):
-        return None
-
-    # If the guard is mutated away, the impossible state becomes reachable.
-    # A truthful close after the repair is rejected for missing FAIL -> PASS,
-    # while retaining the now-fixed blocker is contract-valid but untruthful.
-    post_context = _context(
-        opened.findings,
-        attestation=_attestation(
-            fingerprint=POST_FINGERPRINT,
-            typed_status=ValidationStatus.PASS,
-        ),
-        fingerprint=POST_FINGERPRINT,
-        pre_change_fingerprint=FINGERPRINT,
-    )
-    close = _base_document(post_context, approved=True)
-    close["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "CLOSED",
-            "rationale": "The implementation fixed the defect.",
-            "closure": {"kind": "fixed"},
-        }
-    ]
-    keep = _base_document(post_context, approved=False)
-    keep["status_changes"] = [
-        {
-            "finding_id": "C-01",
-            "status": "OPEN",
-            "rationale": "The typed proof cannot show FAIL then PASS.",
-            "closure": None,
-        }
-    ]
-    close_allowed = True
-    keep_allowed = True
-    try:
-        parse_native_contract_result(close, post_context)
-    except (TypeError, ValueError):
-        close_allowed = False
-    try:
-        parse_native_contract_result(keep, post_context)
-    except (TypeError, ValueError):
-        keep_allowed = False
-    truthful_moves = (close_allowed, False if keep_allowed else False)
-    if any(truthful_moves):
-        return None
-    return ProbeOutcome(
-        "typed-green-no-truthful-move",
-        "implementierung.blocker.review.fixed.first_review",
-        "SCHLIESSEN-ODER-OFFENLASSEN",
-        True,
-        False,
-        False,
-        "typed blocker can be opened, but the truthful close is rejected",
-        "retaining a fixed blocker is admissible but untruthful",
-        ("src/native_review_contract.py", "src/validation_matrix.py"),
-        DeviationClass.FEHLEND,
-    )
-
-
 def _deviation_for(outcome: ProbeOutcome) -> Deviation | None:
     deviation_class = outcome.forced_class
     if deviation_class is None:
@@ -1560,11 +1364,9 @@ def run_target_model_oracle() -> OracleReport:
             + ", ".join(item.situation_id for item in dead_ends)
         )
     review_outcomes = tuple(_review_probe_outcome(item) for item in _review_probes())
-    reachability_106 = _typed_green_reachability_probe()
     outcomes = (
         *review_outcomes,
         *_policy_probe_outcomes(),
-        *((reachability_106,) if reachability_106 is not None else ()),
     )
     deviations = tuple(
         sorted(

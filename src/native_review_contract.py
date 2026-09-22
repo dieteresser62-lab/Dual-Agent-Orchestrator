@@ -36,7 +36,6 @@ from contracts import (
     SOURCE_FINDING_ID_PATTERN,
     StopRequest,
     ValidationAttestation,
-    ValidationStatus,
 )
 from finding_reducer import (
     ReviewerReclassification,
@@ -50,13 +49,6 @@ from finding_signature import (
     finding_record_signature,
     finding_signature,
     mentioned_repository_paths,
-)
-from validation_matrix import (
-    FINDING_COMMAND_PREFIX,
-    ValidationCommand,
-    ValidationMatrixError,
-    finding_validation_command,
-    matches_validation_family,
 )
 from native_provider_schema import (
     ANTHROPIC_PROVIDER,
@@ -111,7 +103,6 @@ class NativeReviewErrorCode(StrEnum):
     FINDING_UPDATE_MISSING = "missing-own-finding-update"
     FINDING_CONTENT_INVALID = "finding-content-invalid"
     FINDING_SIGNATURE_DUPLICATE = "finding-signature-duplicate"
-    ACCEPTANCE_INVALID = "acceptance-invalid"
     ANCHOR_INVALID = "anchor-invalid"
     REVIEW_CONTENT_MISSING = "review-content-missing"
     STOP_CONTENT_INVALID = "stop-content-invalid"
@@ -146,9 +137,6 @@ _REVIEW_DIAGNOSTIC_BY_CODE = {
     ),
     NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE: (
         OrchestratorDiagnostic.REVIEW_FINDING_SIGNATURE_DUPLICATE
-    ),
-    NativeReviewErrorCode.ACCEPTANCE_INVALID: (
-        OrchestratorDiagnostic.REVIEW_ACCEPTANCE_INVALID
     ),
     NativeReviewErrorCode.ANCHOR_INVALID: OrchestratorDiagnostic.REVIEW_ANCHOR_INVALID,
     NativeReviewErrorCode.REVIEW_CONTENT_MISSING: (
@@ -207,9 +195,6 @@ _NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
     ),
     NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE: (
         "Do not create a duplicate finding; update its unique offered open finding when possible."
-    ),
-    NativeReviewErrorCode.ACCEPTANCE_INVALID: (
-        "Use the acceptance-test kind and command family permitted by the bound contract."
     ),
     NativeReviewErrorCode.ANCHOR_INVALID: (
         "Return only unique anchors permitted by the bound anchor origin, or no anchors."
@@ -272,13 +257,6 @@ def native_review_retry_guidance(
         )
         if decision_guidance is not None:
             return decision_guidance
-    if (
-        diagnostic
-        is OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
-    ):
-        return diagnostic.text + _allowed_command_prefixes_suffix(
-            () if context is None else context.validation_command_prefixes
-        )
     if diagnostic is _REVIEW_DIAGNOSTIC_BY_CODE[code]:
         diagnostic = None
     return closed_retry_guidance(code.value, fallback, diagnostic)
@@ -431,19 +409,11 @@ class NativeProseAcceptance:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeValidationAcceptance:
-    argv: tuple[str, ...]
-
-
-NativeAcceptance: TypeAlias = NativeProseAcceptance | NativeValidationAcceptance
-
-
-@dataclass(frozen=True, slots=True)
 class NativeFinding:
     finding_id: str
     finding_class: FindingClass
     summary: str
-    acceptance_test: NativeAcceptance
+    acceptance_test: NativeProseAcceptance
     predecessor_finding_ref: str | None = None
     evidence_anchor_sha256: str | None = None
     affected_paths: tuple[str, ...] = ()
@@ -571,7 +541,6 @@ class NativeReviewContext:
     test_changes_approved: bool = False
     allow_new_observations: bool = True
     anchor_origin: str | None = None
-    validation_command_prefixes: tuple[tuple[str, ...], ...] = ()
     red_state_followup_slice: str | None = None
     plan_artifact_path: str | None = None
     final_review_pending_count: int | None = None
@@ -579,7 +548,6 @@ class NativeReviewContext:
     planned_slices: tuple[PlannedSlice, ...] = ()
     plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
     closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
-    pre_change_fingerprint: str | None = None
     request_sequence: int | None = None
 
     def __post_init__(self) -> None:
@@ -632,17 +600,6 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "validation attestation fingerprint does not match context",
-            )
-        if self.pre_change_fingerprint is not None and (
-            len(self.pre_change_fingerprint) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in self.pre_change_fingerprint
-            )
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                "pre_change_fingerprint must be lowercase SHA-256",
             )
         previous_ids = tuple(item.finding_id for item in self.previous_findings)
         if previous_ids != sorted_finding_ids(previous_ids):
@@ -761,21 +718,6 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "final_review_pending_count is valid only for a final review",
-            )
-        normalized_prefixes = tuple(dict.fromkeys(self.validation_command_prefixes))
-        if normalized_prefixes != self.validation_command_prefixes or any(
-            not prefix
-            or any(
-                not isinstance(part, str)
-                or not part
-                or any(character in part for character in ("\x00", "\r", "\n"))
-                for part in prefix
-            )
-            for prefix in self.validation_command_prefixes
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                "validation command prefixes must be unique safe argv prefixes",
             )
         _validate_plan_treatments(self)
         _validate_closed_finding_bindings(self)
@@ -1203,12 +1145,6 @@ def native_review_provider_response_schema(
         NONBLANK_TEXT_PATTERN
     )
     definitions["prose_acceptance"]["properties"]["text"]["maxLength"] = 2000
-    definitions["validation_acceptance"]["properties"]["argv"]["items"][
-        "pattern"
-    ] = NONBLANK_LINE_PATTERN
-    definitions["validation_acceptance"]["properties"]["argv"]["items"][
-        "maxLength"
-    ] = 512
     for key in ("dimensions", "largest_residual_risk", "break_condition"):
         definitions["evidence"]["properties"][key]["pattern"] = (
             NONBLANK_TEXT_PATTERN
@@ -1957,16 +1893,11 @@ def canonical_native_review_json(document: Mapping[str, Any]) -> str:
 
 def _parse_native_finding(item: Mapping[str, Any]) -> NativeFinding:
     acceptance = item["acceptance_test"]
-    parsed_acceptance: NativeAcceptance
-    if acceptance["kind"] == "prose":
-        parsed_acceptance = NativeProseAcceptance(acceptance["text"])
-    else:
-        parsed_acceptance = NativeValidationAcceptance(tuple(acceptance["argv"]))
     return NativeFinding(
         finding_id=item["finding_id"],
         finding_class=FindingClass(item["finding_class"]),
         summary=item["summary"],
-        acceptance_test=parsed_acceptance,
+        acceptance_test=NativeProseAcceptance(acceptance["text"]),
         predecessor_finding_ref=item.get("predecessor_finding_ref"),
         evidence_anchor_sha256=item.get("evidence_anchor_sha256"),
         affected_paths=tuple(item["affected_paths"]),
@@ -1980,12 +1911,6 @@ def _parse_native_closure(raw: object) -> NativeFindingClosure | None:
     kind = NativeClosureKind(raw["kind"])
     if kind is NativeClosureKind.FIXED:
         return NativeFindingClosure(kind=kind)
-    if kind is NativeClosureKind.PARTIAL:
-        return NativeFindingClosure(
-            kind=kind,
-            evidence=raw["evidence"],
-            remaining=raw["remaining"],
-        )
     return NativeFindingClosure(
         kind=kind,
         rejection_reason=NativeRejectionReason(raw["rejection_reason"]),
@@ -2002,7 +1927,6 @@ def _validate_native_closure(
             for item in (
                 closure.rejection_reason,
                 closure.evidence,
-                closure.remaining,
             )
         ):
             raise NativeReviewContractError(
@@ -2010,30 +1934,6 @@ def _validate_native_closure(
                 f"fixed closure for {finding_id} forbids rejection fields",
             )
         return
-    if closure.kind is NativeClosureKind.PARTIAL:
-        if closure.rejection_reason is not None:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                f"partial finding decision for {finding_id} forbids rejection_reason",
-            )
-        _require_native_text(
-            closure.evidence,
-            f"partial finding evidence for {finding_id}",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-        _require_native_text(
-            closure.remaining,
-            f"partial finding remaining work for {finding_id}",
-            max_length=3000,
-            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-        )
-        return
-    if closure.remaining is not None:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            f"rejected closure for {finding_id} forbids remaining work",
-        )
     if closure.rejection_reason is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_CONTENT_INVALID,
@@ -2057,24 +1957,6 @@ def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> Non
                     "kind": {"type": "string", "const": "fixed"},
                 },
                 "required": ["kind"],
-                "additionalProperties": False,
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "const": "partial"},
-                    "evidence": {
-                        "type": "string",
-                        "pattern": NONBLANK_TEXT_PATTERN,
-                        "maxLength": 3000,
-                    },
-                    "remaining": {
-                        "type": "string",
-                        "pattern": NONBLANK_TEXT_PATTERN,
-                        "maxLength": 3000,
-                    },
-                },
-                "required": ["kind", "evidence", "remaining"],
                 "additionalProperties": False,
             },
             {
@@ -2216,114 +2098,6 @@ def _validate_plan_treatment_response_decisions(
                 )
 
 
-def _validate_fixed_acceptance_evidence(
-    finding: FindingRecord,
-    context: NativeReviewContext,
-) -> None:
-    """Require red-before/green-after only for the explicit typed command."""
-
-    try:
-        command = finding_validation_command(finding)
-    except ValidationMatrixError as exc:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"typed acceptance test for {finding.finding_id} is invalid: {exc}",
-        ) from exc
-    if command is None:
-        # Prose remains opaque.  No textual inference or substitute evidence is
-        # permitted at this boundary.
-        return
-    before_fingerprint = context.pre_change_fingerprint
-    if before_fingerprint is None:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"fixed finding {finding.finding_id} lacks a bound pre-change fingerprint",
-        )
-    if before_fingerprint == context.diff_fingerprint:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"fixed finding {finding.finding_id} has identical before and after fingerprints",
-        )
-    matching = tuple(
-        item
-        for item in finding.acceptance_measurements
-        if item.command.argv == command.argv
-    )
-    before = tuple(
-        item for item in matching if item.fingerprint == before_fingerprint
-    )
-    after = tuple(
-        item for item in matching if item.fingerprint == context.diff_fingerprint
-    )
-    if len(before) != 1 or len(after) != 1:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"fixed finding {finding.finding_id} requires one record-backed acceptance "
-            "result at each bound before/after fingerprint",
-        )
-    if before[0].status is ValidationStatus.PASS:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"typed acceptance test for {finding.finding_id} was already passing "
-            f"at the pre-change fingerprint {before_fingerprint}; a previously "
-            "green test does not prove a fix",
-        )
-    if after[0].status is not ValidationStatus.PASS:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.ACCEPTANCE_INVALID,
-            f"typed acceptance test for {finding.finding_id} does not pass at "
-            f"the post-change fingerprint {context.diff_fingerprint}",
-        )
-
-
-def _allowed_command_prefixes_suffix(
-    allowed_prefixes: tuple[tuple[str, ...], ...],
-) -> str:
-    """Render configured Finding command families as bounded reviewer guidance."""
-
-    if not allowed_prefixes:
-        return ""
-    rendered = ", ".join(
-        f"`{ValidationCommand(argv=prefix).display}`" for prefix in allowed_prefixes
-    )
-    return f"; allowed command prefixes are: {rendered}"
-
-
-def reject_passing_typed_acceptance_binding(
-    finding_id: str,
-    argv: tuple[str, ...],
-    attestation: ValidationAttestation | None,
-    fingerprint: str,
-    allowed_prefixes: tuple[tuple[str, ...], ...],
-) -> None:
-    """Reject a typed BLOCKER command that cannot establish a red baseline."""
-
-    if attestation is None or attestation.diff_fingerprint != fingerprint:
-        return
-    command = ValidationCommand(argv=argv)
-    record = next(
-        (
-            item
-            for item in attestation.records
-            if item.command == command.display
-        ),
-        None,
-    )
-    if record is None or record.status is not ValidationStatus.PASS:
-        return
-    rendered_argv = json.dumps(list(argv), ensure_ascii=False, separators=(",", ":"))
-    raise NativeReviewContractError(
-        NativeReviewErrorCode.ACCEPTANCE_INVALID,
-        f"typed acceptance test for {finding_id} uses command {rendered_argv}, "
-        f"which is already passing at the current fingerprint {fingerprint}; "
-        "bind a command that fails now so a later PASS can prove the fix"
-        + _allowed_command_prefixes_suffix(allowed_prefixes),
-        orchestrator_diagnostic=(
-            OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING
-        ),
-    )
-
-
 def _validate_finding_event_collisions(
     response: NativeReviewResult,
 ) -> tuple[list[str], list[str], list[str]]:
@@ -2446,13 +2220,6 @@ def _validate_response_events(
                     "closing status change",
                 )
             continue
-        if (
-            update.closure is not None
-            and update.closure.kind is NativeClosureKind.FIXED
-        ):
-            _validate_fixed_acceptance_evidence(
-                previous_finding, context
-            )
         if update.rationale == previous_finding.status_rationale:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
@@ -2475,30 +2242,6 @@ def _validate_response_events(
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_ID_INVALID,
                 f"finding {finding.finding_id} does not belong to reviewer",
-            )
-        if (
-            finding.finding_class is FindingClass.OBSERVATION
-            and isinstance(finding.acceptance_test, NativeValidationAcceptance)
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.ACCEPTANCE_INVALID,
-                "OBSERVATION cannot request a validation command",
-            )
-        if isinstance(finding.acceptance_test, NativeValidationAcceptance):
-            if not any(
-                matches_validation_family(finding.acceptance_test.argv, prefix)
-                for prefix in context.validation_command_prefixes
-            ):
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.ACCEPTANCE_INVALID,
-                    "validation command is outside configured families",
-                )
-            reject_passing_typed_acceptance_binding(
-                finding.finding_id,
-                finding.acceptance_test.argv,
-                context.validation_attestation,
-                context.diff_fingerprint,
-                context.validation_command_prefixes,
             )
     known_signatures: dict[str, list[str]] = {}
     for finding in context.effective_known_open_findings:
@@ -2561,19 +2304,12 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
             max_length=3000,
             code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
-        if isinstance(finding.acceptance_test, NativeProseAcceptance):
-            _require_native_text(
-                finding.acceptance_test.text,
-                "finding prose acceptance test",
-                max_length=2000,
-                code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            )
-            if finding.acceptance_test.text.strip().startswith("VALIDATE:"):
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.ACCEPTANCE_INVALID,
-                    "prose acceptance must not use the reserved typed "
-                    "VALIDATE prefix",
-                )
+        _require_native_text(
+            finding.acceptance_test.text,
+            "finding prose acceptance test",
+            max_length=2000,
+            code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+        )
     for update in response.status_changes:
         _require_native_text(
             update.rationale,
@@ -2586,26 +2322,10 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
                 NativeReviewErrorCode.FINDING_CONTENT_INVALID,
                 f"CLOSED status change for {update.finding_id} requires closure",
             )
-        if (
-            not is_closed_finding_status(update.status)
-            and update.closure is not None
-            and update.closure.kind is not NativeClosureKind.PARTIAL
-        ):
+        if not is_closed_finding_status(update.status) and update.closure is not None:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                f"OPEN status change for {update.finding_id} permits only partial",
-            )
-        if (
-            is_closed_finding_status(update.status)
-            and update.closure is not None
-            and update.closure.kind is NativeClosureKind.PARTIAL
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                f"partial finding decision for {update.finding_id} must remain OPEN",
-                orchestrator_diagnostic=(
-                    OrchestratorDiagnostic.REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN
-                ),
+                f"OPEN status change for {update.finding_id} forbids a closure",
             )
         if update.closure is not None:
             _validate_native_closure(update.finding_id, update.closure)
@@ -3248,11 +2968,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "test_changes_approved": context.test_changes_approved,
         "allow_new_observations": context.allow_new_observations,
         "anchor_origin": context.anchor_origin,
-        "validation_command_prefixes": [
-            list(prefix) for prefix in context.validation_command_prefixes
-        ],
         "red_state_followup_slice": context.red_state_followup_slice,
-        "pre_change_fingerprint": context.pre_change_fingerprint,
     }
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
@@ -3344,13 +3060,7 @@ def _validate_slice_commit_decision_scope(
 
 
 def _native_finding_acceptance_text(finding: NativeFinding) -> str:
-    if isinstance(finding.acceptance_test, NativeProseAcceptance):
-        return finding.acceptance_test.text
-    return FINDING_COMMAND_PREFIX + " " + json.dumps(
-        list(finding.acceptance_test.argv),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    return finding.acceptance_test.text
 
 
 # Private compatibility alias for the original provider-independent request-id
@@ -3377,17 +3087,6 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
         ],
         "status_rationale": finding.status_rationale,
         "class_history": [item.value for item in finding.class_history],
-        "acceptance_measurements": [
-            {
-                "fingerprint": item.fingerprint,
-                "argv": list(item.command.argv),
-                "status": item.status.value,
-                "exit_code": item.exit_code,
-                "output_sha256": item.output_sha256,
-                "attestation_id": item.attestation_id,
-            }
-            for item in finding.acceptance_measurements
-        ],
     }
     if finding.predecessor_finding_ref is not None:
         binding["predecessor_finding_ref"] = finding.predecessor_finding_ref

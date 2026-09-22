@@ -107,7 +107,6 @@ def _context(form: str) -> NativeReviewContext:
         test_changes_approved=True,
         allow_new_observations=form != "convergence",
         anchor_origin="docs/internal/approved-plan.md",
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
     )
 
 
@@ -323,9 +322,9 @@ def test_schema_inventory_fails_closed_on_new_or_removed_bounded_site() -> None:
         _assert_schema_inventory(manifest, schemas)
 
     schemas = _writer_schemas()
-    del schemas[context_name]["$defs"]["validation_acceptance"]["properties"][
-        "argv"
-    ]["items"]["maxLength"]
+    del schemas[context_name]["$defs"]["prose_acceptance"]["properties"][
+        "text"
+    ]["maxLength"]
     with pytest.raises(AssertionError, match="missing bounded writer sites"):
         _assert_schema_inventory(manifest, schemas)
 

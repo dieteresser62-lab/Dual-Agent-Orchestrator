@@ -136,7 +136,6 @@ NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
         "missing-own-finding-update",
         "finding-content-invalid",
         "finding-signature-duplicate",
-        "acceptance-invalid",
         "anchor-invalid",
         "review-content-missing",
         "stop-content-invalid",

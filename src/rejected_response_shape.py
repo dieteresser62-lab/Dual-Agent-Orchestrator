@@ -71,7 +71,7 @@ _RELEASE_DECISIONS = frozenset(
 _FINDING_DECISIONS = frozenset({"accepted", "rejected"})
 _FINDING_STATUSES = frozenset({"CLOSED", "OPEN"})
 _FINDING_CLASSES = frozenset({"BLOCKER", "OBSERVATION"})
-_CLOSURE_KINDS = frozenset({"fixed", "partial", "rejected"})
+_CLOSURE_KINDS = frozenset({"fixed", "rejected"})
 _REJECTION_REASONS = frozenset(
     {"already_fixed", "no_defect", "out_of_scope"}
 )

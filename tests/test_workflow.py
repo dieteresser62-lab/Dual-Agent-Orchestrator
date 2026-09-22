@@ -50,7 +50,6 @@ from contracts import (
     ReadinessMarker,
     StepContract,
     ContractResult,
-    FindingAcceptanceMeasurement,
     ReviewEvidence,
     ValidationAttestation,
     ValidationRecord,
@@ -801,15 +800,6 @@ class FakeDriver:
         self, attestation: ValidationAttestation
     ) -> None:
         self.structured_events.append(("validation-attestation", attestation))
-
-    def persist_finding_acceptance_measurement(
-        self,
-        finding: FindingRecord,
-        measurement: FindingAcceptanceMeasurement,
-    ) -> None:
-        self.structured_events.append(
-            ("finding-acceptance-measurement", (finding, measurement))
-        )
 
 
 def _slice_state(
@@ -4059,102 +4049,6 @@ def test_plan_only_rejects_future_product_slices_as_executable_records() -> None
         run_v3_work_unit(WorkflowEngine(driver), state, context)
 
 
-def test_new_typed_acceptance_requirement_is_measured_at_existing_fingerprint() -> None:
-    unchanged = _changes("1", "src/early.py", TEST_FILE)
-    denial = "\n".join(
-        (
-            "REVIEWER: claude",
-            f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            'NEW_FINDING: C-01 | BLOCKER | focused regression required | VALIDATE: ["python3","-m","pytest","tests/test_focus.py","-q"]',
-            "SLICE_APPROVAL: 01 | NO",
-            "STATUS: DONE",
-        )
-    )
-    driver = FakeDriver(
-        snapshots=[unchanged, unchanged],
-        codex_outputs=[_codex_ready(), _codex_ready("C-01")],
-        reviewer_outputs=[denial, _review_stop(AgentRole.CLAUDE, "CONTRACT-UNCLEAR")],
-        deltas={(unchanged.fingerprint, unchanged.fingerprint): "no content change"},
-        validation_status_by_command={
-            "python3 -m pytest tests/test_focus.py -q": ValidationStatus.FAIL,
-        },
-        convergence_evaluations=[_discovery_convergence()],
-    )
-
-    result = WorkflowEngine(driver).run_current_work_unit(
-        _slice_state(), _context()
-    )
-
-    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert len(driver.validation_requests) == 2
-    assert driver.validation_requests[-1].expected_commands == (
-        "python3 -m pytest tests/ -v",
-        "python3 -m pytest tests/test_focus.py -q",
-    )
-    finding = next(item for item in result.history.findings if item.finding_id == "C-01")
-    assert len(finding.acceptance_measurements) == 1
-    assert finding.acceptance_measurements[0].fingerprint == unchanged.fingerprint
-    assert finding.acceptance_measurements[0].status is ValidationStatus.FAIL
-
-
-def test_new_typed_acceptance_measured_green_rejects_opening_before_codex() -> None:
-    now = [datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)]
-    unchanged = _changes("1", "src/early.py", TEST_FILE)
-    matrix = ValidationMatrix(
-        default_command=ValidationCommand(argv=("npm", "test")),
-    )
-    denial = "\n".join(
-        (
-            "REVIEWER: claude",
-            f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            'NEW_FINDING: C-01 | BLOCKER | focused regression required | VALIDATE: ["npm","test","--","app/tests/shopping.test.ts"]',
-            "SLICE_APPROVAL: 01 | NO",
-            "STATUS: DONE",
-        )
-    )
-    driver = FakeDriver(
-        snapshots=[unchanged],
-        codex_outputs=[_codex_ready()],
-        reviewer_outputs=[
-            denial,
-            _review_stop(AgentRole.CLAUDE, "CONTRACT-UNCLEAR"),
-        ],
-    )
-
-    def sleep(seconds: float) -> None:
-        now[0] += timedelta(seconds=seconds)
-
-    result = WorkflowEngine(
-        driver,
-        now_fn=lambda: now[0],
-        sleep_fn=sleep,
-    ).run_current_work_unit(
-        _slice_state(), replace(_context(), validation_matrix=matrix)
-    )
-
-    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert len(driver.codex_calls) == 1
-    assert len(driver.reviewer_calls) == 2
-    assert len(driver.validation_requests) == 2
-    assert result.history.findings == ()
-    assert driver.failure_payloads[0].orchestrator_diagnostic == (
-        OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING.text
-    )
-    retry = driver.reviewer_calls[1].native_request
-    assert retry is not None
-    assert retry.document["retry_feedback"] == {
-        "prior_invocation_id": driver.failure_payloads[0].invocation_id,
-        "rejection_code": "acceptance-invalid",
-        "correction_instruction": (
-            OrchestratorDiagnostic.REVIEW_ACCEPTANCE_COMMAND_ALREADY_PASSING.text
-            + "; allowed command prefixes are: `npm test`"
-        ),
-    }
-    assert [event[0] for event in driver.structured_events].count(
-        "finding-acceptance-measurement"
-    ) == 0
-
-
 def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     failed = replace(
@@ -5131,53 +5025,6 @@ def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) ->
         for item in driver.failure_payloads
     )
     assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
-
-
-def test_partial_review_retry_uses_precise_value_free_failure_diagnostic() -> None:
-    now = datetime(2026, 9, 20, 19, 30, tzinfo=timezone.utc)
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    provider_finding_id = "C-77"
-    diagnostic = OrchestratorDiagnostic.REVIEW_PARTIAL_FINDING_MUST_REMAIN_OPEN
-    driver = FakeDriver(
-        snapshots=[changes],
-        codex_outputs=[_codex_ready()],
-        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
-        reviewer_failures=[
-            _native_review_contract_failure(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "review-partial-closed",
-                received_at=now,
-                detail=(
-                    f"partial finding decision for {provider_finding_id} "
-                    "must remain OPEN"
-                ),
-                diagnostic=diagnostic,
-            ),
-            None,
-        ],
-    )
-
-    result = WorkflowEngine(
-        driver, now_fn=lambda: now, sleep_fn=lambda _seconds: None
-    ).run_current_work_unit(_slice_state(), _context())
-
-    assert result.completed
-    assert len(driver.reviewer_calls) == 2
-    failure = driver.failure_payloads[0]
-    assert failure.orchestrator_diagnostic == diagnostic.text
-    assert provider_finding_id not in failure.orchestrator_diagnostic
-    retry = driver.reviewer_calls[1].native_request
-    assert retry is not None
-    assert retry.document["retry_feedback"] == {
-        "prior_invocation_id": "review-partial-closed",
-        "rejection_code": "finding-content-invalid",
-        "correction_instruction": diagnostic.text,
-    }
-    assert provider_finding_id not in retry.document["retry_feedback"][
-        "correction_instruction"
-    ]
-
-
 
 
 def test_evidence_anchor_retry_replaces_the_finding_numbering_guidance() -> None:

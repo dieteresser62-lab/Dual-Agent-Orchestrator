@@ -168,25 +168,9 @@ def _normalized_payload_fields(payload: object) -> object:
             raw.pop("closure_kind", None)
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
-            raw.pop("remaining_work", None)
         elif payload.closure_kind == "fixed":
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
-            raw.pop("remaining_work", None)
-        elif payload.closure_kind == "partial":
-            raw.pop("rejection_reason", None)
-        elif payload.closure_kind == "rejected":
-            raw.pop("remaining_work", None)
-        if payload.acceptance_command is None:
-            for name in (
-                "acceptance_command",
-                "acceptance_outcome",
-                "acceptance_exit_code",
-                "acceptance_output_sha256",
-                "acceptance_attestation_id",
-                "acceptance_fingerprint",
-            ):
-                raw.pop(name, None)
         if payload.predecessor_finding_ref is None:
             raw.pop("predecessor_finding_ref", None)
             raw.pop("evidence_anchor_sha256", None)
@@ -202,25 +186,9 @@ def _normalized_payload_fields(payload: object) -> object:
                 transition_payload.pop("closure_kind")
                 transition_payload.pop("rejection_reason")
                 transition_payload.pop("closure_evidence")
-                transition_payload.pop("remaining_work")
             elif transition_payload["closure_kind"] == "fixed":
                 transition_payload.pop("rejection_reason")
                 transition_payload.pop("closure_evidence")
-                transition_payload.pop("remaining_work")
-            elif transition_payload["closure_kind"] == "partial":
-                transition_payload.pop("rejection_reason")
-            elif transition_payload["closure_kind"] == "rejected":
-                transition_payload.pop("remaining_work")
-            if transition_payload["acceptance_command"] is None:
-                for name in (
-                    "acceptance_command",
-                    "acceptance_outcome",
-                    "acceptance_exit_code",
-                    "acceptance_output_sha256",
-                    "acceptance_attestation_id",
-                    "acceptance_fingerprint",
-                ):
-                    transition_payload.pop(name)
             if transition_payload["predecessor_finding_ref"] is None:
                 transition_payload.pop("predecessor_finding_ref")
                 transition_payload.pop("evidence_anchor_sha256")

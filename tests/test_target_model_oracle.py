@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import finding_reducer
-import native_review_contract
 
 from target_model_oracle import (
     DeviationClass,
@@ -23,7 +22,6 @@ from target_model_oracle import (
 
 ROOT = Path(__file__).resolve().parents[1]
 RATCHET = ROOT / "tests" / "fixtures" / "target-model-deviations-v1.json"
-CONTRACT_SOURCE = ROOT / "src" / "native_review_contract.py"
 
 
 def _frozen():
@@ -65,22 +63,6 @@ def test_target_model_is_reachable_and_current_delta_does_not_grow() -> None:
         ),
     }
     assert all(item.deviation_id != "103" for item in report.deviations)
-
-
-def test_mutation_106_passing_typed_acceptance_has_no_truthful_move(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    before = CONTRACT_SOURCE.read_bytes()
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            native_review_contract,
-            "reject_passing_typed_acceptance_binding",
-            lambda *args, **kwargs: None,
-        )
-        _assert_mutation_is_new(
-            "typed-green-no-truthful-move", DeviationClass.FEHLEND
-        )
-    assert CONTRACT_SOURCE.read_bytes() == before
 
 
 def test_mutation_u1_automatic_rejection_escalation_is_missing(

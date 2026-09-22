@@ -333,7 +333,6 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         test_changes_approved=True,
         allow_new_observations=not convergence,
         anchor_origin="docs/internal/plan.md",
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
     )
     return BoundNativeReviewContext(
         context, "native-review-request-" + "c" * 64, "c" * 64

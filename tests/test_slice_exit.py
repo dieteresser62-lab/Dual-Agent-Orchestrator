@@ -80,43 +80,6 @@ def test_rejected_closure_projects_reason_and_named_evidence(
     assert restored.payload == payload
 
 
-def test_partial_decision_keeps_blocker_open_in_its_origin_slice(
-    decisions_enabled: None,
-) -> None:
-    closure = NativeFindingClosure(
-        NativeClosureKind.PARTIAL,
-        evidence="Nine paths now pass.",
-        remaining="Three paths remain unreachable.",
-    )
-    payload = project_native_review_decision_payloads(
-        _review(
-            NativeStatusChange(
-                "C-01", FindingStatus.OPEN, "The repair is incomplete.", closure
-            )
-        ),
-        (
-            FindingRecord(
-                "C-01",
-                FindingClass.BLOCKER,
-                FindingStatus.OPEN,
-                "Repair src/fix.py",
-                "src/fix.py passes its regression test",
-                FindingOrigin("6", 1, AgentRole.CLAUDE),
-            ),
-        ),
-        work_unit_id="6",
-    )[0]
-    records = _slice_with_opening(severity=FindingSeverity.BLOCKER)
-    records.append(_record(len(records) + 1, payload, records))
-
-    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
-
-    assert payload.closure_kind == "partial"
-    assert result.cohort_finding_ids == ("C-01",)
-    assert result.condition(1).status is SliceExitStatus.VIOLATED
-    assert "open BLOCKER C-01" in result.condition(1).reasons[0]
-
-
 def test_blocker_downgrade_without_record_evidence_is_rejected() -> None:
     records = _slice_with_opening(severity=FindingSeverity.BLOCKER)
     records.append(

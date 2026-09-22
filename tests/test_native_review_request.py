@@ -92,7 +92,6 @@ def _context() -> NativeReviewContext:
         test_files=("tests/test_native_review_request.py",),
         test_changes_approved=True,
         anchor_origin="approved-plan",
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
     )
 
 
@@ -166,12 +165,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "dbc3ea2d07e523a1cc7eeef5f9111a916d45a259c368722b20ab89d6f37a8b32"
+        "6209cecefc5cfc70d217a5208b34ae09351fd9d8ec3398d0d6e52b53be33cf10"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "15323aa4e20b53153cb57f0d88601eec63fd8e81ba60e95128ccb0c8080bbd83"
+        "e898d81773fd5f8b1eaab00a7b02d27e61c7f14395cae0a1ba34260a1cee33aa"
     )
 
 
@@ -838,21 +837,6 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
 
     request_mismatch = _writer_response()
     contexts_and_responses.append((_context(), request_mismatch))
-
-    invalid_command = _writer_response(decision="denied")
-    invalid_command["new_findings"] = [
-        {
-            "finding_id": "C-01",
-            "finding_class": "BLOCKER",
-            "summary": "Unsafe validation family",
-            "acceptance_test": {
-                "kind": "validation_command",
-                "argv": ["outside", "configured", "family"],
-            },
-            "affected_paths": [],
-        }
-    ]
-    contexts_and_responses.append((_context(), invalid_command))
 
     duplicate_anchors = _writer_response()
     duplicate_anchors["anchors"] = [

@@ -3402,13 +3402,11 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         work_unit_id=str(state.current_work_unit_id),
         operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
         diff_fingerprint=fingerprint,
-        pre_change_fingerprint="c" * 64,
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
         validation_attestation=attestation,
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
     )
     bundle = build_native_review_request(
         NativeReviewRequestSpec(
@@ -4134,14 +4132,12 @@ def _request_time_review_persistence_case(
         work_unit_id=str(review_state.current_work_unit_id),
         operation=WorkflowStep.CLAUDE_PLAN_REVIEW.value,
         diff_fingerprint=fingerprint,
-        pre_change_fingerprint=None,
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.PLAN,
         slice_id="01",
         round_number=1,
         request_sequence=1,
         validation_attestation=attestation,
-        validation_command_prefixes=(("python3", "-m", "pytest"),),
     )
     result = ContractResult(
         reviewer=AgentRole.CLAUDE,

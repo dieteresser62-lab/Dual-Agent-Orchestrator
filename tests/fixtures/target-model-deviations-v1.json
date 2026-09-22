@@ -103,17 +103,6 @@
       ]
     },
     {
-      "id": "partial-closure",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "implementierung.blocker.review.unresolved.first_review",
-      "zug": "PARTIAL",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/artifact_models.py"
-      ]
-    },
-    {
       "id": "separate-branch-discovery-run",
       "klasse": "UEBERZAEHLIG",
       "lage": "abnahme.findings.restart",
@@ -132,18 +121,6 @@
       "istzustand": "Vertrag: evaluate_slice_exit returned conditions (1, 2, 3, 4, 5, 6); Recordschicht: the same record projection supplies all six conditions",
       "codestellen": [
         "src/slice_exit.py",
-        "src/finding_reducer.py"
-      ]
-    },
-    {
-      "id": "typed-acceptance-command",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "implementierung.blocker.review.unresolved.first_review",
-      "zug": "TYPISIERTER-ABNAHMEBEFEHL",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/validation_matrix.py",
         "src/finding_reducer.py"
       ]
     }

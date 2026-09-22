@@ -112,7 +112,7 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
     }
     assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
     assert len(registered_exceptions("codex")) == 7
-    assert len(registered_exceptions("claude")) == 7
+    assert len(registered_exceptions("claude")) == 6
 
 
 def test_every_provider_must_use_the_shared_forward_version_policy(

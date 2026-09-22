@@ -85,7 +85,6 @@ from contracts import (
     CodexContractResult,
     CodexStepContract,
     ContractResult,
-    FindingAcceptanceMeasurement,
     FindingRecord,
     StepContract,
     ValidationAttestation,
@@ -1573,7 +1572,6 @@ class ProductionWorkflowDriver:
                         invocation.previous_findings,
                     )
                 ),
-                pre_accept_output_callback=invocation.pre_accept_output_callback,
         )
 
     def _materialize_review_packet(self, packet: ReviewPacket) -> Path:
@@ -1841,15 +1839,6 @@ class ProductionWorkflowDriver:
         self, attestation: ValidationAttestation
     ) -> None:
         self._persistence_boundary().persist_validation_attestation(attestation)
-
-    def persist_finding_acceptance_measurement(
-        self,
-        finding: FindingRecord,
-        measurement: FindingAcceptanceMeasurement,
-    ) -> None:
-        self._persistence_boundary().persist_finding_acceptance_measurement(
-            finding, measurement
-        )
 
     def recover_pending_validation_attestation(
         self,

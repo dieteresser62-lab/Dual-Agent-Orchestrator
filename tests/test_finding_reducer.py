@@ -9,7 +9,6 @@ import pytest
 
 from artifact_models import (
     ArtifactRecord,
-    CommandSpec,
     CorrectionWorkUnitPayload,
     Fingerprint,
     FingerprintKind,
@@ -129,44 +128,6 @@ def _opening_payload(event: dict[str, Any]) -> FindingTransitionPayload:
         origin_slice_id="01",
         origin_round_number=1,
     )
-
-
-def test_acceptance_measurement_transition_reduces_to_fingerprint_bound_fact() -> None:
-    records = list(_build_case(_current_corpus()[0]))
-    revisions: dict[tuple[str, str], int] = {}
-    _append(
-        records,
-        revisions,
-        "finding-C-01-acceptance",
-        FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.ORCHESTRATOR,
-            action="acceptance_measured",
-            severity=FindingSeverity.BLOCKER,
-            finding_status="open",
-            rationale="Measured before the correction.",
-            work_unit_id="2",
-            acceptance_command=CommandSpec(
-                "validation", ("python3", "-m", "pytest", "tests/focus.py")
-            ),
-            acceptance_outcome="fail",
-            acceptance_exit_code=1,
-            acceptance_output_sha256="b" * 64,
-            acceptance_attestation_id="acceptance-before",
-            acceptance_fingerprint=FINGERPRINT.sha256,
-        ),
-    )
-
-    finding = reduce_findings(
-        replay_artifacts(records, RUN_ID)
-    ).ledger.findings[0]
-
-    assert len(finding.acceptance_measurements) == 1
-    measurement = finding.acceptance_measurements[0]
-    assert measurement.fingerprint == FINGERPRINT.sha256
-    assert measurement.status.value == "FAIL"
-    assert measurement.command.argv[-1] == "tests/focus.py"
 
 
 def test_escalation_record_requires_and_replays_latest_rejected_response() -> None:
@@ -665,7 +626,6 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "orchestrator.py",
         "provider_input_efficiency.py",
         "review_packets.py",
-        "validation_matrix.py",
         "workflow.py",
         "workflow_audit_projection.py",
         "workflow_persistence.py",

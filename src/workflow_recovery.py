@@ -120,19 +120,6 @@ ReviewerDecisionPayload = ReviewPayload | BranchDiscoveryCompletedPayload
 _IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
 
 
-def _review_pre_change_fingerprint(
-    approval_marker: ApprovalMarker,
-    history: WorkflowHistory,
-    slice_start_fingerprint: str | None,
-) -> str | None:
-    if approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
-        return None
-    return (
-        history.last_claude_fingerprint  # allowlist:provider -- bound role field
-        or slice_start_fingerprint
-    )
-
-
 @dataclass(frozen=True)
 class _RequestLedgerSnapshot:
     """The authoritative Finding ledger immediately before provider input."""
@@ -1714,20 +1701,8 @@ class WorkflowRecovery:
                 unit.kind is not WorkUnitKind.SLICE
                 or unit.codex_return_count == 0
             ),
-            validation_command_prefixes=(
-                context.validation_matrix.finding_command_prefixes
-            ),
             red_state_followup_slice=context.red_state_followup_slice,
             final_review_pending_count=final_review_pending_count,
-            pre_change_fingerprint=_review_pre_change_fingerprint(
-                approval_marker,
-                history,
-                getattr(
-                    getattr(state, "current_slice", None),
-                    "start_fingerprint",
-                    None,
-                ),
-            ),
         )
 
     def _parse_pending_native_reviewer_response(

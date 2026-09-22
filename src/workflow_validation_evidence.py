@@ -14,7 +14,6 @@ from audit_trail import ValidationAuditEvent
 from contracts import ValidationAttestation
 from gates import matches_path_patterns
 from validation_matrix import (
-    ValidationCommand,
     ValidationMatrixError,
     ValidationRequest,
     select_validation_request,
@@ -167,7 +166,6 @@ class WorkflowValidationEvidence:
                 context.validation_matrix,
                 diff_fingerprint=changes.fingerprint,
                 changed_paths=changes.user_gate_paths,
-                findings=history.findings,
             )
         except ValidationMatrixError as exc:
             raise self._dependencies.validation_execution_error(str(exc)) from exc
@@ -228,80 +226,6 @@ class WorkflowValidationEvidence:
         ):
             raise self._dependencies.execution_error(
                 "validation attestation id was reused"
-            )
-        self._dependencies.persist_validation_attestation(attestation)
-        event = ValidationAuditEvent(
-            event_id=len(history.events) + 1,
-            slice_id=slice_id,
-            attestation=attestation,
-        )
-        return attestation, replace(
-            history,
-            attestations=(*history.attestations, attestation),
-            events=(*history.events, event),
-        )
-
-    def acceptance_attestation(
-        self,
-        changes: Any,
-        history: Any,
-        commands: tuple[ValidationCommand, ...],
-        slice_id: int,
-        *,
-        preferred: ValidationAttestation | None = None,
-    ) -> tuple[ValidationAttestation, Any]:
-        """Obtain an attestation covering exact typed acceptance commands."""
-
-        expected = tuple(command.display for command in commands)
-        candidates = (
-            *((preferred,) if preferred is not None else ()),
-            *reversed(history.attestations),
-        )
-        for existing in candidates:
-            if (
-                existing.diff_fingerprint == changes.fingerprint
-                and set(expected).issubset(existing.expected_commands)
-            ):
-                return existing, history
-        attempts = sum(
-            1
-            for existing in history.attestations
-            if existing.diff_fingerprint == changes.fingerprint
-        )
-        try:
-            request = ValidationRequest(
-                diff_fingerprint=changes.fingerprint,
-                commands=commands,
-                attempt_number=attempts + 1,
-            )
-        except ValidationMatrixError as exc:
-            raise self._dependencies.validation_execution_error(str(exc)) from exc
-        self._dependencies.persist_validation_request(request)
-        attestation = self._dependencies.recover_pending_validation_attestation(
-            changes.fingerprint,
-            request.expected_commands,
-            validation_attestation_id(request),
-        )
-        if attestation is None:
-            attestation = self._dependencies.validate(changes, request)
-        if attestation.attestation_id != validation_attestation_id(request):
-            raise self._dependencies.execution_error(
-                "acceptance attestation id does not match the selected attempt"
-            )
-        if attestation.diff_fingerprint != changes.fingerprint:
-            raise self._dependencies.execution_error(
-                "acceptance attestation fingerprint is foreign"
-            )
-        if attestation.expected_commands != request.expected_commands:
-            raise self._dependencies.execution_error(
-                "acceptance attestation does not cover the selected commands"
-            )
-        if any(
-            item.attestation_id == attestation.attestation_id
-            for item in history.attestations
-        ):
-            raise self._dependencies.execution_error(
-                "acceptance attestation id was reused"
             )
         self._dependencies.persist_validation_attestation(attestation)
         event = ValidationAuditEvent(

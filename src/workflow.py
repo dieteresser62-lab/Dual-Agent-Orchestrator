@@ -5,8 +5,7 @@ import inspect
 import logging
 import re
 import time
-import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
@@ -21,11 +20,9 @@ from agent_runtime import (
     QuotaWaitPolicy,
     RecoveredFindingComparison,
     TransientRetryPolicy,
-    classify_agent_failure,
     wait_until_quota_resume,
     wait_until_transient_retry,
 )
-from agent_adapters import AgentOutputError
 import workflow_requests
 import workflow_failure_recording
 import workflow_validation_evidence
@@ -42,9 +39,7 @@ from finding_order import sorted_finding_ids
 from finding_convergence import SliceConvergenceEvaluation
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
-    NativeReviewContractError,
     find_native_review_disposition_limit_error,
-    reject_passing_typed_acceptance_binding,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from finding_reducer import (
@@ -69,7 +64,6 @@ from contracts import (
     CodexContractResult,
     CodexStepContract,
     ContractResult,
-    FindingAcceptanceMeasurement,
     FindingRecord,
     FindingClass,
     FindingOccurrence,
@@ -111,10 +105,7 @@ from task_contract import TaskMode
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
-    ValidationMatrixError,
     ValidationRequest,
-    finding_validation_command,
-    select_validation_request,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -366,18 +357,6 @@ class ApprovedScopeExtension:
 
 
 @dataclass(frozen=True)
-class _FingerprintValidationTarget:
-    """Minimal read-only validation target for an unchanged baseline."""
-
-    fingerprint: str
-    user_gate_paths: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not SHA256_PATTERN.fullmatch(self.fingerprint):
-            raise ValueError("validation target requires a SHA-256 fingerprint")
-
-
-@dataclass(frozen=True)
 class WorkflowContext:
     assignment: str
     distilled_plan: str
@@ -588,10 +567,6 @@ class ReviewerInvocation:
     native_request: workflow_requests.NativeReviewRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
     request_sequence: int | None = None
-    pre_accept_output_callback: (
-        Callable[[NativeAgentReviewOutput], None] | None
-    ) = field(default=None, compare=False, repr=False)
-
     def __post_init__(self) -> None:
         if self.request_sequence is None:
             object.__setattr__(self, "request_sequence", self.round_number)
@@ -599,15 +574,6 @@ class ReviewerInvocation:
             raise ValueError("review request sequence must be 1-based")
         if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
             raise ValueError("native review requests are supported only for Claude")
-
-
-@dataclass
-class _ReviewAcceptanceBinding:
-    """Process-local state for pre-publication acceptance measurement."""
-
-    history: WorkflowHistory
-    callback: Callable[[NativeAgentReviewOutput], None] | None = None
-    called: bool = False
 
 
 @dataclass(frozen=True)
@@ -764,13 +730,6 @@ class WorkflowDriver(Protocol):
         self, attestation: ValidationAttestation
     ) -> None: ...
 
-    def persist_finding_acceptance_measurement(
-        self,
-        finding: FindingRecord,
-        measurement: FindingAcceptanceMeasurement,
-    ) -> None: ...
-
-
 MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
     {
         "authoritative_native_findings",
@@ -793,7 +752,6 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "persist_review_packet",
         "persist_validation_attestation",
         "persist_validation_request",
-        "persist_finding_acceptance_measurement",
         "recover_pending_native_codex",  # allowlist:provider -- canonical capability
         "recover_pending_native_reviewer",
         "recover_pending_native_reviewer_before_policy",
@@ -965,17 +923,6 @@ def _finding_to_dict(item: FindingRecord) -> dict[str, object]:
         ],
         "status_rationale": item.status_rationale,
         "class_history": [value.value for value in item.class_history],
-        "acceptance_measurements": [
-            {
-                "fingerprint": measurement.fingerprint,
-                "argv": list(measurement.command.argv),
-                "status": measurement.status.value,
-                "exit_code": measurement.exit_code,
-                "output_sha256": measurement.output_sha256,
-                "attestation_id": measurement.attestation_id,
-            }
-            for measurement in item.acceptance_measurements
-        ],
     }
 
 
@@ -1010,23 +957,6 @@ def _finding_from_dict(raw: object) -> FindingRecord:
         ),
         class_history=tuple(
             FindingClass(str(value)) for value in _json_list(raw.get("class_history", []))
-        ),
-        acceptance_measurements=tuple(
-            FindingAcceptanceMeasurement(
-                fingerprint=str(value["fingerprint"]),
-                command=ValidationCommandSpec(
-                    argv=tuple(
-                        str(part)
-                        for part in _json_list(value.get("argv", []))
-                    )
-                ),
-                status=ValidationStatus(str(value["status"])),
-                exit_code=int(value["exit_code"]),
-                output_sha256=str(value["output_sha256"]),
-                attestation_id=str(value["attestation_id"]),
-            )
-            for value in _json_list(raw.get("acceptance_measurements", []))
-            if isinstance(value, dict)
         ),
     )
 
@@ -1135,7 +1065,6 @@ def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
                     else closure.rejection_reason.value
                 ),
                 "evidence": closure.evidence,
-                "remaining": closure.remaining,
             }
             for finding_id, closure in item.finding_closures
         ],
@@ -1231,11 +1160,6 @@ def _review_from_dict(raw: object) -> ContractResult | None:
                         None
                         if value.get("evidence") is None
                         else str(value["evidence"])
-                    ),
-                    remaining=(
-                        None
-                        if value.get("remaining") is None
-                        else str(value["remaining"])
                     ),
                 ),
             )
@@ -1743,13 +1667,6 @@ class WorkflowEngine:
                 WorkflowStep.CODEX_IMPLEMENTATION,
                 WorkflowStep.CODEX_CORRECTION,
             ):
-                state, active_history, acceptance_halted = (
-                    self._measure_typed_acceptance_before_codex(
-                        state, active_history, context
-                    )
-                )
-                if acceptance_halted:
-                    return WorkflowRunResult(state, active_history)
                 state, active_history = self._run_codex(
                     state, context, active_history
                 )
@@ -1761,13 +1678,6 @@ class WorkflowEngine:
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
                 WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
             ):
-                state, active_history, acceptance_halted = (
-                    self._measure_typed_acceptance_before_review(
-                        state, active_history, context
-                    )
-                )
-                if acceptance_halted:
-                    return WorkflowRunResult(state, active_history)
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.CLAUDE
                 )
@@ -2668,127 +2578,6 @@ class WorkflowEngine:
             correction_findings=correction_findings,
         )
 
-    def _prepare_review_acceptance_binding(
-        self,
-        state: WorkflowState,
-        history: WorkflowHistory,
-        context: WorkflowContext,
-        contract: StepContract,
-        changes: WorkflowChanges,
-        request_findings: tuple[FindingRecord, ...],
-    ) -> _ReviewAcceptanceBinding:
-        """Build the pre-publication hook for newly proposed typed BLOCKERs."""
-
-        binding = _ReviewAcceptanceBinding(history)
-        prior_finding_ids = frozenset(
-            item.finding_id for item in request_findings
-        )
-
-        def pre_accept_output(output: NativeAgentReviewOutput) -> None:
-            binding.called = True
-            newly_opened = tuple(
-                finding
-                for finding in output.result.findings
-                if finding.finding_id not in prior_finding_ids
-            )
-            candidate_findings = tuple(
-                finding
-                for finding in project_open_set(newly_opened).findings
-                if finding.finding_class is FindingClass.BLOCKER
-                and finding_validation_command(finding) is not None
-            )
-            if not candidate_findings:
-                return
-            _, measured_history, halted = self._ensure_typed_acceptance_measurements(
-                state,
-                binding.history,
-                context,
-                changes,
-                preferred_attestation=contract.validation_attestation,
-                verify_start_commit=(
-                    state.current_slice.start_commit or state.branch_base
-                ),
-                candidate_findings=candidate_findings,
-                persist_measurements=False,
-            )
-            binding.history = measured_history
-            if halted:
-                raise WorkflowExecutionError(
-                    "typed acceptance measurement halted before review publication"
-                )
-            for finding in candidate_findings:
-                command = finding_validation_command(finding)
-                assert command is not None
-                for attestation in reversed(measured_history.attestations):
-                    if attestation.diff_fingerprint != changes.fingerprint:
-                        continue
-                    reject_passing_typed_acceptance_binding(
-                        finding.finding_id,
-                        command.argv,
-                        attestation,
-                        changes.fingerprint,
-                        context.validation_matrix.finding_command_prefixes,
-                    )
-
-        binding.callback = pre_accept_output
-        return binding
-
-    def _invoke_reviewer_with_pre_acceptance(
-        self,
-        invocation: ReviewerInvocation,
-        reviewer: AgentRole,
-        binding: _ReviewAcceptanceBinding,
-    ) -> str | NativeAgentReviewOutput:
-        """Apply the hook for drivers that do not own the checked runtime edge."""
-
-        try:
-            candidate = self.driver.invoke_reviewer(invocation)
-            if isinstance(candidate, NativeAgentReviewOutput) and not binding.called:
-                assert binding.callback is not None
-                binding.callback(candidate)
-            return candidate
-        except (AgentOutputError, NativeReviewContractError) as exc:
-            raise classify_agent_failure(
-                reviewer.value,
-                exc,
-                invocation_id=uuid.uuid4().hex,
-                received_at=self.now_fn(),
-            ) from exc
-
-    def _attach_review_acceptance_measurements(
-        self,
-        state: WorkflowState,
-        history: WorkflowHistory,
-        context: WorkflowContext,
-        contract: StepContract,
-        changes: WorkflowChanges,
-        result: ContractResult,
-    ) -> tuple[WorkflowHistory, ContractResult]:
-        """Publish pre-measured acceptance facts after the Finding opening."""
-
-        _, measured_history, halted = self._ensure_typed_acceptance_measurements(
-            state,
-            replace(history, findings=result.findings),
-            context,
-            changes,
-            preferred_attestation=next(
-                (
-                    item
-                    for item in reversed(history.attestations)
-                    if item.diff_fingerprint == changes.fingerprint
-                ),
-                contract.validation_attestation,
-            ),
-            verify_start_commit=(
-                state.current_slice.start_commit or state.branch_base
-            ),
-        )
-        if halted:
-            raise WorkflowExecutionError(
-                "typed acceptance publication unexpectedly halted after pre-acceptance"
-            )
-        return measured_history, replace(result, findings=measured_history.findings)
-
     def _dispatch_native_review(
         self,
         state: WorkflowState,
@@ -2831,10 +2620,6 @@ class WorkflowEngine:
             ),
         )
         native_request = build_request(contract=contract)
-        acceptance_binding = self._prepare_review_acceptance_binding(
-            state, history, context, contract, changes, request_findings
-        )
-
         invocation = ReviewerInvocation(
             work_unit_id=unit.work_unit_id,
             step=state.current_step,
@@ -2852,7 +2637,6 @@ class WorkflowEngine:
             review_packet=review_packet,
             native_request=native_request,
             previous_findings=request_findings,
-            pre_accept_output_callback=acceptance_binding.callback,
         )
         native_output = (
             self.driver.recover_pending_native_reviewer(
@@ -2875,7 +2659,6 @@ class WorkflowEngine:
             # Other still-unsent requests now refresh the complete ledger while
             # retaining their compact offered subset.
             history = self._rebind_unsent_request_history(state, history)
-            acceptance_binding.history = history
             finding_ledger = (
                 finding_ledger
                 if _uses_correction_finding_authority(state)
@@ -2896,11 +2679,8 @@ class WorkflowEngine:
                 history,
                 context,
                 reviewer,
-                lambda: self._invoke_reviewer_with_pre_acceptance(
-                    invocation, reviewer, acceptance_binding
-                ),
+                lambda: self.driver.invoke_reviewer(invocation),
             )
-            history = acceptance_binding.history
         if output is None:
             return state, history
         if not isinstance(output, NativeAgentReviewOutput):
@@ -2940,9 +2720,6 @@ class WorkflowEngine:
                     ),
                 ),
             )
-        history, result = self._attach_review_acceptance_measurements(
-            state, history, context, contract, changes, result
-        )
         requested_ids = tuple(item.finding_id for item in requested_findings)
         new_ids = tuple(
             item.finding_id
@@ -3735,225 +3512,6 @@ class WorkflowEngine:
             context,
             slice_id,
             plan_contract=plan_contract,
-        )
-
-    def _ensure_typed_acceptance_measurements(
-        self,
-        state: WorkflowState,
-        history: WorkflowHistory,
-        context: WorkflowContext,
-        target: WorkflowChanges | _FingerprintValidationTarget,
-        *,
-        preferred_attestation: ValidationAttestation | None = None,
-        verify_start_commit: str | None = None,
-        candidate_findings: tuple[FindingRecord, ...] | None = None,
-        persist_measurements: bool = True,
-    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
-        """Measure every missing typed BLOCKER test at exactly ``target``."""
-
-        def halt(
-            rationale: str,
-            current_history: WorkflowHistory = history,
-        ) -> tuple[WorkflowState, WorkflowHistory, bool]:
-            halted = self._halt_for_stop_request(
-                state,
-                context,
-                StopRequest(VALIDATION_UNAVAILABLE_RULE_ID, rationale),
-            )
-            self.driver.checkpoint(halted, current_history)
-            return halted, current_history, True
-
-        missing: list[tuple[FindingRecord, ValidationCommand]] = []
-        try:
-            measurement_candidates = (
-                project_open_set(history.findings).findings
-                if candidate_findings is None
-                else project_open_set(candidate_findings).findings
-            )
-            for finding in measurement_candidates:
-                command = finding_validation_command(finding)
-                if command is None:
-                    continue
-                if any(
-                    item.fingerprint == target.fingerprint
-                    and item.command.argv == command.argv
-                    for item in finding.acceptance_measurements
-                ):
-                    continue
-                missing.append((finding, command))
-            if missing:
-                # Reuse the matrix selector as the configured-family authority.
-                selected = select_validation_request(
-                    context.validation_matrix,
-                    diff_fingerprint=target.fingerprint,
-                    changed_paths=target.user_gate_paths,
-                    findings=tuple(item[0] for item in missing),
-                )
-                selected_argv = {
-                    command.argv for command in selected.commands if command.argv
-                }
-                if any(command.argv not in selected_argv for _, command in missing):
-                    raise ValidationMatrixError(
-                        "typed finding acceptance command was not selected by the "
-                        "configured validation matrix"
-                    )
-        except ValidationMatrixError as exc:
-            return halt(
-                "typed acceptance test cannot be executed at fingerprint "
-                f"{target.fingerprint}: {exc}"
-            )
-        if not missing:
-            return state, history, False
-
-        if verify_start_commit is not None:
-            try:
-                before_run = self.driver.collect_changes(verify_start_commit)
-            except NoWorkflowChangesError:
-                before_run = None
-            except Exception as exc:
-                return halt(
-                    "typed acceptance baseline cannot be inspected without "
-                    f"changing state: {type(exc).__name__}: {exc}"
-                )
-            if (
-                before_run is not None
-                and before_run.fingerprint != target.fingerprint
-            ):
-                return halt(
-                    "typed acceptance fingerprint shifted before execution: "
-                    f"expected {target.fingerprint}, observed "
-                    f"{before_run.fingerprint}"
-                )
-
-        unique_commands = selected.commands
-        try:
-            attestation, history = self._validation_evidence.acceptance_attestation(
-                target,
-                history,
-                unique_commands,
-                state.current_slice_id,
-                preferred=preferred_attestation,
-            )
-        except ValidationExecutionError as exc:
-            return halt(
-                "typed acceptance test cannot be executed at fingerprint "
-                f"{target.fingerprint}: {exc}"
-            )
-        if not attestation.complete:
-            return halt(
-                "typed acceptance test has no complete result at fingerprint "
-                f"{target.fingerprint}",
-                history,
-            )
-
-        records = {item.command: item for item in attestation.records}
-        updated = {item.finding_id: item for item in history.findings}
-        for finding, command in missing:
-            record = records.get(command.display)
-            if record is None:
-                return halt(
-                    f"typed acceptance test for {finding.finding_id} has no "
-                    f"result at fingerprint {target.fingerprint}",
-                    history,
-                )
-            measurement = FindingAcceptanceMeasurement(
-                fingerprint=target.fingerprint,
-                command=command.command_spec,
-                status=record.status,
-                exit_code=record.exit_code,
-                output_sha256=hashlib.sha256(
-                    record.output.encode("utf-8")
-                ).hexdigest(),
-                attestation_id=attestation.attestation_id,
-            )
-            if not persist_measurements:
-                continue
-            self._persist_structured(
-                self.driver.persist_finding_acceptance_measurement,
-                finding,
-                measurement,
-            )
-            updated[finding.finding_id] = replace(
-                finding,
-                acceptance_measurements=(
-                    *finding.acceptance_measurements,
-                    measurement,
-                ),
-            )
-        history = replace(
-            history,
-            findings=tuple(updated[item.finding_id] for item in history.findings),
-        )
-
-        if verify_start_commit is not None:
-            try:
-                observed = self.driver.collect_changes(verify_start_commit)
-            except NoWorkflowChangesError:
-                observed = None
-            except Exception as exc:
-                return halt(
-                    "could not verify the read-only typed acceptance run: "
-                    f"{type(exc).__name__}: {exc}",
-                    history,
-                )
-            if observed is not None and observed.fingerprint != target.fingerprint:
-                return halt(
-                    "typed acceptance validation changed the repository "
-                    f"fingerprint from {target.fingerprint} to "
-                    f"{observed.fingerprint}",
-                    history,
-                )
-        self.driver.checkpoint(state, history)
-        return state, history, False
-
-    def _measure_typed_acceptance_before_codex(
-        self,
-        state: WorkflowState,
-        history: WorkflowHistory,
-        context: WorkflowContext,
-    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
-        if state.current_step not in {
-            WorkflowStep.CODEX_IMPLEMENTATION,
-            WorkflowStep.CODEX_CORRECTION,
-        }:
-            return state, history, False
-        pre_change_fingerprint = (
-            history.last_claude_fingerprint
-            or state.current_slice.start_fingerprint
-        )
-        if pre_change_fingerprint is None:
-            raise WorkflowExecutionError(
-                "typed acceptance baseline requires a persisted Slice fingerprint"
-            )
-        return self._ensure_typed_acceptance_measurements(
-            state,
-            history,
-            context,
-            _FingerprintValidationTarget(pre_change_fingerprint),
-            verify_start_commit=(
-                state.current_slice.start_commit or state.branch_base
-            ),
-        )
-
-    def _measure_typed_acceptance_before_review(
-        self,
-        state: WorkflowState,
-        history: WorkflowHistory,
-        context: WorkflowContext,
-    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
-        if state.current_step is not WorkflowStep.CLAUDE_SLICE_REVIEW:
-            return state, history, False
-        start_commit = state.current_slice.start_commit or state.branch_base
-        try:
-            changes = self._collect_review_dispatch_changes(start_commit)
-        except NoWorkflowChangesError:
-            return state, history, False
-        return self._ensure_typed_acceptance_measurements(
-            state,
-            history,
-            context,
-            changes,
-            verify_start_commit=start_commit,
         )
 
     def _record_review(

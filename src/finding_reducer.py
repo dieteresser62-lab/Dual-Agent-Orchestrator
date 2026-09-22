@@ -27,15 +27,12 @@ from artifact_replay import (
 )
 from contracts import (
     AgentRole,
-    FindingAcceptanceMeasurement,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingResponseDecision,
     FindingResponse,
     FindingStatus,
-    ValidationCommandSpec,
-    ValidationStatus,
     apply_finding_response,
     apply_reviewer_finding_update,
 )
@@ -452,8 +449,6 @@ def project_latest_recorded_statuses(
     """Select the last recorded status per ID under explicit record filters."""
     latest: dict[str, FindingRecordedStatusProjection] = {}
     for event in _transition_events(records):
-        if event.payload.action == "acceptance_measured":
-            continue
         if imported is not None and event.imported is not imported:
             continue
         if bound_only and event.payload.work_unit_id is None:
@@ -884,16 +879,6 @@ def merge_history_snapshots(
                     raise ValueError(
                         f"finding class history regressed: {finding.finding_id}"
                     )
-                if (
-                    finding.acceptance_measurements[
-                        : len(previous.acceptance_measurements)
-                    ]
-                    != previous.acceptance_measurements
-                ):
-                    raise ValueError(
-                        "finding acceptance measurement history regressed: "
-                        f"{finding.finding_id}"
-                    )
             latest[finding.finding_id] = finding
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
@@ -1140,50 +1125,7 @@ def _apply_transition_to_finding(
             finding_class=FindingClass(payload.severity.value),
         )
         return updated
-    if payload.action == "acceptance_measured":
-        return _apply_acceptance_measurement(event, finding)
     return finding
-
-
-def _apply_acceptance_measurement(
-    event: FindingTransitionProjection,
-    finding: FindingRecord,
-) -> FindingRecord:
-    payload = event.payload
-    record = _event_record(event)
-    if finding.status is not FindingStatus.OPEN:
-        _fail(
-            ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-            f"cannot measure closed finding {payload.finding_id}",
-            record,
-        )
-    assert payload.acceptance_command is not None
-    assert payload.acceptance_outcome is not None
-    assert payload.acceptance_exit_code is not None
-    assert payload.acceptance_output_sha256 is not None
-    assert payload.acceptance_attestation_id is not None
-    assert payload.acceptance_fingerprint is not None
-    if (
-        not event.imported
-        and record.fingerprint.sha256 != payload.acceptance_fingerprint
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "finding acceptance measurement payload differs from its record fingerprint",
-            record,
-        )
-    measurement = FindingAcceptanceMeasurement(
-        fingerprint=payload.acceptance_fingerprint,
-        command=ValidationCommandSpec(argv=payload.acceptance_command.argv),
-        status=ValidationStatus(payload.acceptance_outcome.upper()),
-        exit_code=payload.acceptance_exit_code,
-        output_sha256=payload.acceptance_output_sha256,
-        attestation_id=payload.acceptance_attestation_id,
-    )
-    return replace(
-        finding,
-        acceptance_measurements=(*finding.acceptance_measurements, measurement),
-    )
 
 
 def _current_lineage_findings(

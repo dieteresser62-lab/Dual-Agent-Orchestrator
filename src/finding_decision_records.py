@@ -7,7 +7,6 @@ from typing import Sequence
 from artifact_models import FindingSeverity, FindingTransitionPayload, Role
 from contracts import FindingRecord
 from finding_reducer import is_closed_finding_status
-import native_finding_decisions
 from native_review_contract import NativeReviewResult
 
 
@@ -28,11 +27,7 @@ def project_native_review_decision_payloads(
     payloads: list[FindingTransitionPayload] = []
     for update in response.status_changes:
         closure = update.closure
-        is_partial = (
-            closure is not None
-            and closure.kind is native_finding_decisions.NativeClosureKind.PARTIAL
-        )
-        if not is_closed_finding_status(update.status) and not is_partial:
+        if not is_closed_finding_status(update.status):
             continue
         finding = _referenced_open_finding(findings, update.finding_id)
         if closure is None:
@@ -46,7 +41,7 @@ def project_native_review_decision_payloads(
                 actor=Role(response.reviewer.value),
                 action="status_changed",
                 severity=FindingSeverity(finding.finding_class.value),
-                finding_status=("open" if is_partial else "closed"),
+                finding_status="closed",
                 rationale=update.rationale,
                 work_unit_id=str(work_unit_id),
                 closure_kind=closure.kind.value,
@@ -56,7 +51,6 @@ def project_native_review_decision_payloads(
                     else closure.rejection_reason.value
                 ),
                 closure_evidence=closure.evidence,
-                remaining_work=closure.remaining,
             )
         )
 

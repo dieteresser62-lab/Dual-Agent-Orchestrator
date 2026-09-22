@@ -106,13 +106,13 @@ IMPLEMENTER_REQUEST_ID = (
     "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-e920b8b8d985faa4fbd89d028180975529eec3fe54fe68f248bbcf55b43c35ad"
+    "native-review-request-a72e6a53fe50f36b64777ca28dd44987e4ffecf408a6c569c98e5420aac8e601"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
     "a0283c507c65a366735683871fbe5bf52b2f86ad130f0788471f60a9d43a5c44"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "5e0301f75f754dae5353e7c76786eee32af9b9ebb49f81a72ca5d3013e08d28c"
+    "4c75d1b272fc17df38e75e6de6089b0a24bea49817dc8b68ac4c426023a25258"
 )
 
 RECOVERY_HELPERS = {
@@ -1298,7 +1298,6 @@ def _reviewer_base() -> dict[str, object]:
         slice_id="01",
         round_number=1,
         validation_attestation=attestation,
-        validation_command_prefixes=context.validation_matrix.finding_command_prefixes,
     )
     bundle = build_native_review_request(
         NativeReviewRequestSpec(
@@ -1430,9 +1429,6 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         known_open_findings=(finding,),
         authoritative_finding_ids=("C-02",),
         validation_attestation=base["attestation"],
-        validation_command_prefixes=base[
-            "context"
-        ].validation_matrix.finding_command_prefixes,
     )
     bundle = build_native_review_request(
         NativeReviewRequestSpec(

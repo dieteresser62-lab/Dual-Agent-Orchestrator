@@ -225,7 +225,7 @@ def _attested_remediation_ids(
         if isinstance(record.payload, FindingTransitionPayload)
         and record.payload.work_unit_id == work_unit_id
         and record.payload.action == "status_changed"
-        and record.payload.closure_kind in {"fixed", "partial"}
+        and record.payload.closure_kind == "fixed"
         and record.payload.finding_id in cohort
         and record.payload.finding_id in reviewed_ids
         and record.fingerprint == review_record.fingerprint

@@ -21,11 +21,9 @@
   "fields": [
     {"path": "new_findings[].summary", "limit": 3000, "sample_lengths": [1141, 677, 1233, 781, 1032], "sample_content_sha256": "2b4bedc4d2f421af434311c95a5c81251978ab9533e0bac983bd5995ca56a6b8"},
     {"path": "new_findings[].acceptance_test.text", "limit": 2000, "sample_lengths": [473, 744, 643, 399, 469], "sample_content_sha256": "015062a0398afa0703baa87a1e89bb2d8ef318edc6282cf367a70e199aae51ab"},
-    {"path": "new_findings[].acceptance_test.argv[]", "limit": 512, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
     {"path": "status_changes[].rationale", "limit": 3000, "sample_lengths": [477, 537, 284, 1079, 852, 1003, 1330, 2000], "sample_content_sha256": "5d4f8cfb65e7d13e296b5b087637bc4de6d64b39481fa93d7ac334cff123ac59"},
     {"path": "reclassifications[].rationale", "limit": 3000, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
     {"path": "finding_dispositions[].closure.evidence", "limit": 3000, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
-    {"path": "finding_dispositions[].closure.remaining", "limit": 3000, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
     {"path": "plan_treatment_decisions[].rationale", "limit": 3000, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
     {"path": "occurrences[].rationale", "limit": 3000, "sample_lengths": [], "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
     {"path": "anchors[].input_fixture", "limit": 2000, "sample_lengths": [215], "sample_content_sha256": "cb573e03d12cfccc5d2f32a72f3cc9b81f67e42147aca92c527429a49a88e05b"},
@@ -40,7 +38,6 @@
   ],
   "schema_inventory": [
     {"field": "new_findings[].acceptance_test.text", "pointer": "$defs/prose_acceptance/properties/text", "limit": 2000, "context_scope": "all"},
-    {"field": "new_findings[].acceptance_test.argv[]", "pointer": "$defs/validation_acceptance/properties/argv/items", "limit": 512, "context_scope": "all"},
     {"field": "anchors[].input_fixture", "pointer": "$defs/anchor/properties/input_fixture", "limit": 2000, "context_scope": "all"},
     {"field": "anchors[].expected", "pointer": "$defs/anchor/properties/expected", "limit": 2000, "context_scope": "all"},
     {"field": "anchors[].tolerance", "pointer": "$defs/anchor/properties/tolerance", "limit": 1000, "context_scope": "all"},
@@ -52,7 +49,6 @@
     {"field": "status_changes[].rationale", "pointer": "$defs/bound_status_change/properties/rationale", "limit": 3000, "context_scope": "standard"},
     {"field": "reclassifications[].rationale", "pointer": "$defs/bound_reclassification/properties/rationale", "limit": 3000, "context_scope": "standard"},
     {"field": "finding_dispositions[].closure.evidence", "pointer": "$defs/finding_closure/oneOf/*/properties/evidence", "limit": 3000, "context_scope": "all"},
-    {"field": "finding_dispositions[].closure.remaining", "pointer": "$defs/finding_closure/oneOf/*/properties/remaining", "limit": 3000, "context_scope": "all"},
     {"field": "plan_treatment_decisions[].rationale", "pointer": "$defs/plan_treatment_decision/properties/rationale", "limit": 3000, "context_scope": "all"},
     {"field": "occurrences[].rationale", "pointer": "$defs/branch_discovery_occurrence/properties/rationale", "limit": 3000, "context_scope": "all"},
     {"field": "pre_mortem", "pointer": "$defs/branch_discovery_completed/allOf/*/properties/pre_mortem", "limit": 3000, "context_scope": "all"},
