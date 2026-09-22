@@ -234,13 +234,19 @@ def test_canary_33_proof_kills_measurement_stage_offer_mutations(
 def _canary_34_correction_guard_accepts(
     decision: FindingResponseDecision,
     resulting_fingerprint: str,
+    *,
+    finding_class: FindingClass | None = None,
 ) -> tuple[bool, NativeCodexContractError | None]:
     finding = replace(
         _finding(),
         finding_class=(
-            FindingClass.FINDING
-            if decision is FindingResponseDecision.REJECTED
-            else FindingClass.BLOCKER
+            finding_class
+            if finding_class is not None
+            else (
+                FindingClass.FINDING
+                if decision is FindingResponseDecision.REJECTED
+                else FindingClass.BLOCKER
+            )
         ),
     )
     bound = _bound(
@@ -302,13 +308,117 @@ def test_canary_34_rejects_accepted_correction_without_fingerprint_change() -> N
     assert error.detail == (
         "correction result accepted finding IDs C-01 but made no "
         "fingerprint-changing repository change; accepting a finding requires a "
-        "change; resolve the accepted findings or reject them"
+        "change; resolve the accepted findings as follows: resolve BLOCKER IDs C-01"
     )
     assert str(error) == (
         "result-content-invalid: correction result accepted finding IDs C-01 but "
         "made no fingerprint-changing repository change; accepting a finding "
-        "requires a change; resolve the accepted findings or reject them"
+        "requires a change; resolve the accepted findings as follows: resolve "
+        "BLOCKER IDs C-01"
     )
+
+
+def test_u13_unchanged_ordinary_finding_offers_resolve_or_reject() -> None:
+    accepted, error = _canary_34_correction_guard_accepts(
+        FindingResponseDecision.ACCEPTED,
+        "a" * 64,
+        finding_class=FindingClass.FINDING,
+    )
+
+    assert not accepted
+    assert error is not None
+    assert error.detail == (
+        "correction result accepted finding IDs C-01 but made no "
+        "fingerprint-changing repository change; accepting a finding requires a "
+        "change; resolve the accepted findings as follows: resolve or reject "
+        "ordinary FINDING IDs C-01"
+    )
+
+
+def test_u13_unchanged_mixed_classes_offer_class_legal_paths_per_id() -> None:
+    findings = (
+        replace(_finding(), finding_id="C-01", finding_class=FindingClass.BLOCKER),
+        replace(_finding(), finding_id="C-02", finding_class=FindingClass.FINDING),
+    )
+    bound = _bound(
+        NativeCodexRequestKind.CORRECTION,
+        findings=findings,
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": finding.finding_id,
+                "decision": "accepted",
+                "rationale": "Resolve this finding with a repository change.",
+            }
+            for finding in findings
+        ],
+    }
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        validate_native_correction_fingerprint(result, bound.context, "a" * 64)
+
+    assert raised.value.detail == (
+        "correction result accepted finding IDs C-01, C-02 but made no "
+        "fingerprint-changing repository change; accepting a finding requires a "
+        "change; resolve the accepted findings as follows: resolve BLOCKER IDs "
+        "C-01; resolve or reject ordinary FINDING IDs C-02"
+    )
+
+
+def _assert_u13_class_aware_correction_remediation() -> None:
+    accepted, blocker_error = _canary_34_correction_guard_accepts(
+        FindingResponseDecision.ACCEPTED,
+        "a" * 64,
+        finding_class=FindingClass.BLOCKER,
+    )
+    assert not accepted
+    assert blocker_error is not None
+    assert "reject" not in blocker_error.detail
+
+
+def test_u13_proof_kills_blanket_or_reject_them_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_codex_contract,
+        "_correction_fingerprint_remediation",
+        lambda _accepted: "resolve the accepted findings or reject them",
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_u13_class_aware_correction_remediation()
+
+
+def test_u13_non_correction_context_bypasses_fingerprint_guard() -> None:
+    finding = _finding()
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=(finding,),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "implementation_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "Accept the finding without invoking correction policy.",
+            }
+        ],
+    }
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    validate_native_correction_fingerprint(result, bound.context, "a" * 64)
 
 
 def test_canary_34_accepts_accepted_correction_with_fingerprint_change() -> None:

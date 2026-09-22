@@ -14,6 +14,7 @@ from contracts import (
     AgentRole,
     CodexContractResult,
     CodexStepContract,
+    FindingClass,
     FindingRecord,
     FindingResponseDecision,
     FindingStatus,
@@ -23,6 +24,7 @@ from contracts import (
     StopRequest,
 )
 from finding_reducer import (
+    FindingResponseDelta,
     FindingResponseEvent,
     apply_finding_responses,
     project_finding_response_delta,
@@ -779,8 +781,8 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
             NativeCodexErrorCode.FINDING_REFERENCE_INVALID,  # allowlist:provider -- error vocabulary
             str(exc),
         ) from exc
-    accepted_ids = sorted_finding_ids(
-        item.finding.finding_id
+    accepted_without_change = tuple(
+        item
         for item in response_delta
         if _accepted_correction_without_change(
             item.response.decision,
@@ -788,18 +790,44 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
             resulting_fingerprint,
         )
     )
-    if not accepted_ids:
+    if not accepted_without_change:
         return
+    accepted_ids = sorted_finding_ids(
+        item.finding.finding_id for item in accepted_without_change
+    )
     raise NativeCodexContractError(  # allowlist:provider -- typed rejection
         NativeCodexErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
         "correction result accepted finding IDs "
         f"{', '.join(accepted_ids)} but made no fingerprint-changing repository "
         "change; accepting a finding requires a change; resolve the accepted "
-        "findings or reject them",
+        f"findings as follows: {_correction_fingerprint_remediation(accepted_without_change)}",
         orchestrator_diagnostic=(
             OrchestratorDiagnostic.IMPLEMENTER_ACCEPTED_CORRECTION_REQUIRES_CHANGE
         ),
     )
+
+
+def _correction_fingerprint_remediation(
+    accepted_without_change: tuple[FindingResponseDelta, ...],
+) -> str:
+    blocker_ids = sorted_finding_ids(
+        item.finding.finding_id
+        for item in accepted_without_change
+        if item.finding.finding_class is FindingClass.BLOCKER
+    )
+    finding_ids = sorted_finding_ids(
+        item.finding.finding_id
+        for item in accepted_without_change
+        if item.finding.finding_class is FindingClass.FINDING
+    )
+    groups: list[str] = []
+    if blocker_ids:
+        groups.append(f"resolve BLOCKER IDs {', '.join(blocker_ids)}")
+    if finding_ids:
+        groups.append(
+            f"resolve or reject ordinary FINDING IDs {', '.join(finding_ids)}"
+        )
+    return "; ".join(groups)
 
 
 def _accepted_correction_without_change(
