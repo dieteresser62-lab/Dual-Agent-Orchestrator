@@ -36,6 +36,7 @@ from workflow import (
 )
 import workflow_requests
 from task_contract import TaskMode, parse_task_contract
+from validation_matrix import ValidationCommand, ValidationMatrix
 from workflow_state import (
     AgentFailureKind,
     InvocationFailureRecord,
@@ -48,7 +49,7 @@ from workflow_state import (
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "ae33d70f3575b9d63db88e899ef297747fc79063b6d4e844fdb316da85c76cdc"
+    "8cd45fe4687aaabe41ac838d0dd54862e56d7a31d17253cd640fbd54caa4f0a3"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
     "1b0dc0c9479a690055eea95445dd8e6813096020085be3c78d6cfac352085b26"
@@ -374,6 +375,37 @@ def test_b78_codex_request_projects_the_exact_runtime_stop_rule_set() -> None:
     assert "DOMAIN-001 | A configured domain decision is required." in (
         bundle.document["work_context"]
     )
+
+
+def test_canary_33_codex_plan_schema_uses_the_runtime_validation_declarations() -> None:
+    source_only = _codex_bundle()
+    configured = _codex_bundle(
+        context=replace(
+            _context(),
+            validation_matrix=ValidationMatrix(
+                required_artifacts=("dist/**/*.css",),
+                product_command=ValidationCommand(
+                    argv=("python3", "scripts/product_check.py")
+                ),
+            ),
+        )
+    )
+
+    def measurement_stages(
+        bundle: workflow_requests.NativeCodexRequestBundle,
+    ) -> list[str]:
+        return bundle.provider_response_schema["$defs"]["planned_slice"][
+            "properties"
+        ]["acceptance_criteria"]["items"]["properties"]["measured_against"][
+            "enum"
+        ]
+
+    assert measurement_stages(source_only) == ["SOURCE"]
+    assert measurement_stages(configured) == [
+        "SOURCE",
+        "BUILD_OUTPUT",
+        "RUNNING_PRODUCT",
+    ]
 
 
 def test_plan_review_request_binds_whether_a_repository_plan_artifact_exists() -> None:

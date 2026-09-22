@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import acceptance_criteria
 import pytest
 
 from acceptance_criteria import (
@@ -89,7 +90,7 @@ def test_measurement_basis_is_mandatory_typed_and_lossless() -> None:
     assert acceptance_criteria_from_documents(1, documents) == criteria
 
 
-def test_product_measurements_require_their_declared_validation_stage() -> None:
+def _assert_nonrunning_measurement_stages_are_rejected(validator) -> None:
     build = acceptance_criteria_from_specs(
         1, ({"text": "CSS is shipped.", "measured_against": "BUILD_OUTPUT"},)
     )
@@ -98,20 +99,64 @@ def test_product_measurements_require_their_declared_validation_stage() -> None:
         ({"text": "A deep link loads.", "measured_against": "RUNNING_PRODUCT"},),
     )
 
-    with pytest.raises(ValueError, match="required_artifacts is not declared"):
-        validate_measurement_support(
-            build,
-            build_output_declared=False,
-            running_product_declared=True,
-        )
-    with pytest.raises(ValueError, match="product_command is not declared"):
-        validate_measurement_support(
-            running,
-            build_output_declared=True,
-            running_product_declared=False,
-        )
+    cases = (
+        (build, False, True, "required_artifacts is not declared"),
+        (running, True, False, "product_command is not declared"),
+    )
+    for criteria, build_declared, running_declared, expected in cases:
+        try:
+            validator(
+                criteria,
+                build_output_declared=build_declared,
+                running_product_declared=running_declared,
+            )
+        except ValueError as error:
+            assert expected in str(error)
+        else:
+            raise AssertionError("the unsupported measurement stage was accepted")
+
+
+def test_product_measurements_require_their_declared_validation_stage() -> None:
+    _assert_nonrunning_measurement_stages_are_rejected(validate_measurement_support)
+    build = acceptance_criteria_from_specs(
+        1, ({"text": "CSS is shipped.", "measured_against": "BUILD_OUTPUT"},)
+    )
+    running = acceptance_criteria_from_specs(
+        1,
+        ({"text": "A deep link loads.", "measured_against": "RUNNING_PRODUCT"},),
+    )
+
     validate_measurement_support(
         (*build, *running),
         build_output_declared=True,
         running_product_declared=True,
     )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("accept_build_without_declaration", "accept_running_without_declaration"),
+)
+def test_canary_33_proof_kills_measurement_support_mutations(
+    mutation: str,
+) -> None:
+    original = acceptance_criteria.validate_measurement_support
+
+    def mutant(criteria, *, build_output_declared, running_product_declared):
+        items = tuple(criteria)
+        if mutation == "accept_build_without_declaration" and any(
+            item.measured_against is MeasuredAgainst.BUILD_OUTPUT for item in items
+        ):
+            build_output_declared = True
+        if mutation == "accept_running_without_declaration" and any(
+            item.measured_against is MeasuredAgainst.RUNNING_PRODUCT for item in items
+        ):
+            running_product_declared = True
+        return original(
+            items,
+            build_output_declared=build_output_declared,
+            running_product_declared=running_product_declared,
+        )
+
+    with pytest.raises(AssertionError):
+        _assert_nonrunning_measurement_stages_are_rejected(mutant)

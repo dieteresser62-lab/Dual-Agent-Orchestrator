@@ -152,6 +152,84 @@ def _base(bound: BoundNativeCodexContext, result_type: str) -> dict[str, object]
     }
 
 
+def _measurement_stage_enum(context: NativeCodexContext) -> list[str]:
+    return native_codex_provider_response_schema(context)["$defs"]["planned_slice"][
+        "properties"
+    ]["acceptance_criteria"]["items"]["properties"]["measured_against"]["enum"]
+
+
+def _assert_canary_33_measurement_stage_offer() -> None:
+    plan_context = _bound(NativeCodexRequestKind.PLAN).context
+
+    assert _measurement_stage_enum(plan_context) == ["SOURCE"]
+    assert _measurement_stage_enum(
+        replace(plan_context, build_output_declared=True)
+    ) == ["SOURCE", "BUILD_OUTPUT"]
+    assert _measurement_stage_enum(
+        replace(plan_context, running_product_declared=True)
+    ) == ["SOURCE", "RUNNING_PRODUCT"]
+    assert _measurement_stage_enum(
+        replace(
+            plan_context,
+            build_output_declared=True,
+            running_product_declared=True,
+        )
+    ) == ["SOURCE", "BUILD_OUTPUT", "RUNNING_PRODUCT"]
+
+
+def test_canary_33_writer_offers_only_runnable_measurement_stages() -> None:
+    _assert_canary_33_measurement_stage_offer()
+    source_only = native_codex_provider_response_schema(
+        _bound(NativeCodexRequestKind.PLAN).context
+    )["$defs"]["planned_slice"]["properties"]["acceptance_criteria"]["items"][
+        "properties"
+    ]["measured_against"]
+
+    assert source_only == {"type": "string", "enum": ["SOURCE"]}
+    assert "const" not in source_only
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "always_offer_build_output",
+        "never_offer_build_output",
+        "always_offer_running_product",
+        "never_offer_running_product",
+    ),
+)
+def test_canary_33_proof_kills_measurement_stage_offer_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    def mutated_stages(
+        *, build_output_declared: bool, running_product_declared: bool
+    ) -> list[str]:
+        if mutation == "always_offer_build_output":
+            build_output_declared = True
+        elif mutation == "never_offer_build_output":
+            build_output_declared = False
+        elif mutation == "always_offer_running_product":
+            running_product_declared = True
+        else:
+            running_product_declared = False
+        stages = ["SOURCE"]
+        if build_output_declared:
+            stages.append("BUILD_OUTPUT")
+        if running_product_declared:
+            stages.append("RUNNING_PRODUCT")
+        return stages
+
+    monkeypatch.setattr(
+        native_codex_contract,
+        "_available_measurement_stages",
+        mutated_stages,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_canary_33_measurement_stage_offer()
+
+
 def test_native_codex_schema_is_checked_and_canonical() -> None:
     assert load_native_codex_schema()["$id"] == "native-agent-codex-result-v2"
     bound = _bound(NativeCodexRequestKind.PLAN)

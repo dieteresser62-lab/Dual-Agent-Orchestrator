@@ -9,7 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, TypeAlias
 
-from acceptance_criteria import acceptance_criteria_from_specs
+from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_specs
 from contracts import (
     AgentRole,
     CodexContractResult,
@@ -230,6 +230,8 @@ class NativeCodexContext:
         default_factory=lambda: frozenset(rule.id for rule in BUILTIN_STOP_RULES)
     )
     previous_findings: tuple[FindingRecord, ...] = ()
+    build_output_declared: bool = False
+    running_product_declared: bool = False
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -262,6 +264,13 @@ class NativeCodexContext:
                 NativeCodexErrorCode.CONTEXT_INVALID,
                 "native Codex context requires CodexStepContract and a non-empty "
                 "frozenset of known stop rule ids",
+            )
+        if not isinstance(self.build_output_declared, bool) or not isinstance(
+            self.running_product_declared, bool
+        ):
+            raise NativeCodexContractError(  # allowlist:provider -- context boundary
+                NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+                "native implementer measurement-stage declarations must be booleans",
             )
         finding_ids = tuple(item.finding_id for item in self.previous_findings)
         if finding_ids != sorted_finding_ids(finding_ids):
@@ -389,7 +398,15 @@ def native_codex_provider_response_schema(
         provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
-    if context.request_kind.value != "plan":
+    if context.request_kind.value == "plan":
+        measured_against = schema["$defs"]["planned_slice"]["properties"][
+            "acceptance_criteria"
+        ]["items"]["properties"]["measured_against"]
+        measured_against["enum"] = _available_measurement_stages(
+            build_output_declared=context.build_output_declared,
+            running_product_declared=context.running_product_declared,
+        )
+    else:
         # Keep non-planning writer contracts byte-stable: planned_slice is
         # unreachable from implementation/correction result variants, and the
         # active measurement cutover belongs only to plan output.
@@ -504,6 +521,19 @@ def native_codex_provider_response_schema(
     }
     assert_projected_provider_schema(projected_schema, provider=provider)
     return projected_schema
+
+
+def _available_measurement_stages(
+    *, build_output_declared: bool, running_product_declared: bool
+) -> list[str]:
+    """Return the runnable plan-measurement stages for this exact request."""
+
+    stages = [MeasuredAgainst.SOURCE.value]
+    if build_output_declared:
+        stages.append(MeasuredAgainst.BUILD_OUTPUT.value)
+    if running_product_declared:
+        stages.append(MeasuredAgainst.RUNNING_PRODUCT.value)
+    return stages
 
 
 def _bind_required_empty_array(schema: dict[str, Any]) -> None:

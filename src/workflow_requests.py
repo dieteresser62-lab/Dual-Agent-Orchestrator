@@ -179,6 +179,8 @@ def native_codex_request(
         contract=contract,
         known_stop_rule_ids=context.known_stop_rule_ids,
         previous_findings=native_findings,
+        build_output_declared=bool(context.validation_matrix.required_artifacts),
+        running_product_declared=context.validation_matrix.product_command is not None,
     )
     evidence = [
         NativeCodexEvidenceInput(
