@@ -347,15 +347,27 @@ Dokument und ohne Rücknahme.
 
 ### Validierung
 
-Nach jeder Änderung führt **der Orchestrator** — nicht ein Agent — den in
-`orchestrator.toml` hinterlegten Prüfbefehl aus und bindet das Ergebnis an den
-Fingerabdruck des geprüften Stands. Kein Agent darf ein Testergebnis
-behaupten.
+Nach jeder Änderung führt **der Orchestrator** — nicht ein Agent — den
+Prüfbefehl aus und bindet das Ergebnis an den Fingerabdruck des geprüften
+Stands. Kein Agent darf ein Testergebnis behaupten.
+
+Der Befehl steht in der `orchestrator.toml` des **Zielrepositorys**, nicht in
+der des Orchestrators. Jedes Projekt bringt seinen eigenen mit:
 
 ```toml
+# im Zielrepository
+[validation]
+default_command = ["npm", "test"]
+```
+
+```toml
+# im Orchestrator-Repository selbst
 [validation]
 default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_harness"]
 ```
+
+Findet der Orchestrator keinen konfigurierten Befehl oder ist er nicht
+ausführbar, hält er an, statt ungeprüft zu committen.
 
 ---
 
