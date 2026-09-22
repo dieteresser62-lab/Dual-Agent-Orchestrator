@@ -8,10 +8,17 @@ import pytest
 import finding_reducer
 import native_review_contract
 
+from audit_trail import (
+    AuditProjection,
+    AuditTrailError,
+    ReviewAuditEvent,
+    ValidationAuditEvent,
+)
 from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
+    ContractResult,
     FindingClass,
     FindingOccurrence,
     FindingOrigin,
@@ -291,6 +298,103 @@ def test_canary_30_proof_kills_both_contract_mutations(
 
     with pytest.raises(AssertionError):
         _assert_canary_30_review_paths()
+
+
+def _project_canary_31_audit(result: ContractResult) -> AuditProjection:
+    assert result.validation is not None
+    return AuditProjection(
+        slice_id=1,
+        events=(
+            ValidationAuditEvent(1, 1, result.validation),
+            ReviewAuditEvent(2, 1, 1, result),
+        ),
+    )
+
+
+def _assert_canary_31_review_paths() -> None:
+    context = replace(_context(), slice_id="01", round_number=1)
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "FINDING",
+            "summary": "The audit projection must accept the review denial.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Contract and audit projection accept the same denial.",
+            },
+            "affected_paths": ["src/audit_trail.py"],
+        }
+    ]
+
+    accepted = parse_native_contract_result(document, context)
+    assert accepted.approval is False
+    assert tuple(item.finding_id for item in accepted.findings) == ("C-01",)
+    assert accepted.own_open_findings
+    assert accepted.own_open_blockers == ()
+    assert _project_canary_31_audit(accepted).latest_review(
+        AgentRole.CLAUDE
+    ) is not None
+
+    empty_document = _review(context, approved=False)
+    try:
+        parse_native_contract_result(empty_document, context)
+    except NativeReviewContractError as error:
+        assert error.code is NativeReviewErrorCode.APPROVAL_INVALID
+        assert error.detail == (
+            "denied review requires an open own Finding or BLOCKER"
+        )
+    else:
+        raise AssertionError("the contract accepted a denial without an own finding")
+
+    empty_result = replace(accepted, findings=())
+    try:
+        _project_canary_31_audit(empty_result)
+    except AuditTrailError as error:
+        assert str(error) == (
+            "a denied review requires a reviewer-owned open Finding or BLOCKER"
+        )
+    else:
+        raise AssertionError("the audit projection accepted a denial without an own finding")
+
+
+def test_canary_31_contract_and_audit_agree_on_denial_finding_requirement() -> None:
+    _assert_canary_31_review_paths()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "audit_requires_blocker",
+        "contract_accepts_empty_denial",
+        "audit_accepts_empty_denial",
+    ),
+)
+def test_canary_31_proof_kills_contract_and_audit_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    if mutation == "audit_requires_blocker":
+        monkeypatch.setattr(
+            ContractResult,
+            "own_open_findings",
+            property(lambda result: result.own_open_blockers),
+        )
+    elif mutation == "contract_accepts_empty_denial":
+        monkeypatch.setattr(
+            native_review_contract,
+            "_validate_decision",
+            lambda response, context, findings: None,
+        )
+    else:
+        monkeypatch.setattr(
+            ContractResult,
+            "own_open_findings",
+            property(lambda _result: (object(),)),
+        )
+
+    with pytest.raises((AssertionError, AuditTrailError)):
+        _assert_canary_31_review_paths()
 
 
 def _fixed_document(context: NativeReviewContext) -> dict[str, object]:

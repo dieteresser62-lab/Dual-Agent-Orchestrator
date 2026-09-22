@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import finding_reducer
 
+from contracts import ContractResult
 from target_model_oracle import (
     DeviationClass,
     OracleRegression,
@@ -63,6 +64,18 @@ def test_target_model_is_reachable_and_current_delta_does_not_grow() -> None:
         ),
     }
     assert all(item.deviation_id != "103" for item in report.deviations)
+    review_outcomes = tuple(
+        item for item in report.probe_outcomes if item.audit_accepts is not None
+    )
+    assert len(review_outcomes) == 6
+    assert all(item.audit_accepts for item in review_outcomes)
+    canary_31 = next(
+        item
+        for item in review_outcomes
+        if item.probe_id == "denied-new-finding-audit-parity"
+    )
+    assert canary_31.contract_accepts
+    assert canary_31.records_accept
 
 
 def test_mutation_u1_automatic_rejection_escalation_is_missing(
@@ -90,4 +103,18 @@ def test_mutation_u1_incomplete_implementer_dispositions_are_accepted(
         )
         _assert_mutation_is_new(
             "mandatory-implementer-disposition", DeviationClass.FEHLEND
+        )
+
+
+def test_mutation_u7_audit_requires_an_already_escalated_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            ContractResult,
+            "own_open_findings",
+            property(lambda result: result.own_open_blockers),
+        )
+        _assert_mutation_is_new(
+            "denied-new-finding-audit-parity", DeviationClass.UNEINIG
         )

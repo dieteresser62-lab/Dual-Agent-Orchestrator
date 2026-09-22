@@ -3039,7 +3039,7 @@ class WorkflowEngine:
                 round_number=round_number,
                 is_final_review=is_final_review,
             )
-            own_ids = tuple(item.finding_id for item in result.own_open_blockers)
+            own_ids = tuple(item.finding_id for item in result.own_open_findings)
             return_step = (
                 WorkflowStep.CODEX_PLAN_REVISION
                 if unit.kind is WorkUnitKind.PLAN

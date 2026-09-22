@@ -24,6 +24,12 @@ from typing import Callable, Iterable, Mapping, Sequence
 import native_finding_decisions
 import native_review_contract
 import artifact_models
+from audit_trail import (
+    AuditProjection,
+    ReviewAuditEvent,
+    ValidationAuditEvent,
+    allowed_review_finding_origins,
+)
 from artifact_bridge import finding_payload
 from artifact_models import (
     ArtifactRecord,
@@ -38,6 +44,7 @@ from artifact_models import (
 from contracts import (
     AgentRole,
     ApprovalMarker,
+    ContractResult,
     FindingClass as CurrentFindingClass,
     FindingOrigin,
     FindingRecord,
@@ -66,6 +73,7 @@ from native_finding_decisions import (
 from finding_planning import MAX_ACCEPTANCE_REVIEWS
 from native_review_contract import (
     NativeFinding,
+    NativeProseAcceptance,
     NativeReviewContext,
     NativeReviewResult,
     NativeStatusChange,
@@ -450,6 +458,8 @@ class ProbeOutcome:
     contract_detail: str
     records_detail: str
     locations: tuple[str, ...]
+    audit_accepts: bool | None = None
+    audit_detail: str = "not applicable to this policy probe"
     forced_class: DeviationClass | None = None
 
 
@@ -539,7 +549,7 @@ def _finding(
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
         acceptance_test="The reported behavior is corrected.",
-        origin=FindingOrigin("1", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
         affected_paths=("src/native_review_contract.py",),
     )
     if decision is None:
@@ -571,7 +581,7 @@ def _context(
         diff_fingerprint=fingerprint,
         reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
         approval_marker=approval,
-        slice_id="PLAN" if approval is ApprovalMarker.PLAN else "1",
+        slice_id="PLAN" if approval is ApprovalMarker.PLAN else "01",
         round_number=round_number,
         previous_findings=previous,
         validation_attestation=attestation or _attestation(fingerprint=fingerprint),
@@ -752,6 +762,47 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         locations=("src/native_review_contract.py", "src/finding_reducer.py"),
     )
 
+    # A newly discovered ordinary Finding is denied before it has an
+    # implementer response.  Contract, audit projection, and record reduction
+    # must all accept that pre-escalation state.
+    context = _context(round_number=1)
+    new_finding = NativeFinding(
+        "C-01",
+        CurrentFindingClass.FINDING,
+        "The first review discovered a correctable defect.",
+        NativeProseAcceptance("Correct the defect before Slice approval."),
+        affected_paths=("src/audit_trail.py",),
+    )
+    document = _base_document(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": new_finding.finding_id,
+            "finding_class": new_finding.finding_class.value,
+            "summary": new_finding.summary,
+            "acceptance_test": {
+                "kind": "prose",
+                "text": new_finding.acceptance_test.text,
+            },
+            "affected_paths": list(new_finding.affected_paths),
+        }
+    ]
+    add(
+        "denied-new-finding-audit-parity",
+        "implementierung.finding.review.unresolved.first_review",
+        "DENY-WITH-NEW-FINDING",
+        context,
+        document,
+        _typed_response(context, approved=False, new_findings=(new_finding,)),
+        target_viable=True,
+        expected_status=FindingStatus.OPEN,
+        expected_class=CurrentFindingClass.FINDING,
+        locations=(
+            "src/native_review_contract.py",
+            "src/audit_trail.py",
+            "src/finding_reducer.py",
+        ),
+    )
+
     blocker = _finding(
         CurrentFindingClass.BLOCKER,
         decision=FindingResponseDecision.ACCEPTED,
@@ -837,7 +888,7 @@ def _native_opening_record(finding: NativeFinding) -> FindingRecord:
         status=FindingStatus.OPEN,
         summary=finding.summary,
         acceptance_test=finding.acceptance_test.text,
-        origin=FindingOrigin("1", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
         affected_paths=finding.affected_paths,
     )
 
@@ -941,32 +992,78 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def _contract_probe(probe: ReviewProbe) -> tuple[bool, str]:
+def _contract_probe_result(
+    probe: ReviewProbe,
+) -> tuple[ContractResult | None, bool, str]:
     try:
         result = parse_native_contract_result(probe.document, probe.context)
         matched = _semantic_match(result.findings, probe)
-        return matched, (
+        return result, matched, (
             "review contract reached the requested semantic state"
             if matched
             else "review contract accepted bytes but missed the requested semantic state"
+        )
+    except (TypeError, ValueError) as exc:
+        return None, False, f"{type(exc).__name__}: {exc}"
+
+
+def _contract_probe(probe: ReviewProbe) -> tuple[bool, str]:
+    _, accepted, detail = _contract_probe_result(probe)
+    return accepted, detail
+
+
+def _audit_probe(
+    probe: ReviewProbe,
+    result: ContractResult | None,
+) -> tuple[bool, str]:
+    if result is None:
+        return False, "audit projection was not reached because the contract rejected"
+    try:
+        slice_id = int(probe.context.slice_id)
+        events: list[ValidationAuditEvent | ReviewAuditEvent] = []
+        if result.validation is not None:
+            events.append(ValidationAuditEvent(1, slice_id, result.validation))
+        events.append(
+            ReviewAuditEvent(
+                len(events) + 1,
+                slice_id,
+                probe.context.round_number,
+                result,
+                allowed_review_finding_origins(
+                    probe.context.previous_findings,
+                    current_slice_id=slice_id,
+                    is_final_review=False,
+                ),
+            )
+        )
+        projection = AuditProjection(slice_id=slice_id, events=tuple(events))
+        review = projection.latest_review(AgentRole.CLAUDE)
+        matched = review is not None and _semantic_match(review.result.findings, probe)
+        return matched, (
+            "audit projection reached the requested semantic state"
+            if matched
+            else "audit projection accepted the review but missed the requested semantic state"
         )
     except (TypeError, ValueError) as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 
 def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
-    contract_accepts, contract_detail = _contract_probe(probe)
+    result, contract_accepts, contract_detail = _contract_probe_result(probe)
     records_accept, records_detail = _record_probe(probe)
+    audit_accepts, audit_detail = _audit_probe(probe, result)
     return ProbeOutcome(
-        probe.probe_id,
-        probe.situation_id,
-        probe.move.value if isinstance(probe.move, Move) else probe.move,
-        probe.target_viable,
-        contract_accepts,
-        records_accept,
-        contract_detail,
-        records_detail,
-        probe.locations,
+        probe_id=probe.probe_id,
+        situation_id=probe.situation_id,
+        move=probe.move.value if isinstance(probe.move, Move) else probe.move,
+        target_viable=probe.target_viable,
+        contract_accepts=contract_accepts,
+        records_accept=records_accept,
+        contract_detail=contract_detail,
+        records_detail=records_detail,
+        locations=probe.locations,
+        audit_accepts=audit_accepts,
+        audit_detail=audit_detail,
     )
 
 
@@ -1248,16 +1345,15 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
 
 def _deviation_for(outcome: ProbeOutcome) -> Deviation | None:
     deviation_class = outcome.forced_class
+    layer_results = [outcome.contract_accepts, outcome.records_accept]
+    if outcome.audit_accepts is not None:
+        layer_results.append(outcome.audit_accepts)
     if deviation_class is None:
-        if outcome.contract_accepts != outcome.records_accept:
+        if len(set(layer_results)) != 1:
             deviation_class = DeviationClass.UNEINIG
-        elif outcome.target_viable and not (
-            outcome.contract_accepts and outcome.records_accept
-        ):
+        elif outcome.target_viable and not all(layer_results):
             deviation_class = DeviationClass.FEHLEND
-        elif not outcome.target_viable and (
-            outcome.contract_accepts and outcome.records_accept
-        ):
+        elif not outcome.target_viable and all(layer_results):
             deviation_class = DeviationClass.UEBERZAEHLIG
     if deviation_class is None:
         return None
@@ -1266,7 +1362,15 @@ def _deviation_for(outcome: ProbeOutcome) -> Deviation | None:
         deviation_class,
         outcome.situation_id,
         outcome.move,
-        f"Vertrag: {outcome.contract_detail}; Recordschicht: {outcome.records_detail}",
+        (
+            f"Vertrag: {outcome.contract_detail}; "
+            f"Recordschicht: {outcome.records_detail}"
+            + (
+                f"; Audit layer: {outcome.audit_detail}"
+                if outcome.audit_accepts is not None
+                else ""
+            )
+        ),
         outcome.locations,
     )
 

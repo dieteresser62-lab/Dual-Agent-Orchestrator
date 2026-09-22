@@ -2770,7 +2770,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
             if not bound.context.previous_findings:
                 finding = FindingRecord(
                     finding_id="C-01",
-                    finding_class=FindingClass.BLOCKER,
+                    finding_class=FindingClass.FINDING,
                     status=FindingStatus.OPEN,
                     summary="The native convergence path needs a correction.",
                     acceptance_test="Codex dispositions are replayed into the next review.",

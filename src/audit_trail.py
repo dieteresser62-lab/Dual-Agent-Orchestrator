@@ -221,10 +221,12 @@ class ReviewAuditEvent:
                 )
         if (
             self.result.approval is False
-            and not self.result.own_open_blockers
+            and not self.result.own_open_findings
             and not self.is_final_review
         ):
-            raise AuditTrailError("a denied review requires a reviewer-owned open blocker")
+            raise AuditTrailError(
+                "a denied review requires a reviewer-owned open Finding or BLOCKER"
+            )
 
 
 def allowed_review_finding_origins(
