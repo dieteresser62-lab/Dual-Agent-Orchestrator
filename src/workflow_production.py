@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from agent_adapters import build_agent_registry
 from agent_runtime import OrchestratorConfig
+from audit_trail import ValidationAuditEvent
 from artifact_bridge import ArtifactBridgeError
 from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
 from artifact_replay import ArtifactReplayError
@@ -75,20 +76,11 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
 
     def assert_structured_decision_context(self) -> None: ...
 
-    def prepare_finding_handoff(
-        self,
-        *,
-        plan_task_path: Path,
-        work_plan_path: str,
-        target_branch: str,
-        approved_plan_commit: str,
-    ) -> tuple[str, str] | None: ...
-
     def persist_implementation_handoff(
         self, handoff_path: Path, approved_plan_commit: str
     ) -> None: ...
 
-    def publish_family_handoff(self, state: WorkflowState) -> Path | None: ...
+    def publish_followup_task(self, state: WorkflowState) -> Path | None: ...
 
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
@@ -101,8 +93,7 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "assert_structured_decision_context",
         "finalize_audit",
         "persist_implementation_handoff",
-        "prepare_finding_handoff",
-        "publish_family_handoff",
+        "publish_followup_task",
     }
 )
 
@@ -131,7 +122,6 @@ class ProductionWorkflowDependencies:
     fresh_state: Callable[..., Any]
     history: Callable[..., Any]
     inherit_redundant_test_gate: Callable[..., Any]
-    initialize_finding_handoff: Callable[..., Any]
     managed_audit_path: Callable[..., Any]
     new_watch_task_control_paths: Callable[..., Any]
     new_watch_task_preserved_paths: Callable[..., Any]
@@ -296,10 +286,6 @@ def _validate_resumed_state(
         or state.task_scope_patterns != task_contract.scope_patterns
         or state.work_plan_path != task_contract.work_plan_path
         or state.target_branch != task_contract.target_branch
-        or state.finding_handoff_source_run_id
-        != task_contract.finding_handoff_source_run_id
-        or state.finding_handoff_export_record_id
-        != task_contract.finding_handoff_export_record_id
     ):
         raise StateSchemaError("persisted task contract differs from --resume task")
     return state
@@ -315,9 +301,8 @@ def _create_production_state(
     managed_audit_path: str | None,
     agent_settings: dict[str, Any],
     fresh_state: Callable[..., WorkflowState],
-    initialize_finding_handoff: Callable[..., WorkflowState],
 ) -> WorkflowState:
-    state = fresh_state(
+    return fresh_state(
         task_file=task_file,
         run_id=run_id,
         repository_root=root,
@@ -333,9 +318,6 @@ def _create_production_state(
             agent_settings["claude"].effort,
         ),
     )
-    return initialize_finding_handoff(
-        root, state, task_contract, task_file.read_bytes()
-    )
 
 
 def _recover_final_review_history(
@@ -348,7 +330,7 @@ def _recover_final_review_history(
     structured_replay = None
     read_blob = None
     if (
-        current.kind is WorkUnitKind.BRANCH_DISCOVERY
+        current.kind is WorkUnitKind.FINAL_REVIEW
         and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
     ):
         resolution = resolve_resume_state(root, state)
@@ -371,19 +353,12 @@ def _prepare_plan_implementation_handoff(
     state: WorkflowState,
     commit_ref: str,
 ) -> Path:
-    finding_handoff = driver.prepare_finding_handoff(
-        plan_task_path=task_file,
-        work_plan_path=state.work_plan_path or "",
-        target_branch=state.target_branch or state.branch,
-        approved_plan_commit=commit_ref,
-    )
     handoff = write_implementation_handoff(
         plan_task_path=task_file,
         repository_root=root,
         work_plan_path=state.work_plan_path or "",
         target_branch=state.target_branch or state.branch,
         approved_plan_commit=commit_ref,
-        finding_handoff=finding_handoff,
         write_content=lambda path, content: driver._write_side_effect_file(
             path, content, normalized_text=False
         ),
@@ -431,6 +406,37 @@ def _start_pending_slice(
     history = WorkflowHistory(
         state.current_work_unit_id,
         findings=carried_findings,
+    )
+    return state, history
+
+
+def _start_final_review(
+    state: WorkflowState,
+    history: WorkflowHistory,
+    driver: ProductionWorkflowLoopDriver,
+) -> tuple[WorkflowState, WorkflowHistory]:
+    """Enter the implementation run's terminal branch-wide review."""
+
+    carried_findings = driver.carry_forward_native_findings(
+        state, history.findings
+    )
+    state = state.start_final_review_work_unit()
+    carried_attestations = history.attestations[-1:]
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=carried_findings,
+        events=(
+            (
+                ValidationAuditEvent(
+                    event_id=1,
+                    slice_id=state.current_slice_id,
+                    attestation=carried_attestations[0],
+                ),
+            )
+            if carried_attestations
+            else ()
+        ),
+        attestations=carried_attestations,
     )
     return state, history
 
@@ -530,7 +536,6 @@ def run_production_workflow(
             managed_audit_path=managed_audit_path,
             agent_settings=args.agent_settings,
             fresh_state=dependencies.fresh_state,
-            initialize_finding_handoff=dependencies.initialize_finding_handoff,
         )
     state = dependencies.attach_managed_audit_paths(state)
     state = dependencies.recover_legacy_plan_only_post_gate(state)
@@ -727,11 +732,11 @@ def _run_production_transition_loop(
             history = result.history
             current = state.current_work_unit
 
-        if current.kind is WorkUnitKind.BRANCH_DISCOVERY:
+        if current.kind is WorkUnitKind.FINAL_REVIEW:
             audit_commit = driver.finalize_audit(state)
-            handoff = driver.publish_family_handoff(state)
+            handoff = driver.publish_followup_task(state)
             if handoff is not None:
-                logger.info("Remediation-plan handoff ready: %s", handoff)
+                logger.info("Follow-up work document ready: %s", handoff)
             return WorkflowRunResult(state, history, audit_commit)
 
         if current.kind is WorkUnitKind.PLAN:
@@ -790,9 +795,10 @@ def _run_production_transition_loop(
             continue
 
         if state.execution_mode == TaskMode.IMPLEMENT.value:
-            handoff = driver.publish_family_handoff(state)
-            assert handoff is not None
-            logger.info("Branch-discovery handoff ready: %s", handoff)
+            state, history = _start_final_review(state, history, driver)
+            driver.checkpoint(state, history)
+            state = driver.active_state or state
+            continue
         return WorkflowRunResult(state, history, state.current_slice.commit_ref)
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")

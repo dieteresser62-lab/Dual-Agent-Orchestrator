@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 import git_service
-import native_finding_decisions
 
 from artifact_bridge import review_payload
 from artifact_models import (
@@ -808,7 +807,6 @@ def test_active_cutover_rejects_commit_for_exit_violation(
         approved_plan_commit=plan_commit,
     )
     assert exit_result.status is SliceExitStatus.VIOLATED
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
     with pytest.raises(GitTransactionError, match="E4 exit condition"):
         replace(authorization, slice_exit=exit_result)
 

@@ -1170,86 +1170,30 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
     assert len(measurements) == 1
 
 
-def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
+def test_final_review_preflight_missing_prerequisite_halts_for_resume(
     tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/preflight-paths")
-    state = init_workflow_state(
-        run_id="preflight-paths",
-        task_file=str(repository / "task.md"),
-        branch="feature/preflight-paths",
-        branch_base=_git(repository, "rev-parse", "HEAD"),
-        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
-        slice_count=1,
-    )
-    driver = _driver(repository)
-    history = WorkflowHistory(state.current_work_unit_id)
-    driver.checkpoint(state, history)
-    state = driver.active_state or state
-    denial = FinalReviewPreflightDenied(
-        FinalReviewPreflightResult(
-            "denied",
-            "correction_required",
-            "UNAUTHORIZED-PATH",
-            (),
-            ("src/external.py", "tests/test_external.py"),
-            "move the changes into an authorized Slice or revert them",
-        ),
-        fingerprint="d" * 64,
-    )
-
-    def denied_provider_start() -> str:
-        raise denial
-
-    halted, output = WorkflowEngine(driver)._invoke_role(
-        state,
-        history,
-        WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CODEX,
-        denied_provider_start,
-    )
-
-    assert output is None
-    assert halted.current_work_unit.gate.reason.value == "unexpected_file"
-    assert halted.current_work_unit.gate.fingerprint == "d" * 64
-    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
-    assert halted.current_work_unit.gate.paths == (
-        "src/external.py",
-        "tests/test_external.py",
-    )
-
-
-@pytest.mark.parametrize(
-    ("current_step", "error_code", "rewind_step"),
-    [
-        (
-            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
-            "BRANCH-DISCOVERY-PREREQUISITE-MISSING",
-            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
-        ),
-    ],
-)
-def test_branch_discovery_preflight_missing_prerequisite_halts_for_resume(
-    tmp_path: Path,
-    current_step: WorkflowStep,
-    error_code: str,
-    rewind_step: WorkflowStep,
 ) -> None:
     repository = _repository(tmp_path, "feature/preflight-rewind")
     head = _git(repository, "rev-parse", "HEAD")
-    base = _state(repository, f"preflight-resume-{current_step.value}")
-    state = init_workflow_state(
-        run_id=base.run_id,
-        task_file=base.task_file,
-        branch=base.branch,
-        branch_base=head,
-        first_slice_start_commit=head,
-        slice_count=1,
-        task_digest=base.task_digest,
-        execution_mode="BRANCH_DISCOVERY",
-        task_scope_patterns=base.task_scope_patterns,
-        target_branch=base.target_branch,
-        protocol_binding=base.protocol_binding,
+    state = (
+        _state(repository, "preflight-resume-final-review")
+        .bind_slice_plan(
+            (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
+            first_start_commit=head,
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="b" * 64,
+        )
+        .complete_current_slice(commit_ref=head)
+        .start_final_review_work_unit()
     )
 
     class RewindDriver:
@@ -1269,7 +1213,7 @@ def test_branch_discovery_preflight_missing_prerequisite_halts_for_resume(
         FinalReviewPreflightResult(
             "denied",
             "technical",
-            error_code,
+            "ATTESTATION-MISSING",
             (),
             (),
             "restore the missing prerequisite",
@@ -1288,11 +1232,11 @@ def test_branch_discovery_preflight_missing_prerequisite_halts_for_resume(
     )
 
     assert output is None
-    assert halted.current_step is rewind_step
+    assert halted.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.detail is not None
-    assert halted.current_work_unit.gate.detail.startswith(f"{error_code} | ")
+    assert halted.current_work_unit.gate.detail.startswith("ATTESTATION-MISSING | ")
 
 
 def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(

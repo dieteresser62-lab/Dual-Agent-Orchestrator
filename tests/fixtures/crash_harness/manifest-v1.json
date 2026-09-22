@@ -1,6 +1,6 @@
 {
   "schema_version": "provider-free-crash-harness-v1",
-  "scenario_version": "joint-67-68-v1",
+  "scenario_version": "target-run-chain-removal-v1",
   "effect_classes": [
     "git_commit",
     "provider_start",
@@ -24,14 +24,14 @@
     "queue_finalization": "queue_move",
     "slice_validation": "internal",
     "baseline_initialization": "ledger",
-    "branch_discovery_provider": "provider_start",
-    "branch_discovery_validation": "internal",
-    "family_handoff": "file_write"
+    "final_review_provider": "provider_start",
+    "final_review_validation": "internal",
+    "followup_task": "file_write"
   },
   "journeys": [
-    "plan-implement-branch-discovery",
+    "plan-implement-final-review",
     "multi-slice-correction-observation-resume",
-    "branch-discovery-remediation-handoff"
+    "final-review-followup-document"
   ],
   "retry_kinds": [
     "quota",

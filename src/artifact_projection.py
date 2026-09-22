@@ -10,24 +10,16 @@ from typing import Any, Mapping, Sequence
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
-    BranchDiscoveryCompletedPayload,
-    BranchDiscoveryHandoffExportPayload,
-    BranchDiscoveryHandoffImportPayload,
+    FinalReviewCompletedPayload,
     BindingPayload,
-    ClosedFindingOccurrencePayload,
     CorrectionWorkUnitPayload,
     DiagnosticPayload,
     FindingTransitionPayload,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
     GatePayload,
-    NoImplementationRequiredPayload,
-    PlanAssignmentPayload,
     PlanPayload,
     ReviewAnchorPayload,
     ReviewPayload,
     ReviewValidationBindingPayload,
-    RemediationCohortCheckpointPayload,
     Role,
     TaskPayload,
     ValidationAttestationPayload,
@@ -118,7 +110,7 @@ class ArtifactAuditProjection:
                     AgentResultPayload,
                     DiagnosticPayload,
                     ReviewPayload,
-                    BranchDiscoveryCompletedPayload,
+                    FinalReviewCompletedPayload,
                 ),
             )
             and record.payload.work_unit_id in unit_ids
@@ -135,13 +127,6 @@ class ArtifactAuditProjection:
                     selected.append(record)
             elif isinstance(payload, (
                 TaskPayload, PlanPayload, FindingTransitionPayload,
-                FindingHandoffExportPayload, FindingHandoffImportPayload,
-                BranchDiscoveryHandoffExportPayload,
-                PlanAssignmentPayload,
-                RemediationCohortCheckpointPayload,
-                NoImplementationRequiredPayload,
-                ClosedFindingOccurrencePayload,
-                BranchDiscoveryHandoffImportPayload,
             )):
                 selected.append(record)
             elif record.fingerprint in slice_fingerprints:
@@ -328,10 +313,10 @@ def _render_review_record(
     output.append("")
 
 
-def _render_branch_discovery_completed_record(
+def _render_final_review_completed_record(
     rendering: _ReplayRendering,
     record: ArtifactRecord,
-    payload: BranchDiscoveryCompletedPayload,
+    payload: FinalReviewCompletedPayload,
     prefix: str,
 ) -> None:
     round_number = rendering.work_unit_rounds.get(payload.work_unit_id, "–")
@@ -345,7 +330,7 @@ def _render_branch_discovery_completed_record(
         "| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint |",
         "|---|---|---:|---|---|---|---|",
         f"| {prefix} | `{payload.reviewer.value}` | `{round_number}` | "
-        f"`BRANCH_DISCOVERY_COMPLETED` | `{_safe(payload.work_unit_id)}` | "
+        f"`FINAL_REVIEW_COMPLETED` | `{_safe(payload.work_unit_id)}` | "
         f"{_codes(finding_ids)} | `{record.fingerprint.sha256}` |",
         "",
         "#### Strukturierte Reviewevidenz",
@@ -467,86 +452,6 @@ def _render_finding_transition_record(
         payload.finding_id, payload.finding_status
     )
 
-
-def _render_finding_handoff_import_record(
-    rendering: _ReplayRendering,
-    payload: FindingHandoffImportPayload,
-    prefix: str,
-) -> None:
-    rendering.bindings_and_units.extend((
-        "### Finding-Import · fremde Vorgeschichte",
-        "",
-        "| Seq/Record | Quell-Run | Quell-Head | Export | Plancommit | Review | Taskdigest |",
-        "|---|---|---|---|---|---|---|",
-        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
-        f"`{payload.export_record_id}` | `{payload.approved_plan_commit}` | "
-        f"`{payload.approval_review_record_id}` | `{payload.target_task_sha256}` |",
-        "",
-    ))
-    if not rendering.findings:
-        rendering.findings.extend((
-            "### Finding-Ereignisse",
-            "",
-            "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
-            "|---|---|---|---:|---|---|---|---|",
-        ))
-    for imported in payload.transitions:
-        transition = imported.payload
-        rendering.findings.append(
-            f"| {prefix} / `{imported.record_id}` | `{_safe(transition.finding_id)}` | "
-            f"`{transition.actor.value}` | `{transition.origin_round_number or '–'}` | "
-            f"`imported:{_safe(transition.action)}` | `{transition.severity.value}` | "
-            f"`{_safe(transition.finding_status)}` | {_table_prose(transition.rationale)} |"
-        )
-
-
-def _render_finding_handoff_export_record(
-    rendering: _ReplayRendering,
-    payload: FindingHandoffExportPayload,
-    prefix: str,
-) -> None:
-    rendering.bindings_and_units.extend((
-        "### Finding-Handoff-Export",
-        "",
-        "| Seq/Record | Quell-Run | Prä-Export-Head | Plancommit | Review | Findingrecords | Zieltask | Taskdigest |",
-        "|---|---|---|---|---|---|---|---|",
-        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
-        f"`{payload.approved_plan_commit}` | `{payload.approval_review_record_id}` | "
-        f"{_codes(payload.finding_transition_record_ids)} | `{_safe(payload.target_task_path)}` | "
-        f"`{payload.target_task_sha256}` |",
-        "",
-    ))
-
-
-def _render_branch_discovery_handoff_record(
-    rendering: _ReplayRendering,
-    payload: BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload,
-    prefix: str,
-) -> None:
-    kind = "Import" if isinstance(payload, BranchDiscoveryHandoffImportPayload) else "Export"
-    rendering.bindings_and_units.extend((
-        f"### Branch-Discovery-Handoff-{kind}",
-        "",
-        "| Seq/Record | Quell-Run | Quell-Head | Discovery-Review | Attestierung | Geprüfter HEAD | Familie/Cycle | Zieltask | Ziel-Run |",
-        "|---|---|---|---|---|---|---|---|---|",
-        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
-        f"`{payload.discovery_review_record_id}` | `{payload.validation_attestation_record_id}` | "
-        f"`{payload.reviewed_head_commit}` | `{_safe(payload.family_id)}` / `{payload.cycle_number}` | "
-        f"`{_safe(payload.target_task_path)}` | `{_safe(payload.target_run_identity)}` |",
-        "",
-    ))
-    if isinstance(payload, BranchDiscoveryHandoffImportPayload):
-        rendering.findings.extend((
-            "### Importierter Finding-Snapshot",
-            "",
-            "| Finding | Signatur | Status | Klasse |",
-            "|---|---|---|---|",
-            *(
-                f"| `{item.finding_id}` | `{item.signature}` | `{item.finding_status}` | `{item.severity.value}` |"
-                for item in payload.finding_snapshot
-            ),
-            "",
-        ))
 
 
 def _render_validation_request_record(
@@ -688,71 +593,6 @@ def _render_binding_record(
     ))
 
 
-def _render_remediation_planning_record(
-    rendering: _ReplayRendering,
-    payload: (
-        PlanAssignmentPayload
-        | RemediationCohortCheckpointPayload
-        | NoImplementationRequiredPayload
-        | ClosedFindingOccurrencePayload
-    ),
-    prefix: str,
-) -> None:
-    if isinstance(payload, PlanAssignmentPayload):
-        implementation_count = sum(
-            item.treatment_kind == "implementation" for item in payload.treatments
-        )
-        no_code_count = len(payload.treatments) - implementation_count
-        rendering.bindings_and_units.extend((
-            f"### Behebungsplanung · Runde {payload.remediation_round_number}",
-            "",
-            "| Seq/Record | Familie | Quellsnapshot | Plan result | Plan review | S_r | Code | No-Code | IMPLEMENT-Scope |",
-            "|---|---|---|---|---|---:|---:|---:|---|",
-            f"| {prefix} | `{_safe(payload.family_id)}` | "
-            f"`{payload.source_snapshot_record_id}` | `{payload.plan_result_record_id}` | "
-            f"`{payload.review_record_id}` | `{len(payload.treatments)}` | "
-            f"`{implementation_count}` | `{no_code_count}` | "
-            f"{_codes(payload.implementation_scope)} |",
-            "",
-        ))
-        return
-    if isinstance(payload, NoImplementationRequiredPayload):
-        rendering.bindings_and_units.extend((
-            f"### Planabschluss ohne Implementierung · Runde {payload.remediation_round_number}",
-            "",
-            "| Seq/Record | Familie | PlanAssignment | Planreview | Plan-HEAD | Geschlossene Findings |",
-            "|---|---|---|---|---|---|",
-            f"| {prefix} | `{_safe(payload.family_id)}` | "
-            f"`{payload.plan_assignment_record_id}` | `{payload.review_record_id}` | "
-            f"`{payload.reviewed_plan_commit}` | {_codes(payload.closed_finding_ids)} |",
-            "",
-        ))
-        return
-    if isinstance(payload, ClosedFindingOccurrencePayload):
-        rendering.findings.extend((
-            f"### Geschlossenes Finding-Vorkommen · {_safe(payload.finding_id)}",
-            "",
-            "| Seq/Record | Finding | Signatur | Evidenzanker | Entdeckungsabschluss | Begründung |",
-            "|---|---|---|---|---|---|",
-            f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.signature}` | "
-            f"`{payload.evidence_anchor_sha256}` | "
-            f"`{payload.discovery_completion_record_id}` | {_safe(payload.rationale)} |",
-            "",
-        ))
-        return
-    rendering.bindings_and_units.extend((
-        f"### Kohortencheckpoint · Runde {payload.remediation_round_number}",
-        "",
-        "| Seq/Record | Familie | PlanAssignment | Implementierungslauf | S_r | S_r offen |",
-        "|---|---|---|---|---:|---:|",
-        f"| {prefix} | `{_safe(payload.family_id)}` | "
-        f"`{payload.plan_assignment_record_id}` | "
-        f"`{_safe(payload.implementation_run_id)}` | "
-        f"`{len(payload.inherited_signatures)}` | "
-        f"`{len(payload.unresolved_inherited_signatures)}` |",
-        "",
-    ))
-
 
 def _render_record(
     rendering: _ReplayRendering,
@@ -763,8 +603,8 @@ def _render_record(
     prefix = f"{sequence}. `{_safe(record.record_id)}`"
     if isinstance(payload, AgentResultPayload):
         _render_agent_result_record(rendering, record, payload, prefix)
-    elif isinstance(payload, BranchDiscoveryCompletedPayload):
-        _render_branch_discovery_completed_record(rendering, record, payload, prefix)
+    elif isinstance(payload, FinalReviewCompletedPayload):
+        _render_final_review_completed_record(rendering, record, payload, prefix)
     elif isinstance(payload, ReviewPayload):
         _render_review_record(rendering, record, payload, prefix)
     elif isinstance(payload, ReviewAnchorPayload):
@@ -773,15 +613,6 @@ def _render_record(
         _render_review_validation_binding_record(rendering, record, payload, prefix)
     elif isinstance(payload, FindingTransitionPayload):
         _render_finding_transition_record(rendering, record, payload, prefix)
-    elif isinstance(payload, FindingHandoffImportPayload):
-        _render_finding_handoff_import_record(rendering, payload, prefix)
-    elif isinstance(payload, FindingHandoffExportPayload):
-        _render_finding_handoff_export_record(rendering, payload, prefix)
-    elif isinstance(
-        payload,
-        (BranchDiscoveryHandoffExportPayload, BranchDiscoveryHandoffImportPayload),
-    ):
-        _render_branch_discovery_handoff_record(rendering, payload, prefix)
     elif isinstance(payload, ValidationRequestPayload):
         _render_validation_request_record(rendering, payload, prefix)
     elif isinstance(payload, ValidationAttestationPayload):
@@ -796,16 +627,6 @@ def _render_record(
         _render_work_unit_record(rendering, payload, prefix)
     elif isinstance(payload, BindingPayload):
         _render_binding_record(rendering, payload, prefix)
-    elif isinstance(
-        payload,
-        (
-            PlanAssignmentPayload,
-            RemediationCohortCheckpointPayload,
-            NoImplementationRequiredPayload,
-            ClosedFindingOccurrencePayload,
-        ),
-    ):
-        _render_remediation_planning_record(rendering, payload, prefix)
 
 
 def _render_provider_attempts(rendering: _ReplayRendering) -> None:

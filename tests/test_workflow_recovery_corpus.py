@@ -97,22 +97,23 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "881e944fea9442012aecb7c20b519ea5a2b83bbf"
 SOURCE_BLOB = "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d"
 PRE_B54_COMMIT = "e538d96be18e6857250f6a86ab6f6c499e40d0b0"
-RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+HISTORICAL_RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46"
+    "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-a72e6a53fe50f36b64777ca28dd44987e4ffecf408a6c569c98e5420aac8e601"
+    "native-review-request-0fe7a370d6cedd7e726fe51c6aea1b48fe1b4da5257abe3b33b94ca25a97b918"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "a0283c507c65a366735683871fbe5bf52b2f86ad130f0788471f60a9d43a5c44"
+    "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "4c75d1b272fc17df38e75e6de6089b0a24bea49817dc8b68ac4c426023a25258"
+    "33f599e463f7f8abab3704d33b5bbf242a39f84b8d2e27421352e425123912e3"
 )
 
 RECOVERY_HELPERS = {
@@ -2305,7 +2306,7 @@ def test_b54_entries_and_helpers_are_below_the_b32_threshold() -> None:
     ) not in size_baseline["functions"]
 
 
-def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+def test_historical_and_target_record_sequence_baselines_are_exact() -> None:
     actual_blob = subprocess.run(
         ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
         cwd=ROOT,
@@ -2324,4 +2325,5 @@ def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert actual_blob == head_blob == RECORD_SEQUENCE_BLOB
+    assert head_blob == HISTORICAL_RECORD_SEQUENCE_BLOB
+    assert actual_blob == RECORD_SEQUENCE_BLOB

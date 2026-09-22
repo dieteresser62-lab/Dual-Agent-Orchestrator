@@ -18,7 +18,6 @@ from agent_runtime import (
     ProviderRequestRoundRequired,
     QuotaReachedError,
 )
-from artifact_bridge import ArtifactBridgeError, finding_handoff_export_payload
 from artifact_resume import ArtifactResumeError
 from artifact_models import (
     AgentResultPayload,
@@ -249,45 +248,6 @@ def _mismatched_persisted_request(tmp_path: Path) -> BaseException:
     request_path.write_text("different", encoding="utf-8")
     return _capture(
         lambda: driver._persist_native_agent_request_bundle(invocation)  # noqa: SLF001
-    )
-
-
-def _missing_finding_export_plan() -> BaseException:
-    review = ArtifactRecord.create(
-        run_id="source-run",
-        logical_id="review",
-        revision=1,
-        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "a" * 64),
-        predecessor_ids=(),
-        created_at="2026-08-29T10:00:00+00:00",
-        idempotency_key="source:review",
-        payload=ReviewPayload(
-            Role.CLAUDE,
-            "plan-review",
-            "approved",
-            (),
-            "checked accepted replay and plan binding",
-            "native-claude-review-v2",
-            "native-review-request-" + "b" * 64,
-            "c" * 64,
-        ),
-    )
-    replay = ArtifactReplayResult(
-        expected_run_id="source-run",
-        records=(review,),
-        head_record_id=review.record_id,
-        semantic_facts=(),
-        semantic_digest="d" * 64,
-        audit_events=(),
-    )
-    return _capture(
-        lambda: finding_handoff_export_payload(
-            replay,
-            approved_plan_commit="e" * 40,
-            approval_review_record_id=review.record_id,
-            target_task_path="inbox/implement.md",
-            target_task_bytes=b"task",
-        )
     )
 
 
@@ -573,13 +533,6 @@ def test_terminal_rejection_is_promoted_after_record_start() -> None:
             _mismatched_persisted_request,
             FailureClass.RESUMABLE_HALT,
             "persisted request binding must be repaired, not overwritten",
-        ),
-        (
-            "historical-poison-finding-export.error.json",
-            "finding export plan commit is not present in accepted replay",
-            lambda _tmp: _missing_finding_export_plan(),
-            FailureClass.RESUMABLE_HALT,
-            "accepted replay authority cannot be recreated by retry",
         ),
         (
             "historical-poison-audit-dual-write.error.json",

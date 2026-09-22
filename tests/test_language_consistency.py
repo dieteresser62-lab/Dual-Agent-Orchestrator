@@ -274,7 +274,7 @@ def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
             "A root role file is manifest-dependent only when a packet exists",
             "tests marked `crash_harness`",
             "python3 -m pytest tests/test_crash_harness.py -v",
-            "before the linked branch-discovery review",
+            "before the same-run final full-branch review",
             "The orchestrator does not select or enforce this standalone command",
             "The operator treats a merge as permitted only when",
             "never sampled or reduced",

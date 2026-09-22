@@ -19,7 +19,7 @@
     "src/audit_trail.py": {"codex": 11, "claude": 27},
     "src/cli.py": {"codex": 2, "claude": 2},
     "src/contracts.py": {"codex": 13, "claude": 7},
-    "src/dry_run_scenarios.py": {"codex": 36, "claude": 3},
+    "src/dry_run_scenarios.py": {"codex": 36, "claude": 4},
     "src/final_review_preflight.py": {"codex": 8, "claude": 2},
     "src/git_service.py": {"codex": 4, "claude": 3},
     "src/native_codex_contract.py": {"codex": 140},
@@ -36,14 +36,14 @@
     "src/workflow.py": {"codex": 95, "claude": 68},
     "src/workflow_audit_projection.py": {"codex": 4, "claude": 2},
     "src/workflow_baseline.py": {"codex": 2, "claude": 2},
-    "src/workflow_dry_run.py": {"codex": 16, "claude": 9},
+    "src/workflow_dry_run.py": {"codex": 16, "claude": 10},
     "src/workflow_git_commit.py": {"claude": 2},
     "src/workflow_persistence.py": {"codex": 8, "claude": 6},
     "src/workflow_production.py": {"codex": 5, "claude": 3},
     "src/workflow_recovery.py": {"codex": 21, "claude": 18},
     "src/workflow_requests.py": {"codex": 35, "claude": 1},
     "src/workflow_run_setup.py": {"codex": 9, "claude": 7},
-    "src/workflow_state.py": {"codex": 91, "claude": 39},
+    "src/workflow_state.py": {"codex": 91, "claude": 40},
     "src/workflow_validation.py": {"codex": 1}
   }
 }

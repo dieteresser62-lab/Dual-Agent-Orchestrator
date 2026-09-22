@@ -4,10 +4,9 @@ from dataclasses import replace
 
 import pytest
 import workflow_requests
-import native_finding_decisions
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
-from artifact_models import FamilyBindingPayload, technical_text_evidence
+from artifact_models import technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
 from orchestrator_diagnostics import OrchestratorDiagnostic
@@ -61,36 +60,35 @@ def make_state():
     )
 
 
-def test_branch_discovery_state_starts_as_its_own_terminal_review_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
+def test_final_review_is_the_terminal_work_unit_of_the_implementation_run() -> None:
     reviewed_head = "b" * 40
     state = init_workflow_state(
-        run_id="branch-discovery-run",
-        task_file="/repo/discovery.md",
+        run_id="implementation-run",
+        task_file="/repo/task.md",
         branch="feature/state-v3",
         branch_base="a" * 40,
-        first_slice_start_commit=reviewed_head,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
-        execution_mode="BRANCH_DISCOVERY",
-    )
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/core.py",),
+        start_fingerprint="c" * 64,
+    ).complete_current_slice(
+        commit_ref=reviewed_head,
+    ).start_final_review_work_unit()
 
-    assert state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
-    assert state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+    assert state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
     assert state.current_work_unit.round_number == 1
     assert state.current_work_unit.request_sequence == 1
     assert state.current_slice.status is SliceStatus.COMPLETED
-    assert state.current_slice.start_commit == reviewed_head
+    assert state.current_slice.start_commit == "a" * 40
     assert state.current_slice.commit_ref == reviewed_head
-    assert state.current_slice.scope_paths == ()
-    assert state.current_slice.scope_change_groups == ()
-    assert state.current_slice.start_fingerprint is None
-    assert state.planned_slices == ()
+    assert state.branch_review_base_commit == "a" * 40
 
 
 def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
@@ -1088,46 +1086,6 @@ def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
     assert WorkflowState.from_dict(bound.to_dict()) == bound
     with pytest.raises(WorkflowStateValidationError, match="persisted Slice commit"):
         state.bind_completed_plan_commit(commit_ref="c" * 40)
-
-
-def test_family_profile_can_precede_the_plan_commit_created_by_plan_only() -> None:
-    plan_path = "docs/internal/work-plan.md"
-    commit = "b" * 40
-    binding = FamilyBindingPayload(
-        "family-1",
-        "a" * 40,
-        (plan_path,),
-        "predecessor-run",
-        "ar1-" + "c" * 64,
-        2,
-        None,
-        None,
-    )
-    state = init_workflow_state(
-        run_id="run-family-plan-only",
-        task_file="/repo/plan.md",
-        branch="feature/family-plan-only",
-        branch_base=binding.family_base_commit,
-        first_slice_start_commit="d" * 40,
-        slice_count=1,
-        execution_mode="PLAN_ONLY",
-        work_plan_path=plan_path,
-        family_binding=binding,
-        timestamp="2026-09-19T10:00:00+00:00",
-    ).bind_slice_plan(
-        (PlannedSlice(1, "plan artifact", (plan_path,)),),
-        first_start_commit="d" * 40,
-    ).bind_current_slice_git_boundary(
-        start_commit="d" * 40,
-        scope_paths=(plan_path,),
-        start_fingerprint="1" * 64,
-    ).complete_current_slice(commit_ref=commit)
-
-    bound = state.bind_completed_plan_commit(commit_ref=commit)
-
-    assert bound.approved_plan_commit == commit
-    assert bound.family_binding == binding
-    assert WorkflowState.from_dict(bound.to_dict()) == bound
 
 
 def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:

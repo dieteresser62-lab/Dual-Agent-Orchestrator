@@ -7,7 +7,6 @@ from dataclasses import replace
 import pytest
 
 import native_codex_contract
-import native_finding_decisions
 
 from acceptance_criteria import acceptance_criterion_id
 from contracts import (
@@ -146,17 +145,11 @@ def _bound(
 
 
 def _base(bound: BoundNativeCodexContext, result_type: str) -> dict[str, object]:
-    document: dict[str, object] = {
+    return {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": result_type,
         "request_id": bound.request_id,
     }
-    if result_type == "plan_result":
-        document.update(
-            plan_treatments=[],
-            plan_completion="IMPLEMENTATION_REQUIRED",
-        )
-    return document
 
 
 def test_native_codex_schema_is_checked_and_canonical() -> None:
@@ -268,95 +261,6 @@ def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> 
         assert dispositions["minItems"] == 0
         assert dispositions["maxItems"] == 0
         assert "const" not in dispositions
-
-
-def test_plan_treatment_writer_schema_is_closed_enum_discriminated_union() -> None:
-    provider_schema = native_codex_provider_response_schema(
-        _bound(NativeCodexRequestKind.PLAN).context
-    )
-    treatment_schema = provider_schema["$defs"]["plan_treatment"]
-
-    assert set(treatment_schema) == {"anyOf"}
-    branches = {
-        branch["properties"]["treatment_kind"]["enum"][0]: branch
-        for branch in treatment_schema["anyOf"]
-    }
-    assert set(branches) == {"implementation", "no_code"}
-    assert set(branches["implementation"]["properties"]) == {
-        "signature",
-        "finding_ids",
-        "treatment_kind",
-        "closing_slice_ids",
-    }
-    assert set(branches["no_code"]["properties"]) == {
-        "signature",
-        "finding_ids",
-        "treatment_kind",
-        "no_code_reason",
-        "evidence",
-        "evidence_paths",
-        "affected_paths",
-    }
-    for branch in branches.values():
-        assert set(branch["required"]) == set(branch["properties"])
-        assert branch["additionalProperties"] is False
-
-    pending: list[object] = [treatment_schema]
-    while pending:
-        node = pending.pop()
-        if isinstance(node, dict):
-            assert "const" not in node
-            pending.extend(node.values())
-        elif isinstance(node, list):
-            pending.extend(node)
-
-    assert "anyOf" not in provider_schema
-    assert_projected_provider_schema(provider_schema, provider="codex")
-
-
-@pytest.mark.parametrize(
-    "treatment",
-    (
-        {
-            "signature": "c" * 64,
-            "finding_ids": ["C-01"],
-            "treatment_kind": "implementation",
-            "closing_slice_ids": [1],
-        },
-        {
-            "signature": "c" * 64,
-            "finding_ids": ["C-01"],
-            "treatment_kind": "no_code",
-            "no_code_reason": "no_defect",
-            "evidence": "The finding does not identify a product defect.",
-            "evidence_paths": ["tests/evidence.txt"],
-            "affected_paths": [],
-        },
-    ),
-)
-def test_plan_treatment_writer_accepts_each_union_branch(
-    treatment: dict[str, object],
-) -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
-    document = {
-        **_base(bound, "plan_result"),
-        "ready": True,
-        "slice_plan": [
-            {
-                "slice_id": 1,
-                "summary": "Bind the treatment shape.",
-                "scope_paths": ["src/contract.py"],
-                "acceptance_criteria": [_criterion("The treatment is bound.")],
-            }
-        ],
-        "finding_dispositions": [],
-        "plan_treatments": [treatment],
-    }
-
-    validate_schema_document(
-        {"result": document},
-        native_codex_provider_response_schema(bound.context),
-    )
 
 
 def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
@@ -1060,144 +964,6 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
     assert encountered <= registered
 
 
-def test_plan_revision_requires_every_open_finding_disposition() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN, findings=(_finding(),))
-    document = {
-        **_base(bound, "plan_result"),
-        "ready": True,
-        "slice_plan": [
-            {
-                "slice_id": 1,
-                "summary": "Revise the native plan.",
-                "scope_paths": ["docs/internal/plan.md"],
-                "acceptance_criteria": [_criterion("The native plan is revised.")],
-            }
-        ],
-        "finding_dispositions": [],
-        "plan_treatments": [
-            {
-                "signature": finding_record_signature(_finding()),
-                "finding_ids": ["C-01"],
-                "treatment_kind": "implementation",
-                "closing_slice_ids": [1],
-            }
-        ],
-    }
-    validate_schema_document(
-        {"result": document}, native_codex_provider_response_schema(bound.context)
-    )
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
-    assert raised.value.detail.startswith("missing disposition for C-01")
-
-    document["finding_dispositions"] = [
-        {
-            "finding_id": "C-01",
-            "decision": "accepted",
-            "rationale": "The revised plan now closes the contractual gap.",
-        }
-    ]
-    result = parse_bound_native_codex_contract_result(document, bound)
-    assert result.findings[0].responses[-1].decision is FindingResponseDecision.ACCEPTED
-
-
-def test_implementation_treatment_no_code_fields_are_rejected_by_wire_and_domain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    finding = _finding()
-    bound = _bound(NativeCodexRequestKind.PLAN, findings=(finding,))
-    document = {
-        **_base(bound, "plan_result"),
-        "ready": True,
-        "slice_plan": [
-            {
-                "slice_id": 1,
-                "summary": "Implement the contract.",
-                "scope_paths": ["src/contract.py"],
-                "acceptance_criteria": [_criterion("The contract is implemented.")],
-            }
-        ],
-        "finding_dispositions": [],
-        "plan_treatments": [
-            {
-                "signature": finding_record_signature(finding),
-                "finding_ids": ["C-01"],
-                "treatment_kind": "implementation",
-                "closing_slice_ids": [1],
-                "affected_paths": ["src/contract.py"],
-            }
-        ],
-    }
-
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(
-            {"result": document},
-            native_codex_provider_response_schema(bound.context),
-        )
-
-    monkeypatch.setattr(
-        native_codex_contract,
-        "validate_native_codex_document",
-        lambda _document: None,
-    )
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_native_codex_response(document, bound)
-
-    assert str(raised.value) == (
-        "slice-plan-invalid: plan treatment is invalid: implementation treatment "
-        "forbids No-Code disposition fields"
-    )
-    assert raised.value.orchestrator_diagnostic is (
-        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
-    )
-
-
-def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-    finding = _finding()
-    bound = _bound(NativeCodexRequestKind.PLAN, findings=(finding,))
-    texts = ["An unrelated reviewer-owned condition.", "Replay remains stable."]
-    document = {
-        **_base(bound, "plan_result"),
-        "ready": True,
-        "slice_plan": [
-            {
-                "slice_id": 1,
-                "summary": "Build the record fact.",
-                "scope_paths": ["src/record.py"],
-                "acceptance_criteria": [_criterion(text) for text in texts],
-            }
-        ],
-        "finding_dispositions": [],
-        "plan_treatments": [
-            {
-                "signature": finding_record_signature(finding),
-                "finding_ids": ["C-01"],
-                "treatment_kind": "implementation",
-                "closing_slice_ids": [1],
-            }
-        ],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
-    }
-
-    response = parse_native_codex_response(document, bound)
-
-    assert tuple(
-        criterion.text for criterion in response.slice_plan[0].acceptance_criteria
-    ) == tuple(texts)
-    assert tuple(
-        criterion.criterion_id
-        for criterion in response.slice_plan[0].acceptance_criteria
-    ) == tuple(acceptance_criterion_id(1, text) for text in texts)
-
-
 def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
     bound = _bound(NativeCodexRequestKind.PLAN)
     document = {
@@ -1761,9 +1527,7 @@ def test_retry_guidance_inventory_covers_every_retryable_codex_code() -> None:
 
 
 def test_retry_guidance_uses_the_precise_closed_diagnostic() -> None:
-    diagnostic = (
-        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
-    )
+    diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
 
     guidance = native_codex_retry_guidance(
         NativeCodexErrorCode.SLICE_PLAN_INVALID,
@@ -1771,7 +1535,7 @@ def test_retry_guidance_uses_the_precise_closed_diagnostic() -> None:
     )
 
     assert guidance == diagnostic.text
-    assert "implementation treatment forbids No-Code disposition fields" in guidance
+    assert "planned slice paths must be sorted, unique, and non-empty" in guidance
 
 
 def test_context_invalid_has_no_codex_retry_guidance() -> None:

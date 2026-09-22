@@ -317,8 +317,6 @@ def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
         "request_id": bundle.bound_context.request_id,
         "ready": True,
         "finding_dispositions": [],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
         "slice_plan": [
             {
                 "slice_id": 1,

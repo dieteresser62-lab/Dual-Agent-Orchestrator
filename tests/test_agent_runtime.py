@@ -237,8 +237,6 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
                 }],
             }
         ],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     canonical = json.dumps(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -304,8 +302,6 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
                 }],
             }
         ],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     canonical = json.dumps(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -434,8 +430,6 @@ def test_native_codex_runtime_forwards_canary_execution_root(
                 }],
             }
         ],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     captured: dict[str, object] = {}
 
@@ -498,8 +492,6 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                 }
             ],
             "finding_dispositions": [],
-            "plan_treatments": [],
-            "plan_completion": "IMPLEMENTATION_REQUIRED",
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -608,8 +600,6 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
             }
         ],
         "finding_dispositions": [],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     from native_codex_contract import parse_bound_native_codex_contract_result
 
@@ -671,7 +661,6 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness and resume",

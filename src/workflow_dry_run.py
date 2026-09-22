@@ -24,7 +24,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
     base = "a" * 40
     commit1 = "b" * 40
     commit2 = "c" * 40
-    plan_fp, first_fp, second_fp = (value * 64 for value in "123")
+    plan_fp, first_fp, second_fp, final_fp = (value * 64 for value in "1234")
 
     def review() -> dict[str, object]:
         return {
@@ -36,7 +36,6 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
             "new_findings": [],
             "status_changes": [],
             "reclassifications": [],
-            "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "correctness, contracts, failure paths, security, resume",
@@ -84,8 +83,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                            "measured_against": "SOURCE",
                                        }],
                                    },
-                               ], plan_treatments=[],
-                               plan_completion="IMPLEMENTATION_REQUIRED")),
+                               ])),
             ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
                                review()),
             ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
@@ -96,15 +94,44 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                codex_result("implementation_result", test_files=[])),
             ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
                                review()),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE,
+                4,
+                1,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                {
+                    "schema_version": "native-agent-review-result-v2",
+                    "result_type": "final_review_completed",
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "reviewer": "claude",
+                    "scan_complete": True,
+                    "new_findings": [],
+                    "occurrences": [],
+                    "review_evidence": {
+                        "dimensions": "complete branch correctness and contracts",
+                        "largest_residual_risk": "runtime drift",
+                        "break_condition": "the branch evidence changes",
+                    },
+                    "pre_mortem": "A resume could use stale branch evidence.",
+                },
+            ),
         ),
         changes=(
             ScriptedChange(1, 1, base, plan_fp, ("docs/internal/plan.md",), "plan diff"),
             ScriptedChange(2, 1, base, first_fp, ("src/first.py",), "first slice diff"),
             ScriptedChange(3, 1, commit1, second_fp, ("src/second.py",), "second slice diff"),
+            ScriptedChange(
+                4,
+                1,
+                base,
+                final_fp,
+                ("src/first.py", "src/second.py"),
+                "final branch diff",
+            ),
         ),
         validations=tuple(
             ScriptedValidation(fingerprint, "pass")
-            for fingerprint in (plan_fp, first_fp, second_fp)
+            for fingerprint in (plan_fp, first_fp, second_fp, final_fp)
         ),
         commits=(
             ScriptedCommit(1, first_fp, commit1),
@@ -130,4 +157,5 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
         start_commit=commit1, scope_paths=("src/second.py",), start_fingerprint="0" * 64
     )
     second = session.run(state, context)
-    return second.result, tuple(session.driver.calls), dict(session.driver.validation_counts)
+    final = session.run(second.result.state.start_final_review_work_unit(), context)
+    return final.result, tuple(session.driver.calls), dict(session.driver.validation_counts)

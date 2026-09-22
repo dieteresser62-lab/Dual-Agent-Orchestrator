@@ -1,4 +1,4 @@
-"""Agent-free checks immediately before the branch-discovery reviewer."""
+"""Agent-free checks immediately before the same-run final reviewer."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from workflow_state import (
 )
 
 
-FINAL_REVIEW_OPERATIONS = frozenset({"claude_branch_discovery"})
+FINAL_REVIEW_OPERATIONS = frozenset({"claude_final_review"})
 _TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
     RecordType.FINAL_REVIEW_PREFLIGHT,
@@ -144,14 +144,14 @@ def run_final_review_preflight(
     expected_step = WorkflowStep(operation)
     if (
         state.current_step is not expected_step
-        or state.current_work_unit.kind is not WorkUnitKind.BRANCH_DISCOVERY
+        or state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
     ):
         return _deny(
             "technical",
             "STATE-TRANSITION-MISMATCH",
             (),
             (),
-            "restore the state-v3 branch-discovery cursor",
+            "restore the state-v3 final-review cursor",
         )
     if payload.work_unit_id != str(state.current_work_unit_id) or measurement_record.run_id != state.run_id:
         return _deny("technical", "MEASUREMENT-RUN-MISMATCH", (measurement_record.record_id,), (), "recreate the measurement for the active work unit")
@@ -191,37 +191,8 @@ def run_final_review_preflight(
             if any(records_by_id[ref].fingerprint != item.fingerprint for ref in references):
                 return _deny("technical", "FINGERPRINT-MISMATCH", (item.record_id, *references), (), "restore fingerprint-identical binding references")
 
-    family_binding = state.active_family_binding
-    allowed_patterns = (
-        family_binding.family_authorized_change_set
-        if family_binding is not None
-        else tuple(
-            dict.fromkeys(
-                (
-                    *state.task_scope_patterns,
-                    *(path for item in state.slices for path in item.scope_paths),
-                )
-            )
-        )
-    )
-    approved_external_paths = set(
-        _approved_external_paths(
-            state,
-            records,
-            current_fingerprint=measurement_record.fingerprint.sha256,
-        )
-    )
-    unexpected = tuple(
-        sorted(
-            path
-            for path in set(repository_paths)
-            if path not in approved_external_paths
-            and not matches_path_patterns(path, allowed_patterns)
-        )
-    )
-    if unexpected:
-        return _deny("correction_required", "UNAUTHORIZED-PATH", (), unexpected, "move the changes into an authorized Slice or revert them")
-
+    # The terminal review deliberately covers the complete branch diff from
+    # the Git merge-base; Slice scopes do not constrain this read-only step.
     attestations = [
         item for item in records
         if isinstance(item.payload, ValidationAttestationPayload)
@@ -234,72 +205,6 @@ def run_final_review_preflight(
         return _deny("correction_required", "ATTESTATION-FAILED", (attestation.record_id,), (), "repair the validation failure and attest the current fingerprint")
 
     return FinalReviewPreflightResult("passed")
-
-
-def _approved_external_paths(
-    state: WorkflowState,
-    records: Sequence[ArtifactRecord],
-    *,
-    current_fingerprint: str,
-) -> frozenset[str]:
-    """Recover exact path grants bound to commits or the active final review.
-
-    Completed Slice grants require both the approved user-gate mirror and a
-    commit binding with the identical fingerprint.  A final-review grant cannot
-    have a Slice commit binding yet, so it is accepted only from the active
-    final-review work unit, for the exact current fingerprint, with its matching
-    structured user-gate record.  Historical approvals never widen later
-    fingerprints.
-    """
-    approved_gates = {
-        (item.fingerprint.sha256, item.payload.gate_kind)
-        for item in records
-        if isinstance(item.payload, GatePayload)
-        and item.payload.authority is Role.USER
-        and item.payload.decision == "approved"
-    }
-    commit_bindings = {
-        (item.fingerprint.sha256, item.payload.target)
-        for item in records
-        if isinstance(item.payload, BindingPayload)
-        and item.payload.binding_kind == "commit"
-    }
-    slices_by_id = {item.slice_id: item for item in state.slices}
-    authorized: set[str] = set()
-    for unit in state.work_units:
-        if (
-            unit.kind is not WorkUnitKind.SLICE
-            or unit.status is not WorkUnitStatus.COMPLETED
-        ):
-            continue
-        slice_record = slices_by_id.get(unit.slice_id)
-        if (
-            slice_record is None
-            or slice_record.status is not SliceStatus.COMPLETED
-            or slice_record.commit_ref is None
-        ):
-            continue
-        for decision in unit.gate_decisions:
-            gate_kind = _EXTERNAL_PATH_GATE_KINDS.get(decision.reason)
-            if gate_kind is None or not decision.approved:
-                continue
-            if (decision.fingerprint, gate_kind) not in approved_gates:
-                continue
-            if (decision.fingerprint, slice_record.commit_ref) not in commit_bindings:
-                continue
-            authorized.update(decision.paths)
-    if state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
-        for decision in state.current_work_unit.gate_decisions:
-            gate_kind = _EXTERNAL_PATH_GATE_KINDS.get(decision.reason)
-            if (
-                gate_kind is None
-                or not decision.approved
-                or decision.fingerprint != current_fingerprint
-                or (decision.fingerprint, gate_kind) not in approved_gates
-            ):
-                continue
-            authorized.update(decision.paths)
-    return frozenset(authorized)
 
 
 def preflight_payload(

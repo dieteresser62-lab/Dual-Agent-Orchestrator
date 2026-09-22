@@ -33,19 +33,6 @@ from gates import (
     STOP_RULE_ID_PATTERN,
     validate_builtin_stop_content,
 )
-import native_finding_decisions
-from native_finding_decisions import (
-    NativeRejectionReason,
-    PlanCompletionKind,
-    PlanTreatmentKind,
-    PlanTreatmentProposal,
-    plan_treatment_json_schema,
-)
-from finding_planning import (
-    canonical_open_signature_groups,
-    validate_plan_completion,
-    validate_plan_treatment_coverage,
-)
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -331,8 +318,6 @@ class NativePlanResult:
     ready: bool
     slice_plan: tuple[PlannedSlice, ...]
     dispositions: tuple[NativeFindingDisposition, ...] = ()
-    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
-    plan_completion: PlanCompletionKind | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,7 +416,6 @@ def native_codex_provider_response_schema(
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
-    required.append("plan_treatments")
     open_ids = project_open_set(context.previous_findings).finding_ids
     disposition = schema["$defs"]["finding_disposition"]
     if open_ids:
@@ -607,22 +591,6 @@ def parse_native_codex_response(
                 NativeCodexErrorCode.SLICE_PLAN_INVALID,
                 "slice plan ids must be contiguous and 1-based",
             )
-        treatments = _parse_plan_treatments(document.get("plan_treatments", []))
-        try:
-            validate_plan_treatment_coverage(
-                canonical_open_signature_groups(
-                    bound_context.context.previous_findings
-                ),
-                treatments,
-                slices,
-            )
-            completion = PlanCompletionKind(document["plan_completion"])
-            validate_plan_completion(treatments, slices, completion)
-        except ValueError as exc:
-            raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-                NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
-                str(exc),
-            ) from exc
         return NativePlanResult(
             request_id=document["request_id"],
             ready=document["ready"],
@@ -630,8 +598,6 @@ def parse_native_codex_response(
             dispositions=_parse_dispositions(
                 document.get("finding_dispositions", [])
             ),
-            plan_treatments=treatments,
-            plan_completion=completion,
         )
     dispositions = _parse_dispositions(document["finding_dispositions"])
     if result_type in {"implementation_result", "correction_result"}:
@@ -705,15 +671,8 @@ def native_codex_response_to_contract_result(
         dispositions = response.dispositions
         test_files = ()
         slice_plan = response.slice_plan
-        plan_treatments = response.plan_treatments
-        plan_completion = response.plan_completion
         self_check = None
-        no_implementation_required = (
-            plan_completion is PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED
-        )
-        if not contract.require_slice_plan or (
-            not slice_plan and not no_implementation_required
-        ):
+        if not contract.require_slice_plan or not slice_plan:
             raise NativeCodexContractError(
                 NativeCodexErrorCode.SLICE_PLAN_INVALID,
                 "plan result requires a slice plan contract",
@@ -723,8 +682,6 @@ def native_codex_response_to_contract_result(
         test_files = response.test_files
         slice_plan = ()
         self_check = None
-        plan_treatments = ()
-        plan_completion = None
         _validate_test_files(response.ready, test_files, contract)
     else:
         raise NativeCodexContractError(
@@ -746,8 +703,6 @@ def native_codex_response_to_contract_result(
         findings=findings,
         slice_plan=slice_plan,
         self_check=self_check,
-        plan_treatments=plan_treatments,
-        plan_completion=plan_completion,
     )
 
 
@@ -786,41 +741,6 @@ def _parse_dispositions(
     return dispositions
 
 
-def _parse_plan_treatments(
-    items: list[Mapping[str, Any]],
-) -> tuple[PlanTreatmentProposal, ...]:
-    try:
-        treatments = tuple(
-            PlanTreatmentProposal(
-                signature=item["signature"],
-                finding_ids=tuple(item["finding_ids"]),
-                treatment_kind=PlanTreatmentKind(item["treatment_kind"]),
-                closing_slice_ids=tuple(item.get("closing_slice_ids", ())),
-                no_code_reason=(
-                    None
-                    if item.get("no_code_reason") is None
-                    else NativeRejectionReason(item["no_code_reason"])
-                ),
-                evidence=item.get("evidence"),
-                evidence_paths=tuple(item.get("evidence_paths", ())),
-                affected_paths=tuple(item.get("affected_paths", ())),
-            )
-            for item in items
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
-            f"plan treatment is invalid: {exc}",
-        ) from exc
-    signatures = tuple(item.signature for item in treatments)
-    if signatures != tuple(sorted(set(signatures))):
-        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-            NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
-            "plan treatments must be sorted and unique by signature",
-        )
-    return treatments
-
-
 def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
     planned_slice = definitions["planned_slice"]
@@ -848,19 +768,6 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
         },
     }
     planned_slice["required"].append("acceptance_criteria")
-    definitions["plan_treatment"] = plan_treatment_json_schema()
-    plan_result = definitions["plan_result"]
-    plan_result["properties"]["plan_treatments"] = {
-        "type": "array",
-        "maxItems": 128,
-        "items": {"$ref": "#/$defs/plan_treatment"},
-    }
-    plan_result["properties"]["plan_completion"] = {
-        "type": "string",
-        "enum": [item.value for item in PlanCompletionKind],
-    }
-    plan_result["properties"]["slice_plan"]["minItems"] = 0
-    plan_result["required"].append("plan_completion")
 
 
 def _apply_dispositions(

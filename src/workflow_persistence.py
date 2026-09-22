@@ -23,7 +23,7 @@ from artifact_bridge import (
     ArtifactBridge,
     agent_result_payload,
     attestation_payload,
-    branch_discovery_completed_payload,
+    final_review_completed_payload,
     command_payload,
     finding_payload,
     plan_payload,
@@ -34,11 +34,8 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
     BindingPayload,
-    BranchDiscoveryCompletedPayload,
-    BranchDiscoveryHandoffExportPayload,
+    FinalReviewCompletedPayload,
     FingerprintKind,
-    FindingSeverity,
-    FindingTransitionPayload,
     GatePayload,
     GateTransitionPayload,
     InvocationFailurePayload,
@@ -61,13 +58,11 @@ from artifact_models import (
     WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
-    extend_family_authorized_change_set,
     stable_record_id,
 )
 from artifact_replay import (
     ReplayedWorkflowCursor,
     ReplayedWorkUnitState,
-    effective_family_binding,
     replay_artifacts,
 )
 from contracts import (
@@ -80,15 +75,12 @@ from contracts import (
 from finding_reducer import (
     merge_review_request_result,
     project_finding_response_delta,
-    project_open_set,
     project_reviewer_persistence_transitions,
     reduce_findings,
 )
 from review_packets import ReviewPacket
 from orchestrator_diagnostics import OrchestratorDiagnostic
-from slice_exit import workflow_completion_blocking_finding_ids
-from task_contract import TaskMode
-from workflow import WorkflowCompletionRejected, WorkflowExecutionError
+from workflow import WorkflowExecutionError
 from workflow_state import (
     AgentFailureKind,
     GateDecisionRecord,
@@ -192,12 +184,6 @@ class WorkflowPersistenceDependencies:
     materialize_review_packet: Callable[[ReviewPacket], Path]
     canonical_agent_result: Callable[
         [tuple[ArtifactRecord, ...], str], ArtifactRecord | None
-    ]
-    prepare_completion_finding_handoff: Callable[
-        [WorkflowState], tuple[str, str] | None
-    ]
-    prepare_completion_family_handoff: Callable[
-        [WorkflowState, str], BranchDiscoveryHandoffExportPayload | None
     ]
 
 
@@ -617,17 +603,6 @@ class WorkflowPersistence:
             raise WorkflowExecutionError(
                 "scope extension record differs from the boundary additions"
             )
-        prior_family_binding = effective_family_binding(replay)
-        if prior_family_binding is None:
-            raise WorkflowExecutionError(
-                "scope extension requires a run-bound family identity"
-            )
-        if state.active_family_binding != extend_family_authorized_change_set(
-            prior_family_binding, added_paths
-        ):
-            raise WorkflowExecutionError(
-                "scope extension state differs from the record-approved family growth"
-            )
         source = next(
             (
                 record
@@ -817,58 +792,17 @@ class WorkflowPersistence:
             )
         completing = (
             state.current_step is WorkflowStep.COMPLETED
-            and all(item.commit_ref is not None for item in state.slices)
+            and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
         )
-        if (
-            completing
-            and state.execution_mode == TaskMode.PLAN_ONLY.value
-            and state.current_work_unit.kind is WorkUnitKind.PLAN
-            and state.work_plan_path is not None
-            and state.approved_plan_commit is not None
-        ):
-            # The linked-run handoff is a fourth authoritative Finding exit.
-            # Append it before testing completion: until the export exists, the
-            # transfer is only an intention and must not satisfy totality.
-            self._dependencies.prepare_completion_finding_handoff(state)
         if completing:
             chain = bridge.store.current_chain()
-            blocking_finding_ids = workflow_completion_blocking_finding_ids(
-                chain,
-                run_id=state.run_id,
-            )
-            branch_discovery = (
-                state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
-            )
-            if blocking_finding_ids and not branch_discovery:
-                raise WorkflowCompletionRejected(
-                    "workflow completion rejected; findings without a valid "
-                    "terminal outcome: "
-                    + ", ".join(blocking_finding_ids)
-                )
-            # The still-separate BRANCH_DISCOVERY workflow publishes its open
-            # cohort and completion atomically below.  It needs no mutable
-            # owner fact: the export carries the immutable opening history.
-            final_binding = (
-                next(
-                    (
-                        item
-                        for item in reversed(chain)
-                        if isinstance(
-                            item.payload, BranchDiscoveryCompletedPayload
-                        )
-                    ),
-                    None,
-                )
-                if branch_discovery
-                else next(
-                    (
-                        item
-                        for item in reversed(chain)
-                        if isinstance(item.payload, BindingPayload)
-                        and item.payload.binding_kind in {"commit", "plan_commit"}
-                    ),
-                    None,
-                )
+            final_binding = next(
+                (
+                    item
+                    for item in reversed(chain)
+                    if isinstance(item.payload, FinalReviewCompletedPayload)
+                ),
+                None,
             )
             if final_binding is None:
                 raise WorkflowExecutionError(
@@ -878,25 +812,6 @@ class WorkflowPersistence:
                 outcome="completed",
                 final_binding_id=final_binding.record_id,
             )
-            completion_record_id = stable_record_id(
-                state.run_id,
-                RecordType.WORKFLOW_COMPLETION,
-                "workflow-completion",
-                1,
-            )
-            if state.execution_mode in {
-                TaskMode.IMPLEMENT.value,
-                TaskMode.BRANCH_DISCOVERY.value,
-            }:
-                self._persist_family_completion(
-                    state=state,
-                    bridge=bridge,
-                    chain=chain,
-                    completion_payload=completion_payload,
-                    completion_record_id=completion_record_id,
-                    final_binding=final_binding,
-                )
-                return
             bridge.append(
                 completion_payload,
                 logical_id="workflow-completion",
@@ -904,93 +819,6 @@ class WorkflowPersistence:
                 fingerprint_sha256=final_binding.fingerprint.sha256,
                 fingerprint_kind=FingerprintKind.IMPLEMENTATION,
             )
-
-    def _persist_family_completion(
-        self,
-        *,
-        state: WorkflowState,
-        bridge: ArtifactBridge,
-        chain: tuple[ArtifactRecord, ...],
-        completion_payload: WorkflowCompletionPayload,
-        completion_record_id: str,
-        final_binding: ArtifactRecord,
-    ) -> None:
-        """Persist the shared linked-run export-before-completion boundary."""
-
-        existing_completion = next(
-            (
-                record
-                for record in chain
-                if record.record_id == completion_record_id
-            ),
-            None,
-        )
-        if existing_completion is not None:
-            prefix = chain[: chain.index(existing_completion)]
-            target_mode = (
-                TaskMode.BRANCH_DISCOVERY.value
-                if state.execution_mode == TaskMode.IMPLEMENT.value
-                else TaskMode.PLAN_ONLY.value
-            )
-            exports = tuple(
-                record
-                for record in prefix
-                if isinstance(
-                    record.payload, BranchDiscoveryHandoffExportPayload
-                )
-                and record.payload.target_execution_mode == target_mode
-            )
-            open_findings = reduce_findings(
-                replay_artifacts(chain, state.run_id)
-            ).open_set.finding_ids
-            required = (
-                state.execution_mode == TaskMode.IMPLEMENT.value
-                or bool(open_findings)
-            )
-            if len(exports) != (1 if required else 0):
-                raise WorkflowExecutionError(
-                    f"completed {state.execution_mode} run has an invalid "
-                    f"earlier {target_mode} handoff export count"
-                )
-            bridge.append(
-                completion_payload,
-                logical_id="workflow-completion",
-                idempotency_key="workflow-completion:completed",
-                fingerprint_sha256=final_binding.fingerprint.sha256,
-                fingerprint_kind=FingerprintKind.IMPLEMENTATION,
-            )
-            return
-        handoff_payload = self._dependencies.prepare_completion_family_handoff(
-            state,
-            completion_record_id,
-        )
-        if handoff_payload is None:
-            bridge.append(
-                completion_payload,
-                logical_id="workflow-completion",
-                idempotency_key="workflow-completion:completed",
-                fingerprint_sha256=final_binding.fingerprint.sha256,
-                fingerprint_kind=FingerprintKind.IMPLEMENTATION,
-            )
-            return
-        bridge.append_batch(
-            (
-                (
-                    handoff_payload,
-                    "branch-discovery-handoff-export",
-                    "branch-discovery-handoff-export:completed",
-                    final_binding.fingerprint.sha256,
-                    FingerprintKind.IMPLEMENTATION,
-                ),
-                (
-                    completion_payload,
-                    "workflow-completion",
-                    "workflow-completion:completed",
-                    final_binding.fingerprint.sha256,
-                    FingerprintKind.IMPLEMENTATION,
-                ),
-            )
-        )
 
     def _persist_native_agent_request_bundle(self, invocation: object) -> None:
         bundle = invocation.native_request
@@ -1252,7 +1080,7 @@ class WorkflowPersistence:
                 fingerprint_sha256=fingerprint,
             )
 
-    def _persist_branch_discovery_completion(
+    def _persist_final_review_completion(
         self,
         *,
         output: NativeAgentReviewOutput,
@@ -1264,27 +1092,27 @@ class WorkflowPersistence:
         binding_digest: str,
         response_sha256: str,
     ) -> bool:
-        if output.result.delivery_kind != "branch_discovery_completed":
+        if output.result.delivery_kind != "final_review_completed":
             return False
         bridge = self._artifact_bridge
         state = self.active_state
         native_context = output.context
         assert bridge is not None and state is not None and native_context is not None
         if (
-            state.execution_mode != TaskMode.BRANCH_DISCOVERY.value
-            or native_context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY
+            state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+            or native_context.approval_marker is not ApprovalMarker.FINAL_REVIEW
         ):
             raise WorkflowExecutionError(
-                "branch discovery completion lacks its dedicated run binding"
+                "final review completion lacks its implementation-run step binding"
             )
-        reviewed_head = state.slices[0].start_commit
+        reviewed_head = state.current_slice.commit_ref
         if reviewed_head is None:
             raise WorkflowExecutionError(
-                "branch discovery completion lacks its reviewed HEAD"
+                "final review completion lacks its reviewed HEAD"
             )
         unit = state.current_work_unit
         completion_record = bridge.append(
-            branch_discovery_completed_payload(
+            final_review_completed_payload(
                 output.result,
                 previous_findings,
                 work_unit_id=unit.work_unit_id,
@@ -1405,8 +1233,8 @@ class WorkflowPersistence:
             )
         unit = state.current_work_unit
         review_type = (
-            "branch discovery"
-            if state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+            "final review"
+            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
             else "slice review"
         )
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"
@@ -1418,7 +1246,7 @@ class WorkflowPersistence:
                 if record.logical_id == logical
                 and isinstance(
                     record.payload,
-                    (ReviewPayload, BranchDiscoveryCompletedPayload),
+                    (ReviewPayload, FinalReviewCompletedPayload),
                 )
             ),
             None,
@@ -1500,7 +1328,7 @@ class WorkflowPersistence:
         assert isinstance(content_record.payload, ProviderContentPayload)
         if content_record.payload.response_sha256 != response_sha256:
             raise WorkflowExecutionError("native reviewer content digest differs from its review binding")
-        if self._persist_branch_discovery_completion(
+        if self._persist_final_review_completion(
             output=output,
             fingerprint=fingerprint,
             round_number=round_number,

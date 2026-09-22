@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import native_finding_decisions
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from contracts import (
@@ -26,8 +25,8 @@ from contracts import (
 )
 from native_review_contract import (
     BoundNativeReviewContext,
-    DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS,
-    MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+    DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS,
+    MAX_FINAL_REVIEW_NEW_FINDINGS,
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
@@ -165,12 +164,12 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "6209cecefc5cfc70d217a5208b34ae09351fd9d8ec3398d0d6e52b53be33cf10"
+        "840709e23d3b5e8539741d465b172595c6e5717f1fdc6a7a6a323e66dcd1ff95"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "e898d81773fd5f8b1eaab00a7b02d27e61c7f14395cae0a1ba34260a1cee33aa"
+        "497bece0d6204d13d17d4708d9a1cf87181702da2dac34ead2700e97e90e82d2"
     )
 
 
@@ -181,11 +180,6 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
 def test_enabled_review_request_binds_record_plan_criteria_structurally(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
     criteria = acceptance_criteria_from_texts(
         2,
         ("Reviewer decides whether this condition adopts the finding.",),
@@ -218,11 +212,6 @@ def test_enabled_review_request_binds_record_plan_criteria_structurally(
 def test_plan_disposition_overflow_stops_before_request_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
     findings = tuple(
         _prior_finding(f"C-{number:02d}") for number in range(1, 34)
     )
@@ -243,35 +232,30 @@ def test_plan_disposition_overflow_stops_before_request_construction(
         build_native_review_request(spec)
 
 
-def test_branch_discovery_request_binds_default_and_hard_capacity(
+def test_final_review_request_binds_default_and_hard_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
     context = replace(
         _context(),
-        operation="claude_branch_discovery",
-        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
     spec = replace(
         _spec(),
         context=context,
-        review_kind=NativeReviewKind.BRANCH_DISCOVERY,
+        review_kind=NativeReviewKind.FINAL_REVIEW,
     )
 
     default_bundle = build_native_review_request(spec)
 
-    assert context.max_new_findings == DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS
+    assert context.max_new_findings == DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS
     assert default_bundle.document["review_contract"]["max_new_findings"] == 128
     completed = default_bundle.provider_response_schema["$defs"][
-        "bound_branch_discovery_completed"
+        "bound_final_review_completed"
     ]
     predecessor = default_bundle.provider_response_schema["$defs"][
-        "bound_branch_discovery_finding"
+        "bound_final_review_finding"
     ]["properties"]["predecessor_finding_ref"]
     assert completed["properties"]["new_findings"]["maxItems"] == 128
     assert completed["properties"]["occurrences"]["const"] == []
@@ -287,53 +271,43 @@ def test_branch_discovery_request_binds_default_and_hard_capacity(
         provider="claude",
     )
 
-    maximum = replace(context, max_new_findings=MAX_BRANCH_DISCOVERY_NEW_FINDINGS)
+    maximum = replace(context, max_new_findings=MAX_FINAL_REVIEW_NEW_FINDINGS)
     maximum_bundle = build_native_review_request(replace(spec, context=maximum))
     assert maximum_bundle.document["review_contract"]["max_new_findings"] == 512
     assert maximum_bundle.provider_response_schema["$defs"][
-        "bound_branch_discovery_completed"
+        "bound_final_review_completed"
     ]["properties"]["new_findings"]["maxItems"] == 512
 
 
 @pytest.mark.parametrize("capacity", (0, 513, True))
-def test_branch_discovery_request_rejects_capacity_outside_one_to_512(
+def test_final_review_request_rejects_capacity_outside_one_to_512(
     monkeypatch: pytest.MonkeyPatch,
     capacity: object,
 ) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
     with pytest.raises(NativeReviewContractError, match="from 1 to 512"):
         replace(
             _context(),
-            operation="claude_branch_discovery",
-            approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+            operation="claude_final_review",
+            approval_marker=ApprovalMarker.FINAL_REVIEW,
             anchor_origin=None,
             max_new_findings=capacity,
         )
 
 
-def test_branch_discovery_contract_has_no_pagination_or_cursor_fields(
+def test_final_review_contract_has_no_pagination_or_cursor_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
     context = replace(
         _context(),
-        operation="claude_branch_discovery",
-        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
     bundle = build_native_review_request(
         replace(
             _spec(),
             context=context,
-            review_kind=NativeReviewKind.BRANCH_DISCOVERY,
+            review_kind=NativeReviewKind.FINAL_REVIEW,
         )
     )
 
@@ -406,7 +380,6 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, resume",
@@ -430,17 +403,17 @@ def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> 
         round_number=2,
         allow_new_observations=False,
     )
-    branch_discovery = replace(
+    final_review = replace(
         context,
-        operation="claude_branch_discovery",
-        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
 
     first = native_review_provider_response_schema(context)
     assert native_review_provider_response_schema(same_policy) == first
     assert native_review_provider_response_schema(convergence) != first
-    assert native_review_provider_response_schema(branch_discovery) != first
+    assert native_review_provider_response_schema(final_review) != first
 
 
 def test_writer_projection_defensively_copies_the_same_reader_instance() -> None:
@@ -765,7 +738,7 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
         )
 
 
-def test_plan_slice_convergence_and_discovery_requests_bind_distinct_writer_digests() -> None:
+def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() -> None:
     base = _spec()
     contexts = (
         replace(
@@ -786,11 +759,11 @@ def test_plan_slice_convergence_and_discovery_requests_bind_distinct_writer_dige
         ),
         replace(
             base,
-            review_kind=NativeReviewKind.BRANCH_DISCOVERY,
+            review_kind=NativeReviewKind.FINAL_REVIEW,
             context=replace(
                 base.context,
-                operation="claude_branch_discovery",
-                approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+                operation="claude_final_review",
+                approval_marker=ApprovalMarker.FINAL_REVIEW,
                 anchor_origin=None,
             ),
         ),
@@ -983,7 +956,6 @@ def _response(request_id: str) -> dict[str, object]:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, failure paths, resume",

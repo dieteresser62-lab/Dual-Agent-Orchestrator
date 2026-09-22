@@ -21,25 +21,17 @@ from request_identity import workflow_policy_counter_candidates
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
-    artifact_payload_document, family_binding_document,
-    BranchDiscoveryCompletedPayload,
-    BranchDiscoveryHandoffExportPayload,
-    BranchDiscoveryHandoffImportPayload,
+    artifact_payload_document,
+    FinalReviewCompletedPayload,
     BindingPayload,
     DiagnosticPayload,
     FinalReviewPreflightPayload,
     FindingSeverity,
     FindingTransitionPayload,
-    FindingSnapshotItem,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
-    ImportedFindingTransition,
     InvocationFailurePayload,
-    finding_transition_sequence_sha256,
-    flatten_finding_transition_history,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     PlanPayload,
@@ -69,7 +61,7 @@ from artifact_models import (
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
     TransientRetryPayload,
-    canonical_json, extend_family_authorized_change_set,
+    canonical_json,
 )
 from finding_order import sorted_finding_ids
 from finding_signature import finding_record_signature
@@ -400,11 +392,7 @@ def replay_artifacts(
             RecordType.RUN_PROFILE,
             RecordType.PLAN,
             RecordType.WORKFLOW_COMPLETION,
-            RecordType.FINDING_HANDOFF_EXPORT,
-            RecordType.FINDING_HANDOFF_IMPORT,
-            RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT,
-            RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT,
-            RecordType.BRANCH_DISCOVERY_COMPLETED,
+            RecordType.FINAL_REVIEW_COMPLETED,
         }:
             if record.record_type in singleton_types:
                 _fail(
@@ -456,17 +444,7 @@ def replay_artifacts(
 
     has_run_identity = RecordType.RUN_IDENTITY in singleton_types
     has_run_profile = RecordType.RUN_PROFILE in singleton_types
-    finding_import_bootstrap = (
-        allow_finding_import_bootstrap
-        and all(
-            isinstance(
-                record.payload,
-                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-            )
-            for record in chain
-        )
-    )
-    if (not has_run_identity or not has_run_profile) and not finding_import_bootstrap:
+    if not has_run_identity or not has_run_profile:
         missing = []
         if not has_run_identity:
             missing.append("run identity")
@@ -567,7 +545,7 @@ def _ensure_projection_event_prefix(
             else "validation"
             if isinstance(record.payload, ValidationAttestationPayload)
             else "review"
-            if isinstance(record.payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
+            if isinstance(record.payload, (ReviewPayload, FinalReviewCompletedPayload))
             else None,
         )
         if kind is not None
@@ -721,7 +699,7 @@ def _project_slice_documents(
             if slice_id == "1"
             else prior_commit
         )
-        commit_ref = identity.first_slice_start_commit if identity.execution_mode == "BRANCH_DISCOVERY" and slice_id == "1" else commit_refs.get(slice_id)
+        commit_ref = commit_refs.get(slice_id)
         slices.append(
             {
                 "slice_id": int(slice_id),
@@ -815,8 +793,8 @@ def _project_work_unit_round_and_kind(
     kind = (
         "correction"
         if isinstance(definition, CorrectionWorkUnitPayload)
-        else "branch_discovery"
-        if first_step == "claude_branch_discovery"  # allowlist:provider -- canonical state-v3 step
+        else "final_review"
+        if first_step == "claude_final_review"  # allowlist:provider -- canonical state-v3 step
         else "plan"
         if unit.work_unit_id == "1"
         or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
@@ -1030,11 +1008,9 @@ def _assemble_workflow_state_document(
     planned_slices: Sequence[SliceSpec],
     slices: Sequence[dict[str, object]],
     work_units: Sequence[dict[str, object]],
-    import_record: ArtifactRecord | None,
     runtime_history: dict[str, dict[str, tuple[str, ...]]],
 ) -> dict[str, object]:
     return {
-        **({"family_binding": family_binding_document(effective_family_binding(replay))} if effective_family_binding(replay) is not None else {}),
         "version": 3,
         "run_id": replay.expected_run_id,
         "task_file": identity.task_file,
@@ -1065,12 +1041,6 @@ def _assemble_workflow_state_document(
             task.work_plan_path if plan is None else plan.work_plan_path
         ),
         "approved_plan_commit": None if plan is None else plan.approved_plan_commit,
-        "finding_handoff_source_run_id": (
-            None if import_record is None else import_record.payload.source_run_id
-        ),
-        "finding_handoff_export_record_id": (
-            None if import_record is None else import_record.payload.export_record_id
-        ),
         "audit_report_path": identity.audit_report_path,
         "target_branch": task.target_branch,
         "protocol_binding": {
@@ -1154,17 +1124,6 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
 
     work_units = _project_work_unit_documents(replay, records, transitions)
 
-    import_record = next(
-        (
-            record
-            for record in records
-            if isinstance(
-                record.payload,
-                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-            )
-        ),
-        None,
-    )
     runtime_history = project_runtime_history_references(replay)
 
     document = _assemble_workflow_state_document(
@@ -1177,7 +1136,6 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         planned_slices,
         slices,
         work_units,
-        import_record,
         runtime_history,
     )
     # Parsing the projection through the real state-v3 validator proves that
@@ -1306,7 +1264,7 @@ def project_review_contracts(
     for review_record in chain:
         payload = review_record.payload
         if not isinstance(payload, ReviewPayload):
-            projected.extend(_project_branch_discovery_contract(replay, review_record, positions, records_by_id, read_blob)); continue
+            projected.extend(_project_final_review_contract(replay, review_record, positions, records_by_id, read_blob)); continue
         if review_record.record_id == replay.pending_review_record_id:
             continue
         anchor_record = anchors_by_review.get(review_record.record_id)
@@ -1657,7 +1615,7 @@ def _validate_workflow_transitions_and_events(
                 "run": RunIdentityPayload,
                 "transition": WorkflowTransitionPayload,
                 "validation": ValidationAttestationPayload,
-                "review": (ReviewPayload, BranchDiscoveryCompletedPayload),
+                "review": (ReviewPayload, FinalReviewCompletedPayload),
             }[payload.event_kind]
             if len(typed_references) != 1 or not isinstance(
                 typed_references[0].payload, expected_type
@@ -2001,7 +1959,7 @@ def _validate_provider_decision_content(
         record for record in chain
         if isinstance(
             record.payload,
-            (AgentResultPayload, ReviewPayload, BranchDiscoveryCompletedPayload),
+            (AgentResultPayload, ReviewPayload, FinalReviewCompletedPayload),
         )
     )
     bound_provider_records: set[str] = set()
@@ -2086,7 +2044,7 @@ def _validate_provider_decision_content(
         expected_kind = (
             "review_result"
             if isinstance(
-                decision, (ReviewPayload, BranchDiscoveryCompletedPayload)
+                decision, (ReviewPayload, FinalReviewCompletedPayload)
             )
             else "final_report"
             if decision.outcome == "ready"
@@ -2365,462 +2323,6 @@ def _validate_work_unit_revision(
         )
 
 
-def _validate_single_finding_import(
-    chain: tuple[ArtifactRecord, ...],
-) -> None:
-    import_records = [
-        record for record in chain
-        if isinstance(
-            record.payload,
-            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-        )
-    ]
-    if len(import_records) > 1:
-        _fail(
-            ReplayDiagnosticCode.RECORD_DUPLICATE,
-            "a run may contain only one finding handoff import",
-            import_records[-1],
-        )
-
-
-def _validate_finding_handoff_record(
-    record: ArtifactRecord,
-    payload: object,
-    chain: tuple[ArtifactRecord, ...],
-    records_by_id: dict[str, ArtifactRecord],
-    positions: dict[str, int],
-    reduce_findings: Callable[..., object],
-) -> None:
-    if isinstance(payload, FindingHandoffExportPayload):
-        if (
-            payload.source_run_id != record.run_id
-            or not record.predecessor_ids
-            or payload.source_head_record_id != record.predecessor_ids[0]
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "finding export source run or pre-export head differs",
-                record,
-            )
-        review = records_by_id.get(payload.approval_review_record_id)
-        if (
-            review is None
-            or not isinstance(review.payload, ReviewPayload)
-            or review.payload.verdict != "approved"
-            or positions[review.record_id] >= positions[record.record_id]
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "finding export approval review is not present",
-                record,
-            )
-        source_prefix = chain[:positions[record.record_id]]
-        transitive = flatten_finding_transition_history(source_prefix)
-        legacy = tuple(
-            ImportedFindingTransition(source.record_id, source.payload)
-            for source in source_prefix
-            if isinstance(source.payload, FindingTransitionPayload)
-        )
-        available_ids = {
-            item.record_id for candidate in (transitive, legacy) for item in candidate
-        }
-        if any(
-            record_id not in available_ids
-            for record_id in payload.finding_transition_record_ids
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "finding export transition sequence is not present",
-                record,
-            )
-        if not any(
-            payload.finding_transition_record_ids
-            == tuple(item.record_id for item in candidate)
-            and payload.finding_transitions_sha256
-            == finding_transition_sequence_sha256(candidate)
-            for candidate in (transitive, legacy)
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "finding export transition order or digest differs",
-                record,
-            )
-        if not any(
-            isinstance(candidate.payload, PlanPayload)
-            and candidate.payload.approved_plan_commit == payload.approved_plan_commit
-            for candidate in chain[:positions[record.record_id]]
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "finding export approved plan commit is not present",
-                record,
-            )
-    elif isinstance(payload, FindingHandoffImportPayload):
-        if payload.target_run_id != record.run_id:
-            _fail(
-                ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
-                "finding import target run differs",
-                record,
-            )
-        if payload.source_run_id == record.run_id:
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "finding import must retain foreign provenance",
-                record,
-            )
-        # An import is atomic authority: validate its entire embedded
-        # lifecycle now, not only when a later consumer asks for findings.
-        reduce_findings(_result(record.run_id, (record,)))
-    elif isinstance(
-        payload,
-        (BranchDiscoveryHandoffExportPayload, BranchDiscoveryHandoffImportPayload),
-    ):
-        _validate_branch_discovery_handoff_record(
-            record,
-            payload,
-            chain,
-            records_by_id,
-            positions,
-            reduce_findings,
-        )
-
-
-def _validate_branch_discovery_handoff_record(
-    record: ArtifactRecord,
-    payload: BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload,
-    chain: tuple[ArtifactRecord, ...],
-    records_by_id: dict[str, ArtifactRecord],
-    positions: dict[str, int],
-    reduce_findings: Callable[..., object],
-) -> None:
-    if isinstance(payload, BranchDiscoveryHandoffExportPayload):
-        _validate_branch_discovery_export(
-            record, payload, chain, records_by_id, positions
-        )
-    else:
-        _validate_branch_discovery_import(
-            record, payload, chain, positions, reduce_findings
-        )
-
-
-def _validate_branch_discovery_export(
-    record: ArtifactRecord,
-    payload: BranchDiscoveryHandoffExportPayload,
-    chain: tuple[ArtifactRecord, ...],
-    records_by_id: dict[str, ArtifactRecord],
-    positions: dict[str, int],
-) -> None:
-    if (
-        payload.source_run_id != record.run_id
-        or not record.predecessor_ids
-        or payload.source_head_record_id != record.predecessor_ids[0]
-        or payload.predecessor_run_id != payload.source_run_id
-        or payload.predecessor_head_record_id != (
-            payload.source_completion_record_id
-            if payload.target_execution_mode == "BRANCH_DISCOVERY"
-            else payload.source_head_record_id
-        )
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery export source or predecessor binding differs",
-            record,
-        )
-    attestation = records_by_id.get(payload.validation_attestation_record_id)
-    if (
-        attestation is None
-        or not isinstance(attestation.payload, ValidationAttestationPayload)
-        or positions[attestation.record_id] >= positions[record.record_id]
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            "branch discovery export validation attestation is not present",
-            record,
-        )
-    if payload.target_execution_mode == "PLAN_ONLY":
-        review = records_by_id.get(payload.discovery_review_record_id or "")
-        if (
-            review is None
-            or not isinstance(review.payload, BranchDiscoveryCompletedPayload)
-            or positions[review.record_id] >= positions[record.record_id]
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "branch discovery export completion is not present; approved is not scan completion",
-                record,
-            )
-        if review.fingerprint != attestation.fingerprint:
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "branch discovery export completion and attestation fingerprints differ",
-                record,
-            )
-    else:
-        completion = records_by_id.get(payload.source_completion_record_id or "")
-        if (
-            completion is None
-            or not isinstance(completion.payload, WorkflowCompletionPayload)
-            or completion.payload.outcome != "completed"
-            or not (
-                (
-                    payload.source_head_record_id == completion.record_id
-                    and positions[completion.record_id] < positions[record.record_id]
-                )
-                or (
-                    payload.source_head_record_id != completion.record_id
-                    and positions[completion.record_id]
-                    == positions[record.record_id] + 1
-                )
-            )
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "BRANCH_DISCOVERY family handoff source completion is not present",
-                record,
-            )
-    source_prefix = chain[:positions[record.record_id]]
-    flattened = flatten_finding_transition_history(source_prefix)
-    if (
-        payload.finding_transition_record_ids
-        != tuple(item.record_id for item in flattened)
-        or payload.finding_transitions_sha256
-        != finding_transition_sequence_sha256(flattened)
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery export flattened transition history differs",
-            record,
-        )
-    identity = next(
-        (
-            candidate.payload
-            for candidate in source_prefix
-            if isinstance(candidate.payload, RunIdentityPayload)
-        ),
-        None,
-    )
-    if identity is not None and (
-        (
-            payload.target_execution_mode == "PLAN_ONLY"
-            and identity.execution_mode != "BRANCH_DISCOVERY"
-        )
-        or (
-            payload.target_execution_mode == "BRANCH_DISCOVERY"
-            and identity.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}
-        )
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-            "branch discovery handoff source and target run kinds are invalid",
-            record,
-        )
-    profile = next(
-        (
-            candidate.payload
-            for candidate in source_prefix
-            if isinstance(candidate.payload, RunProfilePayload)
-        ),
-        None,
-    )
-    binding = None if profile is None else profile.family_binding
-    initial_implementation_family = (
-        binding is None
-        and identity is not None
-        and identity.execution_mode == "IMPLEMENT"
-        and payload.target_execution_mode == "BRANCH_DISCOVERY"
-        and payload.cycle_number == 1
-        and payload.family_base_commit == identity.branch_base
-    )
-    if not initial_implementation_family and (
-        binding is None
-        or binding.family_id != payload.family_id
-        or binding.family_base_commit != payload.family_base_commit
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery export family identity differs from RunProfile",
-            record,
-        )
-
-
-def _validate_branch_discovery_import(
-    record: ArtifactRecord,
-    payload: BranchDiscoveryHandoffImportPayload,
-    chain: tuple[ArtifactRecord, ...],
-    positions: dict[str, int],
-    reduce_findings: Callable[..., object],
-) -> None:
-    if (
-        payload.target_run_id != record.run_id
-        or payload.target_run_identity != record.run_id
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
-            "branch discovery import target run differs",
-            record,
-        )
-    if payload.source_run_id == record.run_id:
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery import must retain foreign provenance",
-            record,
-        )
-    reduction = reduce_findings(_result(record.run_id, (record,)))
-    findings_by_id = {
-        finding.finding_id: finding for finding in reduction.ledger.findings
-    }
-    expected_snapshot = tuple(
-        FindingSnapshotItem(
-            finding.finding_id,
-            finding_record_signature(finding),
-            finding.status.value.lower(),
-            FindingSeverity(finding.finding_class.value),
-        )
-        for finding in (
-            findings_by_id[finding_id]
-            for finding_id in sorted_finding_ids(findings_by_id)
-        )
-    )
-    if payload.finding_snapshot != expected_snapshot:
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery import finding_snapshot differs from transitions",
-            record,
-        )
-    profile = next(
-        (
-            candidate.payload
-            for candidate in chain
-            if isinstance(candidate.payload, RunProfilePayload)
-        ),
-        None,
-    )
-    binding = None if profile is None else profile.family_binding
-    bootstrap_only = all(
-        isinstance(candidate.payload, BranchDiscoveryHandoffImportPayload)
-        for candidate in chain
-    )
-    actual_family = None if binding is None else (
-        binding.family_id,
-        binding.family_base_commit,
-        binding.cycle_number,
-        binding.predecessor_run_id,
-        binding.predecessor_head_record_id,
-    )
-    expected_family = (
-        payload.family_id,
-        payload.family_base_commit,
-        payload.cycle_number,
-        payload.predecessor_run_id,
-        payload.predecessor_head_record_id,
-    )
-    if not bootstrap_only and actual_family != expected_family:
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery import family binding differs from RunProfile",
-            record,
-        )
-    task = next(
-        (item.payload for item in chain if isinstance(item.payload, TaskPayload)),
-        None,
-    )
-    identity = next(
-        (
-            item.payload
-            for item in chain
-            if isinstance(item.payload, RunIdentityPayload)
-        ),
-        None,
-    )
-    if task is not None and task.assignment_sha256 != payload.target_task_sha256:
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery import task bytes digest differs from Task record",
-            record,
-        )
-    if identity is not None:
-        normalized_task = identity.task_file.replace("\\", "/")
-        if not (
-            normalized_task == payload.target_task_path
-            or normalized_task.endswith("/" + payload.target_task_path)
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "branch discovery import task path differs from RunIdentity",
-                record,
-            )
-        if identity.execution_mode != payload.target_execution_mode:
-            _fail(
-                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                "branch discovery import target execution mode differs from RunIdentity",
-                record,
-            )
-    first_dispatch = next(
-        (
-            positions[item.record_id]
-            for item in chain
-            if isinstance(
-                item.payload,
-                (
-                    ProviderInputMeasurementPayload,
-                    ProviderAttemptPayload,
-                    AgentResultPayload,
-                ),
-            )
-        ),
-        None,
-    )
-    if first_dispatch is not None and positions[record.record_id] >= first_dispatch:
-        _fail(
-            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            "branch discovery import must precede the first dispatch",
-            record,
-        )
-
-
-def _validate_work_unit_finding_import(
-    record: ArtifactRecord,
-    payload: object,
-    chain: tuple[ArtifactRecord, ...],
-    records_by_id: dict[str, ArtifactRecord],
-    positions: dict[str, int],
-    reduce_findings: Callable[..., object],
-) -> None:
-    if isinstance(payload, WorkUnitPayload) and payload.finding_import_record_id is not None:
-        imported = records_by_id.get(payload.finding_import_record_id)
-        if (
-            imported is None
-            or not isinstance(imported.payload, FindingHandoffImportPayload)
-            or positions[imported.record_id] >= positions[record.record_id]
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "work unit finding import is not present",
-                record,
-            )
-        # The import establishes the initial ledger, not an immutable view
-        # of every later round.  Derive the expected open set from the
-        # complete authoritative prefix so reviewer transitions written
-        # before a new work-unit revision are reflected without weakening
-        # the import provenance binding.
-        finding_prefix = tuple(
-            candidate
-            for candidate in chain[:positions[record.record_id]]
-            if isinstance(
-                candidate.payload,
-                (FindingHandoffImportPayload, FindingTransitionPayload),
-            )
-        )
-        expected_open = reduce_findings(
-            _result(record.run_id, finding_prefix)
-        ).open_set.finding_ids
-        if payload.open_finding_ids != expected_open:
-            _fail(
-                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                "work unit open findings differ from its authoritative finding prefix",
-                record,
-            )
-
 
 def _validate_work_unit_activity_reference(
     record: ArtifactRecord,
@@ -2842,7 +2344,7 @@ def _validate_work_unit_activity_reference(
                 AgentResultPayload,
                 DiagnosticPayload,
                 ReviewPayload,
-                BranchDiscoveryCompletedPayload,
+                FinalReviewCompletedPayload,
                 ProviderInputMeasurementPayload,
                 ProviderAttemptPayload,
                 FinalReviewPreflightPayload,
@@ -2867,7 +2369,7 @@ def _validate_bound_record_references(
     records_by_id: dict[str, ArtifactRecord],
     positions: dict[str, int],
 ) -> None:
-    if isinstance(payload, BranchDiscoveryCompletedPayload):
+    if isinstance(payload, FinalReviewCompletedPayload):
         attestation = records_by_id.get(
             payload.validation_attestation_record_id
         )
@@ -2886,18 +2388,17 @@ def _validate_bound_record_references(
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                "branch discovery completion validation attestation is not present",
+                "final review completion validation attestation is not present",
                 record,
             )
         _same_fingerprint(record, attestation)
         if (
             identity is None
-            or identity.execution_mode != "BRANCH_DISCOVERY"
-            or identity.first_slice_start_commit != payload.reviewed_head_commit
+            or identity.execution_mode != "IMPLEMENT"
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                "branch discovery completion requires its own HEAD-bound BRANCH_DISCOVERY run",
+                "final review completion requires an IMPLEMENT run",
                 record,
             )
     elif isinstance(payload, BindingPayload):
@@ -2937,16 +2438,16 @@ def _validate_bound_record_references(
             ),
             None,
         )
-        discovery_binding = (
+        final_review_binding = (
             identity is not None
-            and identity.execution_mode == "BRANCH_DISCOVERY"
+            and identity.execution_mode == "IMPLEMENT"
             and binding is not None
-            and isinstance(binding.payload, BranchDiscoveryCompletedPayload)
+            and isinstance(binding.payload, FinalReviewCompletedPayload)
         )
         if (
             binding is None
             or not (
-                isinstance(binding.payload, BindingPayload) or discovery_binding
+                isinstance(binding.payload, BindingPayload) or final_review_binding
             )
             or positions[binding.record_id] >= positions[record.record_id]
         ):
@@ -3015,12 +2516,6 @@ def _validate_chain_record_references(
 ) -> None:
     for record in chain:
         payload = record.payload
-        _validate_finding_handoff_record(
-            record, payload, chain, records_by_id, positions, reduce_findings
-        )
-        _validate_work_unit_finding_import(
-            record, payload, chain, records_by_id, positions, reduce_findings
-        )
         _validate_work_unit_activity_reference(
             record, payload, work_units, first_work_unit_position, positions
         )
@@ -3250,7 +2745,6 @@ def _validate_payload_references(
         (positions[record.record_id] for record in work_units.values()),
         default=None,
     )
-    _validate_single_finding_import(chain)
     _validate_chain_record_references(
         chain,
         records_by_id,
@@ -3362,7 +2856,7 @@ def _workflow_event_domain_kind(payload: object) -> str | None:
         return "validation"
     if isinstance(payload, ReviewPayload):
         return "review"
-    if isinstance(payload, BranchDiscoveryCompletedPayload):
+    if isinstance(payload, FinalReviewCompletedPayload):
         return "review"
     return None
 
@@ -3391,7 +2885,7 @@ def _pending_workflow_event_record_id(
         positions = {record.record_id: index for index, record in enumerate(records)}
         if _review_prefix_end(records, positions, candidate) != len(records):
             return None
-    elif isinstance(candidate.payload, BranchDiscoveryCompletedPayload):
+    elif isinstance(candidate.payload, FinalReviewCompletedPayload):
         candidate_index = records.index(candidate)
         if any(
             not isinstance(record.payload, FindingTransitionPayload)
@@ -3431,7 +2925,7 @@ def pending_workflow_event_payload(
         )
     work_unit_id = (
         domain.work_unit_id
-        if isinstance(domain, (ReviewPayload, BranchDiscoveryCompletedPayload))
+        if isinstance(domain, (ReviewPayload, FinalReviewCompletedPayload))
         else None
     )
     prior_transitions = tuple(
@@ -3458,7 +2952,7 @@ def pending_workflow_event_payload(
         if isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         and record.logical_id.removeprefix("work-unit-") == work_unit_id
     ]
-    if isinstance(domain, (ReviewPayload, BranchDiscoveryCompletedPayload)):
+    if isinstance(domain, (ReviewPayload, FinalReviewCompletedPayload)):
         suffix = domain_record.logical_id.rsplit("-", 1)[-1]
         if not suffix.isdigit():
             _fail(
@@ -3685,8 +3179,6 @@ def _fail(
 
 def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
-    if isinstance(payload, ReviewPayload) and not payload.plan_treatment_decisions:
-        raw.pop("plan_treatment_decisions", None)
     if isinstance(
         payload,
         (
@@ -3695,16 +3187,6 @@ def _semantic_payload_document(payload: object) -> dict[str, object]:
             PlanPayload,
             FindingTransitionPayload,
             RunProfilePayload,
-        ),
-    ):
-        return artifact_payload_document(payload)
-    if isinstance(
-        payload,
-        (
-            FindingHandoffExportPayload,
-            FindingHandoffImportPayload,
-            BranchDiscoveryHandoffExportPayload,
-            BranchDiscoveryHandoffImportPayload,
         ),
     ):
         return artifact_payload_document(payload)
@@ -3743,19 +3225,19 @@ def _slice_acceptance_projection(spec: SliceSpec) -> dict[str, object]:
     }
 
 
-def _project_branch_discovery_contract(
+def _project_final_review_contract(
     replay: ArtifactReplayResult,
-    discovery_record: ArtifactRecord,
+    final_review_record: ArtifactRecord,
     positions: dict[str, int],
     records_by_id: dict[str, ArtifactRecord],
     read_blob: Callable[[BlobReference], bytes],
 ) -> tuple[ReplayedReviewContract, ...]:
-    """Rebuild one completed discovery review from its native transaction."""
+    """Rebuild the completed final review from its native transaction."""
 
     from contracts import FindingOccurrence
 
-    payload = discovery_record.payload
-    if not isinstance(payload, BranchDiscoveryCompletedPayload):
+    payload = final_review_record.payload
+    if not isinstance(payload, FinalReviewCompletedPayload):
         return ()
     attestation_record = records_by_id.get(
         payload.validation_attestation_record_id
@@ -3766,8 +3248,8 @@ def _project_branch_discovery_contract(
     ):
         _fail(
             ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            "branch discovery projection cannot resolve its validation attestation",
-            discovery_record,
+            "final review projection cannot resolve its validation attestation",
+            final_review_record,
         )
     attestation = _project_validation_attestation(
         replay,
@@ -3778,38 +3260,38 @@ def _project_branch_discovery_contract(
         (
             record
             for record in replay.records[
-                positions[discovery_record.record_id] + 1 :
+                positions[final_review_record.record_id] + 1 :
             ]
             if isinstance(record.payload, WorkflowEventPayload)
             and record.payload.event_kind == "review"
-            and record.payload.record_refs == (discovery_record.record_id,)
+            and record.payload.record_refs == (final_review_record.record_id,)
         ),
         None,
     )
     if event_record is None:
         _fail(
             ReplayDiagnosticCode.RECORD_MISSING,
-            "branch discovery projection lacks its review workflow event",
-            discovery_record,
+            "final review projection lacks its review workflow event",
+            final_review_record,
         )
     event_position = positions[event_record.record_id]
     transaction = replay.records[
-        positions[discovery_record.record_id] + 1 : event_position
+        positions[final_review_record.record_id] + 1 : event_position
     ]
     from finding_reducer import reduce_findings
 
     findings = reduce_findings(
         replay.subset(replay.records[: event_position + 1])
     ).ledger.findings
-    round_suffix = discovery_record.logical_id.rsplit("-", 1)[-1]
+    round_suffix = final_review_record.logical_id.rsplit("-", 1)[-1]
     if not round_suffix.isdigit() or int(round_suffix) < 1:
         _fail(
             ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            "branch discovery contract has no canonical logical round",
-            discovery_record,
+            "final review contract has no canonical logical round",
+            final_review_record,
         )
     return (ReplayedReviewContract(
-        record_id=discovery_record.record_id,
+        record_id=final_review_record.record_id,
         work_unit_id=payload.work_unit_id,
         round_number=int(round_suffix),
         result=ContractResult(
@@ -3827,7 +3309,7 @@ def _project_branch_discovery_contract(
             ),
             findings=findings,
             anchors=(),
-            delivery_kind="branch_discovery_completed",
+            delivery_kind="final_review_completed",
             occurrences=tuple(
                 FindingOccurrence(
                     item.finding_id,
@@ -3841,21 +3323,6 @@ def _project_branch_discovery_contract(
     ),)
 
 
-def effective_family_binding(replay: ArtifactReplayResult):
-    """Project the initial binding plus every recorded scope approval."""
-
-    binding = None if replay.run_profile is None else replay.run_profile.family_binding
-    if binding is None:
-        return None
-    approved_paths = tuple(
-        addition.path
-        for record in replay.records
-        if isinstance(record.payload, ScopeExtensionPayload)
-        for addition in record.payload.additions
-    )
-    return extend_family_authorized_change_set(binding, approved_paths)
-
-
 __all__ = [
     "ArtifactReplayError",
     "ArtifactReplayResult",
@@ -3864,7 +3331,6 @@ __all__ = [
     "ReplayDiagnosticCode",
     "ReplayFact",
     "STATE_PROJECTION_REDUCER_VERSION",
-    "effective_family_binding",
     "ReplayedWorkflowCursor",
     "ReplayedWorkUnitState",
     "ReplayedSideEffect",

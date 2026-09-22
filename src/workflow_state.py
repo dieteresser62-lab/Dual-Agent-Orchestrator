@@ -8,12 +8,7 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from acceptance_criteria import acceptance_criteria_from_documents
-from artifact_models import (
-    ArtifactValidationError,
-    FamilyBindingPayload,
-    extend_family_authorized_change_set,
-    family_binding_document,
-)
+from artifact_models import ArtifactValidationError
 from contracts import PlannedSlice
 import native_finding_decisions
 from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
@@ -50,7 +45,7 @@ class WorkflowStateValidationError(ValueError):
 class WorkUnitKind(str, Enum):
     PLAN = "plan"
     SLICE = "slice"
-    BRANCH_DISCOVERY = "branch_discovery"
+    FINAL_REVIEW = "final_review"
 
 
 class WorkflowStep(str, Enum):
@@ -61,7 +56,7 @@ class WorkflowStep(str, Enum):
     CLAUDE_SLICE_REVIEW = "claude_slice_review"
     CODEX_CORRECTION = "codex_correction"
     SLICE_COMMIT = "slice_commit"
-    CLAUDE_BRANCH_DISCOVERY = "claude_branch_discovery"
+    CLAUDE_FINAL_REVIEW = "claude_final_review"
     COMPLETED = "completed"
 
 
@@ -1349,103 +1344,6 @@ def _parse_bootstrap_checks(raw: Mapping[str, Any]) -> tuple[BootstrapCheckFact,
     )
 
 
-def _parse_family_binding(
-    raw: Mapping[str, Any],
-) -> FamilyBindingPayload | None:
-    value = raw.get("family_binding")
-    if value is None:
-        return None
-    document = _mapping(value, "family_binding")
-    required = {
-        "family_id",
-        "family_base_commit",
-        "family_authorized_change_set",
-        "predecessor_run_id",
-        "predecessor_head_record_id",
-        "cycle_number",
-        "current_plan_commit",
-        "current_implementation_commit",
-    }
-    if set(document) != required:
-        missing = sorted(required.difference(document))
-        foreign = sorted(set(document).difference(required))
-        detail = (
-            f"missing required field {missing[0]}"
-            if missing
-            else f"contains foreign field {foreign[0]}"
-        )
-        raise WorkflowStateValidationError(f"family_binding {detail}")
-    try:
-        return FamilyBindingPayload(
-            family_id=_string(document["family_id"], "family_binding.family_id"),
-            family_base_commit=_string(
-                document["family_base_commit"],
-                "family_binding.family_base_commit",
-            ),
-            family_authorized_change_set=_string_tuple(
-                document["family_authorized_change_set"],
-                "family_binding.family_authorized_change_set",
-            ),
-            predecessor_run_id=_optional_string(
-                document["predecessor_run_id"],
-                "family_binding.predecessor_run_id",
-            ),
-            predecessor_head_record_id=_optional_string(
-                document["predecessor_head_record_id"],
-                "family_binding.predecessor_head_record_id",
-            ),
-            cycle_number=_positive_int(
-                document["cycle_number"], "family_binding.cycle_number"
-            ),
-            current_plan_commit=_optional_string(
-                document["current_plan_commit"],
-                "family_binding.current_plan_commit",
-            ),
-            current_implementation_commit=_optional_string(
-                document["current_implementation_commit"],
-                "family_binding.current_implementation_commit",
-            ),
-        )
-    except ArtifactValidationError as exc:
-        raise WorkflowStateValidationError(str(exc)) from exc
-
-
-def _validate_family_binding(
-    *,
-    family_binding: FamilyBindingPayload | None,
-    branch_base: str,
-    slices: tuple[SliceRecord, ...],
-    planned_slices: tuple[PlannedSlice, ...],
-    work_plan_path: str | None,
-) -> None:
-    if family_binding is None:
-        return
-    if not isinstance(family_binding, FamilyBindingPayload):
-        raise WorkflowStateValidationError("family_binding is invalid")
-    if branch_base != family_binding.family_base_commit:
-        raise WorkflowStateValidationError(
-            "branch_base differs from family_base_commit"
-        )
-    required_family_paths = {
-        *(path for item in slices for path in item.scope_paths),
-        *(path for item in planned_slices for path in item.scope_paths),
-    }
-    if work_plan_path is not None:
-        required_family_paths.add(work_plan_path)
-    missing_family_paths = tuple(
-        sorted(
-            required_family_paths.difference(
-                family_binding.family_authorized_change_set
-            )
-        )
-    )
-    if missing_family_paths:
-        raise WorkflowStateValidationError(
-            "family_authorized_change_set is missing bound path "
-            f"{missing_family_paths[0]}"
-        )
-
-
 @dataclass(frozen=True)
 class WorkflowState:
     version: int
@@ -1467,13 +1365,10 @@ class WorkflowState:
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
-    finding_handoff_source_run_id: str | None = None
-    finding_handoff_export_record_id: str | None = None
     audit_report_path: str | None = None
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
     bootstrap_checks: tuple[BootstrapCheckFact, ...] = ()
-    family_binding: FamilyBindingPayload | None = None
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -1547,9 +1442,9 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "runtime_history.events is retired; project workflow events from records"
                 )
-        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"}:
+        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
             raise WorkflowStateValidationError(
-                "execution_mode must be IMPLEMENT, PLAN_ONLY, or BRANCH_DISCOVERY"
+                "execution_mode must be IMPLEMENT or PLAN_ONLY"
             )
         if self.task_digest is not None:
             if not SHA256_PATTERN.fullmatch(self.task_digest):
@@ -1577,40 +1472,6 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "approved_plan_commit requires work_plan_path"
                 )
-        _validate_family_binding(
-            family_binding=self.family_binding,
-            branch_base=self.branch_base,
-            slices=self.slices,
-            planned_slices=self.planned_slices,
-            work_plan_path=self.work_plan_path,
-        )
-        handoff_values = (
-            self.finding_handoff_source_run_id,
-            self.finding_handoff_export_record_id,
-        )
-        if any(value is None for value in handoff_values) != all(
-            value is None for value in handoff_values
-        ):
-            raise WorkflowStateValidationError(
-                "finding handoff requires source run and export record"
-            )
-        if self.finding_handoff_source_run_id is not None:
-            if (
-                self.approved_plan_commit is None
-                and self.execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}
-            ):
-                raise WorkflowStateValidationError(
-                    "finding handoff requires PLAN_ONLY, BRANCH_DISCOVERY, or approved_plan_commit"
-                )
-            if re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}",
-                self.finding_handoff_source_run_id,
-            ) is None:
-                raise WorkflowStateValidationError("finding handoff source run is invalid")
-            if re.fullmatch(
-                r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or ""
-            ) is None:
-                raise WorkflowStateValidationError("finding handoff export record is invalid")
         if self.audit_report_path is not None:
             path = PurePosixPath(self.audit_report_path)
             if (
@@ -1808,6 +1669,38 @@ class WorkflowState:
             updated_at=updated_at or _now_iso(),
         )
 
+    def start_final_review_work_unit(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Append the read-only branch-wide review to this implementation run."""
+
+        if self.execution_mode != "IMPLEMENT":
+            raise WorkflowStateValidationError(
+                "final review belongs only to an implementation run"
+            )
+        if self.current_work_unit.status is not WorkUnitStatus.COMPLETED:
+            raise WorkflowStateValidationError(
+                "the current work unit must be completed before final review"
+            )
+        if any(item.status is not SliceStatus.COMPLETED for item in self.slices):
+            raise WorkflowStateValidationError(
+                "final review requires every planned Slice to be committed"
+            )
+        new_unit = WorkUnitRecord(
+            work_unit_id=len(self.work_units) + 1,
+            slice_id=self.current_slice_id,
+            kind=WorkUnitKind.FINAL_REVIEW,
+            status=WorkUnitStatus.IN_PROGRESS,
+            current_step=WorkflowStep.CLAUDE_FINAL_REVIEW,
+        )
+        return replace(
+            self,
+            current_work_unit_id=new_unit.work_unit_id,
+            current_step=new_unit.current_step,
+            work_units=(*self.work_units, new_unit),
+            updated_at=updated_at or _now_iso(),
+        )
+
     def complete_current_slice(
         self,
         *,
@@ -1988,59 +1881,11 @@ class WorkflowState:
         *,
         updated_at: str | None = None,
     ) -> WorkflowState:
-        """Atomically widen the Slice and its record-backed family allowlist."""
+        """Atomically widen the current Slice after the recorded approval."""
 
-        binding = self.active_family_binding
-        if binding is None:
-            raise WorkflowStateValidationError(
-                "approved scope extension requires a run-bound family identity"
-            )
-        normalized_additions = _normalize_scope_paths(additions)
-        current = self.current_work_unit
-        current_slice = self.current_slice
-        if (
-            current.kind is not WorkUnitKind.SLICE
-            or current.status is not WorkUnitStatus.IN_PROGRESS
-            or current_slice.status is not SliceStatus.IN_PROGRESS
-        ):
-            raise WorkflowStateValidationError(
-                "only an in-progress regular Slice can extend its remediation scope"
-            )
-        if not current_slice.scope_paths or current_slice.start_fingerprint is None:
-            raise WorkflowStateValidationError(
-                "remediation scope extension requires a persisted Git boundary"
-            )
-        if set(normalized_additions).intersection(current_slice.scope_paths):
-            raise WorkflowStateValidationError(
-                "remediation additions must not repeat current Slice paths"
-            )
-        expanded_scope = tuple(
-            sorted({*current_slice.scope_paths, *normalized_additions})
-        )
-        expanded_groups = tuple(
-            sorted(
-                {
-                    *current_slice.scope_change_groups,
-                    *((path,) for path in normalized_additions),
-                }
-            )
-        )
-        expanded_slice = replace(
-            current_slice,
-            scope_paths=expanded_scope,
-            scope_change_groups=expanded_groups,
-        )
-        slices = tuple(
-            expanded_slice if item.slice_id == current_slice.slice_id else item
-            for item in self.slices
-        )
-        return replace(
-            self,
-            slices=slices,
-            family_binding=extend_family_authorized_change_set(
-                binding, normalized_additions
-            ),
-            updated_at=updated_at or _now_iso(),
+        return self.extend_current_slice_scope(
+            additions,
+            updated_at=updated_at,
         )
 
     def mark_side_effect_completed(self, key: str, *, updated_at: str | None = None) -> WorkflowState:
@@ -2717,7 +2562,7 @@ class WorkflowState:
     def _slices_with_current_status(
         self, status: SliceStatus
     ) -> tuple[SliceRecord, ...]:
-        if self.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
+        if self.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
             return self.slices
         return tuple(
             replace(item, status=status)
@@ -2789,8 +2634,6 @@ class WorkflowState:
             "task_scope_patterns": list(self.task_scope_patterns),
             "work_plan_path": self.work_plan_path,
             "approved_plan_commit": self.approved_plan_commit,
-            "finding_handoff_source_run_id": self.finding_handoff_source_run_id,
-            "finding_handoff_export_record_id": self.finding_handoff_export_record_id,
             "audit_report_path": self.audit_report_path,
             "target_branch": self.target_branch,
             "protocol_binding": (
@@ -2798,37 +2641,11 @@ class WorkflowState:
             ),
             "bootstrap_checks": [item.to_dict() for item in self.bootstrap_checks],
         }
-        if self.family_binding is not None:
-            document["family_binding"] = family_binding_document(
-                self.family_binding
-            )
         return document
 
     @property
-    def active_family_binding(self) -> FamilyBindingPayload | None:
-        """Expose the installed shared 67/68 family semantics."""
-        return self.family_binding
-
-    @property
     def branch_review_base_commit(self) -> str:
-        binding = self.active_family_binding
-        return self.branch_base if binding is None else binding.family_base_commit
-
-    @property
-    def branch_review_authorized_change_set(self) -> tuple[str, ...]:
-        binding = self.active_family_binding
-        if binding is not None:
-            return binding.family_authorized_change_set
-        return tuple(
-            sorted(
-                {
-                    path
-                    for item in self.slices
-                    if item.status is SliceStatus.COMPLETED
-                    for path in item.scope_paths
-                }
-            )
-        )
+        return self.branch_base
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> WorkflowState:
@@ -2860,22 +2677,6 @@ class WorkflowState:
         plan_commit_keys = {*audit_keys, "approved_plan_commit"}
         plan_binding_keys = {*plan_commit_keys, "protocol_binding"}
         bootstrap_keys = {*plan_binding_keys, "bootstrap_checks"}
-        handoff_shape_keys = {
-            *plan_binding_keys,
-            "finding_handoff_source_run_id",
-            "finding_handoff_export_record_id",
-        }
-        handoff_plan_commit_shape_keys = {
-            *plan_commit_keys,
-            "finding_handoff_source_run_id",
-            "finding_handoff_export_record_id",
-        }
-        handoff_protocol_shape_keys = {
-            *protocol_keys,
-            "finding_handoff_source_run_id",
-            "finding_handoff_export_record_id",
-        }
-        handoff_keys = {*handoff_shape_keys, "bootstrap_checks"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -2884,18 +2685,13 @@ class WorkflowState:
             task_scope_patterns: tuple[str, ...] = ()
             work_plan_path = None
             approved_plan_commit = None
-            finding_handoff_source_run_id = None
-            finding_handoff_export_record_id = None
             audit_report_path = None
             target_branch = None
             protocol_binding = None
         else:
             # ``bootstrap_checks`` is an additive optional mirror field.  Remove it
             # for historical shape selection while validating its contents below.
-            raw_keys = frozenset(raw) - {
-                "bootstrap_checks",
-                "family_binding",
-            }
+            raw_keys = frozenset(raw) - {"bootstrap_checks"}
             if raw_keys not in {
                 frozenset(previous_keys),
                 frozenset(current_keys),
@@ -2906,11 +2702,8 @@ class WorkflowState:
                     frozenset(plan_commit_keys),
                     frozenset(plan_binding_keys),
                     frozenset(bootstrap_keys),
-                    frozenset(handoff_shape_keys),
-                    frozenset(handoff_plan_commit_shape_keys),
-                    frozenset(handoff_protocol_shape_keys),
                 }:
-                    _require_exact_keys(raw, handoff_keys, "workflow state")
+                    _require_exact_keys(raw, bootstrap_keys, "workflow state")
             planned_slices = _parse_planned_slices(raw["planned_slices"])
             history_raw = raw["runtime_history"]
             runtime_history = (
@@ -2922,8 +2715,6 @@ class WorkflowState:
                 task_scope_patterns = ()
                 work_plan_path = None
                 approved_plan_commit = None
-                finding_handoff_source_run_id = None
-                finding_handoff_export_record_id = None
                 audit_report_path = None
                 target_branch = None
             else:
@@ -2943,23 +2734,12 @@ class WorkflowState:
                         frozenset(plan_commit_keys),
                         frozenset(plan_binding_keys),
                         frozenset(bootstrap_keys),
-                        frozenset(handoff_shape_keys),
-                        frozenset(handoff_plan_commit_shape_keys),
-                        frozenset(handoff_protocol_shape_keys),
                     }
                     else None
                 )
                 target_branch = _optional_string(raw["target_branch"], "target_branch")
                 approved_plan_commit = _optional_string(
                     raw.get("approved_plan_commit"), "approved_plan_commit"
-                )
-                finding_handoff_source_run_id = _optional_string(
-                    raw.get("finding_handoff_source_run_id"),
-                    "finding_handoff_source_run_id",
-                )
-                finding_handoff_export_record_id = _optional_string(
-                    raw.get("finding_handoff_export_record_id"),
-                    "finding_handoff_export_record_id",
                 )
             binding_raw = raw.get("protocol_binding")
             protocol_binding = (
@@ -2970,7 +2750,6 @@ class WorkflowState:
                 )
             )
             bootstrap_checks = _parse_bootstrap_checks(raw)
-        family_binding = _parse_family_binding(raw)
         if set(raw) == legacy_keys:
             bootstrap_checks = ()
         slices_raw = _list(raw["slices"], "slices")
@@ -2999,13 +2778,10 @@ class WorkflowState:
             task_scope_patterns=task_scope_patterns,
             work_plan_path=work_plan_path,
             approved_plan_commit=approved_plan_commit,
-            finding_handoff_source_run_id=finding_handoff_source_run_id,
-            finding_handoff_export_record_id=finding_handoff_export_record_id,
             audit_report_path=audit_report_path,
             target_branch=target_branch,
             protocol_binding=protocol_binding,
             bootstrap_checks=bootstrap_checks,
-            family_binding=family_binding,
         )
 
 
@@ -3058,49 +2834,36 @@ def init_workflow_state(
     task_scope_patterns: tuple[str, ...] = (),
     work_plan_path: str | None = None,
     approved_plan_commit: str | None = None,
-    finding_handoff_source_run_id: str | None = None,
-    finding_handoff_export_record_id: str | None = None,
     audit_report_path: str | None = None,
     target_branch: str | None = None,
     protocol_binding: ProtocolBinding | None = None,
-    family_binding: FamilyBindingPayload | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
     _require_non_empty(first_slice_start_commit, "first_slice_start_commit")
     stamp = timestamp or _now_iso()
-    branch_discovery = execution_mode == "BRANCH_DISCOVERY"
     slices = tuple(
         SliceRecord(
             slice_id=slice_id,
             status=(
-                SliceStatus.COMPLETED
-                if branch_discovery
-                else SliceStatus.IN_PROGRESS
+                SliceStatus.IN_PROGRESS
                 if slice_id == 1
                 else SliceStatus.PENDING
             ),
             start_commit=(
                 first_slice_start_commit
-                if slice_id == 1 or branch_discovery
+                if slice_id == 1
                 else None
             ),
-            commit_ref=(first_slice_start_commit if branch_discovery else None),
         )
         for slice_id in range(1, slice_count + 1)
     )
     work_unit = WorkUnitRecord(
         work_unit_id=1,
         slice_id=1,
-        kind=(
-            WorkUnitKind.BRANCH_DISCOVERY if branch_discovery else WorkUnitKind.PLAN
-        ),
+        kind=WorkUnitKind.PLAN,
         status=WorkUnitStatus.IN_PROGRESS,
-        current_step=(
-            WorkflowStep.CLAUDE_BRANCH_DISCOVERY  # allowlist:provider -- canonical state-v3 step
-            if branch_discovery
-            else WorkflowStep.CODEX_PLAN
-        ),
+        current_step=WorkflowStep.CODEX_PLAN,
     )
     return WorkflowState(
         version=STATE_VERSION,
@@ -3120,12 +2883,9 @@ def init_workflow_state(
         task_scope_patterns=task_scope_patterns,
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
-        finding_handoff_source_run_id=finding_handoff_source_run_id,
-        finding_handoff_export_record_id=finding_handoff_export_record_id,
         audit_report_path=audit_report_path,
         target_branch=target_branch,
         protocol_binding=protocol_binding,
-        family_binding=family_binding,
     )
 
 

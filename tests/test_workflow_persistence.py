@@ -16,7 +16,6 @@ from artifact_models import (
     _IDENTIFIER_RE,
     ArtifactRecord,
     BindingPayload,
-    BranchDiscoveryHandoffExportPayload,
     Fingerprint,
     FingerprintKind,
     ProviderContentPayload,
@@ -46,8 +45,6 @@ EXPECTED_INTERNAL_IMPORTS = {
     "finding_reducer",
     "orchestrator_diagnostics",
     "review_packets",
-    "slice_exit",
-    "task_contract",
     "workflow",
     "workflow_state",
 }
@@ -64,8 +61,6 @@ EXPECTED_DEPENDENCY_EDGES = {
     "materialize_review_packet",
     "native_agent_request_bundle_json",
     "native_agent_request_path",
-    "prepare_completion_family_handoff",
-    "prepare_completion_finding_handoff",
 }
 
 EXPECTED_DRIVER_BINDINGS = {
@@ -80,8 +75,6 @@ EXPECTED_DRIVER_BINDINGS = {
     "materialize_review_packet": "self._materialize_review_packet",
     "native_agent_request_bundle_json": "self._native_agent_request_bundle_json",
     "native_agent_request_path": "self._native_agent_request_path",
-    "prepare_completion_family_handoff": "self._prepare_completion_family_handoff",
-    "prepare_completion_finding_handoff": "self._prepare_completion_finding_handoff",
 }
 
 DRIVER_FACADES = {
@@ -182,8 +175,6 @@ def _dependencies(
         native_agent_request_bundle_json=_unexpected_dependency,
         materialize_review_packet=_unexpected_dependency,
         canonical_agent_result=_unexpected_dependency,
-        prepare_completion_finding_handoff=lambda _state: None,
-        prepare_completion_family_handoff=_unexpected_dependency,
     )
 
 
@@ -313,138 +304,6 @@ def test_missing_provider_content_authority_fails_closed() -> None:
             content_kind="agent_result",
             fingerprint="a" * 64,
         )
-
-
-def _completed_family_chain(
-    *,
-    run_id: str,
-    execution_mode: str,
-    include_export: bool,
-) -> tuple[tuple[ArtifactRecord, ...], ArtifactRecord, ArtifactRecord]:
-    records: list[ArtifactRecord] = []
-
-    def append(payload: object, logical_id: str) -> ArtifactRecord:
-        record = ArtifactRecord.create(
-            run_id=run_id,
-            logical_id=logical_id,
-            revision=1,
-            fingerprint=Fingerprint(
-                FingerprintKind.IMPLEMENTATION,
-                "a" * 64,
-            ),
-            predecessor_ids=(records[-1].record_id,) if records else (),
-            created_at=f"2026-09-21T08:00:{len(records):02d}+00:00",
-            idempotency_key=f"{run_id}:{logical_id}",
-            payload=payload,  # type: ignore[arg-type]
-        )
-        records.append(record)
-        return record
-
-    final_binding = append(
-        BindingPayload("commit", "b" * 40, "attestation", ("approval",)),
-        "final-binding",
-    )
-    if include_export:
-        target_mode = (
-            "BRANCH_DISCOVERY"
-            if execution_mode == "IMPLEMENT"
-            else "PLAN_ONLY"
-        )
-        append(
-            BranchDiscoveryHandoffExportPayload(
-                source_run_id=run_id,
-                source_head_record_id=final_binding.record_id,
-                discovery_review_record_id=(
-                    "ar1-" + "1" * 64 if target_mode == "PLAN_ONLY" else None
-                ),
-                validation_attestation_record_id="ar1-" + "2" * 64,
-                reviewed_head_commit="c" * 40,
-                family_id="family-resume",
-                family_base_commit="d" * 40,
-                cycle_number=2,
-                predecessor_run_id=run_id,
-                predecessor_head_record_id=final_binding.record_id,
-                finding_transition_record_ids=("ar1-" + "3" * 64,),
-                finding_transitions_sha256="4" * 64,
-                target_task_path="inbox/doing/family-child.md",
-                target_task_sha256="5" * 64,
-                target_run_identity="family-child",
-                authority=Role.ORCHESTRATOR,
-                target_execution_mode=target_mode,
-                source_completion_record_id=(
-                    "ar1-" + "6" * 64
-                    if target_mode == "BRANCH_DISCOVERY"
-                    else None
-                ),
-            ),
-            "family-export",
-        )
-    completion = append(
-        WorkflowCompletionPayload("completed", final_binding.record_id),
-        "workflow-completion",
-    )
-    return tuple(records), final_binding, completion
-
-
-@pytest.mark.parametrize(
-    ("execution_mode", "open_findings", "include_export"),
-    (
-        ("BRANCH_DISCOVERY", ("C-01",), False),
-        ("BRANCH_DISCOVERY", (), True),
-        ("IMPLEMENT", (), False),
-    ),
-)
-def test_completed_family_resume_rejects_invalid_prior_export_count(
-    monkeypatch: pytest.MonkeyPatch,
-    execution_mode: str,
-    open_findings: tuple[str, ...],
-    include_export: bool,
-) -> None:
-    run_id = f"resume-{execution_mode.lower()}-{int(include_export)}"
-    chain, final_binding, completion = _completed_family_chain(
-        run_id=run_id,
-        execution_mode=execution_mode,
-        include_export=include_export,
-    )
-    monkeypatch.setattr(
-        workflow_persistence_module,
-        "replay_artifacts",
-        lambda *_args, **_kwargs: SimpleNamespace(records=chain),
-    )
-    monkeypatch.setattr(
-        workflow_persistence_module,
-        "reduce_findings",
-        lambda _replay: SimpleNamespace(
-            open_set=SimpleNamespace(finding_ids=open_findings)
-        ),
-    )
-    appended: list[object] = []
-    bridge = cast(
-        Any,
-        SimpleNamespace(
-            append=lambda payload, **_kwargs: appended.append(payload),
-        ),
-    )
-    persistence = WorkflowPersistence(_dependencies())
-    state = cast(
-        Any,
-        SimpleNamespace(execution_mode=execution_mode, run_id=run_id),
-    )
-
-    with pytest.raises(
-        WorkflowExecutionError,
-        match=f"completed {execution_mode} run has an invalid earlier",
-    ):
-        persistence._persist_family_completion(
-            state=state,
-            bridge=bridge,
-            chain=chain,
-            completion_payload=completion.payload,
-            completion_record_id=completion.record_id,
-            final_binding=final_binding,
-        )
-
-    assert appended == []
 
 
 def test_required_workflow_event_omission_fails_closed() -> None:

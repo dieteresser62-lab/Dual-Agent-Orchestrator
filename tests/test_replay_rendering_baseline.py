@@ -17,15 +17,12 @@ from artifact_models import (
     BindingPayload,
     CommandSpec,
     FinalReviewPreflightPayload,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
+    FinalReviewCompletedPayload,
     FindingSeverity,
     FindingTransitionPayload,
     Fingerprint,
     FingerprintKind,
     GatePayload,
-    ImportedFindingTransition,
-    PlanPayload,
     ProviderAttemptPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
@@ -39,13 +36,11 @@ from artifact_models import (
     RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
-    SliceSpec,
     ValidationAttestationPayload,
     ValidationRequestPayload,
     ValidationResult,
     WorkUnitPayload,
     canonical_json,
-    finding_transition_sequence_sha256,
 )
 from artifact_projection import SECTION_KEYS, render_replay_sections
 from artifact_replay import ArtifactReplayResult, replay_artifacts
@@ -60,9 +55,8 @@ FINGERPRINT = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 RENDERED_RECORD_TYPES = (
     "agent_result",
     "binding",
+    "final_review_completed",
     "final_review_preflight",
-    "finding_handoff_export",
-    "finding_handoff_import",
     "finding_transition",
     "gate",
     "provider_attempt",
@@ -77,15 +71,11 @@ RENDERED_RECORD_TYPES = (
 RECORD_RENDERER_HELPERS = {
     "_render_agent_result_record",
     "_render_binding_record",
-    "_render_branch_discovery_completed_record",
-    "_render_branch_discovery_handoff_record",
+    "_render_final_review_completed_record",
     "_render_final_review_preflight_record",
-    "_render_finding_handoff_export_record",
-    "_render_finding_handoff_import_record",
     "_render_finding_transition_record",
     "_render_gate_record",
     "_render_provider_input_measurement_record",
-    "_render_remediation_planning_record",
     "_render_review_anchor_record",
     "_render_review_record",
     "_render_review_validation_binding_record",
@@ -273,6 +263,29 @@ def _core_review_replay() -> ArtifactReplayResult:
         ),
         "commit-2",
     )
+    _append(records, WorkUnitPayload("3", 3, ("src/final.py",)), "work-unit-3")
+    _append(
+        records,
+        FinalReviewCompletedPayload(
+            Role.CLAUDE,
+            "3",
+            (),
+            (),
+            ReviewEvidencePayload(
+                "The complete branch diff and failure paths were checked.",
+                "A later unreviewed commit could invalidate the result.",
+                "Changing HEAD after the review breaks its fingerprint binding.",
+            ),
+            "A path outside the reviewed diff could conceal a regression.",
+            attestation.record_id,
+            "1" * 40,
+            "native-claude-review-v2",
+            "native-review-request-" + "2" * 64,
+            "3" * 64,
+            True,
+        ),
+        "final-review-3",
+    )
     return _accepted_replay(records)
 
 
@@ -378,125 +391,10 @@ def _provider_replay() -> ArtifactReplayResult:
     return _accepted_replay(records, run_id)
 
 
-def _handoff_import_replay() -> ArtifactReplayResult:
-    run_id = f"{RUN_ID}-import"
-    records: list[ArtifactRecord] = []
-    source = ImportedFindingTransition(
-        "ar1-" + "5" * 64,
-        FindingTransitionPayload(
-            "C-02",
-            Role.CLAUDE,
-            Role.CLAUDE,
-            "opened",
-            FindingSeverity.OBSERVATION,
-            "open",
-            "Imported audit history.",
-            "source-unit",
-            "Imported rendering note.",
-            "The note remains visible.",
-            "source-slice",
-            1,
-        ),
-    )
-    imported = _append(
-        records,
-        FindingHandoffImportPayload(
-            "source-run",
-            "ar1-" + "6" * 64,
-            "7" * 40,
-            "ar1-" + "8" * 64,
-            "ar1-" + "9" * 64,
-            run_id,
-            "b" * 64,
-            finding_transition_sequence_sha256((source,)),
-            (source,),
-            Role.ORCHESTRATOR,
-        ),
-        "finding-import",
-        run_id=run_id,
-    )
-    _append(
-        records,
-        WorkUnitPayload("4", 1, ("src/import.py",), ("C-02",), imported.record_id),
-        "work-unit-4",
-        run_id=run_id,
-    )
-    return _accepted_replay(records, run_id)
-
-
-def _handoff_export_replay() -> ArtifactReplayResult:
-    run_id = f"{RUN_ID}-export"
-    records: list[ArtifactRecord] = []
-    _append(
-        records,
-        PlanPayload(
-            "inbox/backlog/b43-plan.md",
-            "7" * 40,
-            (SliceSpec("1", "Preserve rendering.", ("src/artifact_projection.py",)),),
-        ),
-        "plan",
-        run_id=run_id,
-    )
-    finding = _append(
-        records,
-        FindingTransitionPayload(
-            "C-03",
-            Role.CLAUDE,
-            Role.CLAUDE,
-            "opened",
-            FindingSeverity.OBSERVATION,
-            "open",
-            "Export this rendering history.",
-            work_unit_id="plan",
-            summary="Exported rendering note.",
-            acceptance_test="The export remains visible.",
-            origin_slice_id="1",
-            origin_round_number=1,
-        ),
-        "finding-C-03",
-        run_id=run_id,
-    )
-    review = _append(
-        records,
-        ReviewPayload(
-            Role.CLAUDE,
-            "plan",
-            "approved",
-            ("C-03",),
-            "Export approval evidence.",
-            "native-claude-review-v2",
-            "native-review-request-" + "c" * 64,
-            "d" * 64,
-        ),
-        "review-claude-plan-1",
-        run_id=run_id,
-    )
-    transition = ImportedFindingTransition(finding.record_id, finding.payload)
-    _append(
-        records,
-        FindingHandoffExportPayload(
-            run_id,
-            records[-1].record_id,
-            "7" * 40,
-            review.record_id,
-            (finding.record_id,),
-            finding_transition_sequence_sha256((transition,)),
-            "inbox/backlog/b43-followup.md",
-            "e" * 64,
-            Role.ORCHESTRATOR,
-        ),
-        "finding-export",
-        run_id=run_id,
-    )
-    return _accepted_replay(records, run_id)
-
-
 def _anchor_replays() -> Mapping[str, ArtifactReplayResult]:
     return {
         "core-review": _core_review_replay(),
         "provider-attempt": _provider_replay(),
-        "finding-import": _handoff_import_replay(),
-        "finding-export": _handoff_export_replay(),
     }
 
 

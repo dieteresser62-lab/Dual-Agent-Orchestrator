@@ -81,11 +81,11 @@ class OrchestratorDiagnostic(StrEnum):
     WORKFLOW_IMPLEMENTER_CONTENT_DIGEST_MISMATCH = (
         "workflow-execution: native agent content digest differs from its result binding"
     )
-    WORKFLOW_BRANCH_DISCOVERY_BINDING_MISSING = (
-        "workflow-execution: branch discovery completion lacks its dedicated run binding"
+    WORKFLOW_FINAL_REVIEW_BINDING_MISSING = (
+        "workflow-execution: final review completion lacks its dedicated run binding"
     )
-    WORKFLOW_BRANCH_DISCOVERY_HEAD_MISSING = (
-        "workflow-execution: branch discovery completion lacks its reviewed HEAD"
+    WORKFLOW_FINAL_REVIEW_HEAD_MISSING = (
+        "workflow-execution: final review completion lacks its reviewed HEAD"
     )
 
     IMPLEMENTER_SCHEMA_INVALID = (
@@ -221,9 +221,6 @@ class OrchestratorDiagnostic(StrEnum):
     IMPLEMENTER_FINDING_DISPOSITIONS_SORTED = (
         "finding-reference-invalid: finding dispositions must be sorted and unique"
     )
-    IMPLEMENTER_PLAN_TREATMENTS_SORTED = (
-        "slice-plan-invalid: plan treatments must be sorted and unique by signature"
-    )
     IMPLEMENTER_TEST_FILES_UNEXPECTED = (
         "test-files-invalid: unexpected test_files for this step"
     )
@@ -234,84 +231,9 @@ class OrchestratorDiagnostic(StrEnum):
         "test-files-invalid: ready result with test changes requires prior approval"
     )
 
-    IMPLEMENTER_PLAN_TREATMENT_SIGNATURE_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: plan treatment signature "
-        "must be a lowercase SHA-256 digest"
-    )
-    IMPLEMENTER_PLAN_TREATMENT_FINDING_IDS_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: plan treatment finding_ids "
-        "must be non-empty, sorted, and unique"
-    )
-    IMPLEMENTER_PLAN_TREATMENT_KIND_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: plan treatment kind must be typed"
-    )
-    IMPLEMENTER_IMPLEMENTATION_TREATMENT_CLOSING_SLICE_REQUIRED = (
-        "slice-plan-invalid: plan treatment is invalid: implementation treatment "
-        "requires exactly one closing Slice"
-    )
-    IMPLEMENTER_PLAN_TREATMENT_CLOSING_SLICE_ID_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: closing Slice id must be a positive integer"
-    )
-    IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS = (
-        "slice-plan-invalid: plan treatment is invalid: implementation treatment "
-        "forbids No-Code disposition fields"
-    )
-    IMPLEMENTER_NO_CODE_TREATMENT_FORBIDS_CLOSING_SLICES = (
-        "slice-plan-invalid: plan treatment is invalid: No-Code disposition forbids closing Slice ids"
-    )
-    IMPLEMENTER_NO_CODE_TREATMENT_REASON_REQUIRED = (
-        "slice-plan-invalid: plan treatment is invalid: No-Code disposition requires a typed reason"
-    )
-    IMPLEMENTER_NO_CODE_TREATMENT_EVIDENCE_REQUIRED = (
-        "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence must not be empty"
-    )
-    IMPLEMENTER_NO_CODE_TREATMENT_EVIDENCE_PATHS_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence_paths "
-        "must be non-empty, sorted, and unique"
-    )
-    IMPLEMENTER_NO_CODE_TREATMENT_EVIDENCE_PATH_UNSAFE = (
-        "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence_paths "
-        "contains a non-canonical repository path"
-    )
-    IMPLEMENTER_ALREADY_FIXED_TREATMENT_AFFECTED_PATHS_INVALID = (
-        "slice-plan-invalid: plan treatment is invalid: already-fixed disposition affected_paths "
-        "must be non-empty, sorted, and unique"
-    )
-    IMPLEMENTER_ALREADY_FIXED_TREATMENT_AFFECTED_PATH_UNSAFE = (
-        "slice-plan-invalid: plan treatment is invalid: already-fixed disposition affected_paths "
-        "contains a non-canonical repository path"
-    )
-    IMPLEMENTER_ONLY_ALREADY_FIXED_MAY_NAME_AFFECTED_PATHS = (
-        "slice-plan-invalid: plan treatment is invalid: only an already-fixed disposition "
-        "may name affected_paths"
-    )
-    IMPLEMENTER_SIGNATURE_GROUPS_SORTED = (
-        "slice-plan-invalid: canonical signature groups must be sorted and unique"
-    )
-    IMPLEMENTER_PLAN_TREATMENT_COVERAGE_SORTED = (
-        "slice-plan-invalid: plan treatments must contain exactly one sorted treatment per signature"
-    )
-    IMPLEMENTER_IMPLEMENTATION_SLICES_CONTIGUOUS = (
-        "slice-plan-invalid: implementation Slices must be contiguous and 1-based"
-    )
-    IMPLEMENTER_IMPLEMENTATION_CLOSING_SLICE_PRESENT = (
-        "slice-plan-invalid: implementation treatment closing Slice is absent from the plan"
-    )
-    IMPLEMENTER_PLAN_COMPLETION_TYPED = (
-        "slice-plan-invalid: plan completion must be typed"
-    )
-    IMPLEMENTER_NO_IMPLEMENTATION_FORBIDS_TREATMENTS = (
-        "slice-plan-invalid: NO_IMPLEMENTATION_REQUIRED forbids implementation treatments"
-    )
-    IMPLEMENTER_NO_IMPLEMENTATION_FORBIDS_SLICES = (
-        "slice-plan-invalid: NO_IMPLEMENTATION_REQUIRED forbids implementation Slices"
-    )
-    IMPLEMENTER_IMPLEMENTATION_REQUIRES_SLICE = (
-        "slice-plan-invalid: IMPLEMENTATION_REQUIRED requires at least one Slice"
-    )
 
     REVIEW_CONTEXT_DISCOVERY_CAPACITY_SCOPE = (
-        "context-invalid: max_new_findings is valid only for a branch discovery review"
+        "context-invalid: max_new_findings is valid only for a final review review"
     )
     REVIEW_CONTEXT_ROUND_NUMBER_INVALID = (
         "context-invalid: round_number must be 1-based"
@@ -384,36 +306,6 @@ class OrchestratorDiagnostic(StrEnum):
         "context-invalid: communicated Slice-commit decision Finding set differs from the "
         "authoritative enforced set"
     )
-    REVIEW_CONTEXT_PLAN_TREATMENTS_TYPED = (
-        "context-invalid: plan treatments must be typed"
-    )
-    REVIEW_CONTEXT_PLAN_TREATMENTS_SCOPE_INVALID = (
-        "context-invalid: plan treatments are valid only for a plan review"
-    )
-    REVIEW_CONTEXT_PLAN_TREATMENTS_SORTED = (
-        "context-invalid: plan treatments must be sorted and unique by signature"
-    )
-    REVIEW_CONTEXT_PLAN_TREATMENTS_COVERAGE = (
-        "context-invalid: plan treatments must cover every canonical open signature exactly once"
-    )
-    REVIEW_CONTEXT_PLAN_TREATMENT_FINDING_IDS = (
-        "context-invalid: plan treatment Finding IDs differ from their canonical signature group"
-    )
-    REVIEW_CONTEXT_CLOSED_BINDINGS_TYPED = (
-        "context-invalid: closed Finding bindings must be typed"
-    )
-    REVIEW_CONTEXT_CLOSED_BINDINGS_SCOPE_INVALID = (
-        "context-invalid: closed Finding bindings are valid only for branch discovery"
-    )
-    REVIEW_CONTEXT_CLOSED_BINDINGS_SORTED = (
-        "context-invalid: closed Finding bindings must be sorted and unique"
-    )
-    REVIEW_CONTEXT_CLOSED_BINDING_TARGET_INVALID = (
-        "context-invalid: closed Finding binding does not reference a closed offered Finding"
-    )
-    REVIEW_CONTEXT_CLOSED_BINDING_SIGNATURE_INVALID = (
-        "context-invalid: closed Finding binding signature differs from the Finding"
-    )
     REVIEW_CONTEXT_BOUND_CONTEXT_TYPED = (
         "context-invalid: bound review context requires a NativeReviewContext"
     )
@@ -444,10 +336,10 @@ class OrchestratorDiagnostic(StrEnum):
         "reviewer-mismatch: response reviewer does not match bound request"
     )
     REVIEW_DISCOVERY_REQUEST_REQUIRED = (
-        "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires a branch discovery request"
+        "approval-invalid: FINAL_REVIEW_COMPLETED requires a final review request"
     )
     REVIEW_DISCOVERY_RESULT_KIND_INVALID = (
-        "approval-invalid: branch discovery cannot use approved or denied review_result"
+        "approval-invalid: final review cannot use approved or denied review_result"
     )
     REVIEW_PARSED_REQUEST_MISMATCH = (
         "request-mismatch: parsed response does not match bound context"
@@ -549,21 +441,11 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_FINDING_LEDGER_IDS_UNIQUE = (
         "finding-reference-unknown: finding ledger contains duplicate finding IDs"
     )
-    REVIEW_PLAN_TREATMENTS_SORTED = (
-        "finding-content-invalid: plan treatments must be sorted and unique by signature"
-    )
-    REVIEW_PLAN_TREATMENT_DECISIONS_SORTED = (
-        "finding-content-invalid: plan treatment decisions must be sorted and unique "
-        "by signature"
-    )
     REVIEW_REJECTED_CLOSURE_REASON_REQUIRED = (
         "finding-content-invalid: rejected closure is missing required field rejection_reason"
     )
     REVIEW_REJECTED_CLOSURE_EVIDENCE_REQUIRED = (
         "finding-content-invalid: rejected closure requires named evidence"
-    )
-    REVIEW_IMPLEMENTATION_TREATMENT_CLOSURE_FORBIDDEN = (
-        "finding-content-invalid: implementation treatment cannot close its Finding in plan review"
     )
     REVIEW_CONTENT_EVENT_OR_EVIDENCE_REQUIRED = (
         "review-content-missing: review requires at least one finding event or review evidence"
@@ -595,22 +477,22 @@ class OrchestratorDiagnostic(StrEnum):
         "anchor-invalid: native anchors require a bound anchor_origin"
     )
     REVIEW_DISCOVERY_MARKER_REQUIRED = (
-        "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker"
+        "approval-invalid: FINAL_REVIEW_COMPLETED requires its dedicated request marker"
     )
     REVIEW_DISCOVERY_SCAN_COMPLETE_REQUIRED = (
-        "approval-invalid: branch discovery completion requires scan_complete=true"
+        "approval-invalid: final review completion requires scan_complete=true"
     )
     REVIEW_DISCOVERY_PASS_ATTESTATION_REQUIRED = (
-        "approval-invalid: branch discovery completion requires a complete PASS attestation"
+        "approval-invalid: final review completion requires a complete PASS attestation"
     )
     REVIEW_DISCOVERY_TEST_APPROVAL_REQUIRED = (
-        "approval-invalid: branch discovery completion with test changes requires prior approval"
+        "approval-invalid: final review completion with test changes requires prior approval"
     )
     REVIEW_DISCOVERY_OCCURRENCES_UNIQUE = (
-        "finding-event-conflict: branch discovery occurrences must reference each finding at most once"
+        "finding-event-conflict: final review occurrences must reference each finding at most once"
     )
     REVIEW_DISCOVERY_OCCURRENCE_KNOWN = (
-        "finding-reference-unknown: branch discovery occurrence references an unknown Finding"
+        "finding-reference-unknown: final review occurrence references an unknown Finding"
     )
     REVIEW_OPEN_OCCURRENCE_CLOSED_ANCHOR_FORBIDDEN = (
         "finding-content-invalid: open Finding occurrence forbids a closed-disposition anchor"

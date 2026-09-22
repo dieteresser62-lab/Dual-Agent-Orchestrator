@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-import native_finding_decisions
 from artifact_models import (
     ArtifactRecord,
     Fingerprint,
@@ -40,18 +39,7 @@ PLAN_COMMIT = "a" * 40
 FINGERPRINT = "b" * 64
 
 
-@pytest.fixture
-def decisions_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-
-
-def test_rejected_closure_projects_reason_and_named_evidence(
-    decisions_enabled: None,
-) -> None:
+def test_rejected_closure_projects_reason_and_named_evidence() -> None:
     closure = NativeFindingClosure(
         NativeClosureKind.REJECTED,
         NativeRejectionReason.OUT_OF_SCOPE,

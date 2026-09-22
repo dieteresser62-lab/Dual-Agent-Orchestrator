@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-from artifact_bridge import ArtifactBridgeError
 from artifact_models import technical_text_evidence
 from contracts import PlannedSlice
+from plan_handoff import PlanHandoffError
 from workflow import (
     WorkflowExecutionError,
     WorkflowHistory,
@@ -41,6 +41,7 @@ RUNTIME_BASELINE = ROOT / "tests/fixtures/production-transition-runtime-pre-b48-
 RECORD_SEQUENCE_BASELINE = (
     ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
 )
+TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 B48_HELPERS = frozenset(
@@ -104,6 +105,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {"scenario_id": "slice-round", "state": "slice_bound", "actions": ("incomplete",)},
     {"scenario_id": "plan-to-first-slice", "state": "plan", "actions": ("complete-plan", "incomplete")},
     {"scenario_id": "pending-slice", "state": "pending_slice", "actions": ("incomplete",)},
+    {"scenario_id": "final-review-entry", "state": "completed_slice", "actions": ("incomplete",)},
     {"scenario_id": "plan-only-handoff", "state": "plan_only", "actions": ("complete-plan-only",)},
     {"scenario_id": "plan-only-missing-commit", "state": "completed_plan_only_missing_commit"},
     {"scenario_id": "plan-only-bind-error", "state": "completed_plan_only", "bind_error": True},
@@ -589,19 +591,11 @@ class _CorpusDriver:
     def assert_structured_decision_context(self) -> None:
         pass
 
-    def prepare_finding_handoff(self, **_kwargs):
-        if self.spec.get("handoff_error"):
-            raise ArtifactBridgeError("provider-free handoff failure")
-        return None
-
     def prepare_finding_cleanup(self):
         return None
 
     def persist_implementation_handoff(self, *_args) -> None:
         pass
-
-    def publish_family_handoff(self, _state: WorkflowState) -> Path:
-        return Path("inbox/branch-discovery.md")
 
     def _write_side_effect_file(self, *_args, **_kwargs) -> None:
         pass
@@ -717,7 +711,6 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         fresh_state=lambda **_kwargs: initial,
         history=lambda state, _root: WorkflowHistory(state.current_work_unit_id),
         inherit_redundant_test_gate=inherited_gate,
-        initialize_finding_handoff=lambda _root, state, _contract, _bytes: state,
         managed_audit_path=lambda *_args: None,
         new_watch_task_control_paths=lambda *_args: (),
         new_watch_task_preserved_paths=lambda *_args: (),
@@ -741,7 +734,17 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         monkeypatch.setattr(workflow_production, "resolve_resume_state", lambda *_args: SimpleNamespace(replay_result=None))
         monkeypatch.setattr(workflow_production, "inspect_repository", lambda _root: SimpleNamespace(head=spec.get("repository_head", START_COMMIT)))
         monkeypatch.setattr(workflow_production, "collect_repository_changes", lambda *_args, **_kwargs: SimpleNamespace(fingerprint=BOUNDARY_FINGERPRINT))
-        monkeypatch.setattr(workflow_production, "write_implementation_handoff", lambda **_kwargs: inbox / "handoff.md")
+        monkeypatch.setattr(
+            workflow_production,
+            "write_implementation_handoff",
+            (
+                lambda **_kwargs: (_ for _ in ()).throw(
+                    PlanHandoffError("provider-free handoff failure")
+                )
+                if spec.get("handoff_error")
+                else lambda **_kwargs: inbox / "handoff.md"
+            ),
+        )
         monkeypatch.setattr(workflow_production, "WorkflowRunResult", result_wrapper)
         monkeypatch.setattr(workflow_production, "WorkflowExecutionError", error_wrapper)
         if spec.get("bind_error"):
@@ -823,7 +826,7 @@ def test_pre_b48_transition_anchor_is_bound_to_git_and_logical_loop() -> None:
     assert _canonical_sha256(facts) == baseline["facts_sha256"]
     assert len(facts["decisions"]) == 26
     assert len(facts["catchers"]) == 2
-    assert len(facts["checkpoints"]) == 10
+    assert len(facts["checkpoints"]) == 11
 
 
 def test_provider_free_transition_corpus_matches_pre_cut_baseline(
@@ -857,7 +860,10 @@ def test_transition_corpus_builds_once_and_covers_required_boundaries(
     plan_rounds = _expanded_sequence(scenarios["plan-to-first-slice"]["rounds"])
     assert ["kind=plan" in item for item in plan_rounds] == [True, False]
     assert ["kind=slice" in item for item in plan_rounds] == [False, True]
-    assert not ({"correction-round", "final-review-entry"} & set(scenarios))
+    assert "final-review-entry" in scenarios
+    final_rounds = _expanded_sequence(scenarios["final-review-entry"]["rounds"])
+    assert ["kind=final_review" in item for item in final_rounds] == [False, True]
+    assert "correction-round" not in scenarios
 
 
 def test_checkpoint_shift_by_one_instruction_turns_anchor_red() -> None:
@@ -925,7 +931,7 @@ def test_b48_helpers_are_bounded_and_production_entry_shrinks() -> None:
         assert helper.end_lineno - helper.lineno + 1 < 200
 
 
-def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+def test_target_record_sequence_baseline_is_exact() -> None:
     working_blob = subprocess.check_output(
         ("git", "hash-object", str(RECORD_SEQUENCE_BASELINE)),
         cwd=ROOT,
@@ -936,4 +942,5 @@ def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
         cwd=ROOT,
         text=True,
     ).strip()
-    assert working_blob == head_blob
+    assert working_blob == TARGET_RECORD_SEQUENCE_BLOB
+    assert working_blob != head_blob

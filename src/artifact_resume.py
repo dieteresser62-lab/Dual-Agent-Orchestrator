@@ -12,14 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from artifact_models import (
-    BranchDiscoveryHandoffExportPayload,
-    BranchDiscoveryHandoffImportPayload,
     ArtifactRecord,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
     RecordType,
     ReviewPayload,
-    BranchDiscoveryCompletedPayload,
+    FinalReviewCompletedPayload,
     RunIdentityPayload,
     ValidationAttestationPayload,
     WorkflowEventPayload,
@@ -108,7 +104,7 @@ def require_workflow_event_prefix(
             else "review"
             if isinstance(
                 record.payload,
-                (ReviewPayload, BranchDiscoveryCompletedPayload),
+                (ReviewPayload, FinalReviewCompletedPayload),
             )
             else None,
         )
@@ -256,7 +252,6 @@ def resolve_resume_state(
             record_id=exc.record_id,
         ) from exc
 
-    _validate_finding_handoff(repository_root, replay, projected)
     head = replay.head_record_id
     assert head is not None
     return ResumeResolution(
@@ -267,127 +262,6 @@ def resolve_resume_state(
         validated_store=store,
     )
 
-
-def _validate_finding_handoff(
-    repository_root: Path,
-    replay: ArtifactReplayResult,
-    projected: WorkflowState,
-) -> None:
-    """Revalidate cross-run import causality without consulting a state cache."""
-    import_records = tuple(
-        record
-        for record in replay.records
-        if isinstance(
-            record.payload,
-            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-        )
-    )
-    source_run_id = projected.finding_handoff_source_run_id
-    export_record_id = projected.finding_handoff_export_record_id
-    if source_run_id is None:
-        if import_records:
-            raise ArtifactResumeError(
-                "record chain contains an unbound finding import",
-                code=ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                record_id=import_records[0].record_id,
-            )
-        return
-    if export_record_id is None or len(import_records) != 1:
-        raise ArtifactResumeError(
-            f"finding handoff requires exactly one import, found {len(import_records)}",
-            code=ReplayDiagnosticCode.RECORD_MISSING,
-        )
-
-    try:
-        # Lazy import avoids the state_io -> artifact_resume -> bridge ->
-        # task_contract -> audit_trail -> state_io initialization cycle.
-        from artifact_bridge import (
-            ArtifactBridgeError,
-            branch_discovery_handoff_import_payload,
-            finding_handoff_import_payload,
-        )
-
-        source_store = ArtifactStore(repository_root, source_run_id)
-        source_replay = replay_artifacts(
-            source_store.load_chain(),
-            source_run_id,
-            require_content_authority=True,
-        )
-        export_record = next(
-            record
-            for record in source_replay.records
-            if record.record_id == export_record_id
-        )
-        if not isinstance(
-            export_record.payload,
-            (FindingHandoffExportPayload, BranchDiscoveryHandoffExportPayload),
-        ):
-            raise ArtifactBridgeError(
-                "referenced source record is not a finding export"
-            )
-        if isinstance(export_record.payload, BranchDiscoveryHandoffExportPayload):
-            if not isinstance(
-                import_records[0].payload,
-                BranchDiscoveryHandoffImportPayload,
-            ):
-                raise ArtifactBridgeError(
-                    "branch discovery export differs from target import type"
-                )
-            try:
-                target_task_path = Path(projected.task_file).resolve().relative_to(
-                    repository_root.resolve()
-                ).as_posix()
-            except ValueError as exc:
-                raise ArtifactBridgeError(
-                    "branch discovery target task is outside the repository"
-                ) from exc
-            expected_import = branch_discovery_handoff_import_payload(
-                source_replay,
-                export_record,
-                target_run_id=projected.run_id,
-                target_task_path=target_task_path,
-                target_task_bytes=Path(projected.task_file).read_bytes(),
-                target_family_binding=projected.family_binding,
-            )
-        else:
-            if not isinstance(
-                import_records[0].payload,
-                FindingHandoffImportPayload,
-            ):
-                raise ArtifactBridgeError(
-                    "finding export differs from target import type"
-                )
-            if (
-                export_record.payload.approved_plan_commit
-                != projected.approved_plan_commit
-            ):
-                raise ArtifactBridgeError(
-                    "source export plan commit differs from target records"
-                )
-            expected_import = finding_handoff_import_payload(
-                source_replay,
-                export_record,
-                target_run_id=projected.run_id,
-                target_task_bytes=Path(projected.task_file).read_bytes(),
-            )
-    except (
-        ArtifactStoreError,
-        ArtifactReplayError,
-        RuntimeError,
-        OSError,
-        StopIteration,
-    ) as exc:
-        raise ArtifactResumeError(
-            f"finding handoff source is no longer valid: {exc}",
-            code=ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            record_id=export_record_id,
-        ) from exc
-    if import_records[0].payload != expected_import:
-        raise ArtifactResumeError(
-            "finding import differs from its revalidated source",
-            code=ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            record_id=import_records[0].record_id,
-        )
 
 
 __all__ = [

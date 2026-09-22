@@ -11,11 +11,9 @@ import re
 from typing import Any, Mapping
 
 from contracts import AgentRole, ApprovalMarker
-import native_finding_decisions
-from native_finding_decisions import plan_treatment_json_schema
 from native_review_contract import (
     BoundNativeReviewContext,
-    MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+    MAX_FINAL_REVIEW_NEW_FINDINGS,
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     NativeReviewErrorCode,
@@ -69,7 +67,7 @@ class NativeReviewRequestError(ValueError):
 class NativeReviewKind(StrEnum):
     PLAN = "plan"
     SLICE = "slice"
-    BRANCH_DISCOVERY = "branch_discovery"
+    FINAL_REVIEW = "final_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +204,7 @@ class NativeReviewRequestSpec:
         expected_operation = {
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
-            NativeReviewKind.BRANCH_DISCOVERY: "claude_branch_discovery",  # allowlist:provider -- canonical operation
+            NativeReviewKind.FINAL_REVIEW: "claude_final_review",  # allowlist:provider -- canonical operation
         }[self.review_kind]
         if self.context.operation != expected_operation:
             raise NativeReviewRequestError(
@@ -379,7 +377,7 @@ def load_native_review_request_schema() -> dict[str, Any]:
             "bundled native request schema must be an object",
         )
     _enable_native_review_request_finding_decision_schema(schema)
-    _enable_branch_discovery_request_schema(schema)
+    _enable_final_review_request_schema(schema)
     try:
         check_schema(schema, location="<native-review-request-schema>")
     except SchemaDefinitionError as exc:
@@ -424,11 +422,11 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
         and "max_new_findings" in review_contract
     )
     if (
-        document.get("review_kind") == NativeReviewKind.BRANCH_DISCOVERY.value
+        document.get("review_kind") == NativeReviewKind.FINAL_REVIEW.value
     ) != has_discovery_capacity:
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
-            "branch discovery reviews alone must bind review_contract.max_new_findings",
+            "final review reviews alone must bind review_contract.max_new_findings",
         )
     if has_disposition_budget:
         assert isinstance(review_contract, Mapping)
@@ -584,7 +582,7 @@ def _review_context_request_projection(
     review_kind = {
         "claude_plan_review": NativeReviewKind.PLAN.value,
         "claude_slice_review": NativeReviewKind.SLICE.value,
-        "claude_branch_discovery": NativeReviewKind.BRANCH_DISCOVERY.value,
+        "claude_final_review": NativeReviewKind.FINAL_REVIEW.value,
     }.get(context.operation)
     if review_kind is None:
         raise NativeReviewRequestError(
@@ -617,15 +615,11 @@ def _review_context_request_projection(
         review_contract["plan_artifact_path"] = context_binding[
             "plan_artifact_path"
         ]
-    if review_kind == NativeReviewKind.BRANCH_DISCOVERY.value:
+    if review_kind == NativeReviewKind.FINAL_REVIEW.value:
         review_contract["max_new_findings"] = context_binding[
             "max_new_findings"
         ]
     review_contract["planned_slices"] = context_binding["planned_slices"]
-    review_contract["plan_treatments"] = context_binding["plan_treatments"]
-    review_contract["closed_finding_bindings"] = context_binding[
-        "closed_finding_bindings"
-    ]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -661,88 +655,6 @@ def _validate_plan_disposition_capacity(spec: NativeReviewRequestSpec) -> None:
             f"{disposition_count} status, reclassification, or routing decisions; "
             f"the bound maximum is {MAX_NATIVE_REVIEW_DISPOSITIONS}",
         )
-
-
-def _enable_closed_finding_binding_request_schema(
-    definitions: dict[str, Any],
-    contract: dict[str, Any],
-) -> None:
-    definitions["no_code_evidence_anchor"] = {
-        "type": "object",
-        "properties": {
-            "rejection_reason": {
-                "type": "string",
-                "enum": ["no_defect", "out_of_scope", "already_fixed"],
-            },
-            "provenance_fingerprint": {"$ref": "#/$defs/sha256"},
-            "evidence_paths": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 1000,
-                "uniqueItems": True,
-                "items": {"$ref": "#/$defs/safe_path"},
-            },
-            "evidence_content_sha256": {"$ref": "#/$defs/sha256"},
-            "task_sha256": {
-                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
-            },
-            "scope_sha256": {
-                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
-            },
-            "affected_paths": {
-                "type": "array",
-                "maxItems": 1000,
-                "uniqueItems": True,
-                "items": {"$ref": "#/$defs/safe_path"},
-            },
-            "affected_content_sha256": {
-                "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
-            },
-            "stability_sha256": {"$ref": "#/$defs/sha256"},
-        },
-        "required": [
-            "rejection_reason",
-            "provenance_fingerprint",
-            "evidence_paths",
-            "evidence_content_sha256",
-            "task_sha256",
-            "scope_sha256",
-            "affected_paths",
-            "affected_content_sha256",
-            "stability_sha256",
-        ],
-        "additionalProperties": False,
-    }
-    definitions["closed_finding_binding"] = {
-        "type": "object",
-        "properties": {
-            "finding_id": {
-                "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-            },
-            "signature": {"$ref": "#/$defs/sha256"},
-            "source_plan_assignment_record_id": {
-                "type": "string",
-                "pattern": "^ar1-[0-9a-f]{64}$",
-            },
-            "original_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"},
-            "current_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"},
-        },
-        "required": [
-            "finding_id",
-            "signature",
-            "source_plan_assignment_record_id",
-            "original_anchor",
-            "current_anchor",
-        ],
-        "additionalProperties": False,
-    }
-    contract["properties"]["closed_finding_bindings"] = {
-        "type": "array",
-        "maxItems": 128,
-        "items": {"$ref": "#/$defs/closed_finding_binding"},
-    }
-    contract["required"].append("closed_finding_bindings")
 
 
 def _enable_native_review_request_finding_decision_schema(
@@ -806,33 +718,23 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/planned_slice"},
     }
     contract["required"].append("planned_slices")
-    definitions["plan_treatment_proposal"] = plan_treatment_json_schema(
-        union_keyword="oneOf"
-    )
-    contract["properties"]["plan_treatments"] = {
-        "type": "array",
-        "maxItems": 128,
-        "items": {"$ref": "#/$defs/plan_treatment_proposal"},
-    }
-    contract["required"].append("plan_treatments")
-    _enable_closed_finding_binding_request_schema(definitions, contract)
 
 
-def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:
+def _enable_final_review_request_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
     contract = definitions["review_contract"]
     contract["properties"]["approval_marker"]["enum"].append(
-        ApprovalMarker.BRANCH_DISCOVERY.value
+        ApprovalMarker.FINAL_REVIEW.value
     )
     contract["properties"]["max_new_findings"] = {
         "type": "integer",
         "minimum": 1,
-        "maximum": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+        "maximum": MAX_FINAL_REVIEW_NEW_FINDINGS,
     }
     request = definitions["review_request"]
     review_kinds = request["properties"]["review_kind"]["enum"]
-    if NativeReviewKind.BRANCH_DISCOVERY.value not in review_kinds:
-        review_kinds.append(NativeReviewKind.BRANCH_DISCOVERY.value)
+    if NativeReviewKind.FINAL_REVIEW.value not in review_kinds:
+        review_kinds.append(NativeReviewKind.FINAL_REVIEW.value)
 
 
 def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:

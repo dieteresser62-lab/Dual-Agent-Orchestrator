@@ -246,7 +246,7 @@ def test_implementation_sources_include_untracked_and_exclude_ignored_or_unmatch
 def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> None:
     manifest = CrashHarnessManifest.load(MANIFEST)
 
-    assert manifest.scenario_version == "joint-67-68-v1"
+    assert manifest.scenario_version == "target-run-chain-removal-v1"
     assert manifest.effect_classes == LEDGER_ORDER
     assert set(manifest.effect_classes) == set(SIDE_EFFECT_CLASSES)
     assert manifest.boundary_matrix == {
@@ -295,7 +295,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     result = json.loads(payload)
 
     assert result["schema_version"] == RESULT_SCHEMA_VERSION
-    assert result["scenario_version"] == "joint-67-68-v1"
+    assert result["scenario_version"] == "target-run-chain-removal-v1"
     assert result["repository_commit"] == "f" * 40
     assert result["mode"] == "provider-free"
     assert result["baseline_resolution"] == {
@@ -400,9 +400,9 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert all(item["evidence_count"] == 1 for item in retries)
     journeys = {item["scenario_id"]: item for item in result["journeys"]}
     assert set(journeys) == {
-        "plan-implement-branch-discovery",
+        "plan-implement-final-review",
         "multi-slice-correction-observation-resume",
-        "branch-discovery-remediation-handoff",
+        "final-review-followup-document",
     }
     assert all(item["end_state"] == "completed" for item in journeys.values())
     assert all(
@@ -412,12 +412,12 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         for item in journeys.values()
     )
     assert all("manual_state_interventions" not in item for item in journeys.values())
-    assert journeys["plan-implement-branch-discovery"]["plan_only_execution_mode"] == "PLAN_ONLY"
-    assert journeys["plan-implement-branch-discovery"]["implement_execution_mode"] == "IMPLEMENT"
-    assert journeys["plan-implement-branch-discovery"][
-        "branch_discovery_execution_mode"
-    ] == "BRANCH_DISCOVERY"
-    assert journeys["plan-implement-branch-discovery"]["handoff_idempotent"] is True
+    assert journeys["plan-implement-final-review"]["plan_only_execution_mode"] == "PLAN_ONLY"
+    assert journeys["plan-implement-final-review"]["implement_execution_mode"] == "IMPLEMENT"
+    assert journeys["plan-implement-final-review"][
+        "final_review_work_unit_kind"
+    ] == "final_review"
+    assert journeys["plan-implement-final-review"]["handoff_idempotent"] is True
     assert journeys["multi-slice-correction-observation-resume"]["resume_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "independent_execution"
@@ -425,16 +425,12 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert journeys["multi-slice-correction-observation-resume"]["correction_round_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
-    ] == ["C-01:CLOSED"]
-    assert journeys["branch-discovery-remediation-handoff"][
-        "target_execution_mode"
-    ] == "PLAN_ONLY"
-    assert journeys["branch-discovery-remediation-handoff"][
-        "finding_statuses"
-    ] == ["C-01:closed", "C-02:open"]
-    assert journeys["branch-discovery-remediation-handoff"][
-        "transitive_finding_count"
-    ] > 0
+    ] == ["C-01:CLOSED", "C-02:OPEN"]
+    assert journeys["final-review-followup-document"][
+        "source_execution_mode"
+    ] == "IMPLEMENT"
+    assert journeys["final-review-followup-document"]["finding_count"] == 1
+    assert journeys["final-review-followup-document"]["correlation_free"] is True
 
 
 def test_baseline_prefix_completion_rejects_any_later_physical_effect(
@@ -720,13 +716,13 @@ def test_provider_split_path_executes_every_declared_runtime_boundary(tmp_path: 
 
     assert {row["runtime_boundary"] for row in rows} == {
         "slice_provider",
-        "branch_discovery_provider",
+        "final_review_provider",
     }
     assert {row["phase"] for row in rows} == set(BOUNDARY_ORDER)
     assert all(
         {row["phase"] for row in rows if row["runtime_boundary"] == boundary}
         == set(BOUNDARY_ORDER)
-        for boundary in {"slice_provider", "branch_discovery_provider"}
+        for boundary in {"slice_provider", "final_review_provider"}
     )
     assert all(row["observed_crashes"] == 1 for row in rows)
     assert all(row["physical_execution_count"] == 1 for row in rows)

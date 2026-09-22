@@ -2,43 +2,6 @@
   "schema": "finding-reducer-regression-corpus-v1",
   "cases": [
     {
-      "commit": "745a2fa",
-      "trigger": "preserve carried findings after imported slice",
-      "transition": "import -> later work unit",
-      "events": [
-        {"op": "import_open", "finding_id": "C-01", "work_unit": "source-1"},
-        {"op": "work", "work_unit": "2", "open_ids": ["C-01"], "bind_import": true},
-        {"op": "work", "work_unit": "3", "open_ids": []}
-      ],
-      "request": {"work_unit": "3"},
-      "expected": {"ledger": ["C-01:OPEN"], "open": ["C-01"], "correction": {}, "import_open": ["C-01"], "request": ["C-01"], "status_actions": ["C-01:opened"]}
-    },
-    {
-      "commit": "924a554",
-      "trigger": "resume imported findings after slice denial",
-      "transition": "import -> denial transitions -> next round",
-      "events": [
-        {"op": "import_open", "finding_id": "C-01", "work_unit": "source-1"},
-        {"op": "close", "finding_id": "C-01", "work_unit": "2"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "2"},
-        {"op": "work", "work_unit": "2", "round": 2, "open_ids": ["C-02"], "bind_import": true}
-      ],
-      "request": {"work_unit": "2"},
-      "expected": {"ledger": ["C-01:CLOSED", "C-02:OPEN"], "open": ["C-02"], "correction": {}, "import_open": ["C-01"], "request": ["C-01:CLOSED", "C-02:OPEN"], "status_actions": ["C-01:opened", "C-01:status_changed", "C-02:opened"]}
-    },
-    {
-      "commit": "700b8c7",
-      "trigger": "persist PLAN_ONLY plan record before finding handoff",
-      "transition": "reviewed plan record -> foreign transition snapshot -> first implementation work unit",
-      "events": [
-        {"op": "plan"},
-        {"op": "import_open", "finding_id": "C-03", "work_unit": "plan-1"},
-        {"op": "work", "work_unit": "2", "open_ids": ["C-03"], "bind_import": true}
-      ],
-      "request": {"work_unit": "2"},
-      "expected": {"ledger": ["C-03:OPEN"], "open": ["C-03"], "correction": {}, "import_open": ["C-03"], "request": ["C-03"], "status_actions": ["C-03:opened"]}
-    },
-    {
       "commit": "f09ed8b",
       "trigger": "compare correction finding subset",
       "transition": "review ledger -> correction attribution",
@@ -48,7 +11,7 @@
         {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
       ],
       "request": {"finding_ids": ["C-01"], "open_only": true},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01"]}, "import_open": [], "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened"]}
+      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01"]}, "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened"]}
     },
     {
       "commit": "47b4ddc",
@@ -61,7 +24,7 @@
         {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
       ],
       "request": {"finding_ids": ["C-01"], "open_only": true},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:CLOSED"], "open": ["C-01"], "correction": {"4": ["C-01"]}, "import_open": [], "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened", "C-02:status_changed"]}
+      "expected": {"ledger": ["C-01:OPEN", "C-02:CLOSED"], "open": ["C-01"], "correction": {"4": ["C-01"]}, "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened", "C-02:status_changed"]}
     },
     {
       "commit": "24abbfd",
@@ -74,7 +37,7 @@
         {"op": "correction", "work_unit": "4", "round": 2, "finding_ids": ["C-02"]}
       ],
       "request": {"finding_ids": ["C-01", "C-02"]},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01", "C-02"]}, "import_open": [], "request": ["C-01", "C-02"], "status_actions": ["C-01:opened", "C-02:opened"]}
+      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01", "C-02"]}, "request": ["C-01", "C-02"], "status_actions": ["C-01:opened", "C-02:opened"]}
     },
     {
       "commit": "047934f",
@@ -87,7 +50,7 @@
         {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
       ],
       "request": {"finding_ids": ["C-01"]},
-      "expected": {"ledger": ["C-01:CLOSED"], "open": [], "correction": {"4": ["C-01"]}, "import_open": [], "request": ["C-01:CLOSED"], "status_actions": ["C-01:opened", "C-01:status_changed"]}
+      "expected": {"ledger": ["C-01:CLOSED"], "open": [], "correction": {"4": ["C-01"]}, "request": ["C-01:CLOSED"], "status_actions": ["C-01:opened", "C-01:status_changed"]}
     },
     {
       "commit": "5a654d3",
@@ -100,7 +63,7 @@
         {"op": "close", "finding_id": "C-04", "work_unit": "4"}
       ],
       "request": {"finding_ids": ["C-04"]},
-      "expected": {"ledger": ["C-04:CLOSED"], "open": [], "correction": {"4": ["C-04"]}, "import_open": [], "request": ["C-04:CLOSED"], "status_actions": ["C-04:opened", "C-04:status_changed"]}
+      "expected": {"ledger": ["C-04:CLOSED"], "open": [], "correction": {"4": ["C-04"]}, "request": ["C-04:CLOSED"], "status_actions": ["C-04:opened", "C-04:status_changed"]}
     },
     {
       "commit": "ade231f",
@@ -112,7 +75,7 @@
         {"op": "close", "finding_id": "C-01", "work_unit": "2"}
       ],
       "request": {"work_unit": "3"},
-      "expected": {"ledger": ["C-01:CLOSED"], "lineages": ["2:C-01:CLOSED"], "open": [], "correction": {}, "import_open": [], "request": [], "request_by_work_unit": {"2": ["C-01:CLOSED"], "3": []}, "status_actions": ["C-01:opened", "C-01:opened", "C-01:status_changed"], "diagnostics": ["C-01"]}
+      "expected": {"ledger": ["C-01:CLOSED"], "lineages": ["2:C-01:CLOSED"], "open": [], "correction": {}, "request": [], "request_by_work_unit": {"2": ["C-01:CLOSED"], "3": []}, "status_actions": ["C-01:opened", "C-01:opened", "C-01:status_changed"], "diagnostics": ["C-01"]}
     },
     {
       "commit": "286f5b2",
@@ -137,7 +100,7 @@
         {"op": "close", "finding_id": "C-06", "work_unit": "2"}
       ],
       "request": {"work_unit": "2"},
-      "expected": {"ledger": ["C-06:CLOSED"], "open": [], "correction": {}, "import_open": [], "request": ["C-06:CLOSED"], "status_actions": ["C-06:opened", "C-06:status_changed"]}
+      "expected": {"ledger": ["C-06:CLOSED"], "open": [], "correction": {}, "request": ["C-06:CLOSED"], "status_actions": ["C-06:opened", "C-06:status_changed"]}
     },
     {
       "commit": "d24511e",
@@ -150,7 +113,7 @@
         {"op": "close", "finding_id": "C-07", "work_unit": "2"}
       ],
       "request": {"work_unit": "2", "open_only": true},
-      "expected": {"ledger": ["C-07:CLOSED", "C-08:OPEN"], "open": ["C-08"], "correction": {}, "import_open": [], "request": ["C-08"], "status_actions": ["C-07:opened", "C-08:opened", "C-07:status_changed"]}
+      "expected": {"ledger": ["C-07:CLOSED", "C-08:OPEN"], "open": ["C-08"], "correction": {}, "request": ["C-08"], "status_actions": ["C-07:opened", "C-08:opened", "C-07:status_changed"]}
     }
   ]
 }

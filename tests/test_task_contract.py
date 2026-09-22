@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-import native_finding_decisions
 
 from task_contract import (
     FEATURE_BRANCH_PATTERN,
@@ -9,28 +8,6 @@ from task_contract import (
     TaskMode,
     parse_task_contract,
 )
-
-
-BRANCH_DISCOVERY_TASK = """ORCHESTRATOR_MODE: BRANCH_DISCOVERY
-FINDING_HANDOFF_SOURCE_RUN: predecessor-run
-FINDING_HANDOFF_EXPORT: ar1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-TARGET_BRANCH: feature/example
-TASK_SCOPE: src/**, tests/**
-"""
-
-
-def test_branch_discovery_task_is_active_and_requires_its_family_handoff() -> None:
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
-    contract = parse_task_contract(BRANCH_DISCOVERY_TASK)
-    assert contract.mode is TaskMode.BRANCH_DISCOVERY
-    assert contract.work_plan_path is None
-    assert contract.finding_handoff_source_run_id == "predecessor-run"
-
-    with pytest.raises(TaskContractError, match="family predecessor handoff"):
-        parse_task_contract(
-            "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
-            "TARGET_BRANCH: feature/example\nTASK_SCOPE: src/**\n"
-        )
 
 
 def test_plan_only_contract_parses_german_scope_and_markdown_escape() -> None:
@@ -206,37 +183,6 @@ SLICE_PLAN: 1 | App umsetzen | src/app.py, docs/internal/slice-plan-01-app.md
         "docs/internal/slice-plan-01-app.md",
         "src/app.py",
     )
-
-
-def test_approved_plan_contract_accepts_closed_finding_handoff_reference() -> None:
-    text = """ORCHESTRATOR_MODE: IMPLEMENT
-WORK_PLAN_PATH: docs/internal/plan.md
-APPROVED_PLAN_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-FINDING_HANDOFF_SOURCE_RUN: plan-run
-FINDING_HANDOFF_EXPORT: ar1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-TARGET_BRANCH: feature/x
-TASK_SCOPE: src/x.py
-SLICE_PLAN: 1 | implementation | src/x.py
-"""
-
-    contract = parse_task_contract(text)
-
-    assert contract.finding_handoff_source_run_id == "plan-run"
-    assert contract.finding_handoff_export_record_id == "ar1-" + "b" * 64
-
-
-def test_finding_handoff_reference_is_all_or_nothing() -> None:
-    text = """ORCHESTRATOR_MODE: IMPLEMENT
-WORK_PLAN_PATH: docs/internal/plan.md
-APPROVED_PLAN_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-FINDING_HANDOFF_SOURCE_RUN: plan-run
-TARGET_BRANCH: feature/x
-TASK_SCOPE: src/x.py
-SLICE_PLAN: 1 | implementation | src/x.py
-"""
-
-    with pytest.raises(TaskContractError, match="requires both"):
-        parse_task_contract(text)
 
 
 @pytest.mark.parametrize(

@@ -12,12 +12,9 @@ from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
 from artifact_models import (
-    BranchDiscoveryHandoffImportPayload,
     ArtifactRecord,
-    FindingHandoffImportPayload,
     FindingSeverity,
     FindingTransitionPayload,
-    ImportedFindingTransition,
     WorkUnitPayload,
 )
 from artifact_replay import (
@@ -48,12 +45,11 @@ def is_closed_finding_status(status: FindingStatus) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class FindingTransitionProjection:
-    """One ordered local or imported transition in the canonical ledger."""
+    """One ordered transition in the current run's canonical ledger."""
 
     sequence: int
     record_id: str
     source_record_id: str
-    imported: bool
     payload: FindingTransitionPayload
     _record: ArtifactRecord = field(repr=False, compare=False)
 
@@ -74,7 +70,7 @@ class FindingLineageProjection:
 
 @dataclass(frozen=True, slots=True)
 class FindingLedgerProjection:
-    """Complete cross-run ledger, including its immutable event history."""
+    """Complete run-local ledger, including its immutable event history."""
 
     findings: tuple[FindingRecord, ...]
     lineages: tuple[FindingLineageProjection, ...]
@@ -115,16 +111,6 @@ class ReviewFindingMerge:
 
 
 @dataclass(frozen=True, slots=True)
-class FindingImportSnapshotProjection:
-    """Foreign ledger imported for the first implementation work unit."""
-
-    import_record_id: str
-    work_unit_id: str | None
-    findings: tuple[FindingRecord, ...]
-    open_finding_ids: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class FindingRequestProjection:
     """Exact canonical Finding subset offered to one agent request."""
 
@@ -148,7 +134,6 @@ class FindingRecordedStatusProjection:
     status: str
     record_id: str
     actor: str
-    imported: bool
 
     def matches(self, status: str) -> bool:
         return self.status == status
@@ -217,7 +202,6 @@ class FindingReduction:
 
     ledger: FindingLedgerProjection
     open_set: FindingOpenSetProjection
-    import_snapshot: FindingImportSnapshotProjection | None
     status_transitions: FindingStatusTransitionsProjection
     diagnostics: tuple[FindingOpeningConflictDiagnostic, ...]
     _events: tuple[FindingTransitionProjection, ...] = field(
@@ -239,7 +223,7 @@ class FindingReduction:
         selected_events = tuple(
             event
             for event in self._events
-            if (target is None or event.imported or event.payload.work_unit_id == target)
+            if (target is None or event.payload.work_unit_id == target)
             and (
                 event.payload.action != "opened"
                 or event.source_record_id in head_opening_record_ids
@@ -311,11 +295,9 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
     status_transitions = FindingStatusTransitionsProjection(
         tuple(event for event in events if event.payload.action != "responded")
     )
-    import_snapshot = _project_import_snapshot(records, events)
     return FindingReduction(
         ledger=ledger,
         open_set=open_set,
-        import_snapshot=import_snapshot,
         status_transitions=status_transitions,
         diagnostics=tuple(diagnostics),
         _events=events,
@@ -443,14 +425,11 @@ def project_record_finding_statuses(
 def project_latest_recorded_statuses(
     records: Sequence[ArtifactRecord],
     *,
-    imported: bool | None = None,
     bound_only: bool = False,
 ) -> tuple[FindingRecordedStatusProjection, ...]:
     """Select the last recorded status per ID under explicit record filters."""
     latest: dict[str, FindingRecordedStatusProjection] = {}
     for event in _transition_events(records):
-        if imported is not None and event.imported is not imported:
-            continue
         if bound_only and event.payload.work_unit_id is None:
             continue
         latest[event.payload.finding_id] = FindingRecordedStatusProjection(
@@ -458,14 +437,11 @@ def project_latest_recorded_statuses(
             status=event.payload.finding_status,
             record_id=event.record_id,
             actor=event.payload.actor.value,
-            imported=event.imported,
         )
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
 
-def is_closed_finding_transition(
-    record: ArtifactRecord | ImportedFindingTransition,
-) -> bool:
+def is_closed_finding_transition(record: ArtifactRecord) -> bool:
     """Keep the reviewer-owned closed-status predicate inside the reducer."""
 
     payload = record.payload
@@ -889,28 +865,12 @@ def _transition_events(
     events: list[FindingTransitionProjection] = []
     for sequence, record in enumerate(records, start=1):
         payload = record.payload
-        if isinstance(
-            payload,
-            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-        ):
-            events.extend(
-                FindingTransitionProjection(
-                    sequence=sequence,
-                    record_id=record.record_id,
-                    source_record_id=item.record_id,
-                    imported=True,
-                    payload=item.payload,
-                    _record=record,
-                )
-                for item in payload.transitions
-            )
-        elif isinstance(payload, FindingTransitionPayload):
+        if isinstance(payload, FindingTransitionPayload):
             events.append(
                 FindingTransitionProjection(
                     sequence=sequence,
                     record_id=record.record_id,
                     source_record_id=record.record_id,
-                    imported=False,
                     payload=payload,
                     _record=record,
                 )
@@ -1011,12 +971,12 @@ def _reduce_lineages(
                             finding_id=payload.finding_id,
                             head_opening_record_id=head.source_record_id,
                             head_opening_revision=(
-                                None if head.imported else head._record.revision
+                                head._record.revision
                             ),
                             head_work_unit_id=head.payload.work_unit_id,
                             conflicting_opening_record_id=event.source_record_id,
                             conflicting_opening_revision=(
-                                None if event.imported else event._record.revision
+                                event._record.revision
                             ),
                             conflicting_work_unit_id=payload.work_unit_id,
                         )
@@ -1135,41 +1095,6 @@ def _current_lineage_findings(
     for item in lineages:
         heads.setdefault(item.finding.finding_id, item.finding)
     return tuple(heads[key] for key in sorted(heads, key=finding_id_sort_key))
-
-
-def _project_import_snapshot(
-    records: Sequence[ArtifactRecord],
-    events: Sequence[FindingTransitionProjection],
-) -> FindingImportSnapshotProjection | None:
-    imports = tuple(
-        record for record in records
-        if isinstance(
-            record.payload,
-            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-        )
-    )
-    if not imports:
-        return None
-    imported_events = tuple(event for event in events if event.imported)
-    findings = _reduce_events(imported_events)
-    open_ids = project_open_set(findings).finding_ids
-    import_record = imports[0]
-    bound_unit = next(
-        (
-            record.logical_id.removeprefix("work-unit-")
-            for record in records
-            if isinstance(record.payload, WorkUnitPayload)
-            and record.payload.finding_import_record_id == import_record.record_id
-            and record.logical_id.startswith("work-unit-")
-        ),
-        None,
-    )
-    return FindingImportSnapshotProjection(
-        import_record_id=import_record.record_id,
-        work_unit_id=bound_unit,
-        findings=findings,
-        open_finding_ids=open_ids,
-    )
 
 
 def _canonical_findings(

@@ -13,20 +13,16 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import logging
-from typing import Callable, Iterable, Mapping
+from typing import Callable, Iterable
 
 from artifact_models import (
     AgentResultPayload,
     ArtifactPayload,
     ArtifactRecord,
     ArtifactValidationError,
-    BranchDiscoveryCompletedPayload,
-    BranchDiscoveryFindingPayload,
-    BranchDiscoveryHandoffExportPayload,
-    BranchDiscoveryHandoffImportPayload,
-    BranchDiscoveryOccurrencePayload,
-    ClosedFindingDispositionSnapshot,
-    ClosedFindingOccurrencePayload,
+    FinalReviewCompletedPayload,
+    FinalReviewFindingPayload,
+    FinalReviewOccurrencePayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -34,17 +30,7 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     FindingSeverity,
-    FindingSnapshotItem,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
-    ImportedFindingTransition,
     FindingTransitionPayload,
-    FamilyBindingPayload,
-    PlanAssignmentPayload,
-    PlanTreatmentAssignment,
-    PlanTreatmentDecisionPayload,
-    PlanTreatmentProposalPayload,
-    NoImplementationRequiredPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -56,7 +42,6 @@ from artifact_models import (
     ReviewStopRequestPayload,
     ReviewEvidencePayload,
     Role,
-    RemediationCohortCheckpointPayload,
     SideEffectPayload,
     SliceSpec,
     TaskPayload,
@@ -64,11 +49,8 @@ from artifact_models import (
     ValidationRequestPayload,
     ValidationResult,
     WorkUnitPayload,
-    WorkflowCompletionPayload,
     canonical_json,
     stable_side_effect_key,
-    finding_transition_sequence_sha256,
-    flatten_finding_transition_history,
 )
 from artifact_store import ArtifactStore
 from contracts import (
@@ -82,26 +64,12 @@ from contracts import (
     ValidationCommandSpec,
 )
 from finding_order import replay_compatible_finding_ids, sorted_finding_ids
-from finding_signature import finding_record_signature
-from finding_planning import (
-    FindingSignatureGroup,
-    PlanTreatmentDecision,
-    PlanTreatmentDecisionKind,
-    PlanTreatmentKind,
-    PlanTreatmentProposal,
-    RemediationRoundEvaluation,
-    evaluate_remediation_round,
-    validate_plan_treatment_coverage,
-    validate_plan_treatment_decisions,
-    validate_plan_completion,
-)
 import native_finding_decisions
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
 from artifact_replay import (
     ArtifactReplayError,
-    ArtifactReplayResult,
     ReplayDiagnostic,
     ReplayDiagnosticCode,
     _validate_work_unit_revision,
@@ -248,30 +216,6 @@ def agent_result_payload(
             )
             for item in result.slice_plan
         ),
-        plan_treatments=tuple(
-            PlanTreatmentProposalPayload(
-                signature=item.signature,
-                finding_ids=item.finding_ids,
-                treatment_kind=item.treatment_kind.value,
-                closing_slice_ids=tuple(
-                    str(value) for value in item.closing_slice_ids
-                ),
-                no_code_reason=(
-                    None
-                    if item.no_code_reason is None
-                    else item.no_code_reason.value
-                ),
-                evidence=item.evidence,
-                evidence_paths=item.evidence_paths,
-                affected_paths=item.affected_paths,
-            )
-            for item in result.plan_treatments
-        ),
-        plan_completion=(
-            None
-            if result.plan_completion is None
-            else result.plan_completion.value
-        ),
     )
 
 
@@ -317,18 +261,10 @@ def review_payload(
                 result.stop_request.remediation_paths,
             )
         ),
-        plan_treatment_decisions=tuple(
-            PlanTreatmentDecisionPayload(
-                item.signature,
-                item.decision.value,
-                item.rationale,
-            )
-            for item in result.plan_treatment_decisions
-        ),
     )
 
 
-def branch_discovery_completed_payload(
+def final_review_completed_payload(
     result: ContractResult,
     previous_findings: tuple[FindingRecord, ...],
     *,
@@ -338,20 +274,20 @@ def branch_discovery_completed_payload(
     transport_schema: str,
     request_id: str,
     response_sha256: str,
-) -> BranchDiscoveryCompletedPayload:
+) -> FinalReviewCompletedPayload:
     """Persist the E6 delivery without manufacturing an approval verdict."""
 
-    if result.delivery_kind != "branch_discovery_completed":
+    if result.delivery_kind != "final_review_completed":
         raise ArtifactBridgeError(
-            "branch discovery payload requires BRANCH_DISCOVERY_COMPLETED"
+            "final review payload requires FINAL_REVIEW_COMPLETED"
         )
     if result.approval is not None or result.stopped:
         raise ArtifactBridgeError(
-            "branch discovery completion cannot carry approved, denied, or stop"
+            "final review completion cannot carry approved, denied, or stop"
         )
     if result.evidence is None or result.pre_mortem is None:
         raise ArtifactBridgeError(
-            "branch discovery completion requires evidence and pre_mortem"
+            "final review completion requires evidence and pre_mortem"
         )
     previous = {item.finding_id: item for item in previous_findings}
     unknown_occurrences = tuple(
@@ -360,10 +296,10 @@ def branch_discovery_completed_payload(
     )
     if unknown_occurrences:
         raise ArtifactBridgeError(
-            "branch discovery occurrence references an unknown prior finding"
+            "final review occurrence references an unknown prior finding"
         )
     new_findings = tuple(
-        BranchDiscoveryFindingPayload(
+        FinalReviewFindingPayload(
             finding_id=finding.finding_id,
             severity=FindingSeverity(finding.finding_class.value),
             summary=finding.summary,
@@ -376,14 +312,14 @@ def branch_discovery_completed_payload(
         if finding.finding_id not in previous
     )
     occurrences = tuple(
-        BranchDiscoveryOccurrencePayload(
+        FinalReviewOccurrencePayload(
             occurrence.finding_id,
             occurrence.rationale,
             occurrence.evidence_anchor_sha256,
         )
         for occurrence in result.occurrences
     )
-    return BranchDiscoveryCompletedPayload(
+    return FinalReviewCompletedPayload(
         reviewer=_role(result.reviewer),
         work_unit_id=str(work_unit_id),
         new_findings=new_findings,
@@ -403,15 +339,15 @@ def branch_discovery_completed_payload(
     )
 
 
-def branch_discovery_completed_payload_matches_result(
-    payload: BranchDiscoveryCompletedPayload,
+def final_review_completed_payload_matches_result(
+    payload: FinalReviewCompletedPayload,
     result: ContractResult,
     previous_findings: tuple[FindingRecord, ...],
 ) -> bool:
     """Compare the E6 delivery with its request-bound native result."""
 
     try:
-        expected = branch_discovery_completed_payload(
+        expected = final_review_completed_payload(
             result,
             previous_findings,
             work_unit_id=payload.work_unit_id,
@@ -548,1129 +484,6 @@ def finding_payload(
             else None
         ),
         affected_paths=(finding.affected_paths if action == "opened" else ()),
-    )
-
-
-def finding_handoff_export_payload(
-    replay: ArtifactReplayResult,
-    *,
-    approved_plan_commit: str,
-    approval_review_record_id: str,
-    target_task_path: str,
-    target_task_bytes: bytes,
-) -> FindingHandoffExportPayload:
-    """Build an export only from the ordered facts of an accepted replay."""
-    if replay.head_record_id is None:
-        raise ArtifactBridgeError("finding export requires a non-empty accepted replay")
-    if any(
-        isinstance(record.payload, NoImplementationRequiredPayload)
-        for record in replay.records
-    ):
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED forbids an IMPLEMENT handoff"
-        )
-    review = next(
-        (record for record in replay.records if record.record_id == approval_review_record_id),
-        None,
-    )
-    if (
-        review is None
-        or not isinstance(review.payload, ReviewPayload)
-        or review.payload.verdict != "approved"
-    ):
-        raise ArtifactBridgeError("finding export requires its approved reviewer record")
-    plans = [record.payload for record in replay.records if isinstance(record.payload, PlanPayload)]
-    if not plans or not any(plan.approved_plan_commit == approved_plan_commit for plan in plans):
-        raise ArtifactBridgeError("finding export plan commit is not present in accepted replay")
-    transitions = flatten_finding_transition_history(replay.records)
-    if not transitions:
-        raise ArtifactBridgeError("finding export requires at least one source transition")
-    return FindingHandoffExportPayload(
-        source_run_id=replay.expected_run_id,
-        source_head_record_id=replay.head_record_id,
-        approved_plan_commit=approved_plan_commit,
-        approval_review_record_id=approval_review_record_id,
-        finding_transition_record_ids=tuple(item.record_id for item in transitions),
-        finding_transitions_sha256=finding_transition_sequence_sha256(transitions),
-        target_task_path=target_task_path,
-        target_task_sha256=hashlib.sha256(target_task_bytes).hexdigest(),
-        authority=Role.ORCHESTRATOR,
-    )
-
-
-def finding_handoff_import_payload(
-    source_replay: ArtifactReplayResult,
-    export_record: ArtifactRecord,
-    *,
-    target_run_id: str,
-    target_task_bytes: bytes,
-) -> FindingHandoffImportPayload:
-    """Verify an export against its source replay and copy its ordered history."""
-    export = export_record.payload
-    if not isinstance(export, FindingHandoffExportPayload):
-        raise ArtifactBridgeError("finding import requires a finding handoff export record")
-    accepted_export = next(
-        (record for record in source_replay.records if record.record_id == export_record.record_id),
-        None,
-    )
-    if accepted_export != export_record:
-        raise ArtifactBridgeError("finding export record is not in the accepted source replay")
-    if export_record.run_id != source_replay.expected_run_id:
-        raise ArtifactBridgeError("finding export record belongs to another source run")
-    source_prefix = source_replay.records[: source_replay.records.index(export_record)]
-    transitive = flatten_finding_transition_history(source_prefix)
-    legacy = tuple(
-        ImportedFindingTransition(record.record_id, record.payload)
-        for record in source_prefix
-        if isinstance(record.payload, FindingTransitionPayload)
-    )
-    transitions = next(
-        (
-            candidate
-            for candidate in (transitive, legacy)
-            if export.finding_transition_record_ids
-            == tuple(item.record_id for item in candidate)
-            and export.finding_transitions_sha256
-            == finding_transition_sequence_sha256(candidate)
-        ),
-        None,
-    )
-    if (
-        export.source_run_id != source_replay.expected_run_id
-        or not export_record.predecessor_ids
-        or export.source_head_record_id != export_record.predecessor_ids[0]
-        or transitions is None
-    ):
-        raise ArtifactBridgeError("finding export differs from its accepted source replay")
-    target_digest = hashlib.sha256(target_task_bytes).hexdigest()
-    if target_digest != export.target_task_sha256:
-        raise ArtifactBridgeError("finding import task bytes differ from the export binding")
-    return FindingHandoffImportPayload(
-        source_run_id=export.source_run_id,
-        source_head_record_id=export.source_head_record_id,
-        approved_plan_commit=export.approved_plan_commit,
-        approval_review_record_id=export.approval_review_record_id,
-        export_record_id=export_record.record_id,
-        target_run_id=target_run_id,
-        target_task_sha256=target_digest,
-        finding_transitions_sha256=export.finding_transitions_sha256,
-        transitions=transitions,
-        authority=Role.ORCHESTRATOR,
-    )
-
-
-def _finding_snapshot(
-    replay: ArtifactReplayResult, *, allow_empty: bool = False
-) -> tuple[FindingSnapshotItem, ...]:
-    from finding_reducer import reduce_findings
-
-    findings = reduce_findings(replay).ledger.findings
-    findings_by_id = {finding.finding_id: finding for finding in findings}
-    snapshot = tuple(
-        FindingSnapshotItem(
-            finding.finding_id,
-            finding_record_signature(finding),
-            finding.status.value.lower(),
-            FindingSeverity(finding.finding_class.value),
-        )
-        for finding in (
-            findings_by_id[finding_id]
-            for finding_id in sorted_finding_ids(findings_by_id)
-        )
-    )
-    if not snapshot and not allow_empty:
-        raise ArtifactBridgeError(
-            "branch discovery handoff requires a non-empty finding snapshot"
-        )
-    return snapshot
-
-
-def _validate_remediation_cohort_handoff(
-    replay: ArtifactReplayResult,
-    checkpoint_record_id: str | None,
-    family_binding: FamilyBindingPayload,
-) -> None:
-    if checkpoint_record_id is None:
-        return
-    checkpoint = next(
-        (
-            record
-            for record in replay.records
-            if record.record_id == checkpoint_record_id
-        ),
-        None,
-    )
-    if checkpoint is None or not isinstance(
-        checkpoint.payload, RemediationCohortCheckpointPayload
-    ):
-        raise ArtifactBridgeError(
-            "BRANCH_DISCOVERY remediation handoff requires its cohort checkpoint"
-        )
-    if (
-        checkpoint.payload.family_id != family_binding.family_id
-        or checkpoint.payload.implementation_run_id != replay.expected_run_id
-    ):
-        raise ArtifactBridgeError(
-            "remediation cohort checkpoint differs from the source run family"
-        )
-
-
-def _validate_no_implementation_discovery_handoff(
-    replay: ArtifactReplayResult,
-    *,
-    target_execution_mode: str,
-    reviewed_head_commit: str,
-    remediation_cohort_checkpoint_record_id: str | None,
-) -> None:
-    no_implementation = next(
-        (
-            record.payload
-            for record in replay.records
-            if isinstance(record.payload, NoImplementationRequiredPayload)
-        ),
-        None,
-    )
-    source_identity = replay.run_identity
-    if (
-        target_execution_mode == "BRANCH_DISCOVERY"
-        and source_identity is not None
-        and source_identity.execution_mode == "PLAN_ONLY"
-        and no_implementation is None
-    ):
-        raise _finding_decision_bridge_error(
-            "PLAN_ONLY may hand off directly to BRANCH_DISCOVERY only after "
-            "NO_IMPLEMENTATION_REQUIRED"
-        )
-    if no_implementation is None:
-        return
-    if target_execution_mode != "BRANCH_DISCOVERY":
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED must hand off to a "
-            "BRANCH_DISCOVERY child run"
-        )
-    if reviewed_head_commit != no_implementation.reviewed_plan_commit:
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED discovery handoff must bind the "
-            "new reviewed plan HEAD"
-        )
-    if remediation_cohort_checkpoint_record_id is not None:
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED forbids an implementation cohort checkpoint"
-        )
-
-
-def branch_discovery_handoff_export_payload(
-    replay: ArtifactReplayResult,
-    *,
-    discovery_review_record_id: str | None,
-    validation_attestation_record_id: str,
-    reviewed_head_commit: str,
-    family_binding: object,
-    target_task_path: str,
-    target_task_bytes: bytes,
-    target_run_identity: str,
-    target_execution_mode: str = "PLAN_ONLY",
-    source_completion_record_id: str | None = None,
-    remediation_cohort_checkpoint_record_id: str | None = None,
-    allow_pending_source_completion: bool = False,
-) -> BranchDiscoveryHandoffExportPayload:
-    """Build the one family handoff used on every E1/E9 edge."""
-
-    from artifact_models import FamilyBindingPayload
-
-    if replay.head_record_id is None:
-        raise ArtifactBridgeError(
-            "branch discovery handoff export requires a non-empty accepted replay"
-        )
-    if not isinstance(family_binding, FamilyBindingPayload):
-        raise ArtifactBridgeError(
-            "branch discovery handoff export requires a family binding"
-        )
-    if target_execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
-        raise ArtifactBridgeError(
-            "branch discovery handoff target execution mode is invalid"
-        )
-    _validate_no_implementation_discovery_handoff(
-        replay,
-        target_execution_mode=target_execution_mode,
-        reviewed_head_commit=reviewed_head_commit,
-        remediation_cohort_checkpoint_record_id=(
-            remediation_cohort_checkpoint_record_id
-        ),
-    )
-    attestation = next(
-        (
-            record
-            for record in replay.records
-            if record.record_id == validation_attestation_record_id
-        ),
-        None,
-    )
-    if attestation is None or not isinstance(
-        attestation.payload, ValidationAttestationPayload
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery handoff export requires its validation attestation record"
-        )
-    if target_execution_mode == "PLAN_ONLY":
-        review = next(
-            (
-                record
-                for record in replay.records
-                if record.record_id == discovery_review_record_id
-            ),
-            None,
-        )
-        if review is None or not isinstance(
-            review.payload, BranchDiscoveryCompletedPayload
-        ):
-            raise ArtifactBridgeError(
-                "branch discovery handoff export requires its "
-                "BRANCH_DISCOVERY_COMPLETED record; approved is not scan completion"
-            )
-        if review.fingerprint != attestation.fingerprint:
-            raise ArtifactBridgeError(
-                "branch discovery completion and validation attestation fingerprints differ"
-            )
-        if (
-            review.payload.validation_attestation_record_id
-            != validation_attestation_record_id
-            or review.payload.reviewed_head_commit != reviewed_head_commit
-        ):
-            raise ArtifactBridgeError(
-                "branch discovery completion differs from its validation or HEAD binding"
-            )
-        source_completion_record_id = None
-        remediation_cohort_checkpoint_record_id = None
-    else:
-        completion = next(
-            (
-                record
-                for record in replay.records
-                if record.record_id == source_completion_record_id
-            ),
-            None,
-        )
-        if completion is None and allow_pending_source_completion:
-            pass
-        elif completion is None or not isinstance(
-            completion.payload, WorkflowCompletionPayload
-        ) or completion.payload.outcome != "completed":
-            raise ArtifactBridgeError(
-                "BRANCH_DISCOVERY family handoff requires a completed source run"
-            )
-        _validate_remediation_cohort_handoff(
-            replay,
-            remediation_cohort_checkpoint_record_id,
-            family_binding,
-        )
-        discovery_review_record_id = None
-    transitions = flatten_finding_transition_history(replay.records)
-    if not transitions and target_execution_mode != "BRANCH_DISCOVERY":
-        raise ArtifactBridgeError(
-            "branch discovery handoff export requires at least one source transition"
-        )
-    expected_predecessor_head = (
-        source_completion_record_id
-        if target_execution_mode == "BRANCH_DISCOVERY"
-        else replay.head_record_id
-    )
-    if (
-        family_binding.predecessor_run_id != replay.expected_run_id
-        or family_binding.predecessor_head_record_id != expected_predecessor_head
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery target family predecessor differs from the source head"
-        )
-    return BranchDiscoveryHandoffExportPayload(
-        source_run_id=replay.expected_run_id,
-        source_head_record_id=replay.head_record_id,
-        discovery_review_record_id=discovery_review_record_id,
-        validation_attestation_record_id=validation_attestation_record_id,
-        reviewed_head_commit=reviewed_head_commit,
-        family_id=family_binding.family_id,
-        family_base_commit=family_binding.family_base_commit,
-        cycle_number=family_binding.cycle_number,
-        predecessor_run_id=family_binding.predecessor_run_id,
-        predecessor_head_record_id=family_binding.predecessor_head_record_id,
-        finding_transition_record_ids=tuple(
-            item.source_record_id or item.record_id for item in transitions
-        ),
-        finding_transitions_sha256=finding_transition_sequence_sha256(transitions),
-        target_task_path=target_task_path,
-        target_task_sha256=hashlib.sha256(target_task_bytes).hexdigest(),
-        target_run_identity=target_run_identity,
-        authority=Role.ORCHESTRATOR,
-        target_execution_mode=target_execution_mode,
-        source_completion_record_id=source_completion_record_id,
-        remediation_cohort_checkpoint_record_id=(
-            remediation_cohort_checkpoint_record_id
-        ),
-        closed_finding_dispositions=_closed_disposition_snapshots(replay),
-    )
-
-
-def branch_discovery_handoff_import_payload(
-    source_replay: ArtifactReplayResult,
-    export_record: ArtifactRecord,
-    *,
-    target_run_id: str,
-    target_task_path: str,
-    target_task_bytes: bytes,
-    target_family_binding: object,
-) -> BranchDiscoveryHandoffImportPayload:
-    """Revalidate E9's source, task, identity, family and transitive history."""
-
-    from artifact_models import FamilyBindingPayload
-
-    export = export_record.payload
-    if not isinstance(export, BranchDiscoveryHandoffExportPayload):
-        raise ArtifactBridgeError(
-            "branch discovery import requires a branch discovery export record"
-        )
-    if not isinstance(target_family_binding, FamilyBindingPayload):
-        raise ArtifactBridgeError(
-            "branch discovery import requires the target RunProfile family binding"
-        )
-    accepted_export = next(
-        (
-            record
-            for record in source_replay.records
-            if record.record_id == export_record.record_id
-        ),
-        None,
-    )
-    if accepted_export != export_record:
-        raise ArtifactBridgeError(
-            "branch discovery export record is not resolvable in the source run"
-        )
-    if export.target_execution_mode == "PLAN_ONLY":
-        validate_plan_handoff_export_position(source_replay, export_record)
-    else:
-        completion = next(
-            (
-                record
-                for record in source_replay.records
-                if record.record_id == export.source_completion_record_id
-            ),
-            None,
-        )
-        if (
-            completion is None
-            or not isinstance(completion.payload, WorkflowCompletionPayload)
-            or completion.payload.outcome != "completed"
-        ):
-            raise ArtifactBridgeError(
-                "BRANCH_DISCOVERY family handoff requires a completed source run"
-            )
-    if (
-        export_record.run_id != source_replay.expected_run_id
-        or export.source_run_id != source_replay.expected_run_id
-        or not export_record.predecessor_ids
-        or export.source_head_record_id != export_record.predecessor_ids[0]
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery export source run or bound source head differs"
-        )
-    export_position = source_replay.records.index(export_record)
-    source_prefix = source_replay.records[:export_position]
-    transitions = flatten_finding_transition_history(source_prefix)
-    if (
-        export.finding_transition_record_ids
-        != tuple(item.source_record_id or item.record_id for item in transitions)
-        or export.finding_transitions_sha256
-        != finding_transition_sequence_sha256(transitions)
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery export differs from its flattened source history"
-        )
-    task_digest = hashlib.sha256(target_task_bytes).hexdigest()
-    if task_digest != export.target_task_sha256:
-        raise ArtifactBridgeError(
-            "branch discovery import target_task_sha256 differs from task bytes"
-        )
-    if target_task_path != export.target_task_path:
-        raise ArtifactBridgeError(
-            "branch discovery import target_task_path differs from queue position"
-        )
-    if target_run_id != export.target_run_identity:
-        raise ArtifactBridgeError(
-            "branch discovery import target_run_identity differs from target run"
-        )
-    family_values = (
-        target_family_binding.family_id,
-        target_family_binding.family_base_commit,
-        target_family_binding.cycle_number,
-        target_family_binding.predecessor_run_id,
-        target_family_binding.predecessor_head_record_id,
-    )
-    if family_values != (
-        export.family_id,
-        export.family_base_commit,
-        export.cycle_number,
-        export.predecessor_run_id,
-        export.predecessor_head_record_id,
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery import family binding differs from target RunProfile"
-        )
-    source_without_export = replace(
-        source_replay,
-        records=source_prefix,
-        head_record_id=export.source_head_record_id,
-    )
-    return BranchDiscoveryHandoffImportPayload(
-        source_run_id=export.source_run_id,
-        source_head_record_id=export.source_head_record_id,
-        discovery_review_record_id=export.discovery_review_record_id,
-        validation_attestation_record_id=export.validation_attestation_record_id,
-        reviewed_head_commit=export.reviewed_head_commit,
-        family_id=export.family_id,
-        family_base_commit=export.family_base_commit,
-        cycle_number=export.cycle_number,
-        predecessor_run_id=export.predecessor_run_id,
-        predecessor_head_record_id=export.predecessor_head_record_id,
-        export_record_id=export_record.record_id,
-        target_run_id=target_run_id,
-        target_task_path=target_task_path,
-        target_task_sha256=task_digest,
-        target_run_identity=export.target_run_identity,
-        finding_transitions_sha256=export.finding_transitions_sha256,
-        transitions=transitions,
-        finding_snapshot=_finding_snapshot(
-            source_without_export,
-            allow_empty=export.target_execution_mode == "BRANCH_DISCOVERY",
-        ),
-        authority=Role.ORCHESTRATOR,
-        target_execution_mode=export.target_execution_mode,
-        source_completion_record_id=export.source_completion_record_id,
-        remediation_cohort_checkpoint_record_id=(
-            export.remediation_cohort_checkpoint_record_id
-        ),
-        closed_finding_dispositions=export.closed_finding_dispositions,
-    )
-
-
-def validate_plan_handoff_export_position(
-    source_replay: ArtifactReplayResult,
-    export_record: ArtifactRecord,
-) -> None:
-    """Accept E9 at the head or before completion plus ledgered publication."""
-
-    export = export_record.payload
-    assert isinstance(export, BranchDiscoveryHandoffExportPayload)
-    export_position = source_replay.records.index(export_record)
-    trailing = source_replay.records[export_position + 1 :]
-    if not trailing:
-        return
-    completion, *publication = trailing
-    if (
-        not isinstance(completion.payload, WorkflowCompletionPayload)
-        or completion.payload.outcome != "completed"
-        or completion.payload.final_binding_id
-        != export.discovery_review_record_id
-        or any(
-            not isinstance(record.payload, SideEffectPayload)
-            or record.payload.effect_class != "file_write"
-            for record in publication
-        )
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery export must be the accepted source replay head "
-            "or precede only its completed workflow and ledgered publication; "
-            "branch discovery export is not the source run head otherwise"
-        )
-
-
-def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
-    """Derive E6 family acceptance only from a terminal discovery run.
-
-    This is deliberately separate from ``ReviewPayload.verdict``: a completed
-    scan can contain open findings and therefore need not accept the family.
-    """
-
-    identity = replay.run_identity
-    profile = replay.run_profile
-    if (
-        identity is None
-        or identity.execution_mode != "BRANCH_DISCOVERY"
-        or profile is None
-        or profile.family_binding is None
-    ):
-        raise ArtifactBridgeError(
-            "family acceptance may be derived only from its own BRANCH_DISCOVERY run"
-        )
-    completions = tuple(
-        record
-        for record in replay.records
-        if isinstance(record.payload, BranchDiscoveryCompletedPayload)
-    )
-    terminal = tuple(
-        record
-        for record in replay.records
-        if isinstance(record.payload, WorkflowCompletionPayload)
-        and record.payload.outcome == "completed"
-    )
-    if len(completions) != 1 or len(terminal) != 1:
-        raise ArtifactBridgeError(
-            "family acceptance requires one completed scan and one terminal workflow"
-        )
-    completion_position = replay.records.index(completions[0])
-    terminal_position = replay.records.index(terminal[0])
-    if completion_position >= terminal_position:
-        raise ArtifactBridgeError(
-            "family acceptance completion order is invalid"
-        )
-    from finding_reducer import reduce_findings
-
-    return not reduce_findings(replay).open_set.finding_ids
-
-
-def _plan_treatment_assignments(
-    treatments: tuple[PlanTreatmentProposal, ...],
-    *,
-    review_fingerprint: str,
-    evidence_anchors: Mapping[
-        str, native_finding_decisions.NoCodeEvidenceAnchor
-    ] | None,
-) -> tuple[PlanTreatmentAssignment, ...]:
-    anchors = {} if evidence_anchors is None else dict(evidence_anchors)
-    no_code_signatures = {
-        item.signature
-        for item in treatments
-        if item.treatment_kind is PlanTreatmentKind.NO_CODE
-    }
-    if set(anchors) - no_code_signatures:
-        raise _finding_decision_bridge_error(
-            "No-Code evidence anchors contain a foreign treatment signature"
-        )
-    for treatment in treatments:
-        anchor = anchors.get(treatment.signature)
-        if anchor is None:
-            continue
-        if (
-            anchor.evidence_paths != treatment.evidence_paths
-            or anchor.affected_paths != treatment.affected_paths
-        ):
-            raise _finding_decision_bridge_error(
-                "No-Code evidence anchor paths differ from the reviewed proposal"
-            )
-    return tuple(
-        PlanTreatmentAssignment(
-            signature=item.signature,
-            finding_ids=item.finding_ids,
-            treatment_kind=item.treatment_kind.value,
-            closing_slice_ids=tuple(str(value) for value in item.closing_slice_ids),
-            no_code_reason=(
-                None if item.no_code_reason is None else item.no_code_reason.value
-            ),
-            evidence=item.evidence,
-            authoritative_fingerprint=(
-                review_fingerprint
-                if item.treatment_kind is PlanTreatmentKind.NO_CODE
-                else None
-            ),
-            evidence_anchor=anchors.get(item.signature),
-        )
-        for item in treatments
-    )
-
-
-def plan_assignment_payload(
-    *,
-    source_snapshot_record: ArtifactRecord,
-    plan_result_record: ArtifactRecord,
-    review_record: ArtifactRecord,
-    family_binding: FamilyBindingPayload,
-    remediation_round_number: int,
-    evidence_anchors: Mapping[
-        str, native_finding_decisions.NoCodeEvidenceAnchor
-    ] | None = None,
-) -> PlanAssignmentPayload:
-    """Build the sole E3 authority from a positive explicit plan review."""
-
-    snapshot = source_snapshot_record.payload
-    plan_result = plan_result_record.payload
-    review = review_record.payload
-    if not isinstance(snapshot, BranchDiscoveryHandoffImportPayload):
-        raise ArtifactBridgeError(
-            "plan assignment requires a branch discovery Finding snapshot"
-        )
-    if snapshot.target_execution_mode != "PLAN_ONLY":
-        raise ArtifactBridgeError(
-            "plan assignment source snapshot must target PLAN_ONLY"
-        )
-    plan_run_id = snapshot.target_run_id
-    if (
-        source_snapshot_record.run_id != plan_run_id
-        or plan_result_record.run_id != plan_run_id
-        or review_record.run_id != plan_run_id
-    ):
-        raise ArtifactBridgeError(
-            "plan assignment records do not belong to the snapshot-bound plan run"
-        )
-    if not isinstance(plan_result, AgentResultPayload) or plan_result.outcome != "ready":
-        raise ArtifactBridgeError(
-            "plan assignment requires a ready native implementer plan result"
-        )
-    if not isinstance(review, ReviewPayload) or review.verdict != "approved":
-        raise ArtifactBridgeError(
-            "plan assignment requires a positive plan Review record"
-        )
-    if review.work_unit_id != plan_result.work_unit_id:
-        raise ArtifactBridgeError(
-            "plan assignment result and Review use different work units"
-        )
-    if not isinstance(family_binding, FamilyBindingPayload):
-        raise ArtifactBridgeError(
-            "plan assignment requires a typed family binding"
-        )
-    family_id = family_binding.family_id
-    cycle_number = family_binding.cycle_number
-    if family_id != snapshot.family_id or cycle_number != snapshot.cycle_number:
-        raise ArtifactBridgeError(
-            "plan assignment family binding differs from its source snapshot"
-        )
-    groups_by_signature: dict[str, list[str]] = {}
-    for item in snapshot.finding_snapshot:
-        if item.is_open:
-            groups_by_signature.setdefault(item.signature, []).append(item.finding_id)
-    groups = tuple(
-        FindingSignatureGroup(signature, sorted_finding_ids(finding_ids))
-        for signature, finding_ids in sorted(groups_by_signature.items())
-    )
-    try:
-        treatments = tuple(
-            PlanTreatmentProposal(
-                signature=item.signature,
-                finding_ids=item.finding_ids,
-                treatment_kind=PlanTreatmentKind(item.treatment_kind),
-                closing_slice_ids=tuple(
-                    int(value) for value in item.closing_slice_ids
-                ),
-                no_code_reason=(
-                    None
-                    if item.no_code_reason is None
-                    else native_finding_decisions.NativeRejectionReason(
-                        item.no_code_reason
-                    )
-                ),
-                evidence=item.evidence,
-                evidence_paths=item.evidence_paths,
-                affected_paths=item.affected_paths,
-            )
-            for item in plan_result.plan_treatments
-        )
-        planned_slices = tuple(
-            PlannedSlice(
-                int(item.slice_id),
-                item.summary,
-                item.paths,
-                item.acceptance_criteria,
-            )
-            for item in plan_result.slice_plan
-        )
-    except (TypeError, ValueError) as exc:
-        raise ArtifactBridgeError(
-            f"persisted implementer plan treatment is invalid: {exc}"
-        ) from exc
-    try:
-        implementation_scope = validate_plan_treatment_coverage(
-            groups, treatments, planned_slices
-        )
-        decisions = tuple(
-            PlanTreatmentDecision(
-                item.signature,
-                PlanTreatmentDecisionKind(item.decision),
-                item.rationale,
-            )
-            for item in review.plan_treatment_decisions
-        )
-        validate_plan_treatment_decisions(
-            treatments, decisions, plan_approved=True
-        )
-        if plan_result.plan_completion is not None:
-            validate_plan_completion(
-                treatments,
-                planned_slices,
-                native_finding_decisions.PlanCompletionKind(
-                    plan_result.plan_completion
-                ),
-            )
-    except (TypeError, ValueError) as exc:
-        raise ArtifactBridgeError(f"plan assignment coverage is invalid: {exc}") from exc
-    review_fingerprint = review_record.fingerprint.sha256
-    assignments = _plan_treatment_assignments(
-        treatments,
-        review_fingerprint=review_fingerprint,
-        evidence_anchors=evidence_anchors,
-    )
-    snapshot_document = [
-        {
-            "finding_id": item.finding_id,
-            "signature": item.signature,
-            "finding_status": item.finding_status,
-            "severity": item.severity.value,
-        }
-        for item in snapshot.finding_snapshot
-    ]
-    return PlanAssignmentPayload(
-        family_id=family_id,
-        cycle_number=cycle_number,
-        remediation_round_number=remediation_round_number,
-        source_snapshot_record_id=source_snapshot_record.record_id,
-        finding_snapshot_sha256=hashlib.sha256(
-            canonical_json(snapshot_document)
-        ).hexdigest(),
-        plan_result_record_id=plan_result_record.record_id,
-        review_record_id=review_record.record_id,
-        review_fingerprint=review_fingerprint,
-        treatments=assignments,
-        slices=tuple(
-            SliceSpec(
-                str(item.slice_id),
-                item.summary,
-                item.scope_paths,
-                item.acceptance_criteria,
-            )
-            for item in planned_slices
-        ),
-        implementation_scope=implementation_scope,
-        authority=Role.CLAUDE,  # allowlist:provider -- reviewer authority
-        plan_completion=plan_result.plan_completion,
-    )
-
-
-def no_implementation_required_payload(
-    replay: ArtifactReplayResult,
-    *,
-    plan_assignment_record_id: str,
-    reviewed_plan_commit: str,
-) -> NoImplementationRequiredPayload:
-    """Build E7's explicit completion only from a fully closed No-Code plan."""
-
-    assignment_record = next(
-        (
-            record
-            for record in replay.records
-            if record.record_id == plan_assignment_record_id
-        ),
-        None,
-    )
-    assignment = None if assignment_record is None else assignment_record.payload
-    if not isinstance(assignment, PlanAssignmentPayload):
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED requires its PlanAssignment record"
-        )
-    if assignment.plan_completion != (
-        native_finding_decisions.PlanCompletionKind.NO_IMPLEMENTATION_REQUIRED.value
-    ):
-        raise _finding_decision_bridge_error(
-            "plan assignment does not declare NO_IMPLEMENTATION_REQUIRED"
-        )
-    if (
-        assignment.slices
-        or assignment.implementation_scope
-        or any(
-            item.treatment_kind != "no_code"
-            for item in assignment.treatments
-        )
-    ):
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED contains implementation work"
-        )
-    if any(item.evidence_anchor is None for item in assignment.treatments):
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED lacks a stable No-Code evidence anchor"
-        )
-    plan = next(
-        (
-            record.payload
-            for record in replay.records
-            if isinstance(record.payload, PlanPayload)
-            and record.payload.approved_plan_commit == reviewed_plan_commit
-        ),
-        None,
-    )
-    if plan is None:
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED requires the reviewed plan commit"
-        )
-    review = next(
-        (
-            record
-            for record in replay.records
-            if record.record_id == assignment.review_record_id
-        ),
-        None,
-    )
-    if (
-        review is None
-        or not isinstance(review.payload, ReviewPayload)
-        or review.payload.verdict != "approved"
-    ):
-        raise _finding_decision_bridge_error(
-            "NO_IMPLEMENTATION_REQUIRED lacks reviewer authority"
-        )
-    expected_by_id = {
-        finding_id: treatment
-        for treatment in assignment.treatments
-        for finding_id in treatment.finding_ids
-    }
-    from finding_reducer import is_closed_finding_transition
-
-    heads: dict[str, ImportedFindingTransition] = {}
-    for transition in flatten_finding_transition_history(replay.records):
-        if transition.payload.action == "status_changed":
-            heads[transition.payload.finding_id] = transition
-    for finding_id, treatment in expected_by_id.items():
-        transition = heads.get(finding_id)
-        if (
-            transition is None
-            or not is_closed_finding_transition(transition)
-            or transition.payload.closure_kind != "rejected"
-            or transition.payload.rejection_reason != treatment.no_code_reason
-        ):
-            raise _finding_decision_bridge_error(
-                "NO_IMPLEMENTATION_REQUIRED requires every offered Finding "
-                f"to be reviewer-authoritatively closed: {finding_id}"
-            )
-    return NoImplementationRequiredPayload(
-        family_id=assignment.family_id,
-        cycle_number=assignment.cycle_number,
-        remediation_round_number=assignment.remediation_round_number,
-        plan_assignment_record_id=plan_assignment_record_id,
-        review_record_id=assignment.review_record_id,
-        reviewed_plan_commit=reviewed_plan_commit,
-        closed_finding_ids=sorted_finding_ids(expected_by_id),
-        authority=Role.ORCHESTRATOR,
-    )
-
-
-def _closed_disposition_snapshots(
-    replay: ArtifactReplayResult,
-) -> tuple[ClosedFindingDispositionSnapshot, ...]:
-    snapshots: dict[str, ClosedFindingDispositionSnapshot] = {}
-    for record in replay.records:
-        payload = record.payload
-        if isinstance(payload, BranchDiscoveryHandoffImportPayload):
-            for item in payload.closed_finding_dispositions:
-                snapshots[item.finding_id] = item
-        if not isinstance(payload, PlanAssignmentPayload):
-            continue
-        for treatment in payload.treatments:
-            if treatment.treatment_kind != "no_code":
-                continue
-            if treatment.evidence_anchor is None:
-                continue
-            for finding_id in treatment.finding_ids:
-                snapshots[finding_id] = ClosedFindingDispositionSnapshot(
-                    finding_id=finding_id,
-                    signature=treatment.signature,
-                    source_plan_assignment_record_id=record.record_id,
-                    evidence_anchor=treatment.evidence_anchor,
-                )
-    return tuple(
-        snapshots[finding_id]
-        for finding_id in sorted_finding_ids(snapshots)
-    )
-
-
-def closed_finding_review_bindings(
-    handoff_import: BranchDiscoveryHandoffImportPayload,
-    current_anchors: Mapping[
-        str, native_finding_decisions.NoCodeEvidenceAnchor
-    ],
-) -> tuple[native_finding_decisions.ClosedFindingReviewBinding, ...]:
-    """Bind current content measurements to imported closed dispositions."""
-
-    dispositions = {
-        item.finding_id: item
-        for item in handoff_import.closed_finding_dispositions
-    }
-    if set(current_anchors) != set(dispositions):
-        raise _finding_decision_bridge_error(
-            "current closed-Finding anchors differ from the imported disposition set"
-        )
-    return tuple(
-        native_finding_decisions.ClosedFindingReviewBinding(
-            finding_id=finding_id,
-            signature=dispositions[finding_id].signature,
-            source_plan_assignment_record_id=(
-                dispositions[finding_id].source_plan_assignment_record_id
-            ),
-            original_anchor=dispositions[finding_id].evidence_anchor,
-            current_anchor=current_anchors[finding_id],
-        )
-        for finding_id in sorted_finding_ids(dispositions)
-    )
-
-
-def closed_finding_occurrence_payloads(
-    *,
-    discovery_completion_record: ArtifactRecord,
-    handoff_import_record: ArtifactRecord,
-) -> tuple[ClosedFindingOccurrencePayload, ...]:
-    """Materialize each stable closed occurrence as its own typed record."""
-
-    completion = discovery_completion_record.payload
-    handoff = handoff_import_record.payload
-    if not isinstance(completion, BranchDiscoveryCompletedPayload):
-        raise _finding_decision_bridge_error(
-            "closed occurrence requires a BRANCH_DISCOVERY_COMPLETED record"
-        )
-    if not isinstance(handoff, BranchDiscoveryHandoffImportPayload):
-        raise _finding_decision_bridge_error(
-            "closed occurrence requires its branch discovery handoff import"
-        )
-    dispositions = {
-        item.finding_id: item for item in handoff.closed_finding_dispositions
-    }
-    payloads: list[ClosedFindingOccurrencePayload] = []
-    for occurrence in completion.occurrences:
-        disposition = dispositions.get(occurrence.finding_id)
-        if disposition is None:
-            continue
-        expected_anchor = disposition.evidence_anchor.stability_sha256
-        if occurrence.evidence_anchor_sha256 != expected_anchor:
-            raise _finding_decision_bridge_error(
-                "closed Finding occurrence evidence anchor changed"
-            )
-        payloads.append(
-            ClosedFindingOccurrencePayload(
-                finding_id=occurrence.finding_id,
-                signature=disposition.signature,
-                source_plan_assignment_record_id=(
-                    disposition.source_plan_assignment_record_id
-                ),
-                discovery_completion_record_id=(
-                    discovery_completion_record.record_id
-                ),
-                evidence_anchor_sha256=expected_anchor,
-                rationale=occurrence.rationale,
-                reviewer=completion.reviewer,
-            )
-        )
-    return tuple(payloads)
-
-
-def remediation_cohort_checkpoint_payload(
-    *,
-    assignment_record: ArtifactRecord,
-    implementation_replay: ArtifactReplayResult,
-) -> RemediationCohortCheckpointPayload:
-    """Measure S_r at the pre-discovery boundary from authoritative records."""
-
-    assignment = assignment_record.payload
-    if not isinstance(assignment, PlanAssignmentPayload):
-        raise ArtifactBridgeError(
-            "remediation cohort checkpoint requires a PlanAssignment record"
-        )
-    profile = implementation_replay.run_profile
-    binding = None if profile is None else profile.family_binding
-    if (
-        binding is None
-        or binding.family_id != assignment.family_id
-        or binding.cycle_number != assignment.cycle_number
-    ):
-        raise ArtifactBridgeError(
-            "remediation cohort checkpoint family differs from implementation run"
-        )
-    if implementation_replay.head_record_id is None:
-        raise ArtifactBridgeError(
-            "remediation cohort checkpoint requires an implementation record head"
-        )
-    from finding_reducer import reduce_findings
-
-    finding_projection = reduce_findings(implementation_replay)
-    open_ids = frozenset(finding_projection.open_set.finding_ids)
-    known_ids = frozenset(
-        finding.finding_id for finding in finding_projection.ledger.findings
-    )
-    inherited = tuple(item.signature for item in assignment.treatments)
-    unresolved = tuple(
-        item.signature
-        for item in assignment.treatments
-        if item.treatment_kind == "implementation"
-        and any(
-            finding_id not in known_ids or finding_id in open_ids
-            for finding_id in item.finding_ids
-        )
-    )
-    return RemediationCohortCheckpointPayload(
-        family_id=assignment.family_id,
-        remediation_round_number=assignment.remediation_round_number,
-        plan_assignment_record_id=assignment_record.record_id,
-        implementation_run_id=implementation_replay.expected_run_id,
-        implementation_head_record_id=implementation_replay.head_record_id,
-        inherited_signatures=inherited,
-        unresolved_inherited_signatures=unresolved,
-        authority=Role.ORCHESTRATOR,
-    )
-
-
-def evaluate_recorded_remediation_round(
-    *,
-    assignment_record: ArtifactRecord,
-    checkpoint_record: ArtifactRecord,
-    discovery_import_record: ArtifactRecord,
-    discovery_record: ArtifactRecord,
-) -> RemediationRoundEvaluation:
-    """Join S_r and N_r by their distinct record types, never by counts."""
-
-    assignment = assignment_record.payload
-    checkpoint = checkpoint_record.payload
-    discovery_import = discovery_import_record.payload
-    discovery = discovery_record.payload
-    if not isinstance(assignment, PlanAssignmentPayload):
-        raise ArtifactBridgeError("recorded remediation round lacks PlanAssignment")
-    if not isinstance(checkpoint, RemediationCohortCheckpointPayload):
-        raise ArtifactBridgeError(
-            "recorded remediation round lacks its pre-discovery cohort checkpoint"
-        )
-    if not isinstance(discovery, BranchDiscoveryCompletedPayload):
-        raise ArtifactBridgeError(
-            "recorded remediation round lacks BRANCH_DISCOVERY_COMPLETED"
-        )
-    if not isinstance(discovery_import, BranchDiscoveryHandoffImportPayload):
-        raise ArtifactBridgeError(
-            "recorded remediation round lacks its BRANCH_DISCOVERY handoff import"
-        )
-    if (
-        checkpoint.plan_assignment_record_id != assignment_record.record_id
-        or checkpoint.family_id != assignment.family_id
-        or checkpoint.remediation_round_number
-        != assignment.remediation_round_number
-    ):
-        raise ArtifactBridgeError(
-            "recorded remediation round has inconsistent assignment and checkpoint"
-        )
-    if (
-        discovery_import.target_execution_mode != "BRANCH_DISCOVERY"
-        or discovery_import.remediation_cohort_checkpoint_record_id
-        != checkpoint_record.record_id
-        or discovery_import.source_run_id != checkpoint.implementation_run_id
-        or discovery_import.family_id != checkpoint.family_id
-        or discovery_import_record.run_id != discovery_record.run_id
-        or discovery_import.target_run_id != discovery_record.run_id
-        or discovery.validation_attestation_record_id
-        != discovery_import.validation_attestation_record_id
-        or discovery.reviewed_head_commit
-        != discovery_import.reviewed_head_commit
-    ):
-        raise ArtifactBridgeError(
-            "BRANCH_DISCOVERY result is not bound to the recorded remediation cohort"
-        )
-    return evaluate_remediation_round(
-        remediation_round_number=assignment.remediation_round_number,
-        inherited_signatures=checkpoint.inherited_signatures,
-        unresolved_inherited_signatures=(
-            checkpoint.unresolved_inherited_signatures
-        ),
-        new_findings=tuple(
-            (item.finding_id, item.summary, item.acceptance_test)
-            for item in discovery.new_findings
-        ),
     )
 
 
@@ -2323,19 +1136,9 @@ def logical_provider_operation_id(
 __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload",
-    "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
-    "branch_discovery_handoff_export_payload",
-    "branch_discovery_handoff_import_payload",
-    "validate_plan_handoff_export_position",
-    "branch_discovery_completed_payload",
-    "branch_discovery_completed_payload_matches_result",
-    "closed_finding_occurrence_payloads",
-    "closed_finding_review_bindings",
-    "derive_family_acceptance",
-    "evaluate_recorded_remediation_round",
-    "plan_assignment_payload",
-    "no_implementation_required_payload",
-    "remediation_cohort_checkpoint_payload",
+    "plan_payload",
+    "final_review_completed_payload",
+    "final_review_completed_payload_matches_result",
     "review_payload", "review_payload_matches_complete_result",
     "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",

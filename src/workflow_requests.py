@@ -71,7 +71,7 @@ FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS = 1_000_000
 _NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER = {
     ApprovalMarker.PLAN: NativeReviewKind.PLAN,
     ApprovalMarker.SLICE: NativeReviewKind.SLICE,
-    ApprovalMarker.BRANCH_DISCOVERY: NativeReviewKind.BRANCH_DISCOVERY,
+    ApprovalMarker.FINAL_REVIEW: NativeReviewKind.FINAL_REVIEW,
 }
 FINDING_SIGNATURE_REVIEW_CRITERION = (
     "review_contract.known_open_finding_signatures binds every known open "
@@ -336,14 +336,14 @@ def _native_review_acceptance_criteria(
         else None
     )
     discovery_capacity_criterion = (
-        "This branch discovery request binds max_new_findings="
+        "This final review request binds max_new_findings="
         f"{max_new_findings}. Return "
-        "BRANCH_DISCOVERY_COMPLETED only after a complete scan and set "
+        "FINAL_REVIEW_COMPLETED only after a complete scan and set "
         "scan_complete=true. If the scan reaches that capacity, return a stop_request "
         f"with rule_id={DISCOVERY_OUTPUT_LIMIT_RULE_ID}; the partial finding set is "
         "not authoritative, must not be truncated, and must not be continued through "
         "pages, cursors, or another automatic provider call."
-        if review_kind is NativeReviewKind.BRANCH_DISCOVERY
+        if review_kind is NativeReviewKind.FINAL_REVIEW
         else None
     )
     return tuple(
@@ -463,7 +463,7 @@ def native_review_request(
         )
     )
     if (
-        review_kind is not NativeReviewKind.BRANCH_DISCOVERY
+        review_kind is not NativeReviewKind.FINAL_REVIEW
         and not context.slice_summary.strip()
     ):
         raise execution_error(

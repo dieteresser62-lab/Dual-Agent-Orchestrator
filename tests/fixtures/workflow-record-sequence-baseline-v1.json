@@ -32,7 +32,6 @@
     "workflow_transition",
     "workflow_event",
     "plan",
-    "workflow_completion",
     "side_effect",
     "side_effect",
     "binding"

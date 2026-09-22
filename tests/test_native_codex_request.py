@@ -96,8 +96,8 @@ def test_retry_feedback_is_typed_and_changes_codex_request_identity() -> None:
         prior_invocation_id="codex-attempt-1",
         rejection_code=NativeCodexErrorCode.SLICE_PLAN_INVALID,
         correction_instruction=(
-            "slice-plan-invalid: plan treatment is invalid: implementation "
-            "treatment forbids No-Code disposition fields"
+            "slice-plan-invalid: planned slice paths must be sorted, unique, "
+            "and non-empty"
         ),
     )
 
@@ -168,12 +168,12 @@ def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     bundle = build_native_codex_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "208e1506b540791404ae665e604f4f4ae9fe694ef20bc6990c8e85a96fa26585"
+        "69f618e91510ff0c9972d12f2ba2cc9efb79364cc86473276af1d120aa0a7c91"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "9d44640f791f9f828e74ebb3e6c4f7534a1fe6f66f2deaae7498bc105d7def7d"
+        "de60e1facade06c656acb5622e6d169c96a781ce35cf1902f9386b135394a340"
     )
 
 

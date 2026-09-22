@@ -1,191 +1,638 @@
 {
   "schema_version": "payload-dispatch-corpus-v1",
-  "pre_cut": "tests/fixtures/payload-dispatch-pre-b58-v1.json",
   "cases": [
     {
       "record_type": "run_identity",
       "expected_class": "RunIdentityPayload",
-      "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "first_slice_start_commit": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"}
+      "input": {
+        "task_file": "inbox/task.md",
+        "branch": "feature/payload",
+        "branch_base": "1111111111111111111111111111111111111111",
+        "first_slice_start_commit": "1111111111111111111111111111111111111111",
+        "execution_mode": "IMPLEMENT",
+        "audit_report_path": "docs/internal/audit.md"
+      }
     },
     {
       "record_type": "run_profile",
       "expected_class": "RunProfilePayload",
-      "input": {"implementer": {"model": "gpt-5.6-sol", "effort": "max"}, "reviewer": {"model": "opus", "effort": "max"}, "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reducer_version": "structured-v2-schema-2-state-v3-target-acceptance-removal-v1"}
+      "input": {
+        "implementer": {
+          "model": "gpt-5.6-sol",
+          "effort": "max"
+        },
+        "reviewer": {
+          "model": "opus",
+          "effort": "max"
+        },
+        "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reducer_version": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
+      }
     },
     {
       "record_type": "workflow_transition",
       "expected_class": "WorkflowTransitionPayload",
-      "input": {"slice_id": "1", "slice_status": "in_progress", "work_unit_id": "work-01", "step": "codex_implementation", "work_unit_status": "in_progress"}
+      "input": {
+        "slice_id": "1",
+        "slice_status": "in_progress",
+        "work_unit_id": "work-01",
+        "step": "codex_implementation",
+        "work_unit_status": "in_progress"
+      }
     },
     {
       "record_type": "workflow_event",
       "expected_class": "WorkflowEventPayload",
-      "input": {"event_kind": "review", "work_unit_id": "work-01", "slice_id": "1", "round_number": 1, "record_refs": ["ar1-1111111111111111111111111111111111111111111111111111111111111111"]}
+      "input": {
+        "event_kind": "review",
+        "work_unit_id": "work-01",
+        "slice_id": "1",
+        "round_number": 1,
+        "record_refs": [
+          "ar1-1111111111111111111111111111111111111111111111111111111111111111"
+        ]
+      }
     },
     {
       "record_type": "workflow_policy",
       "expected_class": "WorkflowPolicyPayload",
-      "input": {"work_unit_id": "work-01", "implementer_return_count": 1, "max_implementer_returns": 4}
+      "input": {
+        "work_unit_id": "work-01",
+        "implementer_return_count": 1,
+        "max_implementer_returns": 4
+      }
     },
     {
       "record_type": "slice_boundary",
       "expected_class": "SliceBoundaryPayload",
-      "input": {"slice_id": "1", "start_commit": "1111111111111111111111111111111111111111", "scope_change_groups": [["src/artifact_models.py"], ["tests/test_payload_dispatch.py"]], "start_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222"}
+      "input": {
+        "slice_id": "1",
+        "start_commit": "1111111111111111111111111111111111111111",
+        "scope_change_groups": [
+          [
+            "src/artifact_models.py"
+          ],
+          [
+            "tests/test_payload_dispatch.py"
+          ]
+        ],
+        "start_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    {
+      "record_type": "scope_extension",
+      "expected_class": "ScopeExtensionPayload",
+      "input": {
+        "work_unit_id": "work-01",
+        "slice_id": "1",
+        "source_request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "stop_rule_id": "SCOPE-EXTENSION-REQUESTED",
+        "rationale": "The current Slice requires its documentation path.",
+        "additions": [
+          {
+            "path": "docs/payload.md",
+            "category": "documentation"
+          }
+        ]
+      }
     },
     {
       "record_type": "task",
       "expected_class": "TaskPayload",
-      "input": {"target_branch": "feature/payload", "scope_paths": ["src/artifact_models.py"], "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "work_plan_path": "docs/internal/plan.md"}
+      "input": {
+        "target_branch": "feature/payload",
+        "scope_paths": [
+          "src/artifact_models.py"
+        ],
+        "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "work_plan_path": "docs/internal/plan.md"
+      }
     },
     {
       "record_type": "plan",
       "expected_class": "PlanPayload",
-      "input": {"work_plan_path": "docs/internal/plan.md", "approved_plan_commit": "2222222222222222222222222222222222222222", "slices": [{"slice_id": "1", "summary": "Bind payload dispatch.", "paths": ["src/artifact_models.py"]}]}
+      "input": {
+        "work_plan_path": "docs/internal/plan.md",
+        "approved_plan_commit": "2222222222222222222222222222222222222222",
+        "slices": [
+          {
+            "slice_id": "1",
+            "summary": "Bind payload dispatch.",
+            "paths": [
+              "src/artifact_models.py"
+            ]
+          }
+        ]
+      }
     },
     {
       "record_type": "work_unit",
       "expected_class": "WorkUnitPayload",
-      "input": {"slice_id": "1", "round_number": 1, "paths": ["src/artifact_models.py"], "open_finding_ids": ["C-01"], "finding_import_record_id": "ar1-2222222222222222222222222222222222222222222222222222222222222222"}
+      "input": {
+        "slice_id": "1",
+        "round_number": 1,
+        "paths": [
+          "src/artifact_models.py"
+        ],
+        "open_finding_ids": [
+          "C-01"
+        ]
+      }
     },
     {
       "record_type": "correction_work_unit",
       "expected_class": "CorrectionWorkUnitPayload",
-      "input": {"slice_id": "1", "round_number": 2, "paths": ["src/artifact_models.py"], "finding_ids": ["C-01"]}
+      "input": {
+        "slice_id": "1",
+        "round_number": 2,
+        "paths": [
+          "src/artifact_models.py"
+        ],
+        "finding_ids": [
+          "C-01"
+        ]
+      }
     },
     {
       "record_type": "agent_result",
       "expected_class": "AgentResultPayload",
-      "input": {"role": "codex", "work_unit_id": "work-01", "outcome": "ready", "test_files": ["tests/test_payload_dispatch.py"], "transport_schema": "native-codex-v2", "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "slice_plan": [{"slice_id": "1", "summary": "Bind payload dispatch.", "paths": ["src/artifact_models.py"]}]}
+      "input": {
+        "role": "codex",
+        "work_unit_id": "work-01",
+        "outcome": "ready",
+        "test_files": [
+          "tests/test_payload_dispatch.py"
+        ],
+        "transport_schema": "native-codex-v2",
+        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "slice_plan": [
+          {
+            "slice_id": "1",
+            "summary": "Bind payload dispatch.",
+            "paths": [
+              "src/artifact_models.py"
+            ]
+          }
+        ]
+      }
     },
     {
       "record_type": "diagnostic",
       "expected_class": "DiagnosticPayload",
-      "input": {"role": "claude", "work_unit_id": "work-01", "attempt": 1, "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "reason": "Malformed provider output."}
+      "input": {
+        "role": "claude",
+        "work_unit_id": "work-01",
+        "attempt": 1,
+        "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "reason": "Malformed provider output."
+      }
     },
     {
       "record_type": "review",
       "expected_class": "ReviewPayload",
-      "input": {"reviewer": "claude", "work_unit_id": "work-01", "verdict": "stop", "finding_ids": [], "evidence": null, "transport_schema": "native-claude-review-v2", "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "review_evidence": {"dimensions": "Dispatch and failure paths.", "largest_residual_risk": "A future type lacks a mapping.", "break_condition": "A corpus case changes class."}, "red_state_followup_slice": null, "test_files": ["tests/test_payload_dispatch.py"], "pre_mortem": "A swapped mapping silently rehydrates the wrong fact.", "stop_request": {"rule_id": "S-001", "rationale": "Stop requested.", "remediation_paths": ["src/artifact_models.py"]}}
+      "input": {
+        "reviewer": "claude",
+        "work_unit_id": "work-01",
+        "verdict": "stop",
+        "finding_ids": [],
+        "evidence": null,
+        "transport_schema": "native-claude-review-v2",
+        "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "review_evidence": {
+          "dimensions": "Dispatch and failure paths.",
+          "largest_residual_risk": "A future type lacks a mapping.",
+          "break_condition": "A corpus case changes class."
+        },
+        "red_state_followup_slice": null,
+        "test_files": [
+          "tests/test_payload_dispatch.py"
+        ],
+        "pre_mortem": "A swapped mapping silently rehydrates the wrong fact.",
+        "stop_request": {
+          "rule_id": "S-001",
+          "rationale": "Stop requested.",
+          "remediation_paths": [
+            "src/artifact_models.py"
+          ]
+        }
+      }
+    },
+    {
+      "record_type": "final_review_completed",
+      "expected_class": "FinalReviewCompletedPayload",
+      "input": {
+        "reviewer": "claude",
+        "work_unit_id": "work-final",
+        "new_findings": [],
+        "occurrences": [],
+        "review_evidence": {
+          "dimensions": "Complete branch correctness and failure paths.",
+          "largest_residual_risk": "A later commit could invalidate the review.",
+          "break_condition": "The reviewed HEAD changes after delivery."
+        },
+        "pre_mortem": "An unreviewed path could hide a regression.",
+        "validation_attestation_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444",
+        "reviewed_head_commit": "2222222222222222222222222222222222222222",
+        "transport_schema": "native-claude-review-v2",
+        "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "scan_complete": true
+      }
     },
     {
       "record_type": "review_anchor",
       "expected_class": "ReviewAnchorPayload",
-      "input": {"review_record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333", "anchors": [{"anchor_id": "payload-dispatch", "origin": "5ed020e", "input_fixture": "tests/fixtures/payload-dispatch-corpus-v1.json", "expected": "exact payload mapping", "tolerance": "none"}]}
+      "input": {
+        "review_record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333",
+        "anchors": [
+          {
+            "anchor_id": "payload-dispatch",
+            "origin": "5ed020e",
+            "input_fixture": "tests/fixtures/payload-dispatch-corpus-v1.json",
+            "expected": "exact payload mapping",
+            "tolerance": "none"
+          }
+        ]
+      }
     },
     {
       "record_type": "review_validation_binding",
       "expected_class": "ReviewValidationBindingPayload",
-      "input": {"review_record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333", "attestation_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444"}
+      "input": {
+        "review_record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333",
+        "attestation_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444"
+      }
     },
     {
       "record_type": "finding_transition",
       "expected_class": "FindingTransitionPayload",
-      "input": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null, "affected_paths": []}
-    },
-    {
-      "record_type": "finding_handoff_export",
-      "expected_class": "FindingHandoffExportPayload",
-      "input": {"source_run_id": "source-run", "source_head_record_id": "ar1-5555555555555555555555555555555555555555555555555555555555555555", "approved_plan_commit": "6666666666666666666666666666666666666666", "approval_review_record_id": "ar1-7777777777777777777777777777777777777777777777777777777777777777", "finding_transition_record_ids": ["ar1-3333333333333333333333333333333333333333333333333333333333333333"], "finding_transitions_sha256": "9999999999999999999999999999999999999999999999999999999999999999", "target_task_path": "inbox/backlog/followup.md", "target_task_sha256": "8888888888888888888888888888888888888888888888888888888888888888", "authority": "orchestrator"}
-    },
-    {
-      "record_type": "finding_handoff_import",
-      "expected_class": "FindingHandoffImportPayload",
-      "input": {"source_run_id": "source-run", "source_head_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444", "approved_plan_commit": "5555555555555555555555555555555555555555", "approval_review_record_id": "ar1-6666666666666666666666666666666666666666666666666666666666666666", "export_record_id": "ar1-7777777777777777777777777777777777777777777777777777777777777777", "target_run_id": "target-run", "target_task_sha256": "8888888888888888888888888888888888888888888888888888888888888888", "finding_transitions_sha256": "d3f5e388e35686cabbaede2f48ed413ae798f21d81299983f83f32f17898302a", "transitions": [{"record_id": "ar1-3333333333333333333333333333333333333333333333333333333333333333", "payload": {"finding_id": "C-01", "reporter": "claude", "actor": "claude", "action": "opened", "severity": "OBSERVATION", "finding_status": "open", "rationale": "Carry the finding.", "work_unit_id": "source-work-unit", "summary": "Imported observation.", "acceptance_test": "The observation remains visible.", "origin_slice_id": "1", "origin_round_number": 1, "response_decision": null, "affected_paths": []}}], "authority": "orchestrator"}
+      "input": {
+        "finding_id": "C-01",
+        "reporter": "claude",
+        "actor": "claude",
+        "action": "opened",
+        "severity": "OBSERVATION",
+        "finding_status": "open",
+        "rationale": "Carry the finding.",
+        "work_unit_id": "source-work-unit",
+        "summary": "Imported observation.",
+        "acceptance_test": "The observation remains visible.",
+        "origin_slice_id": "1",
+        "origin_round_number": 1,
+        "response_decision": null,
+        "affected_paths": []
+      }
     },
     {
       "record_type": "validation_request",
       "expected_class": "ValidationRequestPayload",
-      "input": {"commands": [{"family": "pytest", "argv": ["python3", "-m", "pytest", "tests/test_payload_dispatch.py"], "mode": "argv"}], "requested_by": "orchestrator"}
+      "input": {
+        "commands": [
+          {
+            "family": "pytest",
+            "argv": [
+              "python3",
+              "-m",
+              "pytest",
+              "tests/test_payload_dispatch.py"
+            ],
+            "mode": "argv"
+          }
+        ],
+        "requested_by": "orchestrator"
+      }
     },
     {
       "record_type": "validation_content",
       "expected_class": "ValidationContentPayload",
-      "input": {"attestation_id": "validation-01", "result_record_id": "ar1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "digest_format": "validation-matrix-v1", "output_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "summary": "Payload dispatch validation.", "outputs": [{"command": {"family": "pytest", "argv": ["pytest", "-q"], "mode": "argv"}, "digest_outcome": "pass", "exit_code": 0, "raw_stdout": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}, "raw_stderr": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}, "compact_output": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}, "output_bytes": 0}]}
+      "input": {
+        "attestation_id": "validation-01",
+        "result_record_id": "ar1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "digest_format": "validation-matrix-v1",
+        "output_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "summary": "Payload dispatch validation.",
+        "outputs": [
+          {
+            "command": {
+              "family": "pytest",
+              "argv": [
+                "pytest",
+                "-q"
+              ],
+              "mode": "argv"
+            },
+            "digest_outcome": "pass",
+            "exit_code": 0,
+            "raw_stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "raw_stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "compact_output": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "output_bytes": 0
+          }
+        ]
+      }
     },
     {
       "record_type": "validation_attestation",
       "expected_class": "ValidationAttestationPayload",
-      "input": {"results": [{"command": {"family": "pytest", "argv": ["pytest", "-q"], "mode": "argv"}, "outcome": "pass", "exit_code": 0, "output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "attested_by": "orchestrator", "output_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "content_record_id": "ar1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+      "input": {
+        "results": [
+          {
+            "command": {
+              "family": "pytest",
+              "argv": [
+                "pytest",
+                "-q"
+              ],
+              "mode": "argv"
+            },
+            "outcome": "pass",
+            "exit_code": 0,
+            "output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "attested_by": "orchestrator",
+        "output_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_record_id": "ar1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
     },
     {
       "record_type": "provider_content",
       "expected_class": "ProviderContentPayload",
-      "input": {"role": "codex", "work_unit_id": "work-01", "round_number": 1, "operation": "codex_implementation", "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "content_kind": "agent_result", "content_bytes": 3, "blob": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 3}}
+      "input": {
+        "role": "codex",
+        "work_unit_id": "work-01",
+        "round_number": 1,
+        "operation": "codex_implementation",
+        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "content_kind": "agent_result",
+        "content_bytes": 3,
+        "blob": {
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "bytes": 3
+        }
+      }
     },
     {
       "record_type": "review_packet",
       "expected_class": "ReviewPacketPayload",
-      "input": {"work_unit_id": "work-01", "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "purpose": "slice", "manifest": ["src/artifact_models.py"], "diff_coverage_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "content_bytes": 3, "blob": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "bytes": 3}}
+      "input": {
+        "work_unit_id": "work-01",
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "purpose": "slice",
+        "manifest": [
+          "src/artifact_models.py"
+        ],
+        "diff_coverage_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_bytes": 3,
+        "blob": {
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "bytes": 3
+        }
+      }
     },
     {
       "record_type": "gate",
       "expected_class": "GatePayload",
-      "input": {"gate_kind": "test-change", "decision": "approved", "authority": "user", "rationale": "Explicit approval."}
+      "input": {
+        "gate_kind": "test-change",
+        "decision": "approved",
+        "authority": "user",
+        "rationale": "Explicit approval."
+      }
     },
     {
       "record_type": "gate_transition",
       "expected_class": "GateTransitionPayload",
-      "input": {"work_unit_id": "work-01", "gate_status": "clear", "reason": "none", "detail": null, "fingerprint": null, "paths": [], "resume_step": null, "active_test_fingerprint": null, "active_test_paths": []}
+      "input": {
+        "work_unit_id": "work-01",
+        "gate_status": "clear",
+        "reason": "none",
+        "detail": null,
+        "fingerprint": null,
+        "paths": [],
+        "resume_step": null,
+        "active_test_fingerprint": null,
+        "active_test_paths": []
+      }
     },
     {
       "record_type": "gate_decision",
       "expected_class": "GateDecisionPayload",
-      "input": {"work_unit_id": "work-01", "gate_record_id": "gate-record-01", "paths": ["tests/test_payload_dispatch.py"], "resume_step": "claude_slice_review"}
+      "input": {
+        "work_unit_id": "work-01",
+        "gate_record_id": "gate-record-01",
+        "paths": [
+          "tests/test_payload_dispatch.py"
+        ],
+        "resume_step": "claude_slice_review"
+      }
     },
     {
       "record_type": "binding",
       "expected_class": "BindingPayload",
-      "input": {"binding_kind": "commit", "target": "1111111111111111111111111111111111111111", "attestation_id": "validation-01", "approval_ids": ["review-01"]}
+      "input": {
+        "binding_kind": "commit",
+        "target": "1111111111111111111111111111111111111111",
+        "attestation_id": "validation-01",
+        "approval_ids": [
+          "review-01"
+        ]
+      }
     },
     {
       "record_type": "invocation_failure",
       "expected_class": "InvocationFailurePayload",
-      "input": {"invocation_id": "invocation-01", "idempotency_key": "invoke:01", "role": "codex", "failure_kind": "process", "failure_class": "resumable_halt", "diagnostic_code": "AGENT-PROCESS", "provider_text": "[provider text redacted; sha256=5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283; utf8_bytes=8]", "provider_text_sha256": "5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283", "provider_text_bytes": 8, "technical_text": "[technical text redacted; sha256=83e3b78f14e08cc5e0bf037b1668b27bcde446cb05f04f86845deaf7812be71d; utf8_bytes=9]", "technical_text_sha256": "83e3b78f14e08cc5e0bf037b1668b27bcde446cb05f04f86845deaf7812be71d", "technical_text_bytes": 9, "received_at": "2026-09-05T10:00:00+00:00", "decision_at_utc": "2026-09-05T10:00:01+00:00", "step": "codex_implementation", "slice_id": "1", "work_unit_id": "work-01", "diagnostic_exit_code": 3, "process_exit_code": 1, "parse_path": null, "source_timezone": null, "reset_at_utc": null, "resume_at_utc": null, "safety_margin_seconds": 0, "retry_delay_seconds": 0, "auto_resume_count": 0, "automatic_resume": false, "diff_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+      "input": {
+        "invocation_id": "invocation-01",
+        "idempotency_key": "invoke:01",
+        "role": "codex",
+        "failure_kind": "process",
+        "failure_class": "resumable_halt",
+        "diagnostic_code": "AGENT-PROCESS",
+        "provider_text": "[provider text redacted; sha256=5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283; utf8_bytes=8]",
+        "provider_text_sha256": "5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283",
+        "provider_text_bytes": 8,
+        "technical_text": "[technical text redacted; sha256=83e3b78f14e08cc5e0bf037b1668b27bcde446cb05f04f86845deaf7812be71d; utf8_bytes=9]",
+        "technical_text_sha256": "83e3b78f14e08cc5e0bf037b1668b27bcde446cb05f04f86845deaf7812be71d",
+        "technical_text_bytes": 9,
+        "received_at": "2026-09-05T10:00:00+00:00",
+        "decision_at_utc": "2026-09-05T10:00:01+00:00",
+        "step": "codex_implementation",
+        "slice_id": "1",
+        "work_unit_id": "work-01",
+        "diagnostic_exit_code": 3,
+        "process_exit_code": 1,
+        "parse_path": null,
+        "source_timezone": null,
+        "reset_at_utc": null,
+        "resume_at_utc": null,
+        "safety_margin_seconds": 0,
+        "retry_delay_seconds": 0,
+        "auto_resume_count": 0,
+        "automatic_resume": false,
+        "diff_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
     },
     {
       "record_type": "quota_pause",
       "expected_class": "QuotaPausePayload",
-      "input": {"role": "claude", "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "retry_at": "2026-09-05T10:01:00+00:00"}
+      "input": {
+        "role": "claude",
+        "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "retry_at": "2026-09-05T10:01:00+00:00"
+      }
     },
     {
       "record_type": "transient_retry",
       "expected_class": "TransientRetryPayload",
-      "input": {"role": "claude", "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "retry_at": "2026-09-05T10:01:00+00:00", "attempt": 1}
+      "input": {
+        "role": "claude",
+        "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "retry_at": "2026-09-05T10:01:00+00:00",
+        "attempt": 1
+      }
     },
     {
       "record_type": "resume_check",
       "expected_class": "ResumeCheckPayload",
-      "input": {"expected_head_id": "head-01", "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "outcome": "matched"}
+      "input": {
+        "expected_head_id": "head-01",
+        "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "matched"
+      }
     },
     {
       "record_type": "workflow_completion",
       "expected_class": "WorkflowCompletionPayload",
-      "input": {"outcome": "completed", "final_binding_id": "binding-final"}
+      "input": {
+        "outcome": "completed",
+        "final_binding_id": "binding-final"
+      }
     },
     {
       "record_type": "provider_input_measurement",
       "expected_class": "ProviderInputMeasurementPayload",
-      "input": {"provider": "codex", "role": "codex", "operation": "codex_implementation", "work_unit_id": "work-01", "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "input_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "components": [{"name": "prompt", "chars": 3, "bytes": 3}], "total_chars": 3, "total_bytes": 3, "safety_limit_chars": 10, "safety_limit_bytes": 10, "technical_limit_chars": null, "technical_limit_bytes": null, "technical_limit_source": null, "effective_limit_chars": 10, "effective_limit_bytes": 10, "allowed": true, "violated_dimensions": [], "char_overage": 0, "byte_overage": 0, "largest_component": "prompt"}
+      "input": {
+        "provider": "codex",
+        "role": "codex",
+        "operation": "codex_implementation",
+        "work_unit_id": "work-01",
+        "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "input_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "policy_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "components": [
+          {
+            "name": "prompt",
+            "chars": 3,
+            "bytes": 3
+          }
+        ],
+        "total_chars": 3,
+        "total_bytes": 3,
+        "safety_limit_chars": 10,
+        "safety_limit_bytes": 10,
+        "technical_limit_chars": null,
+        "technical_limit_bytes": null,
+        "technical_limit_source": null,
+        "effective_limit_chars": 10,
+        "effective_limit_bytes": 10,
+        "allowed": true,
+        "violated_dimensions": [],
+        "char_overage": 0,
+        "byte_overage": 0,
+        "largest_component": "prompt"
+      }
     },
     {
       "record_type": "provider_attempt",
       "expected_class": "ProviderAttemptPayload",
-      "input": {"provider": "codex", "role": "codex", "operation": "codex_implementation", "work_unit_id": "work-01", "logical_operation_id": "provider-operation-01", "binding_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measurement_record_id": "measurement-01", "input_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "attempt_number": 1, "phase": "succeeded", "started_at": "2026-09-05T10:00:00+00:00", "ended_at": "2026-09-05T10:00:01+00:00", "duration_seconds": 1.0, "failure_kind": null, "usage": {"input_tokens": 3, "tool_input_tokens": null, "cache_read_input_tokens": null, "cache_creation_input_tokens": null, "thinking_tokens": null, "output_tokens": 7, "total_tokens": 10, "turns": 1, "cost_usd": 0.01}, "model": "gpt-5.6-sol", "effort": "max"}
+      "input": {
+        "provider": "codex",
+        "role": "codex",
+        "operation": "codex_implementation",
+        "work_unit_id": "work-01",
+        "logical_operation_id": "provider-operation-01",
+        "binding_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "measurement_record_id": "measurement-01",
+        "input_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "attempt_number": 1,
+        "phase": "succeeded",
+        "started_at": "2026-09-05T10:00:00+00:00",
+        "ended_at": "2026-09-05T10:00:01+00:00",
+        "duration_seconds": 1.0,
+        "failure_kind": null,
+        "usage": {
+          "input_tokens": 3,
+          "tool_input_tokens": null,
+          "cache_read_input_tokens": null,
+          "cache_creation_input_tokens": null,
+          "thinking_tokens": null,
+          "output_tokens": 7,
+          "total_tokens": 10,
+          "turns": 1,
+          "cost_usd": 0.01
+        },
+        "model": "gpt-5.6-sol",
+        "effort": "max"
+      }
     },
     {
       "record_type": "side_effect",
       "expected_class": "SideEffectPayload",
-      "input": {"effect_key": "side-effect:internal:d8a8a5dfc86f4aa5b6b353320d7ab269", "effect_class": "internal", "work_unit_id": "work-01", "operation": ["payload-dispatch"], "phase": "intent", "result": null}
+      "input": {
+        "effect_key": "side-effect:internal:d8a8a5dfc86f4aa5b6b353320d7ab269",
+        "effect_class": "internal",
+        "work_unit_id": "work-01",
+        "operation": [
+          "payload-dispatch"
+        ],
+        "phase": "intent",
+        "result": null
+      }
     },
     {
       "record_type": "final_review_preflight",
       "expected_class": "FinalReviewPreflightPayload",
-      "input": {"provider": "claude", "role": "claude", "operation": "claude_final_review", "work_unit_id": "work-01", "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "measurement_record_id": "measurement-01", "outcome": "passed", "category": null, "error_code": null, "affected_record_ids": [], "affected_paths": [], "remediation": null}
+      "input": {
+        "provider": "claude",
+        "role": "claude",
+        "operation": "claude_final_review",
+        "work_unit_id": "work-01",
+        "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "measurement_record_id": "measurement-01",
+        "outcome": "passed",
+        "category": null,
+        "error_code": null,
+        "affected_record_ids": [],
+        "affected_paths": [],
+        "remediation": null
+      }
     }
   ],
   "unknown_type": {
     "record_type": "unknown_record_type",
-    "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "first_slice_start_commit": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"},
+    "input": {
+      "task_file": "inbox/task.md",
+      "branch": "feature/payload",
+      "branch_base": "1111111111111111111111111111111111111111",
+      "first_slice_start_commit": "1111111111111111111111111111111111111111",
+      "execution_mode": "IMPLEMENT",
+      "audit_report_path": "docs/internal/audit.md"
+    },
     "expected_error": "unsupported record_type: unknown_record_type"
   }
 }

@@ -9,35 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from artifact_bridge import (
-    ArtifactBridge,
-    ArtifactBridgeError,
-    branch_discovery_handoff_import_payload,
-    finding_handoff_import_payload,
-    validate_plan_handoff_export_position,
-)
-from artifact_models import (
-    BranchDiscoveryHandoffExportPayload,
-    FamilyBindingPayload,
-    FindingHandoffExportPayload,
-    FingerprintKind,
-    PlanPayload,
-    SliceBoundaryPayload,
-    TaskPayload,
-    WorkflowCompletionPayload,
-    build_family_authorized_change_set,
-    initial_family_id,
-)
-from artifact_replay import ArtifactReplayError, effective_family_binding, replay_artifacts
-from artifact_store import ArtifactStore
-from finding_reducer import reduce_findings
+from artifact_models import PlanPayload
 from git_service import inspect_repository, require_committed_file_at_head
 from inbox_watcher import (
     attempt_sidecar_path,
     success_marker_path,
     watch_identity_path,
 )
-import native_finding_decisions
 from repo_changes import resolve_merge_base
 from state_io import StateSchemaError
 from task_contract import TaskContract, TaskMode
@@ -288,50 +266,6 @@ def _new_watch_task_preserved_paths(
     return (task_contract.work_plan_path,)
 
 
-def _entry_family_binding(
-    *,
-    run_id: str,
-    branch_base: str,
-    task_contract: TaskContract,
-    audit_report_path: str | None,
-) -> FamilyBindingPayload:
-    """Bind a no-handoff entry run to its deterministic cycle-one family."""
-
-    known_scope = tuple(
-        sorted(
-            {
-                *task_contract.scope_patterns,
-                *(
-                    path
-                    for planned_slice in task_contract.approved_slices
-                    for path in planned_slice.scope_paths
-                ),
-            }
-        )
-    )
-    authorized_change_set = build_family_authorized_change_set(
-        inherited_change_set=known_scope,
-        work_plan_paths=(
-            ()
-            if task_contract.work_plan_path is None
-            else (task_contract.work_plan_path,)
-        ),
-        commit_authorized_control_artifacts=(
-            () if audit_report_path is None else (audit_report_path,)
-        ),
-    )
-    return FamilyBindingPayload(
-        family_id=initial_family_id(run_id, branch_base),
-        family_base_commit=branch_base,
-        family_authorized_change_set=authorized_change_set,
-        predecessor_run_id=None,
-        predecessor_head_record_id=None,
-        cycle_number=1,
-        current_plan_commit=task_contract.approved_plan_commit,
-        current_implementation_commit=None,
-    )
-
-
 def _fresh_state(
     *,
     task_file: Path,
@@ -342,7 +276,6 @@ def _fresh_state(
     audit_report_path: str | None = None,
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
-    family_binding: FamilyBindingPayload | None = None,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -355,50 +288,7 @@ def _fresh_state(
         raise StateSchemaError(
             "prepared watch-task branch HEAD changed before state initialization"
         )
-    if (
-        task_contract.mode in {TaskMode.PLAN_ONLY, TaskMode.BRANCH_DISCOVERY}
-        and task_contract.finding_handoff_source_run_id is not None
-    ):
-        discovered_binding = _branch_discovery_family_binding(
-            repository_root,
-            task_file,
-            run_id,
-            task_contract,
-        )
-        if family_binding is not None and family_binding != discovered_binding:
-            raise StateSchemaError(
-                "branch discovery handoff family binding differs from requested binding"
-            )
-        family_binding = discovered_binding
-    elif (
-        task_contract.mode is TaskMode.IMPLEMENT
-        and task_contract.finding_handoff_source_run_id is not None
-    ):
-        discovered_binding = _implementation_family_binding(
-            repository_root,
-            task_contract,
-        )
-        if discovered_binding is not None:
-            if family_binding is not None and family_binding != discovered_binding:
-                raise StateSchemaError(
-                    "implementation handoff family binding differs from requested binding"
-                )
-            family_binding = discovered_binding
-    if family_binding is not None:
-        branch_base = family_binding.family_base_commit
-    elif branch_base_override is not None:
-        branch_base = branch_base_override
-    elif task_contract.approved_plan_commit is not None:
-        branch_base = identity.head
-    else:
-        branch_base = resolve_merge_base(repository_root).commit
-    if family_binding is None:
-        family_binding = _entry_family_binding(
-            run_id=run_id,
-            branch_base=branch_base,
-            task_contract=task_contract,
-            audit_report_path=audit_report_path,
-        )
+    branch_base = resolve_merge_base(repository_root, "master").commit
     state = init_workflow_state(
         run_id=run_id,
         task_file=str(task_file.resolve()),
@@ -411,8 +301,6 @@ def _fresh_state(
         task_scope_patterns=task_contract.scope_patterns,
         work_plan_path=task_contract.work_plan_path,
         approved_plan_commit=task_contract.approved_plan_commit,
-        finding_handoff_source_run_id=task_contract.finding_handoff_source_run_id,
-        finding_handoff_export_record_id=task_contract.finding_handoff_export_record_id,
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
@@ -423,7 +311,6 @@ def _fresh_state(
             codex_profile=codex_profile,
             claude_profile=claude_profile,
         ),
-        family_binding=family_binding,
     )
     if task_contract.approved_plan_commit is not None:
         assert task_contract.work_plan_path is not None
@@ -443,318 +330,6 @@ def _fresh_state(
         )
     return state
 
-
-def _branch_discovery_family_binding(
-    repository_root: Path,
-    task_file: Path,
-    target_run_id: str,
-    task_contract: TaskContract,
-) -> FamilyBindingPayload:
-    """Resolve E9's target family facts before writing the local RunProfile."""
-
-    source_run_id = task_contract.finding_handoff_source_run_id
-    export_record_id = task_contract.finding_handoff_export_record_id
-    assert source_run_id is not None and export_record_id is not None
-    try:
-        source_replay = replay_artifacts(
-            ArtifactStore(repository_root, source_run_id).load_chain(),
-            source_run_id,
-        )
-        export_record = next(
-            record
-            for record in source_replay.records
-            if record.record_id == export_record_id
-        )
-        export = export_record.payload
-        if not isinstance(export, BranchDiscoveryHandoffExportPayload):
-            raise ArtifactBridgeError(
-                "family handoff does not reference a branch discovery export"
-            )
-        source_binding = effective_family_binding(source_replay)
-        try:
-            target_path = task_file.resolve().relative_to(
-                repository_root.resolve()
-            ).as_posix()
-        except ValueError as exc:
-            raise ArtifactBridgeError(
-                "branch discovery target task is outside the repository"
-            ) from exc
-        if export.target_execution_mode == TaskMode.PLAN_ONLY.value:
-            validate_plan_handoff_export_position(source_replay, export_record)
-        else:
-            completion = next(
-                (
-                    record
-                    for record in source_replay.records
-                    if record.record_id == export.source_completion_record_id
-                ),
-                None,
-            )
-            if (
-                completion is None
-                or not isinstance(completion.payload, WorkflowCompletionPayload)
-                or completion.payload.outcome != "completed"
-            ):
-                raise ArtifactBridgeError(
-                    "BRANCH_DISCOVERY family handoff requires a completed source run"
-                )
-        if export.target_execution_mode != task_contract.mode.value:
-            raise ArtifactBridgeError(
-                "branch discovery export target mode differs from the target task"
-            )
-        if export.target_run_identity != target_run_id:
-            raise ArtifactBridgeError(
-                "branch discovery target_run_identity differs from target run"
-            )
-        if export.target_task_path != target_path:
-            raise ArtifactBridgeError(
-                "branch discovery target_task_path differs from queue position"
-            )
-        if export.target_task_sha256 != task_contract.digest:
-            raise ArtifactBridgeError(
-                "branch discovery target_task_sha256 differs from loaded task bytes"
-            )
-        source_task = next(
-            (
-                record.payload
-                for record in source_replay.records
-                if isinstance(record.payload, TaskPayload)
-            ),
-            None,
-        )
-        source_boundaries = tuple(
-            record.payload
-            for record in source_replay.records
-            if isinstance(record.payload, SliceBoundaryPayload)
-        )
-        source_plan = next(
-            (
-                record.payload
-                for record in reversed(source_replay.records)
-                if isinstance(record.payload, PlanPayload)
-            ),
-            None,
-        )
-        authorized_change_set = build_family_authorized_change_set(
-            inherited_change_set=(
-                source_binding.family_authorized_change_set
-                if source_binding is not None
-                else (() if source_task is None else source_task.scope_paths)
-            ),
-            slice_boundaries=source_boundaries,
-            work_plan_paths=(
-                *(
-                    (source_task.work_plan_path,)
-                    if source_task is not None
-                    and source_task.work_plan_path is not None
-                    else ()
-                ),
-                *(
-                    (task_contract.work_plan_path,)
-                    if export.target_execution_mode == TaskMode.PLAN_ONLY.value
-                    and task_contract.work_plan_path is not None
-                    else ()
-                ),
-            ),
-        )
-        if not authorized_change_set:
-            raise ArtifactBridgeError(
-                "branch discovery source has no authorized family change set"
-            )
-        return FamilyBindingPayload(
-            family_id=export.family_id,
-            family_base_commit=export.family_base_commit,
-            family_authorized_change_set=authorized_change_set,
-            predecessor_run_id=export.predecessor_run_id,
-            predecessor_head_record_id=export.predecessor_head_record_id,
-            cycle_number=export.cycle_number,
-            current_plan_commit=(
-                source_binding.current_plan_commit
-                if source_binding is not None
-                else (
-                    None
-                    if source_plan is None
-                    else source_plan.approved_plan_commit
-                )
-            ),
-            current_implementation_commit=export.reviewed_head_commit,
-        )
-    except (
-        ArtifactBridgeError,
-        ArtifactReplayError,
-        OSError,
-        StopIteration,
-        ValueError,
-    ) as exc:
-        raise StateSchemaError(
-            f"BRANCH-DISCOVERY-HANDOFF-INVALID: {exc}"
-        ) from None
-
-
-def _implementation_family_binding(
-    repository_root: Path,
-    task_contract: TaskContract,
-) -> FamilyBindingPayload | None:
-    """Carry a remediation PLAN_ONLY family into its IMPLEMENT child run."""
-
-    source_run_id = task_contract.finding_handoff_source_run_id
-    export_record_id = task_contract.finding_handoff_export_record_id
-    assert source_run_id is not None and export_record_id is not None
-    try:
-        source_replay = replay_artifacts(
-            ArtifactStore(repository_root, source_run_id).load_chain(),
-            source_run_id,
-        )
-        export_record = next(
-            record
-            for record in source_replay.records
-            if record.record_id == export_record_id
-        )
-        if not isinstance(export_record.payload, FindingHandoffExportPayload):
-            return None
-        source_binding = effective_family_binding(source_replay)
-        if source_binding is None:
-            return None
-        if task_contract.approved_plan_commit is None:
-            raise ArtifactBridgeError(
-                "family implementation handoff requires its approved plan commit"
-            )
-        authorized_change_set = tuple(
-            sorted(
-                {
-                    *source_binding.family_authorized_change_set,
-                    *(path for item in task_contract.approved_slices for path in item.scope_paths),
-                    *((task_contract.work_plan_path,) if task_contract.work_plan_path is not None else ()),
-                }
-            )
-        )
-        return FamilyBindingPayload(
-            family_id=source_binding.family_id,
-            family_base_commit=source_binding.family_base_commit,
-            family_authorized_change_set=authorized_change_set,
-            predecessor_run_id=source_run_id,
-            predecessor_head_record_id=export_record.record_id,
-            cycle_number=source_binding.cycle_number,
-            current_plan_commit=task_contract.approved_plan_commit,
-            current_implementation_commit=None,
-        )
-    except (
-        ArtifactBridgeError,
-        ArtifactReplayError,
-        OSError,
-        StopIteration,
-        ValueError,
-    ) as exc:
-        raise StateSchemaError(f"IMPLEMENT-FAMILY-HANDOFF-INVALID: {exc}") from exc
-
-
-def _initialize_finding_handoff(
-    repository_root: Path,
-    state: WorkflowState,
-    task_contract: TaskContract,
-    task_bytes: bytes,
-    *,
-    _history_payload: HistoryPayloadBuilder,
-) -> WorkflowState:
-    """Import foreign finding authority before the first ordinary checkpoint."""
-    source_run_id = task_contract.finding_handoff_source_run_id
-    export_record_id = task_contract.finding_handoff_export_record_id
-    if source_run_id is None or export_record_id is None:
-        return state
-    try:
-        source_chain = ArtifactStore(repository_root, source_run_id).load_chain()
-        source_replay = replay_artifacts(source_chain, source_run_id)
-        export_record = next(
-            (record for record in source_replay.records if record.record_id == export_record_id),
-            None,
-        )
-        if export_record is None:
-            raise ArtifactBridgeError("referenced finding export record is missing")
-        export_payload = export_record.payload
-        if isinstance(export_payload, BranchDiscoveryHandoffExportPayload):
-            if task_contract.mode not in {
-                TaskMode.PLAN_ONLY,
-                TaskMode.BRANCH_DISCOVERY,
-            }:
-                raise ArtifactBridgeError(
-                    "branch discovery export requires its bound family target task"
-                )
-            if export_payload.target_execution_mode != task_contract.mode.value:
-                raise ArtifactBridgeError(
-                    "branch discovery export target mode differs from the target task"
-                )
-            if state.family_binding is None:
-                raise ArtifactBridgeError(
-                    "branch discovery import requires the target family binding"
-                )
-            try:
-                target_task_path = Path(state.task_file).resolve().relative_to(
-                    repository_root.resolve()
-                ).as_posix()
-            except ValueError as exc:
-                raise ArtifactBridgeError(
-                    "branch discovery target task is outside the repository"
-                ) from exc
-            payload = branch_discovery_handoff_import_payload(
-                source_replay,
-                export_record,
-                target_run_id=state.run_id,
-                target_task_path=target_task_path,
-                target_task_bytes=task_bytes,
-                target_family_binding=state.family_binding,
-            )
-            logical_id = "branch-discovery-handoff-import"
-            idempotency_key = (
-                f"branch-discovery-handoff-import:{source_run_id}:{export_record_id}"
-            )
-        else:
-            if (
-                not isinstance(export_payload, FindingHandoffExportPayload)
-                or export_payload.approved_plan_commit
-                != task_contract.approved_plan_commit
-            ):
-                raise ArtifactBridgeError(
-                    "finding export plan commit differs from the task"
-                )
-            payload = finding_handoff_import_payload(
-                source_replay,
-                export_record,
-                target_run_id=state.run_id,
-                target_task_bytes=task_bytes,
-            )
-            logical_id = "finding-handoff-import"
-            idempotency_key = (
-                f"finding-handoff-import:{source_run_id}:{export_record_id}"
-            )
-        bridge = ArtifactBridge(ArtifactStore(repository_root, state.run_id))
-        imported = bridge.append(
-            payload,
-            logical_id=logical_id,
-            idempotency_key=idempotency_key,
-            fingerprint_sha256=task_contract.digest,
-            fingerprint_kind=FingerprintKind.CONTRACT,
-        )
-        local_replay = replay_artifacts(
-            bridge.store.current_chain(),
-            state.run_id,
-            allow_finding_import_bootstrap=True,
-        )
-        reduction = reduce_findings(local_replay)
-        findings = reduction.ledger.findings
-    except (ArtifactBridgeError, ArtifactReplayError, ValueError) as exc:
-        raise StateSchemaError(f"FINDING-HANDOFF-INVALID: {exc}") from exc
-    open_ids = reduction.open_set.finding_ids
-    current = replace(state.current_work_unit, open_findings=open_ids)
-    units = tuple(
-        current if unit.work_unit_id == current.work_unit_id else unit
-        for unit in state.work_units
-    )
-    history = WorkflowHistory(state.current_work_unit_id, findings=findings)
-    return replace(
-        state,
-        work_units=units,
-        runtime_history=_history_payload(None, history),
-    )
 
 
 def _apply_resumed_agent_profiles(

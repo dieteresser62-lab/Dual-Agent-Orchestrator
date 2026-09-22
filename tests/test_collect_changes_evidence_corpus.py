@@ -28,6 +28,7 @@ SOURCE_COMMIT = "2b963abd454de0142779d59d656f86684d6e11de"
 SOURCE_BLOB = "ca1510789851a576c9e3bb1cbef804cea211ecc1"
 PRE_B63_COMMIT = "689a0368a327dbf2c0ec076e248bfff047310341"
 RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 START_COMMIT = "a" * 40
 PLAN_PATH = "docs/internal/work-plan.md"
 AUDIT_PATH = "docs/internal/final-review.md"
@@ -397,10 +398,10 @@ def _static_document(source: str | None = None) -> dict[str, object]:
 
 def _state(module: ModuleType, *, final_review: bool) -> SimpleNamespace:
     return SimpleNamespace(
-        execution_mode=module.TaskMode.BRANCH_DISCOVERY.value if final_review else module.TaskMode.PLAN_ONLY.value,
+        execution_mode=module.TaskMode.IMPLEMENT.value if final_review else module.TaskMode.PLAN_ONLY.value,
         current_work_unit=SimpleNamespace(
             kind=(
-                module.WorkUnitKind.BRANCH_DISCOVERY
+                module.WorkUnitKind.FINAL_REVIEW
                 if final_review
                 else module.WorkUnitKind.PLAN
             )
@@ -830,7 +831,7 @@ def test_b63_anchor_binds_the_b62_source_corpus_and_guards() -> None:
         assert _git("hash-object", str(ROOT / path)) != anchor[blob_key], path
 
 
-def test_pre_b62_source_anchor_is_preserved_but_cutover_dispatch_has_changed() -> None:
+def test_pre_b62_source_anchor_is_preserved_and_logical_collection_is_stable() -> None:
     anchored_blob = subprocess.check_output(
         ("git", "rev-parse", f"{SOURCE_COMMIT}:src/orchestrator.py"),
         cwd=ROOT,
@@ -840,11 +841,11 @@ def test_pre_b62_source_anchor_is_preserved_but_cutover_dispatch_has_changed() -
     logical = _logical_collect_changes(
         ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
     )
-    assert ast.dump(logical, include_attributes=False) != ast.dump(
+    assert ast.dump(logical, include_attributes=False) == ast.dump(
         _pre_b62_method(), include_attributes=False
     )
-    assert "BRANCH_DISCOVERY" in ast.unparse(logical)
-    assert "FINAL_REVIEW" not in ast.unparse(logical)
+    assert "BRANCH_DISCOVERY" not in ast.unparse(logical)
+    assert "FINAL_REVIEW" in ast.unparse(logical)
 
 
 def test_b63_helper_call_graph_catchers_and_mitigations_are_exact() -> None:
@@ -901,6 +902,8 @@ def test_b63_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None
         current = _git("hash-object", str(ROOT / path))
         if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
             assert current != blob, path
+        elif path == RECORD_SEQUENCE_BASELINE.relative_to(ROOT).as_posix():
+            assert current == TARGET_RECORD_SEQUENCE_BLOB, path
         else:
             assert current == blob, path
         assert _git("rev-parse", f"{PRE_B63_COMMIT}:{path}") == blob, path

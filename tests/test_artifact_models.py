@@ -17,11 +17,6 @@ from artifact_models import (
     DiagnosticPayload,
     FindingSeverity,
     FindingTransitionPayload,
-    FamilyBindingPayload,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
-    ImportedFindingTransition,
-    finding_transition_sequence_sha256,
     Fingerprint,
     FingerprintKind,
     GateDecisionPayload,
@@ -50,7 +45,6 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
-    build_family_authorized_change_set,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -98,11 +92,9 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-target-acceptance-removal-v1",
-        "family_binding": None,
+        "reducer_version": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1",
     }
     assert not {"codex", "claude"} & set(asdict(profile))
-    assert "family_binding" not in _record(profile).to_dict()["payload"]
 
 
 def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
@@ -258,66 +250,6 @@ def test_finding_opening_roundtrips_record_bound_affected_paths() -> None:
 
     with pytest.raises(ArtifactValidationError, match="canonical repository-relative"):
         replace(payload, affected_paths=("../outside.py",))
-
-
-def test_family_binding_roundtrips_and_missing_required_field_is_named() -> None:
-    binding = FamilyBindingPayload(
-        family_id="family-1",
-        family_base_commit="1" * 40,
-        family_authorized_change_set=(
-            "docs/internal/plan.md",
-            "src/a.py",
-        ),
-        predecessor_run_id="run-previous",
-        predecessor_head_record_id="ar1-" + "2" * 64,
-        cycle_number=2,
-        current_plan_commit="3" * 40,
-        current_implementation_commit="4" * 40,
-    )
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
-        family_binding=binding,
-    )
-    record = _record(profile)
-
-    assert ArtifactRecord.from_dict(record.to_dict()) == record
-    assert canonical_json(
-        record.to_dict()["payload"]["family_binding"]
-    ) == canonical_json(asdict(binding))
-
-    missing = record.to_dict()
-    del missing["payload"]["family_binding"]["family_base_commit"]
-    with pytest.raises(ArtifactValidationError, match="family_base_commit"):
-        ArtifactRecord.from_dict(missing)
-
-
-def test_family_authorized_change_set_includes_boundaries_plans_and_controls() -> None:
-    boundaries = (
-        SliceBoundaryPayload(
-            "1", "1" * 40, (("src/a.py",),), "a" * 64
-        ),
-        SliceBoundaryPayload(
-            "2",
-            "2" * 40,
-            (("src/b.py", "tests/test_b.py"),),
-            "b" * 64,
-        ),
-    )
-
-    assert build_family_authorized_change_set(
-        inherited_change_set=("src/inherited.py",),
-        slice_boundaries=boundaries,
-        work_plan_paths=("docs/internal/plan.md",),
-        commit_authorized_control_artifacts=("docs/internal/audit.md",),
-    ) == (
-        "docs/internal/audit.md",
-        "docs/internal/plan.md",
-        "src/a.py",
-        "src/b.py",
-        "src/inherited.py",
-        "tests/test_b.py",
-    )
 
 
 def test_plan_record_roundtrip_preserves_ordered_acceptance_criteria() -> None:
@@ -1178,46 +1110,8 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
     assert ArtifactRecord.from_dict(historical).payload.work_unit_id is None
 
 
-def test_finding_handoff_payloads_roundtrip_ordered_source_lifecycle() -> None:
-    opened = ImportedFindingTransition(
-        "ar1-" + "1" * 64,
-        FindingTransitionPayload(
-            "C-02", Role.CLAUDE, Role.CLAUDE, "opened",
-            FindingSeverity.OBSERVATION, "open", "Observe it.", "plan-review",
-            "Observe it.", "The follow-up preserves it.", "plan", 1,
-        ),
-    )
-    response = ImportedFindingTransition(
-        "ar1-" + "2" * 64,
-        FindingTransitionPayload(
-            "C-02", Role.CLAUDE, Role.CODEX, "responded",
-            FindingSeverity.OBSERVATION, "open", "Addressed.", "plan-review",
-            response_decision="accepted",
-        ),
-    )
-    transitions = (opened, response)
-    digest = finding_transition_sequence_sha256(transitions)
-    export = _record(FindingHandoffExportPayload(
-        "source-run", "ar1-" + "3" * 64, "4" * 40,
-        "ar1-" + "5" * 64, tuple(item.record_id for item in transitions),
-        digest, "inbox/implement.md", "6" * 64, Role.ORCHESTRATOR,
-    ))
-    imported = _record(FindingHandoffImportPayload(
-        "source-run", "ar1-" + "3" * 64, "4" * 40,
-        "ar1-" + "5" * 64, "ar1-" + "7" * 64, "run-01", "6" * 64,
-        digest, transitions, Role.ORCHESTRATOR,
-    ))
-
-    assert ArtifactRecord.from_dict(export.to_dict()) == export
-    assert ArtifactRecord.from_dict(imported.to_dict()) == imported
-    with pytest.raises(ArtifactValidationError, match="digest does not match"):
-        replace(imported.payload, transitions=tuple(reversed(transitions)))
-
-
-def test_work_unit_finding_entry_binding_is_sorted_and_roundtrips() -> None:
-    payload = WorkUnitPayload(
-        "1", 1, ("src/a.py",), ("C-62", "C-101"), "ar1-" + "8" * 64
-    )
+def test_work_unit_open_findings_are_sorted_and_roundtrip() -> None:
+    payload = WorkUnitPayload("1", 1, ("src/a.py",), ("C-62", "C-101"))
     assert ArtifactRecord.from_dict(_record(payload).to_dict()).payload == payload
     with pytest.raises(ArtifactValidationError, match="must be sorted"):
         replace(payload, open_finding_ids=("C-101", "C-62"))

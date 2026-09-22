@@ -16,7 +16,6 @@ from artifact_bridge import (
     plan_payload,
     provider_input_measurement_payload,
 )
-from finding_order import sorted_finding_ids
 from artifact_resume import (
     ArtifactResumeError,
     require_gate_prefix,
@@ -26,9 +25,7 @@ from artifact_resume import (
 )
 from artifact_models import (
     ArtifactRecord,
-    BranchDiscoveryHandoffImportPayload,
     FingerprintKind,
-    FindingHandoffImportPayload,
     GateTransitionPayload,
     ProviderInputMeasurementPayload,
     RecordType,
@@ -126,7 +123,6 @@ def _append_baseline_identity_expectations(
             binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
         ),
         orchestrator_code_version=code_version or orchestrator_code_version(),
-        family_binding=state.family_binding,
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -297,36 +293,11 @@ def _append_baseline_contract_expectations(
             "task-contract",
         )
     if current.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
-        finding_import = next(
-            (
-                record
-                for record in records[:first_domain]
-                if isinstance(record.payload, FindingHandoffImportPayload)
-            ),
-            None,
-        )
-        first_implementation_unit_id = next(
-            item.work_unit_id
-            for item in state.work_units
-            if item.kind is not WorkUnitKind.PLAN
-        )
-        bound_import = (
-            finding_import
-            if current.work_unit_id == first_implementation_unit_id
-            else None
-        )
         work_unit_payload = WorkUnitPayload(
             slice_id=str(current.slice_id),
             round_number=current.round_number,
             paths=state.current_slice.scope_paths,
-            open_finding_ids=(
-                sorted_finding_ids(current.open_findings)
-                if bound_import is not None
-                else ()
-            ),
-            finding_import_record_id=(
-                bound_import.record_id if bound_import is not None else None
-            ),
+            open_finding_ids=(),
         )
         logical_id = f"work-unit-{current.work_unit_id}"
         expect(
@@ -364,17 +335,7 @@ def matches_baseline_initialization_prefix(
         for unit in state.work_units
     ):
         return False
-    first_domain = next(
-        (
-            index
-            for index, record in enumerate(records)
-            if not isinstance(
-                record.payload,
-                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
-            )
-        ),
-        len(records),
-    )
+    first_domain = 0
     prefix = records[first_domain:]
     if not prefix:
         return False
@@ -497,13 +458,11 @@ class WorkflowBaseline:
         self,
         existing_chain: tuple[ArtifactRecord, ...],
         state: WorkflowState,
-        import_only_prefix: bool,
     ) -> ArtifactReplayResult:
         return replay_artifacts(
             existing_chain,
             state.run_id,
             allow_incomplete_review_tail=True,
-            allow_finding_import_bootstrap=import_only_prefix,
         )
 
     def _require_existing_baseline_prefix(
@@ -552,7 +511,6 @@ class WorkflowBaseline:
                     binding.claude_profile.model, binding.claude_profile.effort
                 ),
                 orchestrator_code_version=_resume_code_version(existing_replay),
-                family_binding=state.family_binding,
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",
@@ -644,36 +602,11 @@ class WorkflowBaseline:
             chain = bridge.store.current_chain()
             logical_id = f"work-unit-{unit.work_unit_id}"
             work_unit_paths = state.current_slice.scope_paths
-            finding_import = next(
-                (
-                    record
-                    for record in chain
-                    if isinstance(record.payload, FindingHandoffImportPayload)
-                ),
-                None,
-            )
-            first_implementation_unit_id = next(
-                item.work_unit_id
-                for item in state.work_units
-                if item.kind is not WorkUnitKind.PLAN
-            )
-            bound_import = (
-                finding_import
-                if unit.work_unit_id == first_implementation_unit_id
-                else None
-            )
             work_unit_payload = WorkUnitPayload(
                 slice_id=str(unit.slice_id),
                 round_number=unit.round_number,
                 paths=work_unit_paths,
-                open_finding_ids=(
-                    sorted_finding_ids(unit.open_findings)
-                    if bound_import is not None
-                    else ()
-                ),
-                finding_import_record_id=(
-                    bound_import.record_id if bound_import is not None else None
-                ),
+                open_finding_ids=(),
             )
             base_idempotency_key = (
                 f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
@@ -714,19 +647,9 @@ class WorkflowBaseline:
         existing_chain = bridge.store.current_chain()
         existing_replay = None
         if existing_chain:
-            import_only_prefix = all(
-                isinstance(
-                    record.payload,
-                    (
-                        FindingHandoffImportPayload,
-                        BranchDiscoveryHandoffImportPayload,
-                    ),
-                )
-                for record in existing_chain
-            )
             try:
                 existing_replay = self._replay_existing_baseline_chain(
-                    existing_chain, state, import_only_prefix
+                    existing_chain, state
                 )
             except ArtifactReplayError:
                 if not matches_baseline_initialization_prefix(
@@ -746,7 +669,6 @@ class WorkflowBaseline:
                     bridge.store.current_chain(),
                     state.run_id,
                     allow_incomplete_review_tail=True,
-                    allow_finding_import_bootstrap=import_only_prefix,
                 )
             if existing_replay is not None:
                 require_workflow_event_prefix(existing_replay)
@@ -759,7 +681,7 @@ class WorkflowBaseline:
                 # here would turn the recoverable suffix into a chain-middle
                 # authority gap.
                 return
-            if existing_replay is not None and not import_only_prefix:
+            if existing_replay is not None:
                 try:
                     self._require_existing_baseline_prefix(existing_replay)
                 except ArtifactResumeError:

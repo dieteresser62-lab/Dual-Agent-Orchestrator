@@ -507,7 +507,7 @@
           "ordinal": 1,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[7].handlers[0].body[1]",
+          "statement_path": "body[6].handlers[0].body[1]",
           "after_condition_count": 1,
           "enclosing_condition_ordinals": []
         },
@@ -515,7 +515,7 @@
           "ordinal": 2,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[11].body[0]",
+          "statement_path": "body[10].body[0]",
           "after_condition_count": 3,
           "enclosing_condition_ordinals": [
             3
@@ -525,7 +525,7 @@
           "ordinal": 3,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[13].handlers[0].body[1]",
+          "statement_path": "body[12].handlers[0].body[1]",
           "after_condition_count": 3,
           "enclosing_condition_ordinals": []
         },
@@ -533,7 +533,7 @@
           "ordinal": 4,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[14]",
+          "statement_path": "body[13]",
           "after_condition_count": 3,
           "enclosing_condition_ordinals": []
         },
@@ -541,7 +541,7 @@
           "ordinal": 5,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[23].body[6]",
+          "statement_path": "body[22].body[6]",
           "after_condition_count": 10,
           "enclosing_condition_ordinals": [
             9

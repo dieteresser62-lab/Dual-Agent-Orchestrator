@@ -281,7 +281,7 @@ def _attach_record_events(
         is_final_review = (
             prior_steps
             and prior_steps[-1]
-            == WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value
+            == WorkflowStep.CLAUDE_FINAL_REVIEW.value
         )
         allowed_origins = allowed_review_finding_origins(
             finding_ledger,
@@ -403,7 +403,7 @@ def _recover_final_review_attestation(
     a changed branch still selects and persists a new validation normally.
     """
     if (
-        state.current_work_unit.kind is not WorkUnitKind.BRANCH_DISCOVERY
+        state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
     ):
         return current_history
     carried = current_history.attestations[-1:]
@@ -471,7 +471,7 @@ def _overall_audit_entries(
                     }
                 )
             )
-        elif unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
+        elif unit.kind is WorkUnitKind.FINAL_REVIEW:
             label = "Arbeitseinheit %02d – Branch-Entdeckung" % unit.work_unit_id
             summary = "Branchweiter Entdeckungsreview durch Claude"
             scope = tuple(

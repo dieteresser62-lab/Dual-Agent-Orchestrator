@@ -24,14 +24,14 @@ from agent_runtime import (
 from artifact_bridge import (
     ArtifactBridge,
     agent_result_payload,
-    branch_discovery_completed_payload_matches_result,
+    final_review_completed_payload_matches_result,
     logical_provider_operation_id,
     review_payload_matches_result,
 )
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
-    BranchDiscoveryCompletedPayload,
+    FinalReviewCompletedPayload,
     ProviderAttemptPayload,
     ProviderContentPayload,
     ProviderInputMeasurementPayload,
@@ -116,7 +116,7 @@ from workflow_state import (
 logger = logging.getLogger(__name__)
 
 
-ReviewerDecisionPayload = ReviewPayload | BranchDiscoveryCompletedPayload
+ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
 _IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
 
 
@@ -1650,12 +1650,12 @@ class WorkflowRecovery:
         approval_marker = (
             ApprovalMarker.PLAN
             if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-            else ApprovalMarker.BRANCH_DISCOVERY
-            if state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
+            else ApprovalMarker.FINAL_REVIEW
+            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
             else ApprovalMarker.SLICE
         )
         payload = record.payload
-        assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
+        assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
         finding_ledger = (
             history.findings
             if request_replay is None
@@ -1682,7 +1682,7 @@ class WorkflowRecovery:
             approval_marker=approval_marker,
             slice_id=(
                 "DISCOVERY"
-                if approval_marker is ApprovalMarker.BRANCH_DISCOVERY
+                if approval_marker is ApprovalMarker.FINAL_REVIEW
                 else f"{unit.slice_id:02d}"
             ),
             round_number=round_number,
@@ -1745,7 +1745,7 @@ class WorkflowRecovery:
             not in {
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,
             }
             or self._dependencies.active_state().run_id != state.run_id
             or self._dependencies.active_state().current_work_unit_id != unit.work_unit_id
@@ -1777,7 +1777,7 @@ class WorkflowRecovery:
                 for item in chain
                 if isinstance(
                     item.payload,
-                    (ReviewPayload, BranchDiscoveryCompletedPayload),
+                    (ReviewPayload, FinalReviewCompletedPayload),
                 )
                 and item.logical_id == logical_id
             )
@@ -1792,7 +1792,7 @@ class WorkflowRecovery:
             record is None
             or not isinstance(
                 record.payload,
-                (ReviewPayload, BranchDiscoveryCompletedPayload),
+                (ReviewPayload, FinalReviewCompletedPayload),
             )
             or record.payload.reviewer is not Role.CLAUDE
             or record.payload.work_unit_id != str(unit.work_unit_id)
@@ -1809,7 +1809,7 @@ class WorkflowRecovery:
             )
         round_number = int(suffix)
         payload = record.payload
-        assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
+        assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
         if payload.request_id is None or payload.response_sha256 is None:
             raise WorkflowExecutionError(
                 "pre-policy native reviewer recovery lacks its request binding"
@@ -1880,7 +1880,7 @@ class WorkflowRecovery:
         payload_matches = (
             review_payload_matches_result(payload, result)
             if isinstance(payload, ReviewPayload)
-            else branch_discovery_completed_payload_matches_result(
+            else final_review_completed_payload_matches_result(
                 payload,
                 result,
                 native_context.previous_findings,
@@ -1953,7 +1953,7 @@ class WorkflowRecovery:
             for item in chain
             if isinstance(
                 item.payload,
-                (ReviewPayload, BranchDiscoveryCompletedPayload),
+                (ReviewPayload, FinalReviewCompletedPayload),
             )
             and item.logical_id == logical_id
         )
@@ -1964,7 +1964,7 @@ class WorkflowRecovery:
         record = candidates[0] if candidates else None
         payload = None if record is None else record.payload
         if record is not None:
-            assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
+            assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
             if (
                 payload.reviewer is not Role.CLAUDE
                 or payload.work_unit_id != str(invocation.work_unit_id)
@@ -2040,7 +2040,7 @@ class WorkflowRecovery:
             if payload is None
             else review_payload_matches_result(payload, result)
             if isinstance(payload, ReviewPayload)
-            else branch_discovery_completed_payload_matches_result(
+            else final_review_completed_payload_matches_result(
                 payload,
                 result,
                 native_context.previous_findings,

@@ -272,7 +272,7 @@ class WorkflowAudit:
                 project_overall_audit(document, entries)
                 if structured_replay is not None:
                     project_structured_work_plan_audit(document, structured_replay)
-        if unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
+        if unit.kind is WorkUnitKind.FINAL_REVIEW:
             return
         # The Slice audit is part of the authorized Slice commit.  Commit and
         # subsequent workflow-binding records are projected into the overall

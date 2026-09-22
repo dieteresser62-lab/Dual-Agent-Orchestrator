@@ -6,140 +6,171 @@
   "entry_decisions": [
     {
       "ordinal": 1,
-      "pre_cut_line": 139,
       "test_expression": "task_contract.informal_intake",
-      "read_names": ["task_contract"]
+      "read_names": [
+        "task_contract"
+      ]
     },
     {
       "ordinal": 2,
-      "pre_cut_line": 176,
       "test_expression": "new_watch_task",
-      "read_names": ["new_watch_task"]
+      "read_names": [
+        "new_watch_task"
+      ]
     },
     {
       "ordinal": 3,
-      "pre_cut_line": 177,
       "test_expression": "managed_audit_path is not None",
-      "read_names": ["managed_audit_path"]
+      "read_names": [
+        "managed_audit_path"
+      ]
     },
     {
       "ordinal": 4,
-      "pre_cut_line": 179,
       "test_expression": "not configured_outbox.is_absolute()",
-      "read_names": ["configured_outbox"]
+      "read_names": [
+        "configured_outbox"
+      ]
     },
     {
       "ordinal": 5,
-      "pre_cut_line": 206,
       "test_expression": "state_file.exists() and replacement_requested",
-      "read_names": ["replacement_requested", "state_file"]
+      "read_names": [
+        "replacement_requested",
+        "state_file"
+      ]
     },
     {
       "ordinal": 6,
-      "pre_cut_line": 213,
       "test_expression": "isinstance(existing, WorkflowState)",
-      "read_names": ["WorkflowState", "existing", "isinstance"]
+      "read_names": [
+        "WorkflowState",
+        "existing",
+        "isinstance"
+      ]
     },
     {
       "ordinal": 7,
-      "pre_cut_line": 215,
       "test_expression": "(state_file.exists() or bool(args.resume)) and (not new_watch_task)",
-      "read_names": ["args", "bool", "new_watch_task", "state_file"]
+      "read_names": [
+        "args",
+        "bool",
+        "new_watch_task",
+        "state_file"
+      ]
     },
     {
       "ordinal": 8,
-      "pre_cut_line": 226,
       "test_expression": "args.force_overwrite_state",
-      "read_names": ["args"]
+      "read_names": [
+        "args"
+      ]
     },
     {
       "ordinal": 9,
-      "pre_cut_line": 231,
       "test_expression": "effective_resume",
-      "read_names": ["effective_resume"]
+      "read_names": [
+        "effective_resume"
+      ]
     },
     {
       "ordinal": 10,
-      "pre_cut_line": 232,
       "test_expression": "isinstance(loaded, CompletedV2State)",
-      "read_names": ["CompletedV2State", "isinstance", "loaded"]
+      "read_names": [
+        "CompletedV2State",
+        "isinstance",
+        "loaded"
+      ]
     },
     {
       "ordinal": 11,
-      "pre_cut_line": 236,
       "test_expression": "loaded is None",
-      "read_names": ["loaded"]
+      "read_names": [
+        "loaded"
+      ]
     },
     {
       "ordinal": 12,
-      "pre_cut_line": 239,
       "test_expression": "state.task_file != str(task_file)",
-      "read_names": ["state", "str", "task_file"]
+      "read_names": [
+        "state",
+        "str",
+        "task_file"
+      ]
     },
     {
       "ordinal": 13,
-      "pre_cut_line": 241,
       "test_expression": "state.task_digest is None",
-      "read_names": ["state"]
+      "read_names": [
+        "state"
+      ]
     },
     {
       "ordinal": 14,
-      "pre_cut_line": 246,
       "test_expression": "state.task_digest != task_contract.digest",
-      "read_names": ["state", "task_contract"]
+      "read_names": [
+        "state",
+        "task_contract"
+      ]
     },
     {
       "ordinal": 15,
-      "pre_cut_line": 250,
-      "test_expression": "state.execution_mode != task_contract.mode.value or state.task_scope_patterns != task_contract.scope_patterns or state.work_plan_path != task_contract.work_plan_path or (state.target_branch != task_contract.target_branch) or (state.finding_handoff_source_run_id != task_contract.finding_handoff_source_run_id) or (state.finding_handoff_export_record_id != task_contract.finding_handoff_export_record_id)",
-      "read_names": ["state", "task_contract"]
+      "test_expression": "state.execution_mode != task_contract.mode.value or state.task_scope_patterns != task_contract.scope_patterns or state.work_plan_path != task_contract.work_plan_path or (state.target_branch != task_contract.target_branch)",
+      "read_names": [
+        "state",
+        "task_contract"
+      ]
     },
     {
       "ordinal": 16,
-      "pre_cut_line": 261,
       "test_expression": "getattr(args, 'watch_run_id', None) and state.run_id != args.watch_run_id",
-      "read_names": ["args", "getattr", "state"]
+      "read_names": [
+        "args",
+        "getattr",
+        "state"
+      ]
     },
     {
       "ordinal": 17,
-      "pre_cut_line": 263,
       "test_expression": "state.audit_report_path is None and managed_audit_path is not None",
-      "read_names": ["managed_audit_path", "state"]
+      "read_names": [
+        "managed_audit_path",
+        "state"
+      ]
     },
     {
       "ordinal": 18,
-      "pre_cut_line": 267,
       "test_expression": "loaded is not None and (not args.force_overwrite_state) and (not force_new)",
-      "read_names": ["args", "force_new", "loaded"]
+      "read_names": [
+        "args",
+        "force_new",
+        "loaded"
+      ]
     }
   ],
   "catchers": [
     {
       "ordinal": 1,
-      "pre_cut_line": 209,
       "exception": "StateSchemaError",
       "protected_body_sha256": "ab8ac8d6908dd055cb0cd95d8aa9fb8a6a858e9686a0443c1b6024c8e6ae8e27",
       "handler_body_sha256": "a202dd6fb397e9f62aa643a9f469c541c0850733be21bb6e50f91d15e2c82cf4"
     },
     {
       "ordinal": 2,
-      "pre_cut_line": 225,
       "exception": "ActiveV2StateError",
       "protected_body_sha256": "582c7c6b6af99a84158f73de9d719d9ed45f367685d7bb75aa38f503e1732e8e",
       "handler_body_sha256": "c687ee3dd23e746430254ab5319b7b66e5ced3d1ae866f87f00baed654740ff8"
     },
     {
       "ordinal": 3,
-      "pre_cut_line": 447,
       "exception": "WorkflowStateValidationError",
       "protected_body_sha256": "a7d83560eac3621fde54580efbeaf37b1c1e7b4397aa02ac96f8242e1e863a68",
       "handler_body_sha256": "44970b6624d2bdd2b930819f4c3153b1301a13c56497f0ff2b5b766f53d3d91f"
     },
     {
       "ordinal": 4,
-      "pre_cut_line": 478,
       "exception": "(ArtifactBridgeError, ArtifactReplayError, PlanHandoffError)",
-      "protected_body_sha256": "eb9e2de0719b73a2c3aed89279a3d0aca660d0ab2b6589a0f5e755937ba9cc85",
+      "protected_body_sha256": "a24dce26477c4f2cb02030ad9bb57528337cfe572b84c143c9e7811c57256fc4",
       "handler_body_sha256": "20f2196f0a77dab613d859490f603fd3204929a95f4bb5aff107103e2a13d118"
     }
   ],

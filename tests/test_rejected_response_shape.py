@@ -49,13 +49,6 @@ def _rejected_review_document() -> dict[str, object]:
                 "rationale": "PROVIDER RECLASSIFICATION MUST NOT SURVIVE",
             }
         ],
-        "plan_treatment_decisions": [
-            {
-                "signature": "c" * 64,
-                "decision": "accepted",
-                "rationale": "PROVIDER PLAN RATIONALE MUST NOT SURVIVE",
-            }
-        ],
         "anchors": [],
         "review_evidence": {
             "dimensions": "PROVIDER DIMENSIONS MUST NOT SURVIVE",

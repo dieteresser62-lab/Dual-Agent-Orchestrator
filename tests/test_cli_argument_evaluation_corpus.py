@@ -35,6 +35,8 @@ B65_HELPERS = (
 )
 B65_CAUGHT_CALL = "resolve_agent_settings"
 B65_BOUND_CALLS = (B65_CAUGHT_CALL, *B65_HELPERS)
+TARGET_RECORD_SEQUENCE_PATH = "tests/fixtures/workflow-record-sequence-baseline-v1.json"
+TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 B81_AGENTS_FILE_EXPLICIT_VALUE = (
     "any((token == '--agents-file' or token.startswith('--agents-file=') "
     "for token in raw_argv))"
@@ -846,6 +848,8 @@ def test_b64_historical_anchor_and_protected_baselines_are_byte_identical() -> N
         current = _git("hash-object", str(ROOT / path))
         if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
             assert current != blob, path
+        elif path == TARGET_RECORD_SEQUENCE_PATH:
+            assert current == TARGET_RECORD_SEQUENCE_BLOB, path
         else:
             assert current == blob, path
 
@@ -863,6 +867,7 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
         if path not in {
             "tests/test_cli_argument_evaluation_corpus.py",
             "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
+            TARGET_RECORD_SEQUENCE_PATH,
         }:
             assert _git("hash-object", str(ROOT / path)) == blob, path
             assert _git("diff", "--", path) == "", path
@@ -878,8 +883,8 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     sequence_path = str(anchor["workflow_record_sequence_path"])
     sequence_blob = anchor["workflow_record_sequence_blob"]
     assert _git("rev-parse", f"{commit}:{sequence_path}") == sequence_blob
-    assert _git("hash-object", str(ROOT / sequence_path)) == sequence_blob
-    assert _git("diff", "--", sequence_path) == ""
+    assert _git("hash-object", str(ROOT / sequence_path)) == TARGET_RECORD_SEQUENCE_BLOB
+    assert _git("diff", "--", sequence_path) != ""
 
     pre_cut_tree = ast.parse(_git("show", f"{commit}:{source_path}"))
     active_source = SOURCE_PATH.read_text(encoding="utf-8")

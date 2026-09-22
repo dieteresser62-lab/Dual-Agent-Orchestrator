@@ -35,7 +35,7 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "b762dde73296b94a61f028328d09409a07922f2e"
 SOURCE_BLOB = "6eef6884f82c4ae0b184f40bc4222384562d0351"
 PRE_B52_COMMIT = "b0134099e27fe05a1d6036b2b1578de51ad7ce91"
-RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 
 
 DISPATCH_HELPERS = {
@@ -1265,7 +1265,7 @@ def test_dispatch_entrypoints_and_new_helpers_stay_below_b32_threshold() -> None
     assert "src/workflow.py::WorkflowEngine._run_review" not in size_baseline["functions"]
 
 
-def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+def test_target_record_sequence_baseline_is_exact() -> None:
     actual_blob = subprocess.run(
         ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
         cwd=ROOT,

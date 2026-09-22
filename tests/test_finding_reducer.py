@@ -12,10 +12,8 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     Fingerprint,
     FingerprintKind,
-    FindingHandoffImportPayload,
     FindingSeverity,
     FindingTransitionPayload,
-    ImportedFindingTransition,
     PlanPayload,
     ReviewPayload,
     Role,
@@ -24,7 +22,6 @@ from artifact_models import (
     RunProfilePayload,
     SliceSpec,
     WorkUnitPayload,
-    finding_transition_sequence_sha256,
 )
 from artifact_replay import (
     ArtifactReplayError,
@@ -39,9 +36,6 @@ CORPUS_PATH = ROOT / "tests" / "fixtures" / "finding-reducer-corpus.json"
 RUN_ID = "finding-reducer-corpus"
 FINGERPRINT = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 HISTORICAL_COMMITS = {
-    "745a2fa",
-    "924a554",
-    "700b8c7",
     "f09ed8b",
     "47b4ddc",
     "24abbfd",
@@ -72,7 +66,7 @@ def _corpus() -> tuple[dict[str, Any], ...]:
     assert document["schema"] == "finding-reducer-regression-corpus-v1"
     cases = tuple(document["cases"])
     assert {case["commit"] for case in cases} == HISTORICAL_COMMITS
-    assert len(cases) == 12
+    assert len(cases) == 9
     return cases
 
 
@@ -215,7 +209,6 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
         ),
     )
     classes: dict[str, FindingSeverity] = {}
-    imported: ArtifactRecord | None = None
     for index, event in enumerate(case["events"], start=1):
         operation = event["op"]
         finding_id = event.get("finding_id")
@@ -230,36 +223,7 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                     (SliceSpec("1", "Implement the reviewed plan.", ("src/finding.py",)),),
                 ),
             )
-        elif operation == "import_open":
-            opening = _opening_payload(event)
-            source = ImportedFindingTransition(
-                "ar1-" + f"{index:064x}", opening
-            )
-            transitions = (source,)
-            payload = FindingHandoffImportPayload(
-                source_run_id="source-run",
-                source_head_record_id="ar1-" + "b" * 64,
-                approved_plan_commit="c" * 40,
-                approval_review_record_id="ar1-" + "d" * 64,
-                export_record_id="ar1-" + "e" * 64,
-                target_run_id=RUN_ID,
-                target_task_sha256="f" * 64,
-                finding_transitions_sha256=(
-                    finding_transition_sequence_sha256(transitions)
-                ),
-                transitions=transitions,
-                authority=Role.ORCHESTRATOR,
-            )
-            imported = _append(
-                records, revisions, "finding-handoff-import", payload
-            )
-            classes[finding_id] = opening.severity
         elif operation == "work":
-            import_id = (
-                imported.record_id
-                if event.get("bind_import") and imported is not None
-                else None
-            )
             _append(
                 records,
                 revisions,
@@ -269,7 +233,6 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                     event.get("round", 1),
                     ("src/finding.py",),
                     tuple(event.get("open_ids", ())),
-                    import_id,
                 ),
             )
         elif operation == "correction":
@@ -367,11 +330,6 @@ def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
         ] == expected["lineages"]
     assert list(reduction.open_set.finding_ids) == expected["open"]
     assert expected["correction"] == {}
-    assert (
-        []
-        if reduction.import_snapshot is None
-        else list(reduction.import_snapshot.open_finding_ids)
-    ) == expected["import_open"]
     request = case["request"]
     projection = reduction.request_subset(
         work_unit_id=request.get("work_unit"),
@@ -400,18 +358,17 @@ def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
 
 
 def test_named_projections_are_independent_and_immutable() -> None:
-    case = next(item for item in _corpus() if item["commit"] == "924a554")
+    case = next(item for item in _corpus() if item["commit"] == "d24511e")
     reduction = reduce_findings(replay_artifacts(_build_case(case), RUN_ID))
     assert reduction.ledger.transitions
-    assert reduction.open_set.finding_ids == ("C-02",)
-    assert reduction.import_snapshot is not None
+    assert reduction.open_set.finding_ids == ("C-08",)
     assert reduction.request_subset(work_unit_id="2").finding_ids == (
-        "C-01",
-        "C-02",
+        "C-07",
+        "C-08",
     )
     assert tuple(
         item.payload.action for item in reduction.status_transitions.transitions
-    ) == ("opened", "status_changed", "opened")
+    ) == ("opened", "opened", "status_changed")
     with pytest.raises((AttributeError, TypeError)):
         reduction.open_set.findings += ()  # type: ignore[misc]
 
@@ -613,12 +570,10 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "apply_finding_response", "apply_reviewer_finding_update"
     }
     expected_consumers = {
-        "artifact_bridge.py",
         "artifact_projection.py",
         "artifact_replay.py",
         "audit_trail.py",
         "contracts.py",
-        "finding_planning.py",
         "git_service.py",
         "native_codex_contract.py",
         "native_codex_request.py",
@@ -631,7 +586,6 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "workflow_persistence.py",
         "workflow_recovery.py",
         "workflow_requests.py",
-        "workflow_run_setup.py",
     }
     actual_consumers: set[str] = set()
     for path in (ROOT / "src").rglob("*.py"):
@@ -687,9 +641,7 @@ def test_corpus_operations_are_generic_not_commit_conditionals() -> None:
     assert operations == {
         "close",
         "correction",
-        "import_open",
         "open",
-        "plan",
         "respond",
         "review",
         "work",

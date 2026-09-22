@@ -35,17 +35,10 @@ def validate_change_boundary(
 ) -> tuple[str, ...]:
     """Return out-of-scope paths without introducing a stateful boundary."""
     expected_start = state.current_slice.start_commit or state.branch_base
-    if kind is WorkUnitKind.BRANCH_DISCOVERY:
+    if kind is WorkUnitKind.FINAL_REVIEW:
         if changes.start_commit != state.branch_review_base_commit:
             raise execution_error(
                 "branch final review must use the persisted branch base"
-            )
-        family_binding = state.active_family_binding
-        if family_binding is not None:
-            return tuple(
-                path
-                for path in changes.paths
-                if path not in family_binding.family_authorized_change_set
             )
         return ()
     if changes.start_commit != expected_start:

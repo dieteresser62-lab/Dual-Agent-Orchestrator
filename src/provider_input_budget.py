@@ -22,10 +22,9 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
     ),
     "claude": frozenset(
         {
-            "claude_branch_discovery",
+            "claude_final_review",
             "claude_plan_review",
             "claude_slice_review",
-            "claude_final_review",
         }
     ),
 }
@@ -183,7 +182,7 @@ class ProviderInputBudgetPolicy:
 
 
 def default_provider_input_budget_policy() -> ProviderInputBudgetPolicy:
-    # Branch discovery reads the full branch from its read-only workspace; it
+    # Final review reads the full branch from its read-only workspace; it
     # does not serialize that branch into the provider request.  Its metered
     # input has the same components as a Slice review, so the same generous
     # safety ceiling remains appropriate for both operations.

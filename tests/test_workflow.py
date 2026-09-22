@@ -10,12 +10,10 @@ from types import SimpleNamespace
 import pytest
 import plan_handoff
 import workflow_requests
-import native_finding_decisions
 
 from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent, managed_slice_document_path
 from artifact_models import (
-    FamilyBindingPayload,
     InvocationFailurePayload,
     ScopeExtensionPayload,
     provider_text_evidence,
@@ -1078,8 +1076,7 @@ def _denied_review_result(
     )
 
 
-def test_cutover_always_uses_the_slice_convergence_measure() -> None:
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
+def test_later_review_uses_the_slice_convergence_measure() -> None:
     existing = FindingRecord(
         "C-01",
         FindingClass.BLOCKER,
@@ -1122,14 +1119,7 @@ def test_cutover_always_uses_the_slice_convergence_measure() -> None:
     assert next_state.current_step is WorkflowStep.COMPLETED
 
 
-def test_cutover_convergence_stall_ends_gate_free_without_slice_commit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
+def test_convergence_stall_ends_gate_free_without_slice_commit() -> None:
     finding = FindingRecord(
         "C-01",
         FindingClass.BLOCKER,
@@ -1774,57 +1764,6 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     assert payload.provider_text.startswith("[provider text redacted; sha256=")
     assert payload.technical_text.startswith("[technical text redacted; sha256=")
     assert "diagnostic_code=NATIVE-IMPLEMENTER-FORM" in caplog.text
-    assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
-
-
-def test_plan_treatment_halt_reason_reaches_failure_record_and_log(caplog) -> None:
-    now = datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc)
-    detail = (
-        "plan treatment is invalid: implementation treatment forbids No-Code "
-        "disposition fields"
-    )
-    contract_error = NativeCodexContractError(
-        NativeCodexErrorCode.SLICE_PLAN_INVALID,
-        detail,
-    )
-    diagnostic = (
-        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
-    )
-    assert contract_error.orchestrator_diagnostic is diagnostic
-    output_error = AgentOutputError(
-        "native Codex result violates its bound contract",
-        technical_text=str(contract_error),
-        orchestrator_diagnostic=contract_error.orchestrator_diagnostic,
-    )
-    output_error.__cause__ = contract_error
-    error = classify_agent_failure(
-        AgentRole.CODEX.value,
-        output_error,
-        invocation_id="canary-20260919-plan-treatment",
-        received_at=now,
-    )
-    error.__cause__ = output_error
-    driver = FakeDriver(
-        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
-        codex_outputs=[],
-        reviewer_outputs=[],
-    )
-    caplog.set_level("INFO", logger="workflow")
-
-    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
-        _slice_state(),
-        WorkflowHistory(2),
-        _context(),
-        AgentRole.CODEX,
-        error,
-    )
-
-    payload = driver.failure_payloads[0]
-    assert payload.technical_text.startswith("[technical text redacted; sha256=")
-    assert payload.orchestrator_diagnostic == diagnostic.text
-    assert "implementation treatment forbids No-Code disposition fields" in (
-        payload.orchestrator_diagnostic
-    )
     assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
 
 
@@ -3690,14 +3629,14 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
             EvidenceKind.FULL_SLICE,
         ),
         (
-            WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
-            ApprovalMarker.BRANCH_DISCOVERY,
-            "branch_discovery",
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            ApprovalMarker.FINAL_REVIEW,
+            "final_review",
             EvidenceKind.FULL_BRANCH,
         ),
     ),
 )
-def test_native_request_builder_covers_plan_slice_and_branch_discovery_reviews(
+def test_native_request_builder_covers_plan_slice_and_final_reviews(
     step: WorkflowStep,
     marker: ApprovalMarker,
     expected_kind: str,
@@ -3717,7 +3656,7 @@ def test_native_request_builder_covers_plan_slice_and_branch_discovery_reviews(
         f"native-{expected_kind}-review",
         AgentRole.CLAUDE,
         marker,
-        "DISCOVERY" if marker is ApprovalMarker.BRANCH_DISCOVERY else "01",
+        "FINAL" if marker is ApprovalMarker.FINAL_REVIEW else "01",
         1,
         changes.fingerprint,
         _attestation(changes),
@@ -4747,9 +4686,7 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
     caplog,
 ) -> None:
     now = [datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)]
-    diagnostic = (
-        OrchestratorDiagnostic.IMPLEMENTER_IMPLEMENTATION_TREATMENT_FORBIDS_NO_CODE_FIELDS
-    )
+    diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
     changes = _changes("1", "docs/internal/plan.md")
     state = init_workflow_state(
         run_id="run-codex-form-retry",
@@ -4773,8 +4710,7 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
                 "codex-slice-plan-invalid-1",
                 received_at=now[0],
                 detail=(
-                    "plan treatment is invalid: implementation treatment "
-                    "forbids No-Code disposition fields"
+                    "planned slice paths must be sorted, unique, and non-empty"
                 ),
                 diagnostic=diagnostic,
             ),
@@ -4812,7 +4748,7 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
         "rejection_code": "slice-plan-invalid",
         "correction_instruction": diagnostic.text,
     }
-    assert "implementation treatment forbids No-Code disposition fields" in (
+    assert "planned slice paths must be sorted, unique, and non-empty" in (
         second.document["retry_feedback"]["correction_instruction"]
     )
     assert first.bound_context.request_id != second.bound_context.request_id
@@ -5088,7 +5024,6 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
         ],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {},
         "pre_mortem": "provider pre-mortem must not survive",
@@ -5316,7 +5251,6 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
                     }
                 ],
                 "reclassifications": [],
-                "plan_treatment_decisions": [],
                 "anchors": [],
                 "review_evidence": {
                     "dimensions": "provider dimensions must not survive",
@@ -5746,16 +5680,6 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
         first_slice_start_commit=START_COMMIT,
         slice_count=2,
         timestamp="2026-08-12T10:00:00+00:00",
-        family_binding=FamilyBindingPayload(
-            "family-auto-remediation",
-            START_COMMIT,
-            tuple(sorted((*prior_scope, *current_scope))),
-            None,
-            None,
-            1,
-            None,
-            None,
-        ),
     ).bind_slice_plan(
         (
             PlannedSlice(1, "source adapter", prior_scope),
@@ -5995,16 +5919,6 @@ def _scope_extension_state(
         sorted(("src/future.py", path) if ownership == "later" else ("src/future.py",))
     )
     work_plan_path = "docs/internal/plan.md"
-    authorized = tuple(
-        sorted(
-            {
-                *current_scope,
-                *future_scope,
-                work_plan_path,
-                *((audit_report_path,) if audit_report_path else ()),
-            }
-        )
-    )
     state = init_workflow_state(
         run_id=f"scope-{ownership}-{path.replace('/', '-')}",
         task_file="/repo/task.md",
@@ -6018,16 +5932,6 @@ def _scope_extension_state(
         work_plan_path=work_plan_path,
         audit_report_path=audit_report_path,
         target_branch="feature/workflow",
-        family_binding=FamilyBindingPayload(
-            "family-scope",
-            START_COMMIT,
-            authorized,
-            None,
-            None,
-            1,
-            None,
-            None,
-        ),
     ).bind_slice_plan(
         (
             PlannedSlice(1, "current implementation", current_scope),
@@ -6066,31 +5970,14 @@ def _scope_extension_state(
         ("protected", "docs/internal/plan.md", "later", True, False),
     ),
 )
-@pytest.mark.parametrize(
-    "unowned_path_pre_authorized",
-    (True, False),
-    ids=("pre-authorized", "new-to-family"),
-)
 def test_scope_extension_policy_matrix(
     path_kind: str,
     path: str,
     ownership: str,
     exists_at_start: bool,
     approved: bool,
-    unowned_path_pre_authorized: bool,
 ) -> None:
     state = _scope_extension_state(path, ownership)
-    if unowned_path_pre_authorized and ownership == "unowned":
-        assert state.family_binding is not None
-        state = replace(
-            state,
-            family_binding=replace(
-                state.family_binding,
-                family_authorized_change_set=tuple(
-                    sorted({*state.family_binding.family_authorized_change_set, path})
-                ),
-            ),
-        )
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[],
@@ -6124,7 +6011,6 @@ def test_scope_extension_policy_matrix(
     assert (decision is not None) is approved, (
         path_kind,
         ownership,
-        unowned_path_pre_authorized,
     )
     if decision is not None and ownership != "current":
         assert path in decision.state.current_slice.scope_paths
@@ -6195,11 +6081,10 @@ def test_scope_extension_rejects_generated_path_without_a_policy_row() -> None:
     assert decision is None
 
 
-def test_scope_extension_adds_newly_approved_path_to_family_authority() -> None:
+def test_scope_extension_adds_newly_approved_path_to_current_slice() -> None:
     path = "src/extra.py"
     state = _scope_extension_state(path, "unowned")
-    assert state.family_binding is not None
-    assert path not in state.family_binding.family_authorized_change_set
+    assert path not in state.current_slice.scope_paths
 
     decision = WorkflowEngine(
         FakeDriver(
@@ -6220,8 +6105,6 @@ def test_scope_extension_adds_newly_approved_path_to_family_authority() -> None:
 
     assert decision is not None
     assert decision.additions[0].path == path
-    assert decision.state.family_binding is not None
-    assert path in decision.state.family_binding.family_authorized_change_set
     assert path in decision.state.current_slice.scope_paths
 
 
@@ -6247,7 +6130,7 @@ def test_scope_extension_rejects_missing_slice_start_commit() -> None:
     assert decision is None
 
 
-def test_scope_extension_grows_family_and_second_access_needs_no_new_request() -> None:
+def test_scope_extension_persists_and_second_access_needs_no_new_request() -> None:
     path = "src/extra.py"
     rationale = _scope_extension_rationale(path)
 
@@ -6279,8 +6162,7 @@ def test_scope_extension_grows_family_and_second_access_needs_no_new_request() -
             return _test_native_codex_output(invocation, _codex_ready())
 
     state = _scope_extension_state(path, "unowned")
-    assert state.active_family_binding is not None
-    assert path not in state.active_family_binding.family_authorized_change_set
+    assert path not in state.current_slice.scope_paths
     driver = ScopeExtensionDriver(
         snapshots=[],
         codex_outputs=[],
@@ -6298,8 +6180,6 @@ def test_scope_extension_grows_family_and_second_access_needs_no_new_request() -
     )
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    assert advanced.active_family_binding is not None
-    assert path in advanced.active_family_binding.family_authorized_change_set
     assert path in advanced.current_slice.scope_paths
     assert len(driver.codex_calls) == 2
     persisted = tuple(
@@ -6470,23 +6350,8 @@ def test_operator_prerequisite_stop_cannot_bypass_content_validation() -> None:
         )
 
 
-def test_discovery_output_limit_is_a_dedicated_branch_discovery_stop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-    state = init_workflow_state(
-        run_id="run-discovery-output-limit",
-        task_file="/repo/discovery.md",
-        branch="feature/workflow",
-        branch_base=START_COMMIT,
-        first_slice_start_commit=START_COMMIT,
-        slice_count=1,
-        execution_mode="BRANCH_DISCOVERY",
-    )
+def test_discovery_output_limit_is_a_dedicated_final_review_stop() -> None:
+    state = _completed_single_slice_state().start_final_review_work_unit()
     stop_request = StopRequest(
         DISCOVERY_OUTPUT_LIMIT_RULE_ID,
         "the request-bound discovery capacity was reached",
@@ -6499,9 +6364,6 @@ def test_discovery_output_limit_is_a_dedicated_branch_discovery_stop(
     assert halted.current_work_unit.gate.detail == (
         "DISCOVERY_OUTPUT_LIMIT | the request-bound discovery capacity was reached"
     )
-
-    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is True
-
 
 def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)

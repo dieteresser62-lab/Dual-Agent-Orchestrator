@@ -24,7 +24,8 @@ RECORD_SEQUENCE_BASELINE = (
 PAYLOAD_SOURCE = "src/artifact_models.py"
 PAYLOAD_FUNCTION = "_payload_from_dict"
 PAYLOAD_MAPPING = "_PAYLOAD_READERS"
-RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+HISTORICAL_RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -37,18 +38,6 @@ PRE_CUT_DOCUMENT = _load_json(PRE_CUT)
 CORPUS_DOCUMENT = _load_json(CORPUS)
 CORPUS_CASES = tuple(CORPUS_DOCUMENT["cases"])
 CORPUS_TYPES = tuple(case["record_type"] for case in CORPUS_CASES)
-ADDITIVE_PAYLOAD_TYPES = {
-    "branch_discovery_completed": "BranchDiscoveryCompletedPayload",
-    "branch_discovery_handoff_export": "BranchDiscoveryHandoffExportPayload",
-    "branch_discovery_handoff_import": "BranchDiscoveryHandoffImportPayload",
-    "plan_assignment": "PlanAssignmentPayload",
-    "remediation_cohort_checkpoint": "RemediationCohortCheckpointPayload",
-    "no_implementation_required": "NoImplementationRequiredPayload",
-    "closed_finding_occurrence": "ClosedFindingOccurrencePayload",
-    "scope_extension": "ScopeExtensionPayload",
-}
-
-
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args],
@@ -175,28 +164,7 @@ def _normalized_payload_fields(payload: object) -> object:
             raw.pop("predecessor_finding_ref", None)
             raw.pop("evidence_anchor_sha256", None)
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
-    if isinstance(payload, artifact_models.FindingHandoffImportPayload):
-        raw = asdict(payload)
-        for transition in raw["transitions"]:
-            if transition["source_run_id"] is None:
-                transition.pop("source_run_id")
-                transition.pop("source_record_id")
-            transition_payload = transition["payload"]
-            if transition_payload["closure_kind"] is None:
-                transition_payload.pop("closure_kind")
-                transition_payload.pop("rejection_reason")
-                transition_payload.pop("closure_evidence")
-            elif transition_payload["closure_kind"] == "fixed":
-                transition_payload.pop("rejection_reason")
-                transition_payload.pop("closure_evidence")
-            if transition_payload["predecessor_finding_ref"] is None:
-                transition_payload.pop("predecessor_finding_ref")
-                transition_payload.pop("evidence_anchor_sha256")
-        return artifact_models._json_value(raw)  # type: ignore[arg-type]
     raw = asdict(payload)  # type: ignore[arg-type]
-    if isinstance(payload, artifact_models.RunProfilePayload):
-        if payload.family_binding is None:
-            raw.pop("family_binding", None)
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if payload.orchestrator_diagnostic is None:
             raw.pop("orchestrator_diagnostic", None)
@@ -211,11 +179,6 @@ def _normalized_payload_fields(payload: object) -> object:
     if isinstance(payload, artifact_models.GateDecisionPayload):
         if payload.invocation_id is None:
             raw.pop("invocation_id", None)
-    if (
-        isinstance(payload, artifact_models.ReviewPayload)
-        and not payload.plan_treatment_decisions
-    ):
-        raw.pop("plan_treatment_decisions", None)
     return artifact_models._json_value(raw)  # type: ignore[arg-type]
 
 
@@ -284,61 +247,16 @@ def _assert_unknown_rejected(readers: Mapping[RecordType, object]) -> None:
     raise AssertionError(f"unknown record type was accepted: {unknown['record_type']}")
 
 
-def test_b58_pre_cut_anchor_binds_source_and_complete_dispatch() -> None:
-    assert PRE_CUT_DOCUMENT == {
-        "schema_version": "payload-dispatch-pre-b58-v1",
-        "source_commit": "5ed020e1e64263a54c54ea93ad30642cda769a82",
-        "source_blob": "21b4abf0fac890ad05a532a3573567efc65e1d67",
-        "dispatch_branch_count": 36,
-        "constructed_payload_class_count": 41,
-        "unknown_type_error": "unsupported record_type: unknown_record_type",
-    }
-    assert (
-        _git("rev-parse", f"{PRE_CUT_DOCUMENT['source_commit']}:{PAYLOAD_SOURCE}")
-        == PRE_CUT_DOCUMENT["source_blob"]
-    )
-    function = _function(ast.parse(_pre_cut_source()), PAYLOAD_FUNCTION)
-    payload_classes = {
-        node.func.id
-        for node in ast.walk(function)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.endswith("Payload")
-    }
-    assert len(_pre_cut_dispatch()) == PRE_CUT_DOCUMENT["dispatch_branch_count"]
-    assert (
-        len(payload_classes)
-        == PRE_CUT_DOCUMENT["constructed_payload_class_count"]
-    )
-
-
-def test_corpus_and_mapping_cover_every_pre_cut_branch_exactly() -> None:
-    pre_cut = _pre_cut_dispatch()
+def test_corpus_and_mapping_cover_every_current_record_type_exactly() -> None:
     current = _current_mapping()
     assert CORPUS_DOCUMENT["schema_version"] == "payload-dispatch-corpus-v1"
-    assert CORPUS_DOCUMENT["pre_cut"] == PRE_CUT.relative_to(ROOT).as_posix()
     assert (
         CORPUS_DOCUMENT["unknown_type"]["expected_error"]
         == PRE_CUT_DOCUMENT["unknown_type_error"]
     )
     assert len(CORPUS_TYPES) == len(set(CORPUS_TYPES))
-    assert tuple(pre_cut) == CORPUS_TYPES
-    assert {case["record_type"]: case["expected_class"] for case in CORPUS_CASES} == pre_cut
-    assert {
-        name: payload_class
-        for name, payload_class in current.items()
-        if name not in ADDITIVE_PAYLOAD_TYPES
-    } == pre_cut
-    assert {
-        name: payload_class
-        for name, payload_class in current.items()
-        if name in ADDITIVE_PAYLOAD_TYPES
-    } == ADDITIVE_PAYLOAD_TYPES
-    assert tuple(
-        item.value
-        for item in artifact_models._PAYLOAD_READERS
-        if item.value not in ADDITIVE_PAYLOAD_TYPES
-    ) == CORPUS_TYPES
+    assert {case["record_type"]: case["expected_class"] for case in CORPUS_CASES} == current
+    assert tuple(item.value for item in artifact_models._PAYLOAD_READERS) == CORPUS_TYPES
     assert set(artifact_models._PAYLOAD_READERS) == set(RecordType)
 
 
@@ -421,7 +339,7 @@ def test_b58_removes_payload_entry_from_b32_ratchet() -> None:
     assert sum(isinstance(node, ast.Raise) for node in ast.walk(function)) == 1
 
 
-def test_b58_keeps_b25_record_sequence_baseline_byte_identical() -> None:
+def test_b58_anchor_and_target_record_sequences_are_exact() -> None:
     assert _git("hash-object", str(RECORD_SEQUENCE_BASELINE)) == RECORD_SEQUENCE_BLOB
     assert (
         _git(
@@ -429,5 +347,5 @@ def test_b58_keeps_b25_record_sequence_baseline_byte_identical() -> None:
             f"{PRE_CUT_DOCUMENT['source_commit']}:"
             "tests/fixtures/workflow-record-sequence-baseline-v1.json",
         )
-        == RECORD_SEQUENCE_BLOB
+        == HISTORICAL_RECORD_SEQUENCE_BLOB
     )

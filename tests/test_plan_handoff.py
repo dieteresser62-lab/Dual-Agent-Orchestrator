@@ -7,13 +7,11 @@ import pytest
 from contracts import PlannedSlice
 from plan_handoff import (
     PlanHandoffError,
-    branch_discovery_task_path,
     extract_implementation_slices,
     extract_slice_requirements,
-    remediation_plan_paths,
-    render_branch_discovery_task,
+    followup_task_path,
+    render_followup_task,
     render_implementation_task,
-    render_remediation_plan_task,
 )
 
 
@@ -175,54 +173,33 @@ def test_free_text_acceptance_paragraph_remains_invalid() -> None:
         extract_implementation_slices(markdown, plan_stem="work-plan")
 
 
-def test_render_implementation_task_binds_finding_export_without_finding_prose() -> None:
+def test_render_implementation_task_binds_only_the_approved_plan() -> None:
     rendered = render_implementation_task(
         work_plan_path="docs/internal/plan.md",
-        target_branch="feature/finding-handoff",
+        target_branch="feature/implementation",
         approved_plan_commit="a" * 40,
         slices=(PlannedSlice(1, "implement", ("src/core.py",)),),
-        finding_handoff=("source-run", "ar1-" + "b" * 64),
     )
 
-    assert "FINDING_HANDOFF_SOURCE_RUN: source-run\n" in rendered
-    assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
-    assert "C-01" not in rendered
+    assert "APPROVED_PLAN_COMMIT: " + "a" * 40 in rendered
+    assert "SLICE_PLAN: 1 | implement | src/core.py" in rendered
 
 
-def test_render_branch_discovery_task_is_slice_free_and_uses_counterpart_path() -> None:
-    source = branch_discovery_task_path(Path("inbox/doing/change-implement.md"))
+def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
+    class Finding:
+        summary = "Fix the complete-review defect."
+        affected_paths = ("src/core.py", "tests/test_core.py")
+        acceptance_test = "The regression is covered and passes."
 
-    rendered = render_branch_discovery_task(
-        target_branch="feature/finding-handoff",
-        scope_paths=("src/core.py", "tests/test_core.py"),
-        finding_handoff=("source-run", "ar1-" + "b" * 64),
+    source = followup_task_path(Path("inbox/doing/change-implement.md"))
+    rendered = render_followup_task(
+        target_branch="feature/implementation",
+        findings=(Finding(),),
     )
 
-    assert source == Path("inbox/doing/change-branch-discovery.md")
-    assert "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n" in rendered
-    assert "FINDING_HANDOFF_SOURCE_RUN: source-run\n" in rendered
-    assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
-    assert "TASK_SCOPE: src/core.py, tests/test_core.py\n" in rendered
-    assert "SLICE_PLAN" not in rendered
-
-
-def test_render_remediation_plan_task_advances_one_deterministic_cycle() -> None:
-    task, work_plan = remediation_plan_paths(
-        Path("inbox/doing/change-remediation-2-branch-discovery.md"),
-        cycle_number=3,
-    )
-
-    rendered = render_remediation_plan_task(
-        work_plan_path=work_plan,
-        target_branch="feature/finding-handoff",
-        scope_paths=("src/core.py",),
-        finding_handoff=("discovery-run", "ar1-" + "c" * 64),
-    )
-
-    assert task == Path("inbox/doing/change-remediation-3-plan.md")
-    assert work_plan == "docs/internal/change-remediation-3-plan-arbeitsplan.md"
-    assert "ORCHESTRATOR_MODE: PLAN_ONLY\n" in rendered
-    assert f"WORK_PLAN_PATH: {work_plan}\n" in rendered
-    assert "FINDING_HANDOFF_SOURCE_RUN: discovery-run\n" in rendered
-    assert f"FINDING_HANDOFF_EXPORT: ar1-{'c' * 64}\n" in rendered
-    assert f"TASK_SCOPE: {work_plan}, src/core.py\n" in rendered
+    assert source == Path("inbox/doing/change-implement-followup.md")
+    assert "Fix the complete-review defect." in rendered
+    assert "`src/core.py`" in rendered
+    assert "The regression is covered and passes." in rendered
+    assert "source-run" not in rendered
+    assert "ar1-" not in rendered

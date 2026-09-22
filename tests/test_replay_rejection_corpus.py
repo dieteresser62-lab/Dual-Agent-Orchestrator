@@ -12,31 +12,20 @@ from typing import Callable
 import pytest
 
 import artifact_replay
-import native_finding_decisions
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
-    BranchDiscoveryCompletedPayload,
-    BranchDiscoveryHandoffExportPayload,
-    BranchDiscoveryHandoffImportPayload,
     BindingPayload,
     BlobReference,
     CommandSpec,
+    FinalReviewCompletedPayload,
     FinalReviewPreflightPayload,
-    FamilyBindingPayload,
-    FindingHandoffExportPayload,
-    FindingHandoffImportPayload,
-    FindingSeverity,
-    FindingSnapshotItem,
-    FindingTransitionPayload,
     Fingerprint,
     FingerprintKind,
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
-    ImportedFindingTransition,
     InvocationFailurePayload,
-    PlanPayload,
     ProviderAttemptPayload,
     ProviderContentPayload,
     ProviderInputComponentPayload,
@@ -51,16 +40,12 @@ from artifact_models import (
     ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
-    RoleProfilePayload,
     RunIdentityPayload,
-    RunProfilePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
     ScopeExtensionPathPayload,
     ScopeExtensionPayload,
-    SliceSpec,
     TransientRetryPayload,
-    TaskPayload,
     ValidationAttestationPayload,
     ValidationContentPayload,
     ValidationOutputContent,
@@ -70,14 +55,12 @@ from artifact_models import (
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     WorkUnitPayload,
-    finding_transition_sequence_sha256,
     provider_text_evidence,
     stable_record_id,
     stable_side_effect_key,
     technical_text_evidence,
 )
 from artifact_replay import ArtifactReplayError, ReplayDiagnosticCode
-from finding_signature import finding_signature
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +86,6 @@ VALIDATION_PASSES = (
     "_validate_required_review_authority",
     "_validate_review_packet_bindings",
     "_validate_work_unit_revisions",
-    "_validate_single_finding_import",
     "_validate_chain_record_references",
     "_validate_provider_attempt_sequences",
     "_validate_side_effect_sequences",
@@ -452,322 +434,6 @@ def _append_review_validation(
     )
 
 
-def _finding_transition() -> FindingTransitionPayload:
-    return FindingTransitionPayload(
-        "C-01",
-        Role.CLAUDE,
-        Role.CLAUDE,
-        "opened",
-        FindingSeverity.OBSERVATION,
-        "open",
-        "Carry the finding.",
-        "source-work-unit",
-        "Imported observation.",
-        "The observation remains visible.",
-        "1",
-        1,
-    )
-
-
-def _import_payload(*, target_run_id: str = RUN_ID, source_run_id: str = "source-run") -> FindingHandoffImportPayload:
-    imported = ImportedFindingTransition("ar1-" + "3" * 64, _finding_transition())
-    digest = finding_transition_sequence_sha256((imported,))
-    return FindingHandoffImportPayload(
-        source_run_id,
-        "ar1-" + "4" * 64,
-        "5" * 40,
-        "ar1-" + "6" * 64,
-        "ar1-" + "7" * 64,
-        target_run_id,
-        "8" * 64,
-        digest,
-        (imported,),
-        Role.ORCHESTRATOR,
-    )
-
-
-def _export_payload(
-    *,
-    source_head: str,
-    approval_review_id: str,
-    transition_ids: tuple[str, ...] = ("ar1-" + "0" * 64,),
-    transition_digest: str = "9" * 64,
-    source_run_id: str = RUN_ID,
-) -> FindingHandoffExportPayload:
-    return FindingHandoffExportPayload(
-        source_run_id,
-        source_head,
-        "5" * 40,
-        approval_review_id,
-        transition_ids,
-        transition_digest,
-        "inbox/backlog/b40-followup.md",
-        "8" * 64,
-        Role.ORCHESTRATOR,
-    )
-
-
-def _family_binding(*, family_id: str = "finding-family") -> FamilyBindingPayload:
-    return FamilyBindingPayload(
-        family_id,
-        "1" * 40,
-        ("src/a.py",),
-        "source-run",
-        "ar1-" + "4" * 64,
-        2,
-        None,
-        "2" * 40,
-    )
-
-
-def _branch_import_payload(
-    *,
-    target_run_id: str = RUN_ID,
-    source_run_id: str = "source-run",
-    snapshot_signature: str | None = None,
-) -> BranchDiscoveryHandoffImportPayload:
-    transition = _finding_transition()
-    imported = ImportedFindingTransition(
-        "ar1-" + "3" * 64,
-        transition,
-        source_run_id,
-        "ar1-" + "3" * 64,
-    )
-    digest = finding_transition_sequence_sha256((imported,))
-    return BranchDiscoveryHandoffImportPayload(
-        source_run_id,
-        "ar1-" + "4" * 64,
-        "ar1-" + "5" * 64,
-        "ar1-" + "6" * 64,
-        "2" * 40,
-        "finding-family",
-        "1" * 40,
-        2,
-        "source-run",
-        "ar1-" + "4" * 64,
-        "ar1-" + "7" * 64,
-        target_run_id,
-        "inbox/backlog/b40-followup.md",
-        "8" * 64,
-        target_run_id,
-        digest,
-        (imported,),
-        (
-            FindingSnapshotItem(
-                "C-01",
-                snapshot_signature
-                or finding_signature("The observation remains visible.", ()),
-                "open",
-                FindingSeverity.OBSERVATION,
-            ),
-        ),
-        Role.ORCHESTRATOR,
-    )
-
-
-def _with_joint_cutover(factory: Callable[[], object]) -> object:
-    prior = native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER
-    native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER = True
-    try:
-        return factory()
-    finally:
-        native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER = prior
-
-
-def _branch_export_prefix(
-    records: list[ArtifactRecord],
-    *,
-    attestation_fingerprint: Fingerprint = FP_A,
-) -> tuple[ArtifactRecord, ArtifactRecord, ArtifactRecord]:
-    _append(
-        records,
-        _with_joint_cutover(
-            lambda: RunIdentityPayload(
-                "inbox/b40.md",
-                "feature/b40",
-                "1" * 40,
-                "2" * 40,
-                "BRANCH_DISCOVERY",
-                None,
-            )
-        ),
-    )
-    _append(
-        records,
-        RunProfilePayload(
-            RoleProfilePayload("implementer", "medium"),
-            RoleProfilePayload("reviewer", "high"),
-            family_binding=replace(
-                _family_binding(),
-                predecessor_run_id=None,
-                predecessor_head_record_id=None,
-                cycle_number=1,
-            ),
-        ),
-    )
-    finding = _append(records, _finding_transition())
-    attestation = _append_attestation(
-        records,
-        fingerprint=attestation_fingerprint,
-    )
-    completion = _append(
-        records,
-        _with_joint_cutover(
-            lambda: BranchDiscoveryCompletedPayload(
-                reviewer=Role.CLAUDE,
-                work_unit_id="1",
-                new_findings=(),
-                occurrences=(),
-                review_evidence=ReviewEvidencePayload(
-                    "all dimensions",
-                    "residual risk",
-                    "break condition",
-                ),
-                pre_mortem="pre mortem",
-                validation_attestation_record_id=attestation.record_id,
-                reviewed_head_commit="2" * 40,
-                transport_schema="native-claude-review-v2",
-                request_id="native-review-request-" + "c" * 64,
-                response_sha256=RESPONSE_SHA,
-                scan_complete=True,
-            )
-        ),
-        logical_id="review-claude-discovery-1",
-    )
-    return finding, completion, attestation
-
-
-def _branch_export_payload(
-    finding: ArtifactRecord,
-    review: ArtifactRecord,
-    attestation: ArtifactRecord,
-    *,
-    family_id: str = "finding-family",
-    transition_digest: str | None = None,
-) -> BranchDiscoveryHandoffExportPayload:
-    transition = ImportedFindingTransition(
-        finding.record_id,
-        finding.payload,  # type: ignore[arg-type]
-        RUN_ID,
-        finding.record_id,
-    )
-    return BranchDiscoveryHandoffExportPayload(
-        RUN_ID,
-        review.record_id,
-        review.record_id,
-        attestation.record_id,
-        "2" * 40,
-        family_id,
-        "1" * 40,
-        2,
-        RUN_ID,
-        review.record_id,
-        (finding.record_id,),
-        transition_digest or finding_transition_sequence_sha256((transition,)),
-        "inbox/backlog/b40-followup.md",
-        "8" * 64,
-        "target-run",
-        Role.ORCHESTRATOR,
-    )
-
-
-def _branch_discovery_target_export_prefix(
-    records: list[ArtifactRecord],
-    *,
-    source_mode: str = "IMPLEMENT",
-) -> tuple[ArtifactRecord, ArtifactRecord]:
-    identity = (
-        RunIdentityPayload(
-            "inbox/b40.md",
-            "feature/b40",
-            "1" * 40,
-            "2" * 40,
-            source_mode,
-            None,
-        )
-        if source_mode != "BRANCH_DISCOVERY"
-        else _with_joint_cutover(
-            lambda: RunIdentityPayload(
-                "inbox/b40.md",
-                "feature/b40",
-                "1" * 40,
-                "2" * 40,
-                source_mode,
-                None,
-            )
-        )
-    )
-    _append(
-        records,
-        identity,
-    )
-    _append(
-        records,
-        RunProfilePayload(
-            RoleProfilePayload("implementer", "medium"),
-            RoleProfilePayload("reviewer", "high"),
-            family_binding=replace(
-                _family_binding(),
-                predecessor_run_id=None,
-                predecessor_head_record_id=None,
-                cycle_number=1,
-            ),
-        ),
-    )
-    attestation = _append_attestation(records)
-    approval = _append(
-        records,
-        _review(),
-        logical_id="review-claude-source-1",
-    )
-    binding = _append(
-        records,
-        BindingPayload(
-            "commit",
-            "2" * 40,
-            attestation.record_id,
-            (approval.record_id,),
-        ),
-    )
-    completion = _append(
-        records,
-        WorkflowCompletionPayload("completed", binding.record_id),
-    )
-    return attestation, completion
-
-
-def _branch_discovery_target_export_payload(
-    attestation: ArtifactRecord,
-    completion: ArtifactRecord,
-    *,
-    source_completion_record_id: str | None = None,
-) -> BranchDiscoveryHandoffExportPayload:
-    return BranchDiscoveryHandoffExportPayload(
-        source_run_id=RUN_ID,
-        source_head_record_id=completion.record_id,
-        discovery_review_record_id=None,
-        validation_attestation_record_id=attestation.record_id,
-        reviewed_head_commit="2" * 40,
-        family_id="finding-family",
-        family_base_commit="1" * 40,
-        cycle_number=2,
-        predecessor_run_id=RUN_ID,
-        predecessor_head_record_id=completion.record_id,
-        finding_transition_record_ids=(),
-        finding_transitions_sha256=finding_transition_sequence_sha256(()),
-        target_task_path="inbox/backlog/b40-discovery.md",
-        target_task_sha256="8" * 64,
-        target_run_identity="target-run",
-        authority=Role.ORCHESTRATOR,
-        target_execution_mode="BRANCH_DISCOVERY",
-        source_completion_record_id=(
-            completion.record_id
-            if source_completion_record_id is None
-            else source_completion_record_id
-        ),
-    )
-
-
 def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
     operation = ("b40-marker",)
     key = stable_side_effect_key("internal", "1", operation)
@@ -824,147 +490,16 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 logical_id="slice-boundary-1",
                 revision=2,
             )
-    elif line in {3001, 3002, 3003, 3004, 3005, 3013}:
-        finding, review, attestation = _branch_export_prefix(records)
-        if line == 3003:
-            export_attestation = _append_attestation(
-                records,
-                fingerprint=FP_B,
-                logical_id="validation-2",
-            )
-        else:
-            export_attestation = attestation
-        payload = _branch_export_payload(
-            finding,
-            review,
-            export_attestation,
-            family_id="wrong-family" if line == 3005 else "finding-family",
-            transition_digest="9" * 64 if line == 3004 else None,
-        )
-        if line == 3001:
-            payload = replace(payload, predecessor_run_id="wrong-run")
-        elif line == 3002:
-            payload = replace(
-                payload,
-                discovery_review_record_id="ar1-" + "9" * 64,
-            )
-        elif line == 3013:
-            payload = replace(
-                payload,
-                validation_attestation_record_id="ar1-" + "9" * 64,
-            )
-        elif line == 3003:
-            payload = replace(
-                payload,
-                source_head_record_id=export_attestation.record_id,
-                predecessor_head_record_id=export_attestation.record_id,
-            )
-        if line != 3012:
-            _append(records, payload)
-    elif line in {3014, 3015}:
-        attestation, completion = _branch_discovery_target_export_prefix(
-            records,
-            source_mode="BRANCH_DISCOVERY" if line == 3015 else "IMPLEMENT",
-        )
-        payload = _branch_discovery_target_export_payload(
-            attestation,
-            completion,
-            source_completion_record_id=(
-                "ar1-" + "9" * 64 if line == 3014 else None
-            ),
-        )
-        if line == 3014:
-            payload = replace(
-                payload,
-                predecessor_head_record_id="ar1-" + "9" * 64,
-            )
-        _append(records, payload)
-    elif line in {3006, 3007, 3008, 3009, 3010, 3011, 3012, 3016}:
-        payload = _branch_import_payload(
-            target_run_id="wrong-run" if line == 3006 else RUN_ID,
-            source_run_id=RUN_ID if line == 3007 else "source-run",
-            snapshot_signature="9" * 64 if line == 3008 else None,
-        )
-        if line != 3012:
-            _append(records, payload)
-        if line in {3009, 3010, 3011, 3012, 3016}:
-            _append(
-                records,
-                RunProfilePayload(
-                    RoleProfilePayload("implementer", "medium"),
-                    RoleProfilePayload("reviewer", "high"),
-                    family_binding=_family_binding(
-                        family_id=(
-                            "wrong-family" if line == 3009 else "finding-family"
-                        )
-                    ),
-                ),
-            )
-        if line == 3010:
-            _append(
-                records,
-                TaskPayload("feature/b40", ("src/a.py",), "9" * 64),
-            )
-        elif line == 3011:
-            _append(
-                records,
-                RunIdentityPayload(
-                    "inbox/backlog/wrong.md",
-                    "feature/b40",
-                    "1" * 40,
-                    "1" * 40,
-                    "PLAN_ONLY",
-                    None,
-                ),
-            )
-            _append(
-                records,
-                TaskPayload("feature/b40", ("src/a.py",), "8" * 64),
-            )
-        elif line == 3012:
-            _append(records, _measurement(operation="codex_plan"))
-            _append(records, payload)
-        elif line == 3016:
-            _append(
-                records,
-                _with_joint_cutover(
-                    lambda: RunIdentityPayload(
-                        "inbox/backlog/b40-followup.md",
-                        "feature/b40",
-                        "1" * 40,
-                        "1" * 40,
-                        "BRANCH_DISCOVERY",
-                        None,
-                    )
-                ),
-            )
-            _append(
-                records,
-                TaskPayload("feature/b40", ("src/a.py",), "8" * 64),
-            )
     elif line in {3017, 3018, 3019}:
         _append(
             records,
-            (
-                RunIdentityPayload(
-                    "inbox/b40.md",
-                    "feature/b40",
-                    "1" * 40,
-                    "2" * 40,
-                    "IMPLEMENT",
-                    None,
-                )
-                if line == 3019
-                else _with_joint_cutover(
-                    lambda: RunIdentityPayload(
-                        "inbox/b40.md",
-                        "feature/b40",
-                        "1" * 40,
-                        "2" * 40,
-                        "BRANCH_DISCOVERY",
-                        None,
-                    )
-                )
+            RunIdentityPayload(
+                "inbox/b40.md",
+                "feature/b40",
+                "1" * 40,
+                "2" * 40,
+                "PLAN_ONLY" if line == 3019 else "IMPLEMENT",
+                None,
             ),
         )
         attestation = _append_attestation(
@@ -973,29 +508,25 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         )
         _append(
             records,
-            _with_joint_cutover(
-                lambda: BranchDiscoveryCompletedPayload(
-                    reviewer=Role.CLAUDE,
-                    work_unit_id="1",
-                    new_findings=(),
-                    occurrences=(),
-                    review_evidence=ReviewEvidencePayload(
-                        "all dimensions",
-                        "residual risk",
-                        "break condition",
-                    ),
-                    pre_mortem="pre mortem",
-                    validation_attestation_record_id=(
-                        "ar1-" + "9" * 64
-                        if line == 3017
-                        else attestation.record_id
-                    ),
-                    reviewed_head_commit="2" * 40,
-                    transport_schema="native-claude-review-v2",
-                    request_id="native-review-request-" + "c" * 64,
-                    response_sha256=RESPONSE_SHA,
-                    scan_complete=True,
-                )
+            FinalReviewCompletedPayload(
+                reviewer=Role.CLAUDE,
+                work_unit_id="1",
+                new_findings=(),
+                occurrences=(),
+                review_evidence=ReviewEvidencePayload(
+                    "all dimensions",
+                    "residual risk",
+                    "break condition",
+                ),
+                pre_mortem="pre mortem",
+                validation_attestation_record_id=(
+                    "ar1-" + "9" * 64 if line == 3017 else attestation.record_id
+                ),
+                reviewed_head_commit="2" * 40,
+                transport_schema="native-claude-review-v2",
+                request_id="native-review-request-" + "c" * 64,
+                response_sha256=RESPONSE_SHA,
+                scan_complete=True,
             ),
         )
     elif line == 1416:
@@ -1152,33 +683,6 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     elif line == 2059:
         _append(records, WorkUnitPayload("1", 2, ("src/a.py",)), logical_id="work-unit-1")
         _append(records, WorkUnitPayload("2", 1, ("src/a.py",)), logical_id="work-unit-1", revision=2)
-    elif line == 2080:
-        _append(records, _import_payload())
-        _append(records, _import_payload(source_run_id="source-run-2"))
-    elif line == 2093:
-        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
-        _append(records, _export_payload(source_head=previous.record_id, approval_review_id="ar1-" + "4" * 64, source_run_id="wrong-run"))
-    elif line == 2105:
-        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
-        _append(records, _export_payload(source_head=previous.record_id, approval_review_id="ar1-" + "4" * 64))
-    elif line == 2120:
-        review = _append(records, _review(), logical_id="review-claude-1-1")
-        _append(records, _export_payload(source_head=review.record_id, approval_review_id=review.record_id, transition_ids=("ar1-" + "4" * 64,)))
-    elif line in {2139, 2149}:
-        finding = _append(records, _finding_transition())
-        review = _append(records, _review(), logical_id="review-claude-1-1")
-        imported = ImportedFindingTransition(finding.record_id, finding.payload)
-        digest = finding_transition_sequence_sha256((imported,))
-        _append(records, _export_payload(source_head=review.record_id, approval_review_id=review.record_id, transition_ids=(finding.record_id,), transition_digest="9" * 64 if line == 2139 else digest))
-    elif line == 2156:
-        _append(records, _import_payload(target_run_id="another-run"))
-    elif line == 2162:
-        _append(records, _import_payload(source_run_id=RUN_ID))
-    elif line == 2177:
-        _append(records, WorkUnitPayload("1", 1, ("src/a.py",), (), "ar1-" + "4" * 64), logical_id="work-unit-1")
-    elif line == 2199:
-        imported = _append(records, _import_payload())
-        _append(records, WorkUnitPayload("1", 1, ("src/a.py",), (), imported.record_id), logical_id="work-unit-1")
     elif line == 2228:
         _append(records, WorkUnitPayload("1", 1, ("src/a.py",)), logical_id="work-unit-1")
         from artifact_models import DiagnosticPayload
@@ -1339,7 +843,7 @@ def _load_baseline() -> dict[str, object]:
 
 def _entries() -> tuple[dict[str, object], ...]:
     entries = _load_baseline()["entries"]
-    assert isinstance(entries, list) and len(entries) == 104
+    assert isinstance(entries, list) and len(entries) == 78
     assert all(
         isinstance(entry, dict)
         and set(entry) == {"case_id", "input", "code", "line", "message"}
@@ -1416,17 +920,16 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     entries = _entries()
     expected = tuple((int(entry["line"]), str(entry["code"])) for entry in entries)
     assert _source_emissions() == expected
-    assert len({entry["case_id"] for entry in entries}) == 104
-    assert len({entry["line"] for entry in entries}) == 104
+    assert len({entry["case_id"] for entry in entries}) == 78
+    assert len({entry["line"] for entry in entries}) == 78
     assert Counter(entry["code"] for entry in entries) == {
-        "RECORD-FINGERPRINT-MISMATCH": 46,
-        "RECORD-REFERENCE-MISSING": 34,
-        "RECORD-DUPLICATE": 9,
+        "RECORD-FINGERPRINT-MISMATCH": 33,
+        "RECORD-REFERENCE-MISSING": 26,
+        "RECORD-DUPLICATE": 8,
         "RECORD-MISSING": 9,
-        "RECORD-RUN-MISMATCH": 2,
-        "RECORD-TYPE-MISMATCH": 4,
+        "RECORD-TYPE-MISMATCH": 2,
     }
-    # All 100 rejection sites are reducer-reachable. Three deliberately duplicated
+    # All rejection sites are reducer-reachable. Three deliberately duplicated
     # defences cannot be produced by schema-valid persisted bytes; their cases
     # mutate an already validated object so the independent reducer check stays
     # executable and their ingress unreachability remains explicit.
@@ -1471,8 +974,6 @@ def test_replay_validator_has_exact_named_pass_order_and_split_chain_pass() -> N
         )
     )
     assert split_calls == (
-        "_validate_finding_handoff_record",
-        "_validate_work_unit_finding_import",
         "_validate_work_unit_activity_reference",
         "_validate_bound_record_references",
     )
@@ -1553,8 +1054,14 @@ def test_validation_pass_order_swap_is_detected() -> None:
         ),
         logical_id="review-packet-wrong",
     )
-    _append(records, _import_payload())
-    _append(records, _import_payload(source_run_id="source-run-2"))
+    intent = _side_effect()
+    for index in range(3):
+        _append(
+            records,
+            intent,
+            logical_id=f"effect-{index}",
+            revision=index + 1,
+        )
     case = RejectionInput(tuple(records))
 
     original_error, _ = _capture(
@@ -1580,9 +1087,9 @@ def test_validation_pass_order_swap_is_detected() -> None:
         and isinstance(node.value.func, ast.Name)
     }
     packet_index = pass_calls["_validate_review_packet_bindings"]
-    import_index = pass_calls["_validate_single_finding_import"]
-    validator_function.body[packet_index], validator_function.body[import_index] = (
-        validator_function.body[import_index],
+    side_effect_index = pass_calls["_validate_side_effect_sequences"]
+    validator_function.body[packet_index], validator_function.body[side_effect_index] = (
+        validator_function.body[side_effect_index],
         validator_function.body[packet_index],
     )
     module = ast.Module(body=[validator_function], type_ignores=[])
@@ -1593,7 +1100,7 @@ def test_validation_pass_order_swap_is_detected() -> None:
     assert mutant_error.code is ReplayDiagnosticCode.RECORD_DUPLICATE
     assert (
         mutant_error.diagnostic.message
-        == "a run may contain only one finding handoff import"
+        == "side effect has too many phases"
     )
     assert mutant_error.diagnostic.message != original_error.diagnostic.message
 

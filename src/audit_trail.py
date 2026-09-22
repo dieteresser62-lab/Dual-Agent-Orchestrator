@@ -199,7 +199,7 @@ class ReviewAuditEvent:
         if (
             not self.result.stopped
             and self.result.approval is None
-            and self.result.delivery_kind != "branch_discovery_completed"
+            and self.result.delivery_kind != "final_review_completed"
         ):
             raise AuditTrailError("a completed review requires an approval decision")
         if self.result.approval is True and self.result.own_open_blockers:

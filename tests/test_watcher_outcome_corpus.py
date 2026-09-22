@@ -52,7 +52,8 @@ PRE_B57_COMMIT = "8c633cc2ed006e474ff4aea3229950206d1fe066"
 PRE_B57_BLOB = "99965b3e92fea8a681447359f6aa9e54a813162f"
 PRE_B61_COMMIT = "496a4854c40081a81ef2a8904ac4985fd4585d1d"
 PRE_B61_BLOB = "30581cdc366f48579f1f3f8c8f94ce69575948d0"
-RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+HISTORICAL_RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 
@@ -1408,7 +1409,7 @@ def test_b57_watch_entry_shrinks_and_helpers_stay_below_threshold() -> None:
     assert all(span < 200 for span in helper_spans.values()), helper_spans
 
 
-def test_b57_keeps_the_b25_record_sequence_baseline_byte_identical() -> None:
+def test_target_record_sequence_baseline_is_exact() -> None:
     actual_blob = subprocess.run(
         ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
         cwd=ROOT,
@@ -1446,7 +1447,7 @@ def test_b61_pre_cut_anchor_binds_b60_and_all_protected_fixtures() -> None:
                 "5aeb38509ce2fed914477a4ec2f4f393a70820d9"
             ),
             "tests/fixtures/workflow-record-sequence-baseline-v1.json": (
-                RECORD_SEQUENCE_BLOB
+                HISTORICAL_RECORD_SEQUENCE_BLOB
             ),
         },
         "watch_inbox_lines": 329,
@@ -1481,13 +1482,17 @@ def test_b61_pre_cut_anchor_binds_b60_and_all_protected_fixtures() -> None:
             capture_output=True,
             text=True,
         ).stdout.strip() == expected_blob
-        assert subprocess.run(
+        current_blob = subprocess.run(
             ["git", "hash-object", str(ROOT / path)],
             cwd=ROOT,
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip() == expected_blob
+        ).stdout.strip()
+        if path == RECORD_SEQUENCE_BASELINE.relative_to(ROOT).as_posix():
+            assert current_blob == RECORD_SEQUENCE_BLOB
+        else:
+            assert current_blob == expected_blob
 
 
 def test_b61_helpers_inline_to_the_exact_b60_watch_function() -> None:

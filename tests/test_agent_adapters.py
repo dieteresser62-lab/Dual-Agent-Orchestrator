@@ -208,8 +208,6 @@ def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
             }],
         }],
         "finding_dispositions": [],
-        "plan_treatments": [],
-        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
     assert adapter._last_message_file is not None
     adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
@@ -255,7 +253,6 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness",

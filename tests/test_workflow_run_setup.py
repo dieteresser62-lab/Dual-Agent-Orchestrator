@@ -8,17 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import workflow_run_setup
-import native_finding_decisions
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
-from artifact_models import (
-    ArtifactRecord,
-    FamilyBindingPayload,
-    FindingHandoffExportPayload,
-    Fingerprint,
-    FingerprintKind,
-    Role,
-    initial_family_id,
-)
 from contracts import PlannedSlice
 from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
@@ -39,14 +29,9 @@ SETUP_PATH = ROOT / "src/workflow_run_setup.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
-    "artifact_bridge",
     "artifact_models",
-    "artifact_replay",
-    "artifact_store",
-    "finding_reducer",
     "git_service",
     "inbox_watcher",
-    "native_finding_decisions",
     "repo_changes",
     "state_io",
     "task_contract",
@@ -58,11 +43,7 @@ EXPECTED_SETUP_FUNCTIONS = {
     "_apply_resumed_agent_profiles",
     "_context",
     "_current_gate_approval",
-    "_branch_discovery_family_binding",
-    "_entry_family_binding",
     "_fresh_state",
-    "_implementation_family_binding",
-    "_initialize_finding_handoff",
     "_new_watch_task_control_paths",
     "_new_watch_task_preserved_paths",
     "_plan_only_step_boundary",
@@ -71,9 +52,6 @@ EXPECTED_SETUP_FUNCTIONS = {
 EXPECTED_SETUP_EDGES = Counter(
     {
         ("_context", "_plan_only_step_boundary"): 1,
-        ("_fresh_state", "_branch_discovery_family_binding"): 1,
-        ("_fresh_state", "_implementation_family_binding"): 1,
-        ("_fresh_state", "_entry_family_binding"): 1,
     }
 )
 EXPECTED_PRODUCTION_BINDINGS = {
@@ -81,7 +59,6 @@ EXPECTED_PRODUCTION_BINDINGS = {
     "context": "_context",
     "current_gate_approval": "_current_gate_approval",
     "fresh_state": "_fresh_state",
-    "initialize_finding_handoff": "_initialize_finding_handoff",
     "new_watch_task_control_paths": "_new_watch_task_control_paths",
     "new_watch_task_preserved_paths": "_new_watch_task_preserved_paths",
     "recover_legacy_plan_only_post_gate": "_recover_legacy_plan_only_post_gate",
@@ -213,7 +190,7 @@ def test_setup_edge_inventory_fails_closed_on_omission() -> None:
     assert ("_context", "_plan_only_step_boundary") not in _setup_edges(mutated)
 
 
-def test_existing_setup_handoffs_and_history_dependency_remain_exact() -> None:
+def test_existing_setup_dependencies_remain_exact() -> None:
     bindings = _production_bindings()
     assert {
         name: bindings[name] for name in EXPECTED_PRODUCTION_BINDINGS
@@ -225,7 +202,7 @@ def test_existing_setup_handoffs_and_history_dependency_remain_exact() -> None:
         if isinstance(node, ast.Assign)
         for target in node.targets
         if isinstance(target, ast.Name)
-        and target.id in {"_context", "_initialize_finding_handoff"}
+        and target.id == "_context"
     }
     context_assignment = assignments["_context"]
     assert isinstance(context_assignment.value, ast.Call)
@@ -237,18 +214,6 @@ def test_existing_setup_handoffs_and_history_dependency_remain_exact() -> None:
         keyword.arg: ast.unparse(keyword.value)
         for keyword in context_assignment.value.keywords
     } == {"_managed_slice_scope_pattern": "_managed_slice_scope_pattern"}
-
-    assignment = assignments["_initialize_finding_handoff"]
-    assert isinstance(assignment.value, ast.Call)
-    assert ast.unparse(assignment.value.func) == "partial"
-    assert [ast.unparse(argument) for argument in assignment.value.args] == [
-        "_initialize_finding_handoff_unbound"
-    ]
-    assert {
-        keyword.arg: ast.unparse(keyword.value)
-        for keyword in assignment.value.keywords
-    } == {"_history_payload": "_history_payload"}
-
 
 def test_context_matches_every_workflow_context_field(
     tmp_path: Path, monkeypatch
@@ -370,15 +335,16 @@ def test_context_matches_every_workflow_context_field(
         assert getattr(actual, field.name) == getattr(expected, field.name), field.name
 
 
-def test_fresh_approved_plan_run_starts_its_deterministic_cycle_one_family(
+def test_fresh_approved_plan_run_uses_merge_base_and_starts_implementation(
     tmp_path: Path, monkeypatch
 ) -> None:
     head = "a" * 40
+    merge_base = "c" * 40
     contract = TaskContract(
         digest="b" * 64,
         mode=TaskMode.IMPLEMENT,
         scope_patterns=("docs/internal/plan.md", "src/a.py"),
-        target_branch="feature/family-dormancy",
+        target_branch="feature/approved-plan",
         work_plan_path="docs/internal/plan.md",
         approved_plan_commit=head,
         approved_slices=(PlannedSlice(1, "Implement", ("src/a.py",)),),
@@ -387,42 +353,33 @@ def test_fresh_approved_plan_run_starts_its_deterministic_cycle_one_family(
         workflow_run_setup,
         "inspect_repository",
         lambda _root: SimpleNamespace(
-            branch="feature/family-dormancy", head=head
+            branch="feature/approved-plan", head=head
         ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "resolve_merge_base",
+        lambda _root, _mainline: SimpleNamespace(commit=merge_base),
     )
     monkeypatch.setattr(
         workflow_run_setup, "require_committed_file_at_head", lambda *args, **kwargs: None
     )
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        False,
-    )
-
     state = workflow_run_setup._fresh_state(
         task_file=tmp_path / "task.md",
-        run_id="family-dormancy",
+        run_id="approved-plan",
         repository_root=tmp_path,
         task_contract=contract,
     )
 
-    assert state.family_binding == FamilyBindingPayload(
-        initial_family_id("family-dormancy", head),
-        head,
-        ("docs/internal/plan.md", "src/a.py"),
-        None,
-        None,
-        1,
-        head,
-        None,
-    )
-    assert state.branch_base == head
-    assert state.branch_review_base_commit == head
+    assert state.branch_base == merge_base
+    assert state.branch_review_base_commit == merge_base
     assert state.current_slice.start_commit == head
+    assert state.current_work_unit.kind is WorkUnitKind.SLICE
+    assert state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
 
 
 @pytest.mark.parametrize("mode", (TaskMode.PLAN_ONLY, TaskMode.IMPLEMENT))
-def test_every_no_handoff_entry_mode_gets_the_same_deterministic_cycle_one_binding(
+def test_every_entry_mode_uses_the_same_git_derived_merge_base(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mode: TaskMode,
@@ -443,20 +400,20 @@ def test_every_no_handoff_entry_mode_gets_the_same_deterministic_cycle_one_bindi
                 }
             )
         ),
-        target_branch="feature/family-entry",
+        target_branch="feature/entry",
         work_plan_path=work_plan_path,
     )
     monkeypatch.setattr(
         workflow_run_setup,
         "inspect_repository",
         lambda _root: SimpleNamespace(
-            branch="feature/family-entry", head=head
+            branch="feature/entry", head=head
         ),
     )
     monkeypatch.setattr(
         workflow_run_setup,
         "resolve_merge_base",
-        lambda _root: SimpleNamespace(commit=branch_base),
+        lambda _root, _mainline: SimpleNamespace(commit=branch_base),
     )
 
     states = tuple(
@@ -469,258 +426,6 @@ def test_every_no_handoff_entry_mode_gets_the_same_deterministic_cycle_one_bindi
         for _ in range(2)
     )
 
-    assert states[0].family_binding == states[1].family_binding
-    assert states[0].family_binding == FamilyBindingPayload(
-        initial_family_id("deterministic-entry-run", branch_base),
-        branch_base,
-        tuple(
-            sorted(
-                {
-                    "src/a.py",
-                    *((work_plan_path,) if work_plan_path is not None else ()),
-                }
-            )
-        ),
-        None,
-        None,
-        1,
-        None,
-        None,
-    )
-
-
-def test_fresh_state_family_binding_is_not_controlled_by_retired_cutover_flag(
-    tmp_path: Path, monkeypatch
-) -> None:
-    head = "a" * 40
-    contract = TaskContract(
-        digest="b" * 64,
-        mode=TaskMode.IMPLEMENT,
-        scope_patterns=("src/a.py",),
-        target_branch="feature/family-dormant",
-    )
-    binding = FamilyBindingPayload(
-        "family-1",
-        "c" * 40,
-        ("src/a.py",),
-        None,
-        None,
-        1,
-        None,
-        None,
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "inspect_repository",
-        lambda _root: SimpleNamespace(
-            branch="feature/family-dormant", head=head
-        ),
-    )
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        False,
-    )
-
-    state = workflow_run_setup._fresh_state(
-        task_file=tmp_path / "task.md",
-        run_id="family-dormant",
-        repository_root=tmp_path,
-        task_contract=contract,
-        family_binding=binding,
-    )
-
-    assert state.family_binding == binding
-    assert state.branch_base == binding.family_base_commit
-
-
-def test_fresh_branch_discovery_run_uses_a_branch_wide_work_unit(
-    tmp_path: Path, monkeypatch
-) -> None:
-    reviewed_head = "a" * 40
-    family_base = "c" * 40
-    contract = TaskContract(
-        digest="b" * 64,
-        mode=TaskMode.BRANCH_DISCOVERY,
-        scope_patterns=("src/a.py", "tests/test_a.py"),
-        target_branch="feature/branch-discovery",
-        finding_handoff_source_run_id="implementation-run",
-        finding_handoff_export_record_id="ar1-" + "d" * 64,
-    )
-    binding = FamilyBindingPayload(
-        "family-branch-discovery",
-        family_base,
-        contract.scope_patterns,
-        "implementation-run",
-        "ar1-" + "e" * 64,
-        1,
-        None,
-        reviewed_head,
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "inspect_repository",
-        lambda _root: SimpleNamespace(
-            branch=contract.target_branch,
-            head=reviewed_head,
-        ),
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "_branch_discovery_family_binding",
-        lambda *_args, **_kwargs: binding,
-    )
-
-    state = workflow_run_setup._fresh_state(
-        task_file=tmp_path / "branch-discovery.md",
-        run_id="branch-discovery",
-        repository_root=tmp_path,
-        task_contract=contract,
-    )
-
-    assert state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
-    assert state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
-    assert state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
-    assert state.current_work_unit.round_number == 1
-    assert state.current_work_unit.request_sequence == 1
-    assert state.current_slice.status is SliceStatus.COMPLETED
-    assert state.current_slice.start_commit == reviewed_head
-    assert state.current_slice.commit_ref == reviewed_head
-    assert state.current_slice.scope_paths == ()
-    assert state.current_slice.scope_change_groups == ()
-    assert state.current_slice.start_fingerprint is None
-    assert state.planned_slices == ()
-    assert state.branch_review_base_commit == family_base
-    assert state.branch_review_authorized_change_set == contract.scope_patterns
-
-
-def test_fresh_family_run_uses_family_base_but_slice_keeps_current_head(
-    tmp_path: Path, monkeypatch
-) -> None:
-    head = "a" * 40
-    family_base = "c" * 40
-    plan_path = "docs/internal/plan.md"
-    contract = TaskContract(
-        digest="b" * 64,
-        mode=TaskMode.IMPLEMENT,
-        scope_patterns=(plan_path, "src/a.py"),
-        target_branch="feature/family-active",
-        work_plan_path=plan_path,
-        approved_plan_commit=head,
-        approved_slices=(PlannedSlice(1, "Implement", ("src/a.py",)),),
-    )
-    binding = FamilyBindingPayload(
-        "family-1",
-        family_base,
-        (plan_path, "src/a.py"),
-        "predecessor-run",
-        "ar1-" + "d" * 64,
-        2,
-        head,
-        "e" * 40,
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "inspect_repository",
-        lambda _root: SimpleNamespace(
-            branch="feature/family-active", head=head
-        ),
-    )
-    monkeypatch.setattr(
-        workflow_run_setup, "require_committed_file_at_head", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-
-    state = workflow_run_setup._fresh_state(
-        task_file=tmp_path / "task.md",
-        run_id="family-active",
-        repository_root=tmp_path,
-        task_contract=contract,
-        family_binding=binding,
-    )
-
-    assert state.branch_base == family_base
-    assert state.branch_review_base_commit == family_base
-    assert state.current_slice.start_commit == head
-    assert state.branch_review_authorized_change_set == (
-        plan_path,
-        "src/a.py",
-    )
-
-
-def test_remediation_plan_to_implementation_edge_preserves_cycle_number(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_run_id = "remediation-plan-cycle-2"
-    source_binding = FamilyBindingPayload(
-        "family-cycle-invariant",
-        "a" * 40,
-        ("docs/internal/remediation.md", "src/a.py"),
-        "discovery-cycle-1",
-        "ar1-" + "1" * 64,
-        2,
-        None,
-        "b" * 40,
-    )
-    export_payload = FindingHandoffExportPayload(
-        source_run_id=source_run_id,
-        source_head_record_id="ar1-" + "2" * 64,
-        approved_plan_commit="c" * 40,
-        approval_review_record_id="ar1-" + "3" * 64,
-        finding_transition_record_ids=("ar1-" + "4" * 64,),
-        finding_transitions_sha256="5" * 64,
-        target_task_path="inbox/doing/remediation-implement.md",
-        target_task_sha256="6" * 64,
-        authority=Role.ORCHESTRATOR,
-    )
-    export_record = ArtifactRecord.create(
-        run_id=source_run_id,
-        logical_id="finding-handoff-export",
-        revision=1,
-        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "7" * 64),
-        predecessor_ids=(),
-        created_at="2026-09-21T10:00:00+00:00",
-        idempotency_key="finding-handoff-export:cycle-2",
-        payload=export_payload,
-    )
-    source_replay = SimpleNamespace(
-        records=(export_record,),
-        run_profile=SimpleNamespace(family_binding=source_binding),
-        effective_family_binding=source_binding,
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "ArtifactStore",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            load_chain=lambda: (export_record,)
-        ),
-    )
-    monkeypatch.setattr(
-        workflow_run_setup,
-        "replay_artifacts",
-        lambda *_args, **_kwargs: source_replay,
-    )
-    contract = TaskContract(
-        digest="8" * 64,
-        mode=TaskMode.IMPLEMENT,
-        scope_patterns=("docs/internal/remediation.md", "src/a.py"),
-        target_branch="feature/cycle-invariant",
-        work_plan_path="docs/internal/remediation.md",
-        approved_plan_commit="c" * 40,
-        approved_slices=(PlannedSlice(1, "Fix", ("src/a.py",)),),
-        finding_handoff_source_run_id=source_run_id,
-        finding_handoff_export_record_id=export_record.record_id,
-    )
-
-    implementation_binding = workflow_run_setup._implementation_family_binding(
-        tmp_path,
-        contract,
-    )
-
-    assert implementation_binding is not None
-    assert implementation_binding.cycle_number == source_binding.cycle_number == 2
+    assert states[0].branch_base == states[1].branch_base == branch_base
+    assert states[0].branch_review_base_commit == branch_base
+    assert states[0].current_slice.start_commit == head

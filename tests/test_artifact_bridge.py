@@ -14,7 +14,6 @@ from artifact_bridge import (
     finding_payload, review_payload, review_payload_matches_complete_result,
     review_payload_matches_result,
     validation_request_payload,
-    finding_handoff_export_payload, finding_handoff_import_payload,
 )
 from artifact_models import (
     ArtifactRecord, ArtifactValidationError, CorrectionWorkUnitPayload,
@@ -63,79 +62,6 @@ def _bound_bridge(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     return ArtifactBridge(store) if now is None else ArtifactBridge(store, now=now)
-
-
-def test_bridge_constructs_lossless_handoff_only_from_accepted_replay() -> None:
-    records: list[ArtifactRecord] = []
-    def append(logical_id: str, payload: object) -> ArtifactRecord:
-        record = ArtifactRecord.create(
-            run_id="source-run", logical_id=logical_id, revision=1,
-            fingerprint=Fingerprint(FingerprintKind.CONTRACT, DIGEST),
-            predecessor_ids=((records[-1].record_id,) if records else ()),
-            created_at=f"2026-08-28T10:00:0{len(records)}+00:00",
-            idempotency_key=f"source:{logical_id}", payload=payload,  # type: ignore[arg-type]
-        )
-        records.append(record)
-        return record
-    append(
-        "run-identity",
-        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "PLAN_ONLY", None),
-    )
-    append(
-        "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
-        ),
-    )
-    append("plan", PlanPayload("docs/plan.md", "b" * 40, (SliceSpec("1", "one", ("src/a.py",)),)))
-    finding = append("finding-C-01", FindingTransitionPayload(
-        "C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.OBSERVATION,
-        "open", "Carry it.", "plan-review", "Carry it.", "It remains visible.", "plan", 1,
-    ))
-    review = append("review", ReviewPayload(
-        Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
-        "native-claude-review-v2", "native-review-request-" + "c" * 64, "d" * 64,
-    ))
-    before_export = replay_artifacts(
-        records,
-        "source-run",
-        require_content_authority=False,
-        require_review_authority=False,
-    )
-    export_payload = finding_handoff_export_payload(
-        before_export, approved_plan_commit="b" * 40,
-        approval_review_record_id=review.record_id,
-        target_task_path="inbox/implement.md", target_task_bytes=b"task",
-    )
-    export_record = append("finding-export", export_payload)
-    source = replay_artifacts(
-        records,
-        "source-run",
-        require_content_authority=False,
-        require_review_authority=False,
-    )
-    imported = finding_handoff_import_payload(
-        source, export_record, target_run_id="target-run", target_task_bytes=b"task"
-    )
-
-    assert imported.transitions[0].payload == finding.payload
-    assert imported.export_record_id == export_record.record_id
-    with pytest.raises(ArtifactBridgeError, match="task bytes differ"):
-        finding_handoff_import_payload(
-            source, export_record, target_run_id="target-run", target_task_bytes=b"tampered"
-        )
-    with pytest.raises(ArtifactBridgeError, match="not in the accepted source replay"):
-        finding_handoff_import_payload(
-            source, ArtifactRecord.create(
-                run_id="source-run", logical_id="foreign-export", revision=1,
-                fingerprint=export_record.fingerprint,
-                predecessor_ids=export_record.predecessor_ids,
-                created_at=export_record.created_at,
-                idempotency_key="source:foreign-export", payload=export_record.payload,
-            ),
-            target_run_id="target-run", target_task_bytes=b"task",
-        )
 
 
 def test_finding_payload_preserves_legacy_shape_and_native_authority() -> None:

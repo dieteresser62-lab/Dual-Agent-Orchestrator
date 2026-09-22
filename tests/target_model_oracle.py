@@ -23,6 +23,7 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 import native_finding_decisions
 import native_review_contract
+import artifact_models
 from artifact_bridge import finding_payload
 from artifact_models import (
     ArtifactRecord,
@@ -62,11 +63,8 @@ from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
     NativeRejectionReason,
-    PlanTreatmentDecision,
-    PlanTreatmentDecisionKind,
-    PlanTreatmentKind,
-    PlanTreatmentProposal,
 )
+from finding_planning import MAX_ACCEPTANCE_REVIEWS
 from native_review_contract import (
     NativeFinding,
     NativeProseAcceptance,
@@ -568,7 +566,6 @@ def _context(
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
     fingerprint: str = FINGERPRINT,
-    plan_treatments: tuple[PlanTreatmentProposal, ...] = (),
 ) -> NativeReviewContext:
     return NativeReviewContext(
         run_id=RUN_ID,
@@ -584,7 +581,6 @@ def _context(
         allow_new_observations=True,
         anchor_origin=(None if approval is ApprovalMarker.PLAN else "approved-plan"),
         planned_slices=planned_slices,
-        plan_treatments=plan_treatments,
     )
 
 
@@ -598,7 +594,6 @@ def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str,
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "target reachability and record agreement",
@@ -616,7 +611,6 @@ def _typed_response(
     new_findings: tuple[NativeFinding, ...] = (),
     status_changes: tuple[NativeStatusChange, ...] = (),
     reclassifications: tuple[NativeReclassification, ...] = (),
-    plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = (),
 ) -> NativeReviewResult:
     return NativeReviewResult(
         request_id=context.request_id,
@@ -625,7 +619,6 @@ def _typed_response(
         new_findings=new_findings,
         status_changes=status_changes,
         reclassifications=reclassifications,
-        plan_treatment_decisions=plan_treatment_decisions,
         anchors=(),
         evidence=None,
         pre_mortem="A later rule change could create a newly unreachable state.",
@@ -843,69 +836,6 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     return tuple(probes)
 
 
-def _plan_review_probes() -> tuple[ReviewProbe, ...]:
-    probes: list[ReviewProbe] = []
-    add = _ReviewProbeCollector(probes)
-
-    # Today's plan review may approve while carrying its open cohort into a
-    # planned implementation Slice.  The target explicitly ends planning with
-    # no open Finding.
-    plan_finding = _finding(CurrentFindingClass.BLOCKER)
-    signature = finding_record_signature(plan_finding)
-    treatment = PlanTreatmentProposal(
-        signature,
-        ("C-01",),
-        PlanTreatmentKind.IMPLEMENTATION,
-        closing_slice_ids=(1,),
-    )
-    plan_slice = PlannedSlice(
-        1,
-        "Carry the open plan finding into implementation.",
-        ("src/native_review_contract.py",),  # allowlist:provider -- measured code location
-    )
-    context = _context(
-        (plan_finding,),
-        approval=ApprovalMarker.PLAN,
-        operation="claude_plan_review",  # allowlist:provider -- persisted operation vocabulary
-        planned_slices=(plan_slice,),
-        plan_treatments=(treatment,),
-    )
-    treatment_decision = PlanTreatmentDecision(
-        signature,
-        PlanTreatmentDecisionKind.ACCEPTED,
-        "The implementation Slice is assigned the open plan finding.",
-    )
-    document = _base_document(context, approved=True)
-    document["plan_treatment_decisions"] = [
-        {
-            "signature": signature,
-            "decision": "accepted",
-            "rationale": treatment_decision.rationale,
-        }
-    ]
-    add(
-        "open-plan-finding-handoff",
-        "planung.clean",
-        "OFFENEN-PLANBEFUND-UEBERGEBEN",
-        context,
-        document,
-        _typed_response(
-            context,
-            approved=True,
-            plan_treatment_decisions=(treatment_decision,),
-        ),
-        target_viable=False,
-        expected_status=FindingStatus.OPEN,
-        expected_class=CurrentFindingClass.BLOCKER,
-        locations=(
-            "src/native_review_contract.py",  # allowlist:provider -- measured code location
-            "src/native_finding_decisions.py",
-            "src/plan_handoff.py",
-        ),
-    )
-    return tuple(probes)
-
-
 def _legacy_finding_review_probes() -> tuple[ReviewProbe, ...]:
     probes: list[ReviewProbe] = []
     add = _ReviewProbeCollector(probes)
@@ -966,7 +896,6 @@ def _legacy_finding_review_probes() -> tuple[ReviewProbe, ...]:
 def _review_probes() -> tuple[ReviewProbe, ...]:
     return (
         *_core_review_probes(),
-        *_plan_review_probes(),
         *_legacy_finding_review_probes(),
     )
 
@@ -1141,6 +1070,57 @@ def _review_probe_outcome(probe: ReviewProbe) -> ProbeOutcome:
 def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     outcomes: list[ProbeOutcome] = []
 
+    # Plan approval must reject an open cohort, and the record vocabulary must
+    # offer no cross-run PlanAssignment that could carry it forward.
+    plan_finding = _finding(CurrentFindingClass.BLOCKER)
+    plan_context = _context(
+        (plan_finding,),
+        approval=ApprovalMarker.PLAN,
+        operation="claude_plan_review",  # allowlist:provider -- persisted operation vocabulary
+        planned_slices=(
+            PlannedSlice(
+                1,
+                "Implement the reviewed plan.",
+                ("src/native_review_contract.py",),
+            ),
+        ),
+    )
+    plan_probe = ReviewProbe(
+        "open-plan-finding-handoff",
+        "planung.clean",
+        "OFFENEN-PLANBEFUND-UEBERGEBEN",
+        plan_context,
+        _base_document(plan_context, approved=True),
+        _typed_response(plan_context, approved=True),
+        False,
+        FindingStatus.OPEN,
+        CurrentFindingClass.BLOCKER,
+        (
+            "src/native_review_contract.py",
+            "src/native_finding_decisions.py",
+            "src/plan_handoff.py",
+        ),
+    )
+    plan_contract_accepts, plan_contract_detail = _contract_probe(plan_probe)
+    plan_record_accepts = hasattr(artifact_models, "PlanAssignmentPayload")
+    outcomes.append(
+        ProbeOutcome(
+            plan_probe.probe_id,
+            plan_probe.situation_id,
+            str(plan_probe.move),
+            False,
+            plan_contract_accepts,
+            plan_record_accepts,
+            plan_contract_detail,
+            (
+                "record vocabulary still exposes PlanAssignment"
+                if plan_record_accepts
+                else "record vocabulary has no open-plan handoff"
+            ),
+            plan_probe.locations,
+        )
+    )
+
     # Complete dispositions: call the same domain helper used by the native
     # Codex result path and observe whether it rejects an omitted open Finding.
     prior = (_finding(CurrentFindingClass.OBSERVATION),)
@@ -1234,7 +1214,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     )
 
     # The installed remediation-family evaluator is called at target cycle six.
-    remediation = native_finding_decisions.MAX_REMEDIATION_ROUNDS
+    remediation = MAX_ACCEPTANCE_REVIEWS
     outcomes.append(
         ProbeOutcome(
             "acceptance-cycle-beyond-six",
@@ -1287,17 +1267,21 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         )
     )
 
-    # A BRANCH_DISCOVERY work unit is still constructible as its own run.
-    discovery = init_workflow_state(
-        run_id="oracle-branch-discovery",
-        task_file="/repo/discovery.md",
-        branch="feature/oracle",
-        branch_base="a" * 40,
-        first_slice_start_commit="b" * 40,
-        slice_count=1,
-        execution_mode="BRANCH_DISCOVERY",
-    )
-    separate_run = discovery.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY  # allowlist:provider -- persisted step vocabulary
+    # The terminal review is no longer constructible as its own run.
+    try:
+        init_workflow_state(
+            run_id="oracle-final-review",
+            task_file="/repo/final-review.md",
+            branch="feature/oracle",
+            branch_base="a" * 40,
+            first_slice_start_commit="b" * 40,
+            slice_count=1,
+            execution_mode="FINAL_REVIEW",
+        )
+    except ValueError:
+        separate_run = False
+    else:
+        separate_run = True
     outcomes.append(
         ProbeOutcome(
             "separate-branch-discovery-run",
@@ -1306,8 +1290,10 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             False,
             separate_run,
             separate_run,
-            "workflow initializer creates a dedicated discovery work unit",
-            "state projection persists that work-unit kind",
+            "workflow initializer accepts a dedicated final-review run"
+            if separate_run
+            else "workflow initializer rejects a dedicated final-review run",
+            "state projection has no dedicated final-review execution mode",
             ("src/workflow_state.py", "src/workflow.py"),
         )
     )

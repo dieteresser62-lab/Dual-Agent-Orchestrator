@@ -49,7 +49,7 @@ RECORD_SEQUENCE_BASELINE = (
 SOURCE_COMMIT = "444f5188200814373b7dfcdee1c114e1a9fda8a0"
 SOURCE_BLOB = "1b82c80f9840a2193adb5c3ef241a4ecc08f5b42"
 PRE_B56_COMMIT = "cb00bc0c4270147c417d4d89c011ca6cb24e6ed1"
-RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 STAMP = "2026-09-05T00:00:00+00:00"
 BRANCH_BASE = "b" * 40
 TASK_DIGEST = "a" * 64
@@ -1208,7 +1208,7 @@ def test_b56_entries_and_helpers_are_below_the_b32_threshold() -> None:
     )
 
 
-def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+def test_target_record_sequence_baseline_is_exact() -> None:
     actual_blob = subprocess.run(
         ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
         cwd=ROOT,

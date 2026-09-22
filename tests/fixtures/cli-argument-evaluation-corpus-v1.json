@@ -10,8 +10,24 @@
     "agent_output_max_chars": 1800,
     "agent_profile_overrides": [],
     "agent_settings": {
-      "claude": {"__type__": "AgentSettings", "name": "claude", "binary": "claude", "model": "sonnet", "timeout_seconds": 1800, "effort": "high", "max_budget_usd": null},
-      "codex": {"__type__": "AgentSettings", "name": "codex", "binary": "codex", "model": "gpt-5.6-sol", "timeout_seconds": 1800, "effort": "medium", "max_budget_usd": null}
+      "claude": {
+        "__type__": "AgentSettings",
+        "name": "claude",
+        "binary": "claude",
+        "model": "sonnet",
+        "timeout_seconds": 1800,
+        "effort": "high",
+        "max_budget_usd": null
+      },
+      "codex": {
+        "__type__": "AgentSettings",
+        "name": "codex",
+        "binary": "codex",
+        "model": "gpt-5.6-sol",
+        "timeout_seconds": 1800,
+        "effort": "medium",
+        "max_budget_usd": null
+      }
     },
     "agents_file": "<ROOT>/AGENTS.md",
     "approve_gate": false,
@@ -48,28 +64,130 @@
     "quota_max_auto_resumes": null,
     "quota_max_wait": null,
     "quota_safety_margin": null,
-    "quota_wait_policy": {"__type__": "QuotaWaitPolicy", "automatic": true, "safety_margin_seconds": 60, "maximum_wait_seconds": 604800, "maximum_auto_resumes": 32, "heartbeat_interval_seconds": 3600},
+    "quota_wait_policy": {
+      "__type__": "QuotaWaitPolicy",
+      "automatic": true,
+      "safety_margin_seconds": 60,
+      "maximum_wait_seconds": 604800,
+      "maximum_auto_resumes": 32,
+      "heartbeat_interval_seconds": 3600
+    },
     "reject_gate": false,
     "repo_config": {
       "__type__": "RepoConfig",
-      "paths": {"__type__": "PathClasses", "productive": ["src/**/*.py", "run_task", "*.toml"], "tests": ["tests/**"], "documentation": ["docs/**", "*.md"], "generated": [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]},
+      "paths": {
+        "__type__": "PathClasses",
+        "productive": [
+          "src/**/*.py",
+          "run_task",
+          "*.toml"
+        ],
+        "tests": [
+          "tests/**"
+        ],
+        "documentation": [
+          "docs/**",
+          "*.md"
+        ],
+        "generated": [
+          ".orchestrator/**",
+          "**/__pycache__/**",
+          ".pytest_cache/**"
+        ]
+      },
       "stop_rules": [],
-      "validation": {"__type__": "ValidationMatrix", "default_command": null, "rules": [], "required_artifacts": [], "product_command": null},
-      "workflow": {"__type__": "WorkflowConfig", "manual_slice_gate": false, "plan_gate": false, "test_change_gate": false},
+      "validation": {
+        "__type__": "ValidationMatrix",
+        "default_command": null,
+        "rules": [],
+        "required_artifacts": [],
+        "product_command": null
+      },
+      "workflow": {
+        "__type__": "WorkflowConfig",
+        "manual_slice_gate": false,
+        "plan_gate": false,
+        "test_change_gate": false
+      },
       "validation_declared": false,
       "source": null,
-      "provider_input_budget": {"__type__": "ProviderInputBudgetPolicy", "rules": [
-        {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_branch_discovery", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_final_review", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_plan_review", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "claude", "role": "claude", "operation": "claude_slice_review", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_correction", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_final_correction", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_final_review", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_implementation", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_plan", "max_chars": 4000000, "max_bytes": 16000000},
-        {"__type__": "ProviderInputBudgetRule", "provider": "codex", "role": "codex", "operation": "codex_plan_revision", "max_chars": 4000000, "max_bytes": 16000000}
-      ]}
+      "provider_input_budget": {
+        "__type__": "ProviderInputBudgetPolicy",
+        "rules": [
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "claude",
+            "role": "claude",
+            "operation": "claude_final_review",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "claude",
+            "role": "claude",
+            "operation": "claude_plan_review",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "claude",
+            "role": "claude",
+            "operation": "claude_slice_review",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_correction",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_final_correction",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_final_review",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_implementation",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_plan",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          },
+          {
+            "__type__": "ProviderInputBudgetRule",
+            "provider": "codex",
+            "role": "codex",
+            "operation": "codex_plan_revision",
+            "max_chars": 4000000,
+            "max_bytes": 16000000
+          }
+        ]
+      }
     },
     "resume": false,
     "resume_explicit": false,
@@ -88,7 +206,13 @@
     "transient_retry_initial_delay": null,
     "transient_retry_max_auto_resumes": null,
     "transient_retry_max_delay": null,
-    "transient_retry_policy": {"__type__": "TransientRetryPolicy", "automatic": true, "initial_delay_seconds": 5, "maximum_delay_seconds": 30, "maximum_auto_resumes": 2},
+    "transient_retry_policy": {
+      "__type__": "TransientRetryPolicy",
+      "automatic": true,
+      "initial_delay_seconds": 5,
+      "maximum_delay_seconds": 30,
+      "maximum_auto_resumes": 2
+    },
     "verbose": false,
     "watch": false,
     "watch_max_retries": 3,
@@ -96,98 +220,492 @@
   },
   "rejections": [
     {
-      "scenario_id": "task-file-source-conflict", "description": "A positional task file and --task-file are mutually exclusive.",
-      "arguments": ["first.md", "--task-file", "second.md"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 1, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 745, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "task file must be provided either positionally or with --task-file, not both"}
-    },
-    {
-      "scenario_id": "dry-run-scenario-without-dry-run", "description": "--dry-run-scenario is rejected unless --dry-run is active.",
-      "arguments": ["--dry-run-scenario", "scenario.json"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 2, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 750, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "--dry-run-scenario requires --dry-run"}
-    },
-    {
-      "scenario_id": "dry-run-report-without-scenario", "description": "--dry-run-report is rejected unless a dry-run scenario is supplied.",
-      "arguments": ["--dry-run-report", "report.json"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 3, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 752, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "--dry-run-report requires --dry-run-scenario"}
-    },
-    {
-      "scenario_id": "explicit-config-missing", "description": "An explicitly selected missing configuration file is rejected.",
-      "arguments": ["--config", "missing.toml"], "environment": {}, "source_kind": "raise", "source_ordinal": 1, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 761, "type": "ConfigError", "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"}], "process_starts": 0,
-      "outcome": {"kind": "raise", "error_chain": [{"type": "ConfigError", "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"}], "stderr": ""}
-    },
-    {
-      "scenario_id": "quota-environment-not-integer", "description": "A non-integer quota environment value is rethrown as ConfigError.",
-      "arguments": [], "environment": {"RUN_TASK_QUOTA_SAFETY_MARGIN": "not-an-integer"}, "source_kind": "raise", "source_ordinal": 2, "catcher_ordinal": 1,
+      "scenario_id": "task-file-source-conflict",
+      "description": "A positional task file and --task-file are mutually exclusive.",
+      "arguments": [
+        "first.md",
+        "--task-file",
+        "second.md"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 1,
+      "catcher_ordinal": null,
       "exception_events": [
-        {"function": "quota_int", "line": 789, "type": "ValueError", "message": "invalid literal for int() with base 10: 'not-an-integer'"},
-        {"function": "quota_int", "line": 791, "type": "ConfigError", "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"},
-        {"function": "parse_args", "line": 796, "type": "ConfigError", "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"},
-        {"function": "parse_args", "line": 818, "type": "SystemExit", "message": "2"}
-      ], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"}
+        {
+          "function": "parse_args",
+          "line": 745,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "task file must be provided either positionally or with --task-file, not both"
+      }
     },
     {
-      "scenario_id": "invalid-quota-policy", "description": "A negative quota safety margin is translated to parser.error.",
-      "arguments": ["--quota-safety-margin", "-1"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 4, "catcher_ordinal": 2,
-      "exception_events": [{"function": "parse_args", "line": 794, "type": "ValueError", "message": "quota safety margin must be a non-negative integer"}, {"function": "parse_args", "line": 818, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "quota safety margin must be a non-negative integer"}
+      "scenario_id": "dry-run-scenario-without-dry-run",
+      "description": "--dry-run-scenario is rejected unless --dry-run is active.",
+      "arguments": [
+        "--dry-run-scenario",
+        "scenario.json"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 2,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 750,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "--dry-run-scenario requires --dry-run"
+      }
     },
     {
-      "scenario_id": "invalid-transient-retry-policy", "description": "A negative transient retry delay is translated to parser.error.",
-      "arguments": ["--transient-retry-initial-delay", "-1"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 5, "catcher_ordinal": 3,
-      "exception_events": [{"function": "parse_args", "line": 827, "type": "ValueError", "message": "transient retry initial delay must be a positive integer"}, {"function": "parse_args", "line": 846, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "transient retry initial delay must be a positive integer"}
+      "scenario_id": "dry-run-report-without-scenario",
+      "description": "--dry-run-report is rejected unless a dry-run scenario is supplied.",
+      "arguments": [
+        "--dry-run-report",
+        "report.json"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 3,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 752,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "--dry-run-report requires --dry-run-scenario"
+      }
     },
     {
-      "scenario_id": "gate-decision-without-resume", "description": "A gate decision is rejected unless --resume was explicit.",
-      "arguments": ["--approve-gate", "--gate-rationale", "reviewed"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 6, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 851, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "--approve-gate/--reject-gate requires explicit --resume"}
+      "scenario_id": "explicit-config-missing",
+      "description": "An explicitly selected missing configuration file is rejected.",
+      "arguments": [
+        "--config",
+        "missing.toml"
+      ],
+      "environment": {},
+      "source_kind": "raise",
+      "source_ordinal": 1,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 761,
+          "type": "ConfigError",
+          "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "raise",
+        "error_chain": [
+          {
+            "type": "ConfigError",
+            "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"
+          }
+        ],
+        "stderr": ""
+      }
     },
     {
-      "scenario_id": "gate-decision-without-rationale", "description": "An explicit gate decision requires a nonblank rationale.",
-      "arguments": ["--resume", "--approve-gate"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 7, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 853, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "an explicit gate decision requires --gate-rationale"}
+      "scenario_id": "quota-environment-not-integer",
+      "description": "A non-integer quota environment value is rethrown as ConfigError.",
+      "arguments": [],
+      "environment": {
+        "RUN_TASK_QUOTA_SAFETY_MARGIN": "not-an-integer"
+      },
+      "source_kind": "raise",
+      "source_ordinal": 2,
+      "catcher_ordinal": 1,
+      "exception_events": [
+        {
+          "function": "quota_int",
+          "line": 789,
+          "type": "ValueError",
+          "message": "invalid literal for int() with base 10: 'not-an-integer'"
+        },
+        {
+          "function": "quota_int",
+          "line": 791,
+          "type": "ConfigError",
+          "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
+        },
+        {
+          "function": "parse_args",
+          "line": 796,
+          "type": "ConfigError",
+          "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
+        },
+        {
+          "function": "parse_args",
+          "line": 818,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
+      }
     },
     {
-      "scenario_id": "gate-rationale-without-decision", "description": "A rationale without an approve or reject decision is rejected.",
-      "arguments": ["--resume", "--gate-rationale", "reviewed"], "environment": {}, "source_kind": "parser_error", "source_ordinal": 8, "catcher_ordinal": null,
-      "exception_events": [{"function": "parse_args", "line": 855, "type": "SystemExit", "message": "2"}], "process_starts": 0,
-      "outcome": {"kind": "parser_error", "exit_code": 2, "stderr_message": "--gate-rationale requires --approve-gate or --reject-gate"}
+      "scenario_id": "invalid-quota-policy",
+      "description": "A negative quota safety margin is translated to parser.error.",
+      "arguments": [
+        "--quota-safety-margin",
+        "-1"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 4,
+      "catcher_ordinal": 2,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 794,
+          "type": "ValueError",
+          "message": "quota safety margin must be a non-negative integer"
+        },
+        {
+          "function": "parse_args",
+          "line": 818,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "quota safety margin must be a non-negative integer"
+      }
     },
     {
-      "scenario_id": "invalid-agent-setting", "description": "An invalid agent setting is rethrown as ConfigError.",
-      "arguments": [], "environment": {"RUN_TASK_CLAUDE_EFFORT": "extreme"}, "source_kind": "raise", "source_ordinal": 3, "catcher_ordinal": 4,
-      "exception_events": [{"function": "parse_args", "line": 881, "type": "AgentConfigError", "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"}, {"function": "parse_args", "line": 883, "type": "ConfigError", "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"}], "process_starts": 0,
-      "outcome": {"kind": "raise", "error_chain": [{"type": "ConfigError", "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"}, {"type": "AgentConfigError", "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"}], "stderr": ""}
+      "scenario_id": "invalid-transient-retry-policy",
+      "description": "A negative transient retry delay is translated to parser.error.",
+      "arguments": [
+        "--transient-retry-initial-delay",
+        "-1"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 5,
+      "catcher_ordinal": 3,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 827,
+          "type": "ValueError",
+          "message": "transient retry initial delay must be a positive integer"
+        },
+        {
+          "function": "parse_args",
+          "line": 846,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "transient retry initial delay must be a positive integer"
+      }
+    },
+    {
+      "scenario_id": "gate-decision-without-resume",
+      "description": "A gate decision is rejected unless --resume was explicit.",
+      "arguments": [
+        "--approve-gate",
+        "--gate-rationale",
+        "reviewed"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 6,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 851,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "--approve-gate/--reject-gate requires explicit --resume"
+      }
+    },
+    {
+      "scenario_id": "gate-decision-without-rationale",
+      "description": "An explicit gate decision requires a nonblank rationale.",
+      "arguments": [
+        "--resume",
+        "--approve-gate"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 7,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 853,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "an explicit gate decision requires --gate-rationale"
+      }
+    },
+    {
+      "scenario_id": "gate-rationale-without-decision",
+      "description": "A rationale without an approve or reject decision is rejected.",
+      "arguments": [
+        "--resume",
+        "--gate-rationale",
+        "reviewed"
+      ],
+      "environment": {},
+      "source_kind": "parser_error",
+      "source_ordinal": 8,
+      "catcher_ordinal": null,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 855,
+          "type": "SystemExit",
+          "message": "2"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "parser_error",
+        "exit_code": 2,
+        "stderr_message": "--gate-rationale requires --approve-gate or --reject-gate"
+      }
+    },
+    {
+      "scenario_id": "invalid-agent-setting",
+      "description": "An invalid agent setting is rethrown as ConfigError.",
+      "arguments": [],
+      "environment": {
+        "RUN_TASK_CLAUDE_EFFORT": "extreme"
+      },
+      "source_kind": "raise",
+      "source_ordinal": 3,
+      "catcher_ordinal": 4,
+      "exception_events": [
+        {
+          "function": "parse_args",
+          "line": 881,
+          "type": "AgentConfigError",
+          "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+        },
+        {
+          "function": "parse_args",
+          "line": 883,
+          "type": "ConfigError",
+          "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+        }
+      ],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "raise",
+        "error_chain": [
+          {
+            "type": "ConfigError",
+            "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+          },
+          {
+            "type": "AgentConfigError",
+            "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+          }
+        ],
+        "stderr": ""
+      }
     }
   ],
   "successes": [
     {
-      "scenario_id": "valid-explicit-quota-arguments", "description": "All quota integers use the explicit argument return path.",
-      "arguments": ["--quota-safety-margin", "17", "--quota-max-wait", "120", "--quota-max-auto-resumes", "2", "--quota-heartbeat-interval", "15"], "environment": {}, "source_kind": "return", "source_ordinal": 1, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "a06225c2061f9aa7d5d5f146c893340145b495c4545e6e60f098d97ae68ef96e", "return_ordinals": [1, 1, 1, 1, 2, 2, 2, 4], "stderr": ""},
-      "namespace_patch": {"quota_heartbeat_interval": 15, "quota_max_auto_resumes": 2, "quota_max_wait": 120, "quota_safety_margin": 17, "quota_wait_policy": {"safety_margin_seconds": 17, "maximum_wait_seconds": 120, "maximum_auto_resumes": 2, "heartbeat_interval_seconds": 15}}
+      "scenario_id": "valid-explicit-quota-arguments",
+      "description": "All quota integers use the explicit argument return path.",
+      "arguments": [
+        "--quota-safety-margin",
+        "17",
+        "--quota-max-wait",
+        "120",
+        "--quota-max-auto-resumes",
+        "2",
+        "--quota-heartbeat-interval",
+        "15"
+      ],
+      "environment": {},
+      "source_kind": "return",
+      "source_ordinal": 1,
+      "catcher_ordinal": null,
+      "exception_events": [],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "success",
+        "namespace_field_count": 67,
+        "namespace_sha256": "252f68a0e165ed2083b45dc03f540d6109f38d3a12d41943ad5d6214a5026a17",
+        "return_ordinals": [
+          1,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          4
+        ],
+        "stderr": ""
+      },
+      "namespace_patch": {
+        "quota_heartbeat_interval": 15,
+        "quota_max_auto_resumes": 2,
+        "quota_max_wait": 120,
+        "quota_safety_margin": 17,
+        "quota_wait_policy": {
+          "safety_margin_seconds": 17,
+          "maximum_wait_seconds": 120,
+          "maximum_auto_resumes": 2,
+          "heartbeat_interval_seconds": 15
+        }
+      }
     },
     {
-      "scenario_id": "valid-default-arguments", "description": "Absent quota and retry settings use their default return path.",
-      "arguments": [], "environment": {}, "source_kind": "return", "source_ordinal": 2, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "b7806a53648f3903e5a2f4d368f88a27784b5ee87c2efd5399f2f3d42997c696", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {}
+      "scenario_id": "valid-default-arguments",
+      "description": "Absent quota and retry settings use their default return path.",
+      "arguments": [],
+      "environment": {},
+      "source_kind": "return",
+      "source_ordinal": 2,
+      "catcher_ordinal": null,
+      "exception_events": [],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "success",
+        "namespace_field_count": 67,
+        "namespace_sha256": "94340109d36050c04623c838eefebb452b430ea9704a1cfe837bf41905cb0599",
+        "return_ordinals": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4
+        ],
+        "stderr": ""
+      },
+      "namespace_patch": {}
     },
     {
-      "scenario_id": "valid-quota-environment-integer", "description": "A valid quota environment value uses the parsed integer return path.",
-      "arguments": [], "environment": {"RUN_TASK_QUOTA_SAFETY_MARGIN": "17"}, "source_kind": "return", "source_ordinal": 3, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "d60a85c000e3fcfd22eccf69c629872b310c52712d2e58ca14502e6b5294e795", "return_ordinals": [3, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"quota_wait_policy": {"safety_margin_seconds": 17}}
+      "scenario_id": "valid-quota-environment-integer",
+      "description": "A valid quota environment value uses the parsed integer return path.",
+      "arguments": [],
+      "environment": {
+        "RUN_TASK_QUOTA_SAFETY_MARGIN": "17"
+      },
+      "source_kind": "return",
+      "source_ordinal": 3,
+      "catcher_ordinal": null,
+      "exception_events": [],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "success",
+        "namespace_field_count": 67,
+        "namespace_sha256": "f43665d7b82e2133b5f9992db106827837048f49d8d0b501b1bf291e9f5ba824",
+        "return_ordinals": [
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4
+        ],
+        "stderr": ""
+      },
+      "namespace_patch": {
+        "quota_wait_policy": {
+          "safety_margin_seconds": 17
+        }
+      }
     },
     {
-      "scenario_id": "valid-explicit-gate-decision", "description": "A complete gate decision reaches the outer Namespace return path.",
-      "arguments": ["--resume", "--approve-gate", "--gate-rationale", "reviewed exact persisted evidence"], "environment": {}, "source_kind": "return", "source_ordinal": 4, "catcher_ordinal": null, "exception_events": [], "process_starts": 0,
-      "outcome": {"kind": "success", "namespace_field_count": 67, "namespace_sha256": "e7fa9edf1b800b17c0501a8c86a6312def0bbdea80acb6404dbf5d3a77b6e6c8", "return_ordinals": [2, 2, 2, 2, 2, 2, 2, 4], "stderr": ""}, "namespace_patch": {"approve_gate": true, "gate_decision": true, "gate_rationale": "reviewed exact persisted evidence", "resume": true, "resume_explicit": true}
+      "scenario_id": "valid-explicit-gate-decision",
+      "description": "A complete gate decision reaches the outer Namespace return path.",
+      "arguments": [
+        "--resume",
+        "--approve-gate",
+        "--gate-rationale",
+        "reviewed exact persisted evidence"
+      ],
+      "environment": {},
+      "source_kind": "return",
+      "source_ordinal": 4,
+      "catcher_ordinal": null,
+      "exception_events": [],
+      "process_starts": 0,
+      "outcome": {
+        "kind": "success",
+        "namespace_field_count": 67,
+        "namespace_sha256": "a7810f6d7236b59915d51d6114d42ff967ac32b04e1c079f32fe25ba869c4f4a",
+        "return_ordinals": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4
+        ],
+        "stderr": ""
+      },
+      "namespace_patch": {
+        "approve_gate": true,
+        "gate_decision": true,
+        "gate_rationale": "reviewed exact persisted evidence",
+        "resume": true,
+        "resume_explicit": true
+      }
     }
   ]
 }

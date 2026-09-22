@@ -5,7 +5,6 @@ from dataclasses import replace
 import hashlib
 
 import pytest
-import native_finding_decisions
 
 from contracts import (
     AgentRole,
@@ -191,7 +190,6 @@ def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str,
         "new_findings": [],
         "status_changes": [],
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, failure paths, resume",
@@ -265,14 +263,11 @@ def _fixed_document(context: NativeReviewContext) -> dict[str, object]:
 
 @pytest.fixture
 def active_finding_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
+    # Finding decisions are unconditionally active after the target-model cutover.
+    return None
 
 
-def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
+def test_final_review_completion_is_not_an_approval_and_keeps_open_findings(
     active_finding_decisions: None,
 ) -> None:
     existing = _finding(
@@ -282,13 +277,13 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
     )
     context = replace(
         _context(previous=(existing,), anchor_origin=None),
-        operation="claude_branch_discovery",
-        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
         slice_id="FINAL",
     )
     document = {
         "schema_version": "native-agent-review-result-v2",
-        "result_type": "branch_discovery_completed",
+        "result_type": "final_review_completed",
         "request_id": context.request_id,
         "reviewer": "claude",
         "scan_complete": True,
@@ -326,7 +321,7 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
     )
     result = parse_native_contract_result(document, context)
 
-    assert result.delivery_kind == "branch_discovery_completed"
+    assert result.delivery_kind == "final_review_completed"
     assert result.approval is None
     assert result.stopped is False
     assert result.occurrences == (
@@ -345,19 +340,19 @@ def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
         parse_native_contract_result(ordinary_review, context)
 
 
-def test_branch_discovery_requires_complete_scan_and_never_truncates_at_capacity(
+def test_final_review_requires_complete_scan_and_never_truncates_at_capacity(
     active_finding_decisions: None,
 ) -> None:
     context = replace(
         _context(anchor_origin=None),
-        operation="claude_branch_discovery",
-        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
         slice_id="FINAL",
         max_new_findings=1,
     )
     document = {
         "schema_version": "native-agent-review-result-v2",
-        "result_type": "branch_discovery_completed",
+        "result_type": "final_review_completed",
         "request_id": context.request_id,
         "reviewer": "claude",
         "scan_complete": True,
@@ -1350,7 +1345,7 @@ def test_seventy_five_finding_plan_approval_names_exact_missing_updates() -> Non
         {
             "finding_id": f"C-{number:02d}",
             "status": "CLOSED",
-            "rationale": "The reviewed plan treatment closes this blocker.",
+            "rationale": "The reviewed plan change closes this blocker.",
             "closure": {"kind": "fixed"},
         }
         for number in range(1, 33)

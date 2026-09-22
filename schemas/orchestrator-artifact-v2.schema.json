@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "scope_extension", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "branch_discovery_completed", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "branch_discovery_handoff_export", "branch_discovery_handoff_import", "plan_assignment", "remediation_cohort_checkpoint", "no_implementation_required", "closed_finding_occurrence", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "scope_extension", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "final_review_completed", "review_anchor", "review_validation_binding", "finding_transition", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -34,18 +34,10 @@
     {"if": {"properties": {"record_type": {"const": "agent_result"}}}, "then": {"properties": {"status": {"const": "ready"}, "payload": {"$ref": "#/$defs/agent_result"}}}},
     {"if": {"properties": {"record_type": {"const": "diagnostic"}}}, "then": {"properties": {"status": {"const": "failed"}, "payload": {"$ref": "#/$defs/diagnostic"}}}},
     {"if": {"properties": {"record_type": {"const": "review"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/review"}}}},
-    {"if": {"properties": {"record_type": {"const": "branch_discovery_completed"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/branch_discovery_completed"}}}},
+    {"if": {"properties": {"record_type": {"const": "final_review_completed"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/final_review_completed"}}}},
     {"if": {"properties": {"record_type": {"const": "review_anchor"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_anchor"}}}},
     {"if": {"properties": {"record_type": {"const": "review_validation_binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_validation_binding"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_transition"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/finding_transition"}}}},
-    {"if": {"properties": {"record_type": {"const": "finding_handoff_export"}}}, "then": {"properties": {"status": {"const": "exported"}, "payload": {"$ref": "#/$defs/finding_handoff_export"}}}},
-    {"if": {"properties": {"record_type": {"const": "finding_handoff_import"}}}, "then": {"properties": {"status": {"const": "imported"}, "payload": {"$ref": "#/$defs/finding_handoff_import"}}}},
-    {"if": {"properties": {"record_type": {"const": "branch_discovery_handoff_export"}}}, "then": {"properties": {"status": {"const": "exported"}, "payload": {"$ref": "#/$defs/branch_discovery_handoff_export"}}}},
-    {"if": {"properties": {"record_type": {"const": "branch_discovery_handoff_import"}}}, "then": {"properties": {"status": {"const": "imported"}, "payload": {"$ref": "#/$defs/branch_discovery_handoff_import"}}}},
-    {"if": {"properties": {"record_type": {"const": "plan_assignment"}}}, "then": {"properties": {"status": {"const": "assigned"}, "payload": {"$ref": "#/$defs/plan_assignment"}}}},
-    {"if": {"properties": {"record_type": {"const": "remediation_cohort_checkpoint"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/remediation_cohort_checkpoint"}}}},
-    {"if": {"properties": {"record_type": {"const": "no_implementation_required"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/no_implementation_required"}}}},
-    {"if": {"properties": {"record_type": {"const": "closed_finding_occurrence"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/closed_finding_occurrence"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_request"}}}, "then": {"properties": {"status": {"const": "requested"}, "payload": {"$ref": "#/$defs/validation_request"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_content"}}}, "then": {"properties": {"status": {"const": "captured"}, "payload": {"$ref": "#/$defs/validation_content"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_attestation"}}}, "then": {"properties": {"status": {"const": "attested"}, "payload": {"$ref": "#/$defs/validation_attestation"}}}},
@@ -110,7 +102,7 @@
         "branch": {"$ref": "#/$defs/non_empty"},
         "branch_base": {"$ref": "#/$defs/non_empty"},
         "first_slice_start_commit": {"$ref": "#/$defs/git_sha"},
-        "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"]},
+        "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY"]},
         "audit_report_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
       }
     },
@@ -129,29 +121,9 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-acceptance-removal-v1"},
-        "family_binding": {"$ref": "#/$defs/family_binding"}
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"}
       }
-    },
-    "family_binding": {
-      "type": "object", "additionalProperties": false,
-      "required": ["family_id", "family_base_commit", "family_authorized_change_set", "predecessor_run_id", "predecessor_head_record_id", "cycle_number", "current_plan_commit", "current_implementation_commit"],
-      "properties": {
-        "family_id": {"$ref": "#/$defs/identifier"},
-        "family_base_commit": {"$ref": "#/$defs/git_sha"},
-        "family_authorized_change_set": {"$ref": "#/$defs/non_empty_paths"},
-        "predecessor_run_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
-        "predecessor_head_record_id": {"oneOf": [{"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, {"type": "null"}]},
-        "cycle_number": {"type": "integer", "minimum": 1},
-        "current_plan_commit": {"oneOf": [{"$ref": "#/$defs/git_sha"}, {"type": "null"}]},
-        "current_implementation_commit": {"oneOf": [{"$ref": "#/$defs/git_sha"}, {"type": "null"}]}
-      },
-      "allOf": [
-        {"if": {"properties": {"predecessor_run_id": {"type": "null"}}}, "then": {"properties": {"predecessor_head_record_id": {"type": "null"}}}},
-        {"if": {"properties": {"predecessor_run_id": {"$ref": "#/$defs/identifier"}}}, "then": {"properties": {"predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}}}
-      ]
-    },
-    "workflow_transition": {
+    },    "workflow_transition": {
       "type": "object", "additionalProperties": false,
       "required": ["slice_id", "slice_status", "work_unit_id", "step", "work_unit_status"],
       "properties": {
@@ -234,7 +206,7 @@
     },
     "work_unit": {
       "type": "object", "additionalProperties": false, "required": ["slice_id", "round_number", "paths"],
-      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "open_finding_ids": {"$ref": "#/$defs/finding_ids"}, "finding_import_record_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}}
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "open_finding_ids": {"$ref": "#/$defs/finding_ids"}}
     },
     "correction_work_unit": {
       "type": "object", "additionalProperties": false, "required": ["slice_id", "round_number", "paths", "finding_ids"],
@@ -242,7 +214,7 @@
     },
     "agent_result": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files", "transport_schema", "request_id", "response_sha256", "slice_plan"],
-      "properties": {"role": {"const": "codex"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}, "slice_plan": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/slice"}}, "plan_treatments": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/plan_treatment_proposal"}}, "plan_completion": {"enum": ["IMPLEMENTATION_REQUIRED", "NO_IMPLEMENTATION_REQUIRED"]}}
+      "properties": {"role": {"const": "codex"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}, "slice_plan": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/slice"}}}
     },
     "diagnostic": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "attempt", "output_sha256", "reason"],
@@ -250,27 +222,27 @@
     },
     "review": {
       "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence", "test_files", "pre_mortem", "stop_request", "transport_schema", "request_id", "response_sha256"],
-      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "test_files": {"$ref": "#/$defs/paths"}, "pre_mortem": {"type": ["string", "null"], "minLength": 1}, "stop_request": {"oneOf": [{"$ref": "#/$defs/review_stop_request"}, {"type": "null"}]}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}, "plan_treatment_decisions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/plan_treatment_decision"}}},
+      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "test_files": {"$ref": "#/$defs/paths"}, "pre_mortem": {"type": ["string", "null"], "minLength": 1}, "stop_request": {"oneOf": [{"$ref": "#/$defs/review_stop_request"}, {"type": "null"}]}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
       "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}, {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}]}}, {"if": {"properties": {"red_state_followup_slice": {"type": "string"}}, "required": ["red_state_followup_slice"]}, "then": {"properties": {"verdict": {"const": "approved"}}}}, {"if": {"properties": {"evidence": {"type": "string"}}, "required": ["evidence"]}, "then": {"properties": {"review_evidence": {"type": "null"}}}}, {"if": {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}, "then": {"properties": {"evidence": {"type": "null"}}}}, {"if": {"properties": {"verdict": {"const": "stop"}}}, "then": {"properties": {"stop_request": {"$ref": "#/$defs/review_stop_request"}}}, "else": {"properties": {"stop_request": {"type": "null"}}}}]
     },
-    "branch_discovery_finding": {
+    "final_review_finding": {
       "type": "object", "additionalProperties": false,
       "required": ["finding_id", "severity", "summary", "acceptance_test", "affected_paths"],
       "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}}
     },
-    "branch_discovery_occurrence": {
+    "final_review_occurrence": {
       "type": "object", "additionalProperties": false,
       "required": ["finding_id", "rationale"],
       "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "rationale": {"$ref": "#/$defs/non_empty"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}}
     },
-    "branch_discovery_completed": {
+    "final_review_completed": {
       "type": "object", "additionalProperties": false,
       "required": ["reviewer", "work_unit_id", "new_findings", "occurrences", "review_evidence", "pre_mortem", "validation_attestation_record_id", "reviewed_head_commit", "transport_schema", "request_id", "response_sha256"],
       "properties": {
         "reviewer": {"$ref": "#/$defs/review/properties/reviewer"},
         "work_unit_id": {"$ref": "#/$defs/identifier"},
-        "new_findings": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/branch_discovery_finding"}},
-        "occurrences": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/branch_discovery_occurrence"}},
+        "new_findings": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/final_review_finding"}},
+        "occurrences": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/final_review_occurrence"}},
         "review_evidence": {"$ref": "#/$defs/review_evidence"},
         "pre_mortem": {"$ref": "#/$defs/non_empty"},
         "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"},
@@ -305,90 +277,7 @@
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
       "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified", "escalated"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "closure_kind": {"enum": ["fixed", "rejected"]}, "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "closure_evidence": {"$ref": "#/$defs/non_empty"}, "predecessor_finding_ref": {"$ref": "#/$defs/finding_id"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "affected_paths": {"$ref": "#/$defs/paths"}},
       "allOf": [{"if": {"properties": {"action": {"const": "opened"}}, "required": ["action"]}, "then": {"required": ["affected_paths"]}}]
-    },
-    "imported_finding_transition": {
-      "type": "object", "additionalProperties": false, "required": ["record_id", "payload"],
-      "properties": {"record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "payload": {"$ref": "#/$defs/finding_transition"}, "source_run_id": {"$ref": "#/$defs/identifier"}, "source_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}},
-      "allOf": [
-        {"if": {"required": ["source_run_id"]}, "then": {"required": ["source_record_id"]}},
-        {"if": {"required": ["source_record_id"]}, "then": {"required": ["source_run_id"]}}
-      ]
-    },
-    "finding_handoff_export": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "approved_plan_commit", "approval_review_record_id", "finding_transition_record_ids", "finding_transitions_sha256", "target_task_path", "target_task_sha256", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "approval_review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "finding_transition_record_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "authority": {"const": "orchestrator"}}
-    },
-    "finding_handoff_import": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "approved_plan_commit", "approval_review_record_id", "export_record_id", "target_run_id", "target_task_sha256", "finding_transitions_sha256", "transitions", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "approval_review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "export_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "transitions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/imported_finding_transition"}}, "authority": {"const": "orchestrator"}}
-    },
-    "finding_snapshot_item": {
-      "type": "object", "additionalProperties": false,
-      "required": ["finding_id", "signature", "finding_status", "severity"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "signature": {"$ref": "#/$defs/sha256"}, "finding_status": {"enum": ["open", "closed"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}}
-    },
-    "branch_discovery_handoff_export": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "finding_transition_record_ids", "finding_transitions_sha256", "target_task_path", "target_task_sha256", "target_run_identity", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": ["string", "null"], "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "finding_transition_record_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "authority": {"const": "orchestrator"}, "target_execution_mode": {"const": "BRANCH_DISCOVERY"}, "source_completion_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "remediation_cohort_checkpoint_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "closed_finding_dispositions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/closed_finding_disposition"}}},
-      "allOf": [{"if": {"required": ["target_execution_mode"]}, "then": {"required": ["source_completion_record_id"], "properties": {"discovery_review_record_id": {"type": "null"}}}, "else": {"required": ["discovery_review_record_id"], "properties": {"finding_transition_record_ids": {"minItems": 1}}}}]
-    },
-    "branch_discovery_handoff_import": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "export_record_id", "target_run_id", "target_task_path", "target_task_sha256", "target_run_identity", "finding_transitions_sha256", "transitions", "finding_snapshot", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": ["string", "null"], "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "export_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "transitions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/imported_finding_transition"}}, "finding_snapshot": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/finding_snapshot_item"}}, "authority": {"const": "orchestrator"}, "target_execution_mode": {"const": "BRANCH_DISCOVERY"}, "source_completion_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "remediation_cohort_checkpoint_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "closed_finding_dispositions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/closed_finding_disposition"}}},
-      "allOf": [{"if": {"required": ["target_execution_mode"]}, "then": {"required": ["source_completion_record_id"], "properties": {"discovery_review_record_id": {"type": "null"}}}, "else": {"required": ["discovery_review_record_id"], "properties": {"transitions": {"minItems": 1}, "finding_snapshot": {"minItems": 1}}}}]
-    },
-    "no_code_evidence_anchor": {
-      "type": "object", "additionalProperties": false,
-      "required": ["rejection_reason", "provenance_fingerprint", "evidence_paths", "evidence_content_sha256", "task_sha256", "scope_sha256", "affected_paths", "affected_content_sha256"],
-      "properties": {"rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "provenance_fingerprint": {"$ref": "#/$defs/sha256"}, "evidence_paths": {"$ref": "#/$defs/non_empty_paths"}, "evidence_content_sha256": {"$ref": "#/$defs/sha256"}, "task_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}, "scope_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}, "affected_paths": {"$ref": "#/$defs/paths"}, "affected_content_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}}
-    },
-    "closed_finding_disposition": {
-      "type": "object", "additionalProperties": false,
-      "required": ["finding_id", "signature", "source_plan_assignment_record_id", "evidence_anchor"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "signature": {"$ref": "#/$defs/sha256"}, "source_plan_assignment_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "evidence_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"}}
-    },
-    "plan_treatment_proposal": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["signature", "finding_ids", "treatment_kind", "closing_slice_ids"], "properties": {"signature": {"$ref": "#/$defs/sha256"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}, "treatment_kind": {"const": "implementation"}, "closing_slice_ids": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}}}},
-        {"type": "object", "additionalProperties": false, "required": ["signature", "finding_ids", "treatment_kind", "no_code_reason", "evidence", "evidence_paths", "affected_paths"], "properties": {"signature": {"$ref": "#/$defs/sha256"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}, "treatment_kind": {"const": "no_code"}, "no_code_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "evidence": {"$ref": "#/$defs/non_empty"}, "evidence_paths": {"$ref": "#/$defs/non_empty_paths"}, "affected_paths": {"$ref": "#/$defs/paths"}}}
-      ]
-    },
-    "plan_treatment_decision": {
-      "type": "object", "additionalProperties": false,
-      "required": ["signature", "decision", "rationale"],
-      "properties": {"signature": {"$ref": "#/$defs/sha256"}, "decision": {"enum": ["accepted", "rejected"]}, "rationale": {"$ref": "#/$defs/non_empty"}}
-    },
-    "plan_treatment_assignment": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["signature", "finding_ids", "treatment_kind", "closing_slice_ids"], "properties": {"signature": {"$ref": "#/$defs/sha256"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}, "treatment_kind": {"const": "implementation"}, "closing_slice_ids": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}}}},
-        {"type": "object", "additionalProperties": false, "required": ["signature", "finding_ids", "treatment_kind", "no_code_reason", "evidence", "authoritative_fingerprint"], "properties": {"signature": {"$ref": "#/$defs/sha256"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}, "treatment_kind": {"const": "no_code"}, "no_code_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed"]}, "evidence": {"$ref": "#/$defs/non_empty"}, "authoritative_fingerprint": {"$ref": "#/$defs/sha256"}, "evidence_anchor": {"$ref": "#/$defs/no_code_evidence_anchor"}}}
-      ]
-    },
-    "plan_assignment": {
-      "type": "object", "additionalProperties": false,
-      "required": ["family_id", "cycle_number", "remediation_round_number", "source_snapshot_record_id", "finding_snapshot_sha256", "plan_result_record_id", "review_record_id", "review_fingerprint", "treatments", "slices", "implementation_scope", "authority"],
-      "properties": {"family_id": {"$ref": "#/$defs/identifier"}, "cycle_number": {"type": "integer", "minimum": 1}, "remediation_round_number": {"type": "integer", "minimum": 1, "maximum": 64}, "source_snapshot_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "finding_snapshot_sha256": {"$ref": "#/$defs/sha256"}, "plan_result_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "review_fingerprint": {"$ref": "#/$defs/sha256"}, "treatments": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/plan_treatment_assignment"}}, "slices": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/slice"}}, "implementation_scope": {"$ref": "#/$defs/paths"}, "authority": {"$ref": "#/$defs/role"}, "plan_completion": {"enum": ["IMPLEMENTATION_REQUIRED", "NO_IMPLEMENTATION_REQUIRED"]}}
-    },
-    "remediation_cohort_checkpoint": {
-      "type": "object", "additionalProperties": false,
-      "required": ["family_id", "remediation_round_number", "plan_assignment_record_id", "implementation_run_id", "implementation_head_record_id", "inherited_signatures", "unresolved_inherited_signatures", "authority"],
-      "properties": {"family_id": {"$ref": "#/$defs/identifier"}, "remediation_round_number": {"type": "integer", "minimum": 1, "maximum": 64}, "plan_assignment_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "implementation_run_id": {"$ref": "#/$defs/identifier"}, "implementation_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "inherited_signatures": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}}, "unresolved_inherited_signatures": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}}, "authority": {"const": "orchestrator"}}
-    },
-    "no_implementation_required": {
-      "type": "object", "additionalProperties": false,
-      "required": ["family_id", "cycle_number", "remediation_round_number", "plan_assignment_record_id", "review_record_id", "reviewed_plan_commit", "closed_finding_ids", "authority"],
-      "properties": {"family_id": {"$ref": "#/$defs/identifier"}, "cycle_number": {"type": "integer", "minimum": 1}, "remediation_round_number": {"type": "integer", "minimum": 1, "maximum": 64}, "plan_assignment_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_plan_commit": {"$ref": "#/$defs/git_sha"}, "closed_finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}, "authority": {"const": "orchestrator"}}
-    },
-    "closed_finding_occurrence": {
-      "type": "object", "additionalProperties": false,
-      "required": ["finding_id", "signature", "source_plan_assignment_record_id", "discovery_completion_record_id", "evidence_anchor_sha256", "rationale", "reviewer"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "signature": {"$ref": "#/$defs/sha256"}, "source_plan_assignment_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_completion_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "evidence_anchor_sha256": {"$ref": "#/$defs/sha256"}, "rationale": {"$ref": "#/$defs/non_empty"}, "reviewer": {"$ref": "#/$defs/reviewer"}}
-    },
-    "validation_request": {
+    },    "validation_request": {
       "type": "object", "additionalProperties": false, "required": ["commands", "requested_by"],
       "properties": {"commands": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/command"}}, "requested_by": {"$ref": "#/$defs/role"}}
     },
@@ -502,7 +391,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["name", "value_kind", "item_count"],
       "properties": {
-        "name": {"enum": ["anchors", "decision", "finding_dispositions", "new_findings", "occurrences", "plan_completion", "plan_treatment_decisions", "plan_treatments", "pre_mortem", "rationale", "reclassifications", "ready", "remediation_paths", "request_id", "result_type", "review_evidence", "reviewer", "rule_id", "scan_complete", "schema_version", "slice_plan", "status_changes", "test_files"]},
+        "name": {"enum": ["anchors", "decision", "finding_dispositions", "new_findings", "occurrences", "pre_mortem", "rationale", "reclassifications", "ready", "remediation_paths", "request_id", "result_type", "review_evidence", "reviewer", "rule_id", "scan_complete", "schema_version", "slice_plan", "status_changes", "test_files"]},
         "value_kind": {"enum": ["array", "boolean", "integer", "null", "number", "object", "string"]},
         "item_count": {"type": ["integer", "null"], "minimum": 0}
       }
@@ -532,39 +421,17 @@
         "finding_id": {"$ref": "#/$defs/finding_id"},
         "finding_class": {"enum": ["BLOCKER", "OBSERVATION", null]}
       }
-    },
-    "rejected_plan_treatment_shape": {
+    },    "rejected_native_response_shape": {
       "type": "object", "additionalProperties": false,
-      "required": ["signature", "finding_ids", "treatment_kind", "closing_slice_ids", "rejection_reason"],
-      "properties": {
-        "signature": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
-        "finding_ids": {"type": "array", "items": {"$ref": "#/$defs/finding_id"}},
-        "treatment_kind": {"enum": ["implementation", "no_code", null]},
-        "closing_slice_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}},
-        "rejection_reason": {"enum": ["no_defect", "out_of_scope", "already_fixed", null]}
-      }
-    },
-    "rejected_plan_treatment_decision_shape": {
-      "type": "object", "additionalProperties": false,
-      "required": ["signature", "decision"],
-      "properties": {
-        "signature": {"$ref": "#/$defs/sha256"},
-        "decision": {"enum": ["accepted", "rejected", null]}
-      }
-    },
-    "rejected_native_response_shape": {
-      "type": "object", "additionalProperties": false,
-      "required": ["fields", "unknown_field_count", "result_type", "release_decision", "finding_dispositions", "status_changes", "reclassifications", "plan_treatments", "plan_treatment_decisions"],
+      "required": ["fields", "unknown_field_count", "result_type", "release_decision", "finding_dispositions", "status_changes", "reclassifications"],
       "properties": {
         "fields": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/rejected_response_field_shape"}},
         "unknown_field_count": {"type": "integer", "minimum": 0},
-        "result_type": {"enum": ["branch_discovery_completed", "correction_result", "implementation_result", "plan_result", "review_result", "stop_request", "stop_result", null]},
+        "result_type": {"enum": ["final_review_completed", "correction_result", "implementation_result", "plan_result", "review_result", "stop_request", "stop_result", null]},
         "release_decision": {"enum": ["approved", "denied", "not_ready", "ready", "scan_complete", "scan_incomplete", null]},
         "finding_dispositions": {"type": "array", "items": {"$ref": "#/$defs/rejected_finding_disposition_shape"}},
         "status_changes": {"type": "array", "items": {"$ref": "#/$defs/rejected_status_change_shape"}},
-        "reclassifications": {"type": "array", "items": {"$ref": "#/$defs/rejected_reclassification_shape"}},
-        "plan_treatments": {"type": "array", "items": {"$ref": "#/$defs/rejected_plan_treatment_shape"}},
-        "plan_treatment_decisions": {"type": "array", "items": {"$ref": "#/$defs/rejected_plan_treatment_decision_shape"}}
+        "reclassifications": {"type": "array", "items": {"$ref": "#/$defs/rejected_reclassification_shape"}}
       }
     },
     "invocation_failure": {
@@ -593,17 +460,17 @@
             "anchor-invalid: native anchor ids must be unique",
             "anchor-invalid: native anchors require a bound anchor_origin",
             "anchor-invalid: native review anchors must satisfy their bound contract",
-            "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires a branch discovery request",
-            "approval-invalid: BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker",
+            "approval-invalid: FINAL_REVIEW_COMPLETED requires a final review request",
+            "approval-invalid: FINAL_REVIEW_COMPLETED requires its dedicated request marker",
             "approval-invalid: approved Slice review leaves Findings opened in this response without a same-response closure or escalation",
             "approval-invalid: approval is invalid while an own BLOCKER is open",
             "approval-invalid: approval requires a complete PASS attestation or named red-state follow-up",
             "approval-invalid: approval requires pre_mortem",
             "approval-invalid: approval with test changes requires prior approval",
-            "approval-invalid: branch discovery cannot use approved or denied review_result",
-            "approval-invalid: branch discovery completion requires a complete PASS attestation",
-            "approval-invalid: branch discovery completion requires scan_complete=true",
-            "approval-invalid: branch discovery completion with test changes requires prior approval",
+            "approval-invalid: final review cannot use approved or denied review_result",
+            "approval-invalid: final review completion requires a complete PASS attestation",
+            "approval-invalid: final review completion requires scan_complete=true",
+            "approval-invalid: final review completion with test changes requires prior approval",
             "approval-invalid: denied review requires an open own BLOCKER",
             "approval-invalid: native review decision must satisfy its approval contract",
             "approval-invalid: review cannot introduce or reclassify to OBSERVATION",
@@ -615,11 +482,6 @@
             "context-invalid: bound request_digest must be lowercase SHA-256",
             "context-invalid: bound request_id must contain request_digest",
             "context-invalid: bound review context requires a NativeReviewContext",
-            "context-invalid: closed Finding binding does not reference a closed offered Finding",
-            "context-invalid: closed Finding binding signature differs from the Finding",
-            "context-invalid: closed Finding bindings are valid only for branch discovery",
-            "context-invalid: closed Finding bindings must be sorted and unique",
-            "context-invalid: closed Finding bindings must be typed",
             "context-invalid: communicated Slice-commit decision Finding set differs from the authoritative enforced set",
             "context-invalid: diff_fingerprint must be lowercase SHA-256",
             "context-invalid: final_review_pending_count is valid only for a final review",
@@ -628,7 +490,7 @@
             "context-invalid: known open findings must belong to the authoritative finding set",
             "context-invalid: legacy final_review_pending_count is unsupported",
             "context-invalid: live native review parsing requires BoundNativeReviewContext",
-            "context-invalid: max_new_findings is valid only for a branch discovery review",
+            "context-invalid: max_new_findings is valid only for a final review review",
             "context-invalid: native Clau\u0064e writer schema requires reviewer=clau\u0064e",
             "context-invalid: native implementer context must satisfy its bound contract",
             "context-invalid: native Co\u0064ex context requires Co\u0064exStepContract and a non-empty frozenset of known stop rule ids",
@@ -636,11 +498,6 @@
             "context-invalid: native review context must satisfy its bound contract",
             "context-invalid: offered findings must belong to the authoritative finding set",
             "context-invalid: offered open findings must match the known open finding set",
-            "context-invalid: plan treatment Finding IDs differ from their canonical signature group",
-            "context-invalid: plan treatments are valid only for a plan review",
-            "context-invalid: plan treatments must be sorted and unique by signature",
-            "context-invalid: plan treatments must be typed",
-            "context-invalid: plan treatments must cover every canonical open signature exactly once",
             "context-invalid: plan_artifact_path is valid only for a plan review",
             "context-invalid: plan_artifact_path must be one exact repository-relative Markdown path",
             "context-invalid: planned slice ids must be contiguous and 1-based",
@@ -658,15 +515,12 @@
             "dormant-finding-decision-field: native implementer output must not use dormant finding decision fields",
             "dormant-finding-decision-field: native review output must not use dormant finding decision fields",
             "finding-content-invalid: closed Finding occurrence carries another evidence anchor",
-            "finding-content-invalid: implementation treatment cannot close its Finding in plan review",
             "finding-content-invalid: native review finding content must satisfy its closed contract",
             "finding-content-invalid: new Finding generation carries another evidence anchor",
             "finding-content-invalid: open Finding occurrence forbids a closed-disposition anchor",
-            "finding-content-invalid: plan treatment decisions must be sorted and unique by signature",
-            "finding-content-invalid: plan treatments must be sorted and unique by signature",
             "finding-content-invalid: rejected closure is missing required field rejection_reason",
             "finding-content-invalid: rejected closure requires named evidence",
-            "finding-event-conflict: branch discovery occurrences must reference each finding at most once",
+            "finding-event-conflict: final review occurrences must reference each finding at most once",
             "finding-event-conflict: closed Finding occurrence requires an unchanged evidence anchor",
             "finding-event-conflict: native review finding events must be mutually consistent",
             "finding-event-conflict: new finding reuses a previous finding id",
@@ -692,7 +546,7 @@
             "finding-reference-invalid: finding dispositions must be sorted and unique",
             "finding-reference-invalid: native implementer finding references must match the offered open findings",
             "finding-reference-not-open: native review finding updates must name open findings",
-            "finding-reference-unknown: branch discovery occurrence references an unknown Finding",
+            "finding-reference-unknown: final review occurrence references an unknown Finding",
             "finding-reference-unknown: closed findings cannot be reopened; create a new Finding generation",
             "finding-reference-unknown: finding ledger contains duplicate finding IDs",
             "finding-reference-unknown: finding update requires a rationale",
@@ -727,31 +581,8 @@
             "schema-invalid: bundled native review schema must be an object",
             "schema-invalid: native implementer output must satisfy its closed result schema",
             "schema-invalid: native review output must satisfy its closed result schema",
-            "slice-plan-invalid: IMPLEMENTATION_REQUIRED requires at least one Slice",
-            "slice-plan-invalid: NO_IMPLEMENTATION_REQUIRED forbids implementation Slices",
-            "slice-plan-invalid: NO_IMPLEMENTATION_REQUIRED forbids implementation treatments",
-            "slice-plan-invalid: canonical signature groups must be sorted and unique",
-            "slice-plan-invalid: implementation Slices must be contiguous and 1-based",
-            "slice-plan-invalid: implementation treatment closing Slice is absent from the plan",
             "slice-plan-invalid: native implementer slice plan must satisfy the planning contract",
-            "slice-plan-invalid: plan completion must be typed",
             "slice-plan-invalid: plan result requires a slice plan contract",
-            "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence must not be empty",
-            "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence_paths contains a non-canonical repository path",
-            "slice-plan-invalid: plan treatment is invalid: No-Code disposition evidence_paths must be non-empty, sorted, and unique",
-            "slice-plan-invalid: plan treatment is invalid: No-Code disposition forbids closing Slice ids",
-            "slice-plan-invalid: plan treatment is invalid: No-Code disposition requires a typed reason",
-            "slice-plan-invalid: plan treatment is invalid: already-fixed disposition affected_paths contains a non-canonical repository path",
-            "slice-plan-invalid: plan treatment is invalid: already-fixed disposition affected_paths must be non-empty, sorted, and unique",
-            "slice-plan-invalid: plan treatment is invalid: closing Slice id must be a positive integer",
-            "slice-plan-invalid: plan treatment is invalid: implementation treatment forbids No-Code disposition fields",
-            "slice-plan-invalid: plan treatment is invalid: implementation treatment requires exactly one closing Slice",
-            "slice-plan-invalid: plan treatment is invalid: only an already-fixed disposition may name affected_paths",
-            "slice-plan-invalid: plan treatment is invalid: plan treatment finding_ids must be non-empty, sorted, and unique",
-            "slice-plan-invalid: plan treatment is invalid: plan treatment kind must be typed",
-            "slice-plan-invalid: plan treatment is invalid: plan treatment signature must be a lowercase SHA-256 digest",
-            "slice-plan-invalid: plan treatments must be sorted and unique by signature",
-            "slice-plan-invalid: plan treatments must contain exactly one sorted treatment per signature",
             "slice-plan-invalid: planned slice paths must be sorted, unique, and non-empty",
             "slice-plan-invalid: slice plan ids must be contiguous and 1-based",
             "stop-content-invalid: native implementer stop content must satisfy the selected stop rule",
@@ -765,8 +596,8 @@
             "test-files-invalid: test_files do not match the step contract",
             "test-files-invalid: unexpected test_files for this step",
             "workflow-execution: a deterministic workflow rule halted the run",
-            "workflow-execution: branch discovery completion lacks its dedicated run binding",
-            "workflow-execution: branch discovery completion lacks its reviewed HEAD",
+            "workflow-execution: final review completion lacks its dedicated run binding",
+            "workflow-execution: final review completion lacks its reviewed HEAD",
             "workflow-execution: native Co\u0064ex persistence lacks its immutable transport binding",
             "workflow-execution: native agent content digest differs from its result binding",
             "workflow-execution: native agent result logical binding differs",

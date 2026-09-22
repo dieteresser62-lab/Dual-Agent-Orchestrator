@@ -25,7 +25,6 @@ if str(SOURCE_ROOT) not in sys.path:
 from artifact_bridge import (
     ArtifactBridge,
     attestation_payload,
-    branch_discovery_handoff_import_payload,
     provider_input_measurement_payload,
     review_payload_matches_complete_result,
 )
@@ -34,9 +33,6 @@ from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     BindingPayload,
-    BranchDiscoveryHandoffExportPayload,
-    FamilyBindingPayload,
-    FingerprintKind,
     ReviewPayload,
     Role,
     ValidationAttestationPayload,
@@ -97,9 +93,9 @@ RUNTIME_BOUNDARY_EFFECTS = {
     "queue_finalization": "queue_move",
     "slice_validation": "internal",
     "baseline_initialization": "ledger",
-    "branch_discovery_provider": "provider_start",
-    "branch_discovery_validation": "internal",
-    "family_handoff": "file_write",
+    "final_review_provider": "provider_start",
+    "final_review_validation": "internal",
+    "followup_task": "file_write",
 }
 
 
@@ -432,12 +428,12 @@ class CrashHarnessManifest:
             )
         if dict(manifest.runtime_boundaries) != RUNTIME_BOUNDARY_EFFECTS:
             raise CrashHarnessError(
-                "manifest runtime boundaries differ from the linked-run topology"
+                "manifest runtime boundaries differ from the target run topology"
             )
         if manifest.journeys != (
-            "plan-implement-branch-discovery",
+            "plan-implement-final-review",
             "multi-slice-correction-observation-resume",
-            "branch-discovery-remediation-handoff",
+            "final-review-followup-document",
         ):
             raise CrashHarnessError("manifest journey inventory is incomplete")
         if manifest.retry_kinds != ("quota", "network", "process"):
@@ -551,21 +547,21 @@ def _effect_spec(
         result = "3" * 40
         work_unit_id = "2"
     elif effect_class == "provider_start":
-        branch_discovery = runtime_boundary == "branch_discovery_provider"
+        final_review = runtime_boundary == "final_review_provider"
         operation = (
             (
                 "claude"  # allowlist:provider -- persisted provider-start vocabulary
-                if branch_discovery
+                if final_review
                 else "codex"  # allowlist:provider -- persisted provider-start vocabulary
             ),
-            "branch_discovery" if branch_discovery else "implementation",
+            "final_review" if final_review else "implementation",
             digest,
             "d" * 64,
             "attempt",
             "1",
             (
-                ".orchestrator/provider-results/branch-discovery-harness.json"
-                if branch_discovery
+                ".orchestrator/provider-results/final-review-harness.json"
+                if final_review
                 else ".orchestrator/provider-results/harness.json"
             ),
         )
@@ -574,8 +570,8 @@ def _effect_spec(
     elif effect_class == "file_write":
         operation = (
             (
-                "inbox/s5-branch-discovery.md"
-                if runtime_boundary == "family_handoff"
+                "inbox/s5-followup.md"
+                if runtime_boundary == "followup_task"
                 else "inbox/s5-implement.md"
             ),
             digest,
@@ -589,8 +585,8 @@ def _effect_spec(
     elif effect_class == "internal":
         operation = (
             (
-                "branch-discovery-validation-attestation"
-                if runtime_boundary == "branch_discovery_validation"
+                "final-review-validation-attestation"
+                if runtime_boundary == "final_review_validation"
                 else "validation-attestation"
             ),
         )
@@ -1261,15 +1257,14 @@ def canonical_result(document: Mapping[str, object]) -> bytes:
 
 
 def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
-    """Execute a commit-bound PLAN_ONLY handoff and its IMPLEMENT journey."""
+    """Exercise independent runs, same-run final review, and Inbox follow-up."""
 
     from dry_run_scenarios import (
-        build_joint_branch_discovery_scenario,
         build_s5_plan_only_scenario,
         build_s5_long_run_scenario,
         run_scripted_workflow_resumable,
     )
-    from plan_handoff import render_branch_discovery_task, write_implementation_handoff
+    from plan_handoff import write_implementation_handoff
     from task_contract import parse_task_contract
     from workflow_state import WorkflowStep
 
@@ -1327,32 +1322,10 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     if handoff_contract.approved_plan_commit != plan_commit:
         raise CrashHarnessError("IMPLEMENT handoff lost its approved-plan binding")
 
-    source_family = FamilyBindingPayload(
-        family_id="s5-linked-family",
-        family_base_commit="a" * 40,
-        family_authorized_change_set=(
-            "docs/internal/s5-work-plan.md",
-            "src/first.py",
-            "src/second.py",
-        ),
-        predecessor_run_id=None,
-        predecessor_head_record_id=None,
-        cycle_number=1,
-        current_plan_commit=plan_commit,
-        current_implementation_commit="d" * 40,
-    )
     long_scenario = build_s5_long_run_scenario()
-    long_scenario = replace(
-        long_scenario,
-        initial=replace(long_scenario.initial, family_binding=source_family),
-    )
     independent_scenario = replace(
         build_s5_long_run_scenario(),
         name="s5-long-run-independent-v1",
-        initial=replace(
-            build_s5_long_run_scenario().initial,
-            family_binding=source_family,
-        ),
     )
     long = run_scripted_workflow_resumable(
         scenario=long_scenario,
@@ -1367,267 +1340,82 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     findings = long.result.history.findings
     second_findings = second_long.result.history.findings
 
-    long_store = ArtifactStore(journey_root, f"dry-{long_scenario.name}")
-    implementation_replay = replay_artifacts(
-        long_store.load_chain(), f"dry-{long_scenario.name}"
+    long_run_id = f"dry-{long_scenario.name}"
+    long_store = ArtifactStore(journey_root, long_run_id)
+    followup_publisher = _production_driver(journey_root)
+    followup_publisher._artifact_bridge = ArtifactBridge(  # noqa: SLF001
+        long_store, now=lambda: FIXED_TIME
     )
-    implementation_export_record = next(
-        record
-        for record in implementation_replay.records
-        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
-        and record.payload.target_execution_mode == "BRANCH_DISCOVERY"
-    )
-    implementation_export = implementation_export_record.payload
-    discovery_task = journey_root / implementation_export.target_task_path
-    discovery_task_bytes = render_branch_discovery_task(
-        target_branch=long.result.state.target_branch or long.result.state.branch,
-        scope_paths=source_family.family_authorized_change_set,
-        finding_handoff=(
-            implementation_replay.expected_run_id,
-            implementation_export_record.record_id,
-        ),
-    ).encode("utf-8")
-    if hashlib.sha256(discovery_task_bytes).hexdigest() != (
-        implementation_export.target_task_sha256
+    followup_publisher.active_state = long.result.state
+    followup_task = followup_publisher.publish_followup_task(long.result.state)
+    if followup_task is None or not followup_task.is_file():
+        raise CrashHarnessError("final review published no ordinary Inbox task")
+    followup_content = followup_task.read_text(encoding="utf-8")
+    if (
+        "The final branch review found a follow-up defect." not in followup_content
+        or "src/second.py" not in followup_content
+        or "C-02" in followup_content
+        or long_run_id in followup_content
     ):
         raise CrashHarnessError(
-            "IMPLEMENT completion export differs from its discovery task bytes"
+            "follow-up task is incomplete or exposes cross-run correlation"
         )
-    discovery_task.write_bytes(discovery_task_bytes)
-    discovery_run_id = implementation_export.target_run_identity
-    discovery_family = FamilyBindingPayload(
-        family_id=implementation_export.family_id,
-        family_base_commit=implementation_export.family_base_commit,
-        family_authorized_change_set=source_family.family_authorized_change_set,
-        predecessor_run_id=implementation_export.predecessor_run_id,
-        predecessor_head_record_id=implementation_export.predecessor_head_record_id,
-        cycle_number=implementation_export.cycle_number,
-        current_plan_commit=plan_commit,
-        current_implementation_commit=implementation_export.reviewed_head_commit,
-    )
-    discovery_import = branch_discovery_handoff_import_payload(
-        implementation_replay,
-        implementation_export_record,
-        target_run_id=discovery_run_id,
-        target_task_path=implementation_export.target_task_path,
-        target_task_bytes=discovery_task_bytes,
-        target_family_binding=discovery_family,
-    )
-    discovery_task_digest = hashlib.sha256(discovery_task_bytes).hexdigest()
-    ArtifactBridge(
-        ArtifactStore(journey_root, discovery_run_id), now=lambda: FIXED_TIME
-    ).append(
-        discovery_import,
-        logical_id="branch-discovery-handoff-import",
-        idempotency_key="branch-discovery-handoff-import",
-        fingerprint_sha256=discovery_task_digest,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    discovery_scenario = build_joint_branch_discovery_scenario(discovery_family)
-    discovery = run_scripted_workflow_resumable(
-        scenario=discovery_scenario,
-        task_file=discovery_task,
-        driver_factory=driver_factory,
-        run_id=discovery_run_id,
-    )
-
-    discovery_store = ArtifactStore(journey_root, discovery_run_id)
-    discovery_publisher = _production_driver(journey_root)
-    discovery_publisher._artifact_bridge = ArtifactBridge(  # noqa: SLF001
-        discovery_store, now=lambda: FIXED_TIME
-    )
-    discovery_publisher.active_state = discovery.result.state
-    published_remediation_task = discovery_publisher.publish_family_handoff(
-        discovery.result.state
-    )
-    if published_remediation_task is None:
-        raise CrashHarnessError(
-            "completed discovery with open findings published no remediation task"
-        )
-    discovery_replay = replay_artifacts(
-        discovery_store.load_chain(), discovery_run_id
-    )
-    remediation_export_record = next(
-        record
-        for record in discovery_replay.records
-        if isinstance(record.payload, BranchDiscoveryHandoffExportPayload)
-        and record.payload.target_execution_mode == "PLAN_ONLY"
-    )
-    remediation_export = remediation_export_record.payload
-    remediation_task = published_remediation_task
-    if remediation_task != journey_root / remediation_export.target_task_path:
-        raise CrashHarnessError(
-            "published remediation task differs from its discovery export path"
-        )
-    remediation_task_bytes = remediation_task.read_bytes()
-    if hashlib.sha256(remediation_task_bytes).hexdigest() != (
-        remediation_export.target_task_sha256
-    ):
-        raise CrashHarnessError(
-            "BRANCH_DISCOVERY completion export differs from its remediation task"
-        )
-    remediation_contract = parse_task_contract(
-        remediation_task_bytes.decode("utf-8")
-    )
-    if remediation_contract.work_plan_path is None:
-        raise CrashHarnessError("remediation PLAN_ONLY task lacks its work-plan path")
-    remediation_run_id = remediation_export.target_run_identity
-    remediation_family = FamilyBindingPayload(
-        family_id=remediation_export.family_id,
-        family_base_commit=remediation_export.family_base_commit,
-        family_authorized_change_set=tuple(
-            sorted(
-                (
-                    *discovery_family.family_authorized_change_set,
-                    remediation_contract.work_plan_path,
-                )
-            )
-        ),
-        predecessor_run_id=remediation_export.predecessor_run_id,
-        predecessor_head_record_id=remediation_export.predecessor_head_record_id,
-        cycle_number=remediation_export.cycle_number,
-        current_plan_commit=plan_commit,
-        current_implementation_commit=remediation_export.reviewed_head_commit,
-    )
-    remediation_import = branch_discovery_handoff_import_payload(
-        discovery_replay,
-        remediation_export_record,
-        target_run_id=remediation_run_id,
-        target_task_path=remediation_export.target_task_path,
-        target_task_bytes=remediation_task_bytes,
-        target_family_binding=remediation_family,
-    )
-    remediation_task_digest = hashlib.sha256(remediation_task_bytes).hexdigest()
-    remediation_store = ArtifactStore(journey_root, remediation_run_id)
-    ArtifactBridge(remediation_store, now=lambda: FIXED_TIME).append(
-        remediation_import,
-        logical_id="remediation-plan-handoff-import",
-        idempotency_key="remediation-plan-handoff-import",
-        fingerprint_sha256=remediation_task_digest,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    remediation_state = init_workflow_state(
-        run_id=remediation_run_id,
-        task_file=str(remediation_task.resolve()),
-        branch="feature/dry-run",
-        branch_base=remediation_family.family_base_commit,
-        first_slice_start_commit="d" * 40,
-        slice_count=1,
-        task_digest=remediation_task_digest,
-        execution_mode="PLAN_ONLY",
-        task_scope_patterns=remediation_contract.scope_patterns,
-        work_plan_path=remediation_contract.work_plan_path,
-        target_branch="feature/dry-run",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-        family_binding=remediation_family,
-        timestamp=FIXED_TIME,
-    )
-    remediation_driver = _production_driver(journey_root)
-    remediation_driver._artifact_bridge = ArtifactBridge(  # noqa: SLF001
-        remediation_store, now=lambda: FIXED_TIME
-    )
-    remediation_driver.bind_work_unit(remediation_state)
-    remediation_resolution = resolve_resume_state(
-        journey_root, remediation_run_id
-    )
 
     journey_resolutions = {
         "plan": resolve_resume_state(journey_root, "dry-s5-plan-only-v1"),
-        "long": resolve_resume_state(journey_root, f"dry-{long_scenario.name}"),
+        "long": resolve_resume_state(journey_root, long_run_id),
         "independent": resolve_resume_state(
             journey_root, f"dry-{independent_scenario.name}"
         ),
-        "discovery": resolve_resume_state(journey_root, discovery_run_id),
-        "remediation": remediation_resolution,
     }
     if (
         not long.result.workflow_completed
         or long.result.state.current_step is not WorkflowStep.COMPLETED
         or long.result.state.execution_mode != "IMPLEMENT"
         or long.result.state.approved_plan_commit != plan_commit
-        or tuple(item.finding_id for item in findings) != ("C-01",)
+        or long.result.state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+        or tuple(item.finding_id for item in findings) != ("C-01", "C-02")
         or journey_resolutions["long"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("combined long-run did not close its complete ledger")
     if (
         not second_long.result.workflow_completed
-        or tuple(item.finding_id for item in second_findings) != ("C-01",)
+        or tuple(item.finding_id for item in second_findings) != ("C-01", "C-02")
         or journey_resolutions["independent"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("independent multi-slice journey did not converge")
-    discovery_findings = discovery.result.history.findings
-    if (
-        not discovery.result.workflow_completed
-        or discovery.result.state.execution_mode != "BRANCH_DISCOVERY"
-        or discovery.result.state.current_step is not WorkflowStep.COMPLETED
-        or journey_resolutions["discovery"].state.current_step
-        is not WorkflowStep.COMPLETED
-        or tuple(item.finding_id for item in discovery_findings)
-        != ("C-01", "C-02")
-    ):
-        raise CrashHarnessError(
-            "linked BRANCH_DISCOVERY run did not converge: "
-            f"workflow_completed={discovery.result.workflow_completed}, "
-            f"mode={discovery.result.state.execution_mode}, "
-            f"step={discovery.result.state.current_step.value}, "
-            f"projected_step="
-            f"{journey_resolutions['discovery'].state.current_step.value}, "
-            f"finding_ids={tuple(item.finding_id for item in discovery_findings)!r}"
-        )
-    imported_remediation_ids = tuple(
-        item.finding_id for item in remediation_import.finding_snapshot
-    )
-    if (
-        remediation_resolution.state.current_step is not WorkflowStep.CODEX_PLAN  # allowlist:provider -- typed workflow step
-        or imported_remediation_ids != ("C-01", "C-02")
-    ):
-        raise CrashHarnessError(
-            "BRANCH_DISCOVERY remediation handoff did not preserve its finding ledger"
-        )
     plan_agents = tuple(call for call in plan.calls if call.startswith("agent:"))
     long_agents = tuple(call for call in long.calls if call.startswith("agent:"))
-    discovery_agents = tuple(
-        call for call in discovery.calls if call.startswith("agent:")
-    )
     second_long_agents = tuple(
         call for call in second_long.calls if call.startswith("agent:")
     )
     handoff_sha256 = hashlib.sha256(handoff_content.encode("utf-8")).hexdigest()
-    discovery_handoff_sha256 = hashlib.sha256(discovery_task_bytes).hexdigest()
-    remediation_handoff_sha256 = hashlib.sha256(remediation_task_bytes).hexdigest()
+    followup_sha256 = hashlib.sha256(followup_content.encode("utf-8")).hexdigest()
     return (
         {
-            "scenario_id": "plan-implement-branch-discovery",
-            "agent_invocation_count": (
-                len(plan_agents) + len(long_agents) + len(discovery_agents)
-            ),
+            "scenario_id": "plan-implement-final-review",
+            "agent_invocation_count": len(plan_agents) + len(long_agents),
             "commit_count": sum(call.startswith("commit:") for call in plan.calls)
             + sum(call.startswith("commit:") for call in long.calls),
             "validation_count": sum(plan.validation_counts.values())
-            + sum(long.validation_counts.values())
-            + sum(discovery.validation_counts.values()),
+            + sum(long.validation_counts.values()),
             "resume_count": sum(call.startswith("interrupt:") for call in long.calls),
             "plan_only_execution_mode": plan.result.state.execution_mode,
             "implement_execution_mode": long.result.state.execution_mode,
-            "branch_discovery_execution_mode": (
-                discovery.result.state.execution_mode
-            ),
+            "final_review_work_unit_kind": long.result.state.current_work_unit.kind.value,
             "approved_plan_commit": plan_commit,
             "handoff_sha256": handoff_sha256,
-            "family_handoff_sha256": discovery_handoff_sha256,
             "handoff_idempotent": True,
             "durability_mode": "structured-v2-record-chain",
             "record_run_ids": [
                 "dry-s5-plan-only-v1",
-                f"dry-{long_scenario.name}",
-                discovery_run_id,
+                long_run_id,
             ],
             "record_heads": [
                 journey_resolutions["plan"].record_head_id,
                 journey_resolutions["long"].record_head_id,
-                journey_resolutions["discovery"].record_head_id,
             ],
             "end_state": "completed",
         },
@@ -1658,27 +1446,19 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
             "end_state": "completed",
         },
         {
-            "scenario_id": "branch-discovery-remediation-handoff",
+            "scenario_id": "final-review-followup-document",
             "agent_invocation_count": 0,
             "commit_count": 0,
             "validation_count": 0,
             "resume_count": 0,
-            "source_execution_mode": discovery.result.state.execution_mode,
-            "target_execution_mode": (
-                remediation_resolution.state.execution_mode
-            ),
-            "finding_statuses": [
-                f"{item.finding_id}:{item.finding_status}"
-                for item in remediation_import.finding_snapshot
-            ],
-            "handoff_sha256": remediation_handoff_sha256,
-            "transitive_finding_count": len(remediation_import.transitions),
+            "source_execution_mode": long.result.state.execution_mode,
+            "target_path": str(followup_task.relative_to(journey_root)),
+            "finding_count": 1,
+            "correlation_free": True,
+            "handoff_sha256": followup_sha256,
             "durability_mode": "structured-v2-record-chain",
-            "record_run_ids": [discovery_run_id, remediation_run_id],
-            "record_heads": [
-                journey_resolutions["discovery"].record_head_id,
-                journey_resolutions["remediation"].record_head_id,
-            ],
+            "record_run_ids": [long_run_id],
+            "record_heads": [journey_resolutions["long"].record_head_id],
             "end_state": "completed",
         },
     )

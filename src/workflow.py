@@ -1219,7 +1219,7 @@ class WorkflowRunResult:
 
     @property
     def workflow_completed(self) -> bool:
-        """Require this linked run to reach its own terminal state."""
+        """Require this run to reach its own terminal state."""
         return (
             self.completed
             and self.state.current_step is WorkflowStep.COMPLETED
@@ -1233,10 +1233,9 @@ class WorkflowRunResult:
 
         if self._provider_input_boundary_verdict or self._quota_automation_verdict:
             return True
-        if self.state.execution_mode == TaskMode.BRANCH_DISCOVERY.value:
-            # E6 deliberately permits a completed discovery delivery to retain
-            # open findings.  Those findings determine the locally derived
-            # family acceptance; they are not a denial of the delivery itself.
+        if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+            # The terminal review may complete with new open findings. They are
+            # published as an ordinary Inbox task, not interpreted as a denial.
             return False
         return bool(workflow_rejection_finding_ids(self.state, self.history))
 
@@ -1676,7 +1675,7 @@ class WorkflowEngine:
             if step in (
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_BRANCH_DISCOVERY,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,
             ):
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.CLAUDE
@@ -1723,10 +1722,7 @@ class WorkflowEngine:
                 "pre-policy native reviewer recovery returned an invalid contract"
             )
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_branch_discovery = (
-            state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
-        )
-        is_final_review = is_branch_discovery
+        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
         request_result = pending.output.result
         result = request_result
         finding_ledger = self._authoritative_finding_ledger(
@@ -1746,22 +1742,22 @@ class WorkflowEngine:
                         offered,
                         result.findings,
                         review_type=(
-                            "branch discovery" if is_branch_discovery else "slice review"
+                            "final review" if is_final_review else "slice review"
                         ),
                         recovered_comparison=recovered,
                     ),
                 )
-            elif is_branch_discovery and offered != finding_ledger:
+            elif is_final_review and offered != finding_ledger:
                 result = replace(
                     result,
                     findings=self._merge_review_request_subset(
                         finding_ledger,
                         offered,
                         result.findings,
-                        review_type="branch discovery",
+                        review_type="final review",
                     ),
                 )
-            if is_branch_discovery:
+            if is_final_review:
                 requested_ids = tuple(item.finding_id for item in offered)
                 offered_id_set = frozenset(requested_ids)
                 new_ids = tuple(
@@ -2597,7 +2593,6 @@ class WorkflowEngine:
         request_findings: tuple[FindingRecord, ...],
         finding_ledger: tuple[FindingRecord, ...],
         final_review_pending_count: int | None = None,
-        is_branch_discovery: bool = False,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         request_history = replace(history, findings=request_findings)
         build_request = partial(
@@ -2839,10 +2834,7 @@ class WorkflowEngine:
         if reviewer is not AgentRole.CLAUDE:
             raise WorkflowExecutionError("only Claude may execute review steps")
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_branch_discovery = (
-            state.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
-        )
-        is_final_review = is_branch_discovery
+        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
         history = self._bind_correction_request_history(state, history)
         start_commit = state.branch_review_base_commit if is_final_review else (
             state.current_slice.start_commit or state.branch_base
@@ -2902,14 +2894,14 @@ class WorkflowEngine:
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             reviewer=reviewer,
             approval_marker=(
-                ApprovalMarker.BRANCH_DISCOVERY
-                if is_branch_discovery
+                ApprovalMarker.FINAL_REVIEW
+                if is_final_review
                 else ApprovalMarker.PLAN
                 if is_plan_review
                 else ApprovalMarker.SLICE
             ),
             slice_id=(
-                "DISCOVERY" if is_branch_discovery else f"{unit.slice_id:02d}"
+                "DISCOVERY" if is_final_review else f"{unit.slice_id:02d}"
             ),
             round_number=review_round,
             request_sequence=unit.request_sequence,
@@ -2985,7 +2977,6 @@ class WorkflowEngine:
             request_findings,
             finding_ledger,
             final_review_pending_count,
-            is_branch_discovery,
         )
 
     def _apply_review_result(
@@ -3032,17 +3023,17 @@ class WorkflowEngine:
             state = self._halt_for_stop_request(state, context, result.stop_request)
             self.driver.checkpoint(state, history)
             return state, history
-        if result.delivery_kind == "branch_discovery_completed":
-            if state.execution_mode != TaskMode.BRANCH_DISCOVERY.value:
+        if result.delivery_kind == "final_review_completed":
+            if not is_final_review:
                 raise WorkflowExecutionError(
-                    "BRANCH_DISCOVERY_COMPLETED is outside a branch discovery run"
+                    "FINAL_REVIEW_COMPLETED is outside the final review step"
                 )
             state = state.complete_current_work_unit()
             self.driver.checkpoint(state, history)
             return state, history
         if is_final_review:
             raise WorkflowExecutionError(
-                "branch discovery requires BRANCH_DISCOVERY_COMPLETED"
+                "final review requires FINAL_REVIEW_COMPLETED"
             )
 
         if result.approval is True:
@@ -3215,29 +3206,6 @@ class WorkflowEngine:
                 code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
                 detail = str(error)
                 affected_paths = error.result.affected_paths
-                if (
-                    code == "UNAUTHORIZED-PATH"
-                    and error.fingerprint is not None
-                    and affected_paths
-                ):
-                    driver_state = self.driver.active_state
-                    if (
-                        isinstance(driver_state, WorkflowState)
-                        and driver_state.run_id == state.run_id
-                    ):
-                        state = replace(
-                            state,
-                            bootstrap_checks=driver_state.bootstrap_checks,
-                        )
-                    state = state.await_user_gate(
-                        reason=GateReason.UNEXPECTED_FILE,
-                        detail=f"UNEXPECTED-PATH | {detail}",
-                        fingerprint=error.fingerprint,
-                        paths=affected_paths,
-                        resume_step=state.current_step,
-                    )
-                    self.driver.checkpoint(state, history)
-                    return state, None
                 state = state.await_bootstrap_resume(
                     detail=f"{code} | {detail}",
                     fingerprint=fingerprint,
@@ -3689,7 +3657,7 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, WorkflowHistory, bool]:
         if state.current_work_unit.kind in {
             WorkUnitKind.PLAN,
-            WorkUnitKind.BRANCH_DISCOVERY,
+            WorkUnitKind.FINAL_REVIEW,
         }:
             return state, history, False
         evidence = detect_anchor_changes(
@@ -3754,7 +3722,7 @@ class WorkflowEngine:
         stop_request: StopRequest,
     ) -> WorkflowState:
         discovery_output_limit = (
-            state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+            state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
             and stop_request.rule_id == DISCOVERY_OUTPUT_LIMIT_RULE_ID
         )
         if (
@@ -3980,7 +3948,7 @@ class WorkflowEngine:
 
     @staticmethod
     def _change_start_commit(state: WorkflowState) -> str | None:
-        if state.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY:
+        if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
             return state.branch_review_base_commit
         return state.current_slice.start_commit
 
@@ -4103,7 +4071,7 @@ class WorkflowEngine:
             else "SLICE START COMMIT"
         )
         final_dimensions = (
-            "\n\nMANDATORY BRANCH-DISCOVERY DIMENSIONS\n"
+            "\n\nMANDATORY FINAL-REVIEW DIMENSIONS\n"
             "architecture drift | interface consistency | dead transition states | "
             "documentation synchronization | declared requirements and acceptance criteria"
             if evidence_kind is EvidenceKind.FULL_BRANCH

@@ -17,9 +17,6 @@ from content_authority import (
 from finding_order import sorted_finding_ids
 from native_finding_decisions import (
     NativeFindingClosure,
-    PlanCompletionKind,
-    PlanTreatmentDecision,
-    PlanTreatmentProposal,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
@@ -38,7 +35,7 @@ class AgentRole(str, Enum):
 class ApprovalMarker(str, Enum):
     PLAN = "PLAN_APPROVAL"
     SLICE = "SLICE_APPROVAL"
-    BRANCH_DISCOVERY = "BRANCH_DISCOVERY_COMPLETED"
+    FINAL_REVIEW = "FINAL_REVIEW_COMPLETED"
 
 
 class ReadinessMarker(str, Enum):
@@ -481,29 +478,28 @@ class ContractResult:
     delivery_kind: str = "review"
     occurrences: tuple[FindingOccurrence, ...] = ()
     scan_complete: bool | None = None
-    plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
     finding_closures: tuple[tuple[str, NativeFindingClosure], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.delivery_kind not in {"review", "branch_discovery_completed"}:
+        if self.delivery_kind not in {"review", "final_review_completed"}:
             raise ValueError("review delivery_kind is invalid")
-        if self.delivery_kind == "branch_discovery_completed":
+        if self.delivery_kind == "final_review_completed":
             if self.stopped or self.stop_request is not None or self.approval is not None:
                 raise ValueError(
-                    "branch discovery completion is neither an approval nor a stop"
+                    "final review completion is neither an approval nor a stop"
                 )
             if self.evidence is None or self.pre_mortem is None:
                 raise ValueError(
-                    "branch discovery completion requires evidence and pre_mortem"
+                    "final review completion requires evidence and pre_mortem"
                 )
             if self.scan_complete is not True:
                 raise ValueError(
-                    "branch discovery completion requires scan_complete=true"
+                    "final review completion requires scan_complete=true"
                 )
             occurrence_ids = tuple(item.finding_id for item in self.occurrences)
             if occurrence_ids != sorted_finding_ids(occurrence_ids):
                 raise ValueError(
-                    "branch discovery occurrences must be sorted and unique"
+                    "final review occurrences must be sorted and unique"
                 )
         else:
             if self.scan_complete is not None:
@@ -514,11 +510,6 @@ class ContractResult:
                 raise ValueError("ordinary reviews cannot carry discovery occurrences")
             if not self.stopped and self.approval is None:
                 raise ValueError("a completed review requires an approval decision")
-        if any(
-            not isinstance(item, PlanTreatmentDecision)
-            for item in self.plan_treatment_decisions
-        ):
-            raise ValueError("plan treatment decisions must be typed")
         closure_ids = tuple(item[0] for item in self.finding_closures)
         if (
             any(
@@ -693,19 +684,6 @@ class CodexContractResult:
     findings: tuple[FindingRecord, ...]
     slice_plan: tuple[PlannedSlice, ...] = ()
     self_check: str | None = None
-    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
-    plan_completion: PlanCompletionKind | None = None
-
-    def __post_init__(self) -> None:
-        if any(
-            not isinstance(item, PlanTreatmentProposal)
-            for item in self.plan_treatments
-        ):
-            raise ValueError("plan treatments must be typed")
-        if self.plan_completion is not None and not isinstance(
-            self.plan_completion, PlanCompletionKind
-        ):
-            raise ValueError("plan completion must be typed")
 
 
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:

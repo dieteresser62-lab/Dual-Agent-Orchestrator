@@ -54,22 +54,20 @@ def test_budget_table_covers_every_reachable_provider_operation() -> None:
         "codex_final_correction",
         "codex_final_review",
     }
-    assert PROVIDER_OPERATIONS["claude"] - reachable["claude"] == {
-        "claude_final_review"
-    }
+    assert PROVIDER_OPERATIONS["claude"] - reachable["claude"] == set()
 
 
-def test_branch_discovery_uses_the_slice_review_input_ceiling() -> None:
+def test_final_review_uses_the_slice_review_input_ceiling() -> None:
     rules = {
         rule.operation: rule
         for rule in default_provider_input_budget_policy().rules
         if rule.provider == "claude"
     }
 
-    discovery = rules["claude_branch_discovery"]
+    final_review = rules["claude_final_review"]
     slice_review = rules["claude_slice_review"]
-    assert (discovery.max_chars, discovery.max_bytes) == (4_000_000, 16_000_000)
-    assert (discovery.max_chars, discovery.max_bytes) == (
+    assert (final_review.max_chars, final_review.max_bytes) == (4_000_000, 16_000_000)
+    assert (final_review.max_chars, final_review.max_bytes) == (
         slice_review.max_chars,
         slice_review.max_bytes,
     )

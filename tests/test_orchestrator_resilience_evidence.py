@@ -530,7 +530,7 @@ def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -
     result, calls, validations = orchestrator.run_default_dry_run(task)
 
     assert result.workflow_completed
-    assert result.state.current_work_unit.kind is WorkUnitKind.SLICE
+    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
     assert result.state.current_step is WorkflowStep.COMPLETED
     assert tuple(call for call in calls if call.startswith("agent:")) == (
         "agent:codex:work-unit-1:request-1:codex_plan",
@@ -539,9 +539,10 @@ def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -
         "agent:claude:work-unit-2:request-1:claude_slice_review",
         "agent:codex:work-unit-3:request-1:codex_implementation",
         "agent:claude:work-unit-3:request-1:claude_slice_review",
+        "agent:claude:work-unit-4:request-1:claude_final_review",
     )
     assert sum(call.startswith("commit:") for call in calls) == 2
-    assert sum(validations.values()) == 3
+    assert sum(validations.values()) == 4
     assert result.history.findings == ()
 
 
@@ -556,9 +557,11 @@ def test_provider_free_correction_continues_beyond_four_returns(tmp_path: Path) 
     correction = report.result.state.current_work_unit
     assert report.result.workflow_completed
     assert report.remaining_agent_events == 0
-    assert correction.kind is WorkUnitKind.SLICE
-    assert correction.codex_return_count == 6
-    assert correction.max_codex_returns == 8
+    assert correction.kind is WorkUnitKind.FINAL_REVIEW
+    corrected_slice = report.result.state.work_units[-2]
+    assert corrected_slice.kind is WorkUnitKind.SLICE
+    assert corrected_slice.codex_return_count == 6
+    assert corrected_slice.max_codex_returns == 8
     assert correction.gate.status is GateStatus.CLEAR
     assert sum(call.startswith("commit:") for call in report.calls) == 1
     assert all(

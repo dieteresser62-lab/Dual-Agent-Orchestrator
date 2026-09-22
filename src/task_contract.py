@@ -20,8 +20,7 @@ BRANCH_REFERENCE_PATTERN = re.compile(
     r"(?![A-Za-z0-9_/-])"
 )
 MARKER_PATTERN = re.compile(
-    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE|"
-    r"FINDING_HANDOFF_SOURCE_RUN|FINDING_HANDOFF_EXPORT)"
+    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE)"
     r"[ \t]*:[ \t]*(.+?)[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -38,7 +37,6 @@ class TaskContractError(ValueError):
 class TaskMode(str, Enum):
     IMPLEMENT = "IMPLEMENT"
     PLAN_ONLY = "PLAN_ONLY"
-    BRANCH_DISCOVERY = "BRANCH_DISCOVERY"
 
 
 @dataclass(frozen=True)
@@ -50,8 +48,6 @@ class TaskContract:
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
     approved_slices: tuple[PlannedSlice, ...] = ()
-    finding_handoff_source_run_id: str | None = None
-    finding_handoff_export_record_id: str | None = None
     informal_intake: bool = False
     target_branch_generated: bool = False
 
@@ -81,41 +77,6 @@ class TaskContract:
                 )
             if self.approved_plan_commit is not None or self.approved_slices:
                 raise TaskContractError("PLAN_ONLY cannot consume an approved-plan handoff")
-        if self.mode is TaskMode.BRANCH_DISCOVERY:
-            if self.work_plan_path is not None:
-                raise TaskContractError("BRANCH_DISCOVERY forbids WORK_PLAN_PATH")
-            if self.approved_plan_commit is not None or self.approved_slices:
-                raise TaskContractError(
-                    "BRANCH_DISCOVERY cannot consume an approved-plan handoff"
-                )
-        handoff_values = (
-            self.finding_handoff_source_run_id,
-            self.finding_handoff_export_record_id,
-        )
-        if any(value is None for value in handoff_values) != all(
-            value is None for value in handoff_values
-        ):
-            raise TaskContractError("finding handoff requires both source run and export record")
-        if self.finding_handoff_source_run_id is not None:
-            if (
-                self.approved_plan_commit is None
-                and self.mode not in {
-                    TaskMode.PLAN_ONLY,
-                    TaskMode.BRANCH_DISCOVERY,
-                }
-            ):
-                raise TaskContractError(
-                    "finding handoff requires PLAN_ONLY, BRANCH_DISCOVERY, or an "
-                    "approved-plan IMPLEMENT task"
-                )
-            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.finding_handoff_source_run_id) is None:
-                raise TaskContractError("FINDING_HANDOFF_SOURCE_RUN is invalid")
-            if re.fullmatch(r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or "") is None:
-                raise TaskContractError("FINDING_HANDOFF_EXPORT must be an artifact record ID")
-        elif self.mode is TaskMode.BRANCH_DISCOVERY:
-            raise TaskContractError(
-                "BRANCH_DISCOVERY requires the family predecessor handoff"
-            )
         if self.approved_plan_commit is not None:
             if self.mode is not TaskMode.IMPLEMENT or self.work_plan_path is None:
                 raise TaskContractError(
@@ -311,7 +272,7 @@ def parse_task_contract(
         declared_mode = TaskMode(raw_mode.upper()) if raw_mode is not None else None
     except ValueError as exc:
         raise TaskContractError(
-            "ORCHESTRATOR_MODE must be PLAN_ONLY, IMPLEMENT, or BRANCH_DISCOVERY"
+            "ORCHESTRATOR_MODE must be PLAN_ONLY or IMPLEMENT"
         ) from exc
     override_mode = (
         TaskMode.PLAN_ONLY if mode_override is True
@@ -384,13 +345,6 @@ def parse_task_contract(
 
     approved_plan_commit = _single_marker(markers, "APPROVED_PLAN_COMMIT")
     approved_slices = _parse_embedded_slice_plan(text)
-    finding_handoff_source_run_id = _single_marker(
-        markers, "FINDING_HANDOFF_SOURCE_RUN"
-    )
-    finding_handoff_export_record_id = _single_marker(
-        markers, "FINDING_HANDOFF_EXPORT"
-    )
-
     return TaskContract(
         digest=digest,
         mode=mode,
@@ -399,8 +353,6 @@ def parse_task_contract(
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
         approved_slices=approved_slices,
-        finding_handoff_source_run_id=finding_handoff_source_run_id,
-        finding_handoff_export_record_id=finding_handoff_export_record_id,
         informal_intake=informal_intake,
         target_branch_generated=target_branch_generated,
     )

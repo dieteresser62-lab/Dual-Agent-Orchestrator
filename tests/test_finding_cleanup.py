@@ -10,7 +10,7 @@ def test_removed_cleanup_machine_has_no_public_entrypoint() -> None:
     assert not hasattr(finding_cleanup, "is_finding_cleanup_work_unit")
     assert not hasattr(finding_cleanup, "plan_finding_cleanup")
     assert not hasattr(WorkUnitKind, "CORRECTION")
-    assert not hasattr(WorkUnitKind, "FINAL_REVIEW")
+    assert WorkUnitKind.FINAL_REVIEW.value == "final_review"
 
 
 def test_positive_balance_streak_uses_only_trailing_open_balance() -> None:

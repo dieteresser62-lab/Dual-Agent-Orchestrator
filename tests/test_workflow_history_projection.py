@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 import artifact_replay as artifact_replay_module
-import native_finding_decisions
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_bridge import ArtifactBridge
 from artifact_resume import (
@@ -24,7 +23,6 @@ from artifact_models import (
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
-    FamilyBindingPayload,
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
@@ -127,7 +125,6 @@ STATE_PROJECTION_HELPERS = (
     "_project_work_unit_document",
     "_project_work_unit_documents",
     "_slice_acceptance_projection",
-    "effective_family_binding",
     "_assemble_workflow_state_document",
 )
 STATE_PROJECTION_SHARED_BOUNDARIES = (
@@ -326,7 +323,6 @@ def _journey(
     bridge: ArtifactBridge,
     *,
     carried_validation: bool = False,
-    family_binding: FamilyBindingPayload | None = None,
 ):
     identity = bridge.append(
         RunIdentityPayload(
@@ -354,7 +350,6 @@ def _journey(
         RunProfilePayload(
             RoleProfilePayload("gpt-5.6-sol", "medium"),
             RoleProfilePayload("opus", "max"),
-            family_binding=family_binding,
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -578,75 +573,6 @@ def _state_projection_bridge(tmp_path: Path, chain_name: str) -> ArtifactBridge:
     )
 
 
-def _branch_discovery_journey(bridge: ArtifactBridge) -> tuple:
-    reviewed_head = "d" * 40
-    family_binding = FamilyBindingPayload(
-        "family-branch-discovery",
-        "b" * 40,
-        ("src/one.py", "tests/test_one.py"),
-        "implementation-run",
-        "ar1-" + "c" * 64,
-        1,
-        None,
-        reviewed_head,
-    )
-    identity = bridge.append(
-        RunIdentityPayload(
-            "inbox/backlog/branch-discovery.md",
-            "feature/state-authority-consolidation",
-            family_binding.family_base_commit,
-            reviewed_head,
-            "BRANCH_DISCOVERY",
-            None,
-        ),
-        logical_id="run-identity",
-        idempotency_key="run-identity",
-        fingerprint_sha256=FINGERPRINT,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    _append_event(
-        bridge,
-        identity,
-        event_kind="run",
-        work_unit_id=None,
-        slice_id="1",
-        round_number=None,
-    )
-    bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("gpt-5.6-sol", "medium"),
-            RoleProfilePayload("sonnet", "high"),
-            family_binding=family_binding,
-        ),
-        logical_id="run-profile",
-        idempotency_key="run-profile",
-        fingerprint_sha256=FINGERPRINT,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    bridge.append(
-        TaskPayload(
-            "feature/state-authority-consolidation",
-            family_binding.family_authorized_change_set,
-            FINGERPRINT,
-        ),
-        logical_id="task-contract",
-        idempotency_key="task-contract",
-        fingerprint_sha256=FINGERPRINT,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    _append_transition(
-        bridge,
-        revision=1,
-        slice_id="1",
-        slice_status="completed",
-        work_unit_id="1",
-        step="claude_branch_discovery",
-        work_unit_status="in_progress",
-    )
-    _append_policy_gate(bridge, work_unit_id="1")
-    return bridge.store.load_chain()
-
-
 def _productively_checked_work_unit_kinds() -> frozenset[WorkUnitKind]:
     source_root = Path(__file__).resolve().parents[1] / "src"
     checked_names: set[str] = set()
@@ -665,115 +591,6 @@ def _productively_checked_work_unit_kinds() -> frozenset[WorkUnitKind]:
                 and node.value.id == "WorkUnitKind"
             )
     return frozenset(WorkUnitKind[name] for name in checked_names)
-
-
-def test_branch_discovery_record_projection_restores_branch_wide_unit_and_preflight(
-    tmp_path: Path,
-) -> None:
-    bridge = _state_projection_bridge(tmp_path, "branch-discovery")
-    chain = _branch_discovery_journey(bridge)
-
-    projected = project_workflow_state(replay_artifacts(chain, RUN_ID)).state
-
-    assert projected.current_work_unit.kind is WorkUnitKind.BRANCH_DISCOVERY
-    assert projected.current_step is WorkflowStep.CLAUDE_BRANCH_DISCOVERY
-    assert projected.current_work_unit.round_number == 1
-    assert projected.current_work_unit.request_sequence == 1
-    assert projected.current_slice.status is SliceStatus.COMPLETED
-    assert projected.current_slice.scope_paths == ()
-    assert projected.current_slice.scope_change_groups == ()
-    assert projected.current_slice.start_fingerprint is None
-    assert not any(isinstance(record.payload, SliceBoundaryPayload) for record in chain)
-
-    fingerprint = "e" * 64
-    append_validation_authority(
-        bridge,
-        ValidationAttestationPayload(
-            (
-                ValidationResult(
-                    CommandSpec("pytest", ("python3", "-m", "pytest")),
-                    "pass",
-                    0,
-                    "f" * 64,
-                ),
-            ),
-            Role.ORCHESTRATOR,
-            "1" * 64,
-            "ar1-" + "2" * 64,
-        ),
-        logical_id="branch-discovery-validation",
-        idempotency_key="branch-discovery-validation",
-        fingerprint_sha256=fingerprint,
-    )
-    current_chain = bridge.store.load_chain()
-    measurement = bridge.append(
-        ProviderInputMeasurementPayload(
-            Role.CLAUDE,
-            Role.CLAUDE,
-            WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value,
-            str(projected.current_work_unit_id),
-            "3" * 64,
-            relevant_record_head(current_chain),
-            "4" * 64,
-            "5" * 64,
-            (ProviderInputComponentPayload("prompt", 3, 3),),
-            3,
-            3,
-            10,
-            10,
-            None,
-            None,
-            None,
-            10,
-            10,
-            True,
-            (),
-            0,
-            0,
-            "prompt",
-        ),
-        logical_id="provider-input-1-claude-branch-discovery",
-        idempotency_key="provider-input:branch-discovery",
-        fingerprint_sha256=fingerprint,
-    )
-
-    preflight = run_final_review_preflight(
-        state=projected,
-        records=bridge.store.load_chain(),
-        measurement_record=measurement,
-        repository_paths=("src/one.py", "tests/test_one.py"),
-    )
-
-    assert preflight.passed
-
-
-def test_every_productively_checked_work_unit_kind_has_a_productive_projection(
-    tmp_path: Path,
-) -> None:
-    regular = project_workflow_state(
-        replay_artifacts(
-            _journey(_state_projection_bridge(tmp_path, "regular-kinds")),
-            RUN_ID,
-        )
-    ).state
-    discovery = project_workflow_state(
-        replay_artifacts(
-            _branch_discovery_journey(
-                _state_projection_bridge(tmp_path, "branch-discovery-kind")
-            ),
-            RUN_ID,
-        )
-    ).state
-    produced = frozenset(
-        unit.kind for state in (regular, discovery) for unit in state.work_units
-    )
-    checked = _productively_checked_work_unit_kinds()
-
-    assert checked == frozenset(WorkUnitKind)
-    assert checked <= produced, (
-        "WorkUnitKind is checked in production but has no productive record "
-        f"projection: {sorted(kind.value for kind in checked - produced)}"
-    )
 
 
 def _append_projection_gate_override(bridge: ArtifactBridge) -> None:
@@ -1013,52 +830,6 @@ def test_first_slice_projection_uses_structural_start_even_when_equal_to_base(
     assert replay.run_identity.first_slice_start_commit == "b" * 40
     assert replay.run_identity.first_slice_start_commit == replay.run_identity.branch_base
     assert project_workflow_state(replay).state.current_slice.start_commit == "b" * 40
-
-
-def test_family_binding_is_projected_losslessly_from_run_profile(
-    tmp_path: Path,
-) -> None:
-    binding = FamilyBindingPayload(
-        "family-1",
-        "b" * 40,
-        ("src/one.py", "src/three.py", "src/two.py"),
-        "predecessor-run",
-        "ar1-" + "a" * 64,
-        2,
-        None,
-        "c" * 40,
-    )
-    bridge = _state_projection_bridge(tmp_path, "family-binding")
-    chain = _journey(bridge, family_binding=binding)
-
-    projected = project_workflow_state(replay_artifacts(chain, RUN_ID))
-
-    assert projected.state.family_binding == binding
-    assert canonical_json(
-        json.loads(projected.canonical_document)["family_binding"]
-    ) == canonical_json(asdict(binding))
-
-
-def test_projection_without_family_fact_is_byteidentical_across_cutover_switch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bridge = _state_projection_bridge(tmp_path, "family-dormancy")
-    replay = replay_artifacts(_journey(bridge), RUN_ID)
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        False,
-    )
-    before = project_workflow_state(replay).canonical_document
-    monkeypatch.setattr(
-        native_finding_decisions,
-        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
-        True,
-    )
-    after = project_workflow_state(replay).canonical_document
-
-    assert before == after
-    assert b'"family_binding"' not in after
 
 
 def _load_state_projection_baseline() -> dict[str, object]:
@@ -1663,7 +1434,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     cached = json.loads(state_file.read_text(encoding="utf-8"))
     assert cached["reducer_version"] == (
-        "structured-v2-schema-2-state-v3-target-acceptance-removal-v1"
+        "structured-v2-schema-2-state-v3-target-run-chain-removal-v1"
     )
     assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
 
@@ -1824,10 +1595,7 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
             json.dumps(_normalized_independent_mirror(mirrors[end], replay))
         ) == first.to_document(), end
         assert isinstance(first.state, WorkflowState)
-        assert set(first.to_document()) == (
-            set(WorkflowState.__dataclass_fields__)
-            - {"family_binding"}
-        )
+        assert set(first.to_document()) == set(WorkflowState.__dataclass_fields__)
         projected_prefixes.append(first.to_document())
         accepted_ends.append(end)
 
@@ -2303,8 +2071,6 @@ def test_retired_runtime_history_events_cannot_return_to_state() -> None:
         "task_scope_patterns": [],
         "work_plan_path": None,
         "approved_plan_commit": None,
-        "finding_handoff_source_run_id": None,
-        "finding_handoff_export_record_id": None,
         "audit_report_path": None,
         "target_branch": None,
         "protocol_binding": None,

@@ -82,7 +82,7 @@ def _slice_work_units(records: Sequence[ArtifactRecord]) -> dict[str, int]:
         "codex_plan",  # allowlist:provider -- persisted workflow step
         "claude_plan_review",  # allowlist:provider -- persisted workflow step
         "codex_plan_revision",  # allowlist:provider -- persisted workflow step
-        "claude_branch_discovery",  # allowlist:provider -- persisted workflow step
+        "claude_final_review",  # allowlist:provider -- persisted workflow step
     }
     result: dict[str, int] = {}
     for record in records:

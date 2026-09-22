@@ -1,1 +1,284 @@
-{"schema_version":"production-entry-runtime-pre-b46-v1","source_commit":"cdc5f334186b41b45e4642d62066d111cdc3009c","source_blob":"447221b54cb2901d84da5cf19d6ff3cd77eb88f9","scenarios":[{"scenario_id":"new-no-state","classification":"new","new_watch_task":false,"state_at_loop_boundary":{"run_id":"new-run","task_file":"inbox/task.md","task_digest":"ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b","execution_mode":"IMPLEMENT","task_scope_patterns":["src/workflow_production.py","tests/test_production_entry_corpus.py"],"audit_report_path":"docs/internal/task-audit.md"},"driver_factory_calls":[{"replace_existing_run_id":null}],"first_checkpoint_records":[{"checkpoint_ordinal":1,"state_run_id":"new-run","history_work_unit_id":1}],"error":null},{"scenario_id":"new-watch-task","classification":"new","new_watch_task":true,"state_at_loop_boundary":{"run_id":"watch-new","task_file":"inbox/task.md","task_digest":"ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b","execution_mode":"IMPLEMENT","task_scope_patterns":["src/workflow_production.py","tests/test_production_entry_corpus.py"],"audit_report_path":"docs/internal/task-audit.md"},"driver_factory_calls":[{"replace_existing_run_id":null}],"first_checkpoint_records":[{"checkpoint_ordinal":1,"state_run_id":"watch-new","history_work_unit_id":1}],"error":null},{"scenario_id":"resume","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":{"run_id":"persisted-run","task_file":"inbox/task.md","task_digest":"ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b","execution_mode":"IMPLEMENT","task_scope_patterns":["src/workflow_production.py","tests/test_production_entry_corpus.py"],"audit_report_path":"docs/internal/task-audit.md"},"driver_factory_calls":[{"replace_existing_run_id":null}],"first_checkpoint_records":[{"checkpoint_ordinal":1,"state_run_id":"persisted-run","history_work_unit_id":1}],"error":null},{"scenario_id":"forced-replacement","classification":"replacing","new_watch_task":false,"state_at_loop_boundary":{"run_id":"new-run","task_file":"inbox/task.md","task_digest":"ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b","execution_mode":"IMPLEMENT","task_scope_patterns":["src/workflow_production.py","tests/test_production_entry_corpus.py"],"audit_report_path":"docs/internal/task-audit.md"},"driver_factory_calls":[{"replace_existing_run_id":"persisted-run"}],"first_checkpoint_records":[{"checkpoint_ordinal":1,"state_run_id":"new-run","history_work_unit_id":1}],"error":null},{"scenario_id":"replacement-state-schema-error","classification":"replacing","new_watch_task":false,"state_at_loop_boundary":{"run_id":"new-run","task_file":"inbox/task.md","task_digest":"ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b","execution_mode":"IMPLEMENT","task_scope_patterns":["src/workflow_production.py","tests/test_production_entry_corpus.py"],"audit_report_path":"docs/internal/task-audit.md"},"driver_factory_calls":[{"replace_existing_run_id":null}],"first_checkpoint_records":[{"checkpoint_ordinal":1,"state_run_id":"new-run","history_work_unit_id":1}],"error":null},{"scenario_id":"active-v2-without-overwrite","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"ActiveV2StateError","message":"active v2 state requires a choice"}},{"scenario_id":"active-v2-with-overwrite","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"--resume requested but no version-3 state exists"}},{"scenario_id":"resume-task-file-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task identity differs from --resume task"}},{"scenario_id":"resume-missing-task-digest","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted state predates the hardened task contract; start a new run with --no-resume --force-overwrite-state"}},{"scenario_id":"resume-task-digest-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"task content changed since the persisted run was created"}},{"scenario_id":"resume-execution-mode-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-scope-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-work-plan-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-target-branch-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-finding-source-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-finding-export-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted task contract differs from --resume task"}},{"scenario_id":"resume-watch-run-mismatch","classification":"resuming","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"persisted watch run identity differs from inbox task"}},{"scenario_id":"existing-state-without-selection","classification":"new","new_watch_task":false,"state_at_loop_boundary":null,"driver_factory_calls":[],"first_checkpoint_records":[],"error":{"type":"StateSchemaError","message":"existing state requires --resume or --force-overwrite-state"}}]}
+{
+  "schema_version": "production-entry-runtime-pre-b46-v1",
+  "source_commit": "cdc5f334186b41b45e4642d62066d111cdc3009c",
+  "source_blob": "447221b54cb2901d84da5cf19d6ff3cd77eb88f9",
+  "scenarios": [
+    {
+      "scenario_id": "new-no-state",
+      "classification": "new",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "new-run",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "new-run",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null
+    },
+    {
+      "scenario_id": "new-watch-task",
+      "classification": "new",
+      "new_watch_task": true,
+      "state_at_loop_boundary": {
+        "run_id": "watch-new",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "watch-new",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null
+    },
+    {
+      "scenario_id": "resume",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "persisted-run",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "persisted-run",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null
+    },
+    {
+      "scenario_id": "forced-replacement",
+      "classification": "replacing",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "new-run",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": "persisted-run"
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "new-run",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null
+    },
+    {
+      "scenario_id": "replacement-state-schema-error",
+      "classification": "replacing",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "new-run",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "new-run",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null
+    },
+    {
+      "scenario_id": "active-v2-without-overwrite",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "ActiveV2StateError",
+        "message": "active v2 state requires a choice"
+      }
+    },
+    {
+      "scenario_id": "active-v2-with-overwrite",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "--resume requested but no version-3 state exists"
+      }
+    },
+    {
+      "scenario_id": "resume-task-file-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted task identity differs from --resume task"
+      }
+    },
+    {
+      "scenario_id": "resume-missing-task-digest",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted state predates the hardened task contract; start a new run with --no-resume --force-overwrite-state"
+      }
+    },
+    {
+      "scenario_id": "resume-task-digest-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "task content changed since the persisted run was created"
+      }
+    },
+    {
+      "scenario_id": "resume-execution-mode-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted task contract differs from --resume task"
+      }
+    },
+    {
+      "scenario_id": "resume-scope-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted task contract differs from --resume task"
+      }
+    },
+    {
+      "scenario_id": "resume-work-plan-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted task contract differs from --resume task"
+      }
+    },
+    {
+      "scenario_id": "resume-target-branch-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted task contract differs from --resume task"
+      }
+    },
+    {
+      "scenario_id": "resume-watch-run-mismatch",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "persisted watch run identity differs from inbox task"
+      }
+    },
+    {
+      "scenario_id": "existing-state-without-selection",
+      "classification": "new",
+      "new_watch_task": false,
+      "state_at_loop_boundary": null,
+      "driver_factory_calls": [],
+      "first_checkpoint_records": [],
+      "error": {
+        "type": "StateSchemaError",
+        "message": "existing state requires --resume or --force-overwrite-state"
+      }
+    }
+  ]
+}

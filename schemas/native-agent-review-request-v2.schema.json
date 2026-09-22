@@ -558,14 +558,14 @@
           "enum": [
             "claude_plan_review",
             "claude_slice_review",
-            "claude_branch_discovery"
+            "claude_final_review"
           ]
         },
         "review_kind": {
           "enum": [
             "plan",
             "slice",
-            "branch_discovery"
+            "final_review"
           ]
         },
         "target_branch": {

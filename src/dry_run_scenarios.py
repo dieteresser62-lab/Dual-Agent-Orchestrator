@@ -17,7 +17,7 @@ from agent_runtime import (
     TransientRetryPolicy,
     classify_agent_failure,
 )
-from artifact_models import FamilyBindingPayload, InvocationFailurePayload
+from artifact_models import InvocationFailurePayload
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import (
     AgentRole,
@@ -435,7 +435,6 @@ class ScriptedInitialState:
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
     planned_slices: tuple[PlannedSlice, ...] = ()
-    family_binding: FamilyBindingPayload | None = None
     first_slice_start_commit: str | None = None
 
     @classmethod
@@ -454,18 +453,14 @@ class ScriptedInitialState:
             kind = WorkUnitKind(str(raw.get("kind", WorkUnitKind.SLICE.value)))
         except ValueError as exc:
             raise DryRunScenarioError("scenario.initial.kind is unknown") from exc
-        if kind not in {
-            WorkUnitKind.PLAN,
-            WorkUnitKind.SLICE,
-            WorkUnitKind.BRANCH_DISCOVERY,
-        }:
+        if kind not in {WorkUnitKind.PLAN, WorkUnitKind.SLICE}:
             raise DryRunScenarioError(
-                "scenario.initial.kind must be plan, slice, or branch discovery"
+                "scenario.initial.kind must be plan or slice"
             )
         execution_mode = _string(
             raw.get("execution_mode", "IMPLEMENT"), "scenario.initial.execution_mode"
         )
-        if execution_mode not in {"IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"}:
+        if execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
             raise DryRunScenarioError("scenario.initial.execution_mode is unknown")
         work_plan_raw = raw.get("work_plan_path")
         approved_commit_raw = raw.get("approved_plan_commit")
@@ -1598,11 +1593,7 @@ def build_scenario_state(
     task_digest = hashlib.sha256(
         task_file.read_text(encoding="utf-8").encode("utf-8")
     ).hexdigest()
-    branch_base = (
-        scenario.initial.family_binding.family_base_commit
-        if scenario.initial.family_binding is not None
-        else first.start_commit
-    )
+    branch_base = first.start_commit
     state = init_workflow_state(
         run_id=f"dry-{scenario.name}",
         task_file=str(task_file.resolve()),
@@ -1617,7 +1608,6 @@ def build_scenario_state(
         approved_plan_commit=scenario.initial.approved_plan_commit,
         target_branch=scenario.initial.branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-        family_binding=scenario.initial.family_binding,
         timestamp=scenario.clock_start.isoformat(),
     )
     if scenario.initial.planned_slices:
@@ -1626,10 +1616,7 @@ def build_scenario_state(
             first_start_commit=first_slice_start_commit,
             updated_at=scenario.clock_start.isoformat(),
         )
-    if scenario.initial.kind in {
-        WorkUnitKind.PLAN,
-        WorkUnitKind.BRANCH_DISCOVERY,
-    }:
+    if scenario.initial.kind is WorkUnitKind.PLAN:
         return state
     state = state.complete_current_work_unit(updated_at=scenario.clock_start.isoformat())
     state = state.start_work_unit(
@@ -1894,7 +1881,7 @@ def _run_scripted_workflow(
     if not first.result.completed:
         return first
     state = first.result.state
-    if state.execution_mode in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
+    if state.execution_mode == "PLAN_ONLY":
         return first
     planned_slices = state.planned_slices
     completed_slice = first if state.current_work_unit.kind is WorkUnitKind.SLICE else None
@@ -1927,7 +1914,25 @@ def _run_scripted_workflow(
         state = completed_slice.result.state
     if completed_slice is None:
         raise DryRunScenarioError("scripted workflow has no completed Slice")
-    return completed_slice
+    state = state.start_final_review_work_unit()
+    carried_attestations = completed_slice.result.history.attestations[-1:]
+    final_history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=completed_slice.result.history.findings,
+        events=(
+            (
+                ValidationAuditEvent(
+                    event_id=1,
+                    slice_id=state.current_slice_id,
+                    attestation=carried_attestations[0],
+                ),
+            )
+            if carried_attestations
+            else ()
+        ),
+        attestations=carried_attestations,
+    )
+    return run_unit(state, final_history)
 
 
 def _scripted_unified_diff(paths: tuple[str, ...], change: str) -> str:
@@ -1988,8 +1993,6 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "result_type": "plan_result",
                     "ready": True,
                     "finding_dispositions": [],
-                    "plan_treatments": [],
-                    "plan_completion": "IMPLEMENTATION_REQUIRED",
                     "slice_plan": [
                         {
                             "slice_id": 1,
@@ -2022,7 +2025,6 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "new_findings": [],
                     "status_changes": [],
                     "reclassifications": [],
-                    "plan_treatment_decisions": [],
                     "anchors": [],
                     "review_evidence": {
                         "dimensions": "plan contract, scope, failure paths, handoff",
@@ -2046,81 +2048,84 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
     )
 
 
+def _s5_codex_result(  # allowlist:provider -- scripted native result factory
+    result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
+) -> dict[str, object]:
+    return {
+        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+        "request_id": "$BOUND_REQUEST_ID",
+        "result_type": result_type,
+        "ready": True,
+        "finding_dispositions": [
+            {
+                "finding_id": finding_id,
+                "decision": "accepted",
+                "rationale": f"The provider-free correction addresses {finding_id}.",
+            }
+            for finding_id in dispositions
+        ],
+        **fields,
+    }
+
+
+def _s5_review_result(
+    *,
+    approved: bool,
+    observations: tuple[str, ...] = (),
+    blockers: tuple[str, ...] = (),
+    closed: tuple[str, ...] = (),
+) -> dict[str, object]:
+    findings = [
+        {
+            "finding_id": finding_id,
+            "finding_class": finding_class,
+            "affected_paths": ["src/second.py"],
+            "summary": f"Provider-free finding {finding_id}.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": f"The long-run evidence closes {finding_id}.",
+            },
+        }
+        for finding_class, identities in (
+            ("OBSERVATION", observations),
+            ("BLOCKER", blockers),
+        )
+        for finding_id in identities
+    ]
+    return {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "review_result",
+        "request_id": "$BOUND_REQUEST_ID",
+        "reviewer": "claude",  # allowlist:provider -- persisted reviewer role
+        "decision": "approved" if approved else "denied",
+        "new_findings": findings,
+        "status_changes": [
+            {
+                "finding_id": finding_id,
+                "status": "CLOSED",
+                "rationale": f"The long-run evidence closes {finding_id}.",
+                "closure": {"kind": "fixed"},
+            }
+            for finding_id in closed
+        ],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "correctness, contracts, failure paths, security, resume",
+            "largest_residual_risk": "a later transition drops carried findings",
+            "break_condition": "resume changes the canonical finding ledger",
+        },
+        "pre_mortem": "A crash after a denied review repeats one physical effect.",
+    }
+
+
 def build_s5_long_run_scenario() -> DryRunScenario:
     """Return S5's IMPLEMENT correction, observation and resume journey."""
 
     base, commit_one, commit_two = "b" * 40, "c" * 40, "d" * 40
-    slice_one_fp, slice_two_fp, correction_fp = (value * 64 for value in "234")
-
-    def codex(  # allowlist:provider -- scripted native result factory
-        result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
-    ) -> dict[str, object]:
-        return {
-            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
-            "request_id": "$BOUND_REQUEST_ID",
-            "result_type": result_type,
-            "ready": True,
-            "finding_dispositions": [
-                {
-                    "finding_id": finding_id,
-                    "decision": "accepted",
-                    "rationale": f"The provider-free correction addresses {finding_id}.",
-                }
-                for finding_id in dispositions
-            ],
-            **fields,
-        }
-
-    def review(
-        *,
-        approved: bool,
-        observations: tuple[str, ...] = (),
-        blockers: tuple[str, ...] = (),
-        closed: tuple[str, ...] = (),
-    ) -> dict[str, object]:
-        findings = [
-            {
-                "finding_id": finding_id,
-                "finding_class": finding_class,
-                "affected_paths": ["src/second.py"],
-                "summary": f"Provider-free finding {finding_id}.",
-                "acceptance_test": {
-                    "kind": "prose",
-                    "text": f"The long-run evidence closes {finding_id}.",
-                },
-            }
-            for finding_class, identities in (
-                ("OBSERVATION", observations),
-                ("BLOCKER", blockers),
-            )
-            for finding_id in identities
-        ]
-        return {
-            "schema_version": "native-agent-review-result-v2",
-            "result_type": "review_result",
-            "request_id": "$BOUND_REQUEST_ID",
-            "reviewer": "claude",  # allowlist:provider -- persisted reviewer role
-            "decision": "approved" if approved else "denied",
-            "new_findings": findings,
-            "status_changes": [
-                {
-                    "finding_id": finding_id,
-                    "status": "CLOSED",
-                    "rationale": f"The long-run evidence closes {finding_id}.",
-                    "closure": {"kind": "fixed"},
-                }
-                for finding_id in closed
-            ],
-            "reclassifications": [],
-            "plan_treatment_decisions": [],
-            "anchors": [],
-            "review_evidence": {
-                "dimensions": "correctness, contracts, failure paths, security, resume",
-                "largest_residual_risk": "a later transition drops carried findings",
-                "break_condition": "resume changes the canonical finding ledger",
-            },
-            "pre_mortem": "A crash after a denied review repeats one physical effect.",
-        }
+    slice_one_fp, slice_two_fp, correction_fp, final_fp = (
+        value * 64 for value in "2345"
+    )
 
     quota_failure = ScriptedFailure(
         AgentFailureKind.QUOTA,
@@ -2148,11 +2153,11 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         agent_events=(
             ScriptedAgentEvent(
                 AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                codex("implementation_result", test_files=[]),  # allowlist:provider
+                _s5_codex_result("implementation_result", test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=True),
+                _s5_review_result(approved=True),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
@@ -2160,21 +2165,66 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                output=codex(  # allowlist:provider
+                output=_s5_codex_result(  # allowlist:provider
                     "implementation_result", test_files=[]
                 ),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=False, blockers=("C-01",)),
+                _s5_review_result(approved=False, blockers=("C-01",)),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
-                codex("correction_result", dispositions=("C-01",), test_files=[]),  # allowlist:provider
+                _s5_codex_result("correction_result", dispositions=("C-01",), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                review(approved=True, closed=("C-01",)),
+                _s5_review_result(approved=True, closed=("C-01",)),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE,
+                4,
+                1,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
+                {
+                    "schema_version": "native-agent-review-result-v2",
+                    "result_type": "final_review_completed",
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "reviewer": "claude",  # allowlist:provider
+                    "scan_complete": True,
+                    "new_findings": [
+                        {
+                            "finding_id": "C-02",
+                            "finding_class": "BLOCKER",
+                            "affected_paths": ["src/second.py"],
+                            "summary": "The final branch review found a follow-up defect.",
+                            "predecessor_finding_ref": None,
+                            "evidence_anchor_sha256": None,
+                            "acceptance_test": {
+                                "kind": "prose",
+                                "text": (
+                                    "A new ordinary Inbox run fixes the final-review defect."
+                                ),
+                            },
+                        }
+                    ],
+                    "occurrences": [],
+                    "review_evidence": {
+                        "dimensions": (
+                            "complete branch correctness, contracts, failure paths, "
+                            "security, and resume behavior"
+                        ),
+                        "largest_residual_risk": (
+                            "the full-branch fingerprint changes after review"
+                        ),
+                        "break_condition": (
+                            "the final review is not bound to the merge-base diff"
+                        ),
+                    },
+                    "pre_mortem": (
+                        "A crash after final review could replay stale branch evidence."
+                    ),
+                },
             ),
         ),
         changes=(
@@ -2195,6 +2245,14 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             _scripted_change(
                 3, 3, commit_one, correction_fp, ("src/second.py",), "correction"
             ),
+            _scripted_change(
+                4,
+                1,
+                base,
+                final_fp,
+                ("src/first.py", "src/second.py"),
+                "final branch review",
+            ),
         ),
         validations=tuple(
             ScriptedValidation(fingerprint)
@@ -2202,6 +2260,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 slice_one_fp,
                 slice_two_fp,
                 correction_fp,
+                final_fp,
             )
         ),
         commits=(
@@ -2225,92 +2284,6 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 maximum_auto_resumes=2,
             ),
         ),
-    )
-
-
-def build_joint_branch_discovery_scenario(
-    family_binding: FamilyBindingPayload,
-) -> DryRunScenario:
-    """Return the linked standalone branch-discovery run after IMPLEMENT."""
-
-    reviewed_head = family_binding.current_implementation_commit
-    if reviewed_head is None:
-        raise DryRunScenarioError(
-            "branch discovery scenario requires the implementation HEAD"
-        )
-    fingerprint = "6" * 64
-    return DryRunScenario(
-        name="joint-branch-discovery-v1",
-        initial=ScriptedInitialState(
-            kind=WorkUnitKind.BRANCH_DISCOVERY,
-            branch="feature/dry-run",
-            slice_count=1,
-            scope_paths=("src/first.py", "src/second.py"),
-            execution_mode="BRANCH_DISCOVERY",
-            family_binding=family_binding,
-            first_slice_start_commit=reviewed_head,
-        ),
-        agent_events=(
-            ScriptedAgentEvent(
-                AgentRole.CLAUDE,  # allowlist:provider
-                1,
-                1,
-                WorkflowStep.CLAUDE_BRANCH_DISCOVERY,  # allowlist:provider
-                {
-                    "schema_version": "native-agent-review-result-v2",
-                    "result_type": "branch_discovery_completed",
-                    "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider
-                    "scan_complete": True,
-                    "new_findings": [
-                        {
-                            "finding_id": "C-02",
-                            "finding_class": "OBSERVATION",
-                            "affected_paths": ["src/orchestrator.py"],
-                            "summary": (
-                                "The linked discovery run found a remediation item."
-                            ),
-                            "predecessor_finding_ref": None,
-                            "evidence_anchor_sha256": None,
-                            "acceptance_test": {
-                                "kind": "prose",
-                                "text": (
-                                    "A linked PLAN_ONLY run receives the complete "
-                                    "finding history."
-                                ),
-                            },
-                        }
-                    ],
-                    "occurrences": [],
-                    "review_evidence": {
-                        "dimensions": (
-                            "correctness, contracts, failure paths, security, resume"
-                        ),
-                        "largest_residual_risk": (
-                            "the remediation handoff loses imported finding history"
-                        ),
-                        "break_condition": (
-                            "the linked PLAN_ONLY import omits C-02"
-                        ),
-                    },
-                    "pre_mortem": (
-                        "A crash after discovery could publish an unbound family task."
-                    ),
-                },
-            ),
-        ),
-        changes=(
-            _scripted_change(
-                1,
-                1,
-                family_binding.family_base_commit,
-                fingerprint,
-                ("src/first.py", "src/second.py"),
-                "branch discovery",
-            ),
-        ),
-        validations=(ScriptedValidation(fingerprint),),
-        clock_start=datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
 
 
@@ -2381,7 +2354,6 @@ def build_progressive_correction_scenario(
                 for finding_id in closed
             ],
             "reclassifications": [],
-            "plan_treatment_decisions": [],
             "anchors": [],
             "review_evidence": {
                 "dimensions": "progress, terminal verdict, persistence, resume",
@@ -2445,6 +2417,31 @@ def build_progressive_correction_scenario(
                     review(approved=True, closed=(current_id,)),
                 )
             )
+    final_fingerprint = "9" * 64
+    if not stalled:
+        events.append(
+            ScriptedAgentEvent(
+                reviewer_role,
+                3,
+                1,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
+                {
+                    "schema_version": "native-agent-review-result-v2",
+                    "result_type": "final_review_completed",
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "reviewer": "claude",  # allowlist:provider
+                    "scan_complete": True,
+                    "new_findings": [],
+                    "occurrences": [],
+                    "review_evidence": {
+                        "dimensions": "complete branch correctness and failure paths",
+                        "largest_residual_risk": "a later commit changes reviewed HEAD",
+                        "break_condition": "the final fingerprint no longer matches",
+                    },
+                    "pre_mortem": "The branch could change after its final review.",
+                },
+            )
+        )
     changes = [
         _scripted_change(2, 1, base, "1" * 64, scope, "implementation"),
     ]
@@ -2458,6 +2455,17 @@ def build_progressive_correction_scenario(
                 fingerprint,
                 scope,
                 f"correction round {round_number}",
+            )
+        )
+    if not stalled:
+        changes.append(
+            _scripted_change(
+                3,
+                1,
+                base,
+                final_fingerprint,
+                scope,
+                "final branch review",
             )
         )
     validation_fingerprints = tuple(item.fingerprint for item in changes)

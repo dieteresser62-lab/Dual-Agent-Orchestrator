@@ -15,7 +15,6 @@ from typing import Any, Mapping
 
 
 _FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _KNOWN_FIELDS = frozenset(
     {
@@ -24,9 +23,6 @@ _KNOWN_FIELDS = frozenset(
         "finding_dispositions",
         "new_findings",
         "occurrences",
-        "plan_completion",
-        "plan_treatment_decisions",
-        "plan_treatments",
         "pre_mortem",
         "rationale",
         "reclassifications",
@@ -49,7 +45,7 @@ _VALUE_KINDS = frozenset(
 )
 _RESULT_TYPES = frozenset(
     {
-        "branch_discovery_completed",
+        "final_review_completed",
         "correction_result",
         "implementation_result",
         "plan_result",
@@ -75,8 +71,6 @@ _CLOSURE_KINDS = frozenset({"fixed", "rejected"})
 _REJECTION_REASONS = frozenset(
     {"already_fixed", "no_defect", "out_of_scope"}
 )
-_PLAN_TREATMENT_KINDS = frozenset({"implementation", "no_code"})
-_PLAN_TREATMENT_DECISIONS = frozenset({"accepted", "rejected"})
 
 
 def _require_enum(value: object, allowed: frozenset[str], label: str) -> None:
@@ -94,11 +88,6 @@ def _require_optional_enum(
 def _require_finding_id(value: object, label: str) -> None:
     if not isinstance(value, str) or _FINDING_ID_RE.fullmatch(value) is None:
         raise ValueError(f"{label} must be a canonical Finding ID")
-
-
-def _require_positive(value: object, label: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"{label} must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,50 +173,6 @@ class RejectedReclassificationShape:
 
 
 @dataclass(frozen=True, slots=True)
-class RejectedPlanTreatmentShape:
-    signature: str | None
-    finding_ids: tuple[str, ...]
-    treatment_kind: str | None
-    closing_slice_ids: tuple[int, ...]
-    rejection_reason: str | None
-
-    def __post_init__(self) -> None:
-        if self.signature is not None and _SHA256_RE.fullmatch(self.signature) is None:
-            raise ValueError("plan treatment signature must be a lowercase SHA-256")
-        for finding_id in self.finding_ids:
-            _require_finding_id(finding_id, "plan treatment finding_id")
-        _require_optional_enum(
-            self.treatment_kind,
-            _PLAN_TREATMENT_KINDS,
-            "plan treatment kind",
-        )
-        for slice_id in self.closing_slice_ids:
-            _require_positive(slice_id, "plan treatment closing_slice_id")
-        _require_optional_enum(
-            self.rejection_reason,
-            _REJECTION_REASONS,
-            "plan treatment rejection reason",
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class RejectedPlanTreatmentDecisionShape:
-    signature: str
-    decision: str | None
-
-    def __post_init__(self) -> None:
-        if _SHA256_RE.fullmatch(self.signature) is None:
-            raise ValueError(
-                "plan treatment decision signature must be a lowercase SHA-256"
-            )
-        _require_optional_enum(
-            self.decision,
-            _PLAN_TREATMENT_DECISIONS,
-            "plan treatment decision",
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class RejectedNativeResponseShape:
     fields: tuple[RejectedResponseFieldShape, ...]
     unknown_field_count: int
@@ -236,8 +181,6 @@ class RejectedNativeResponseShape:
     finding_dispositions: tuple[RejectedFindingDispositionShape, ...]
     status_changes: tuple[RejectedStatusChangeShape, ...]
     reclassifications: tuple[RejectedReclassificationShape, ...]
-    plan_treatments: tuple[RejectedPlanTreatmentShape, ...]
-    plan_treatment_decisions: tuple[RejectedPlanTreatmentDecisionShape, ...]
 
     def __post_init__(self) -> None:
         if (
@@ -294,10 +237,6 @@ def _safe_finding_id(value: object) -> str | None:
         if isinstance(value, str) and _FINDING_ID_RE.fullmatch(value) is not None
         else None
     )
-
-
-def _safe_positive(value: object) -> int | None:
-    return value if not isinstance(value, bool) and isinstance(value, int) and value > 0 else None
 
 
 def _mapping_items(raw: object) -> tuple[Mapping[str, object], ...]:
@@ -378,71 +317,6 @@ def extract_rejected_native_response_shape(
                 )
             )
 
-    plan_treatments: list[RejectedPlanTreatmentShape] = []
-    for item in _mapping_items(document.get("plan_treatments")):
-        signature = item.get("signature")
-        safe_signature = (
-            signature
-            if isinstance(signature, str) and _SHA256_RE.fullmatch(signature)
-            else None
-        )
-        raw_finding_ids = item.get("finding_ids")
-        finding_ids = (
-            tuple(
-                finding_id
-                for value in raw_finding_ids
-                if (finding_id := _safe_finding_id(value)) is not None
-            )
-            if isinstance(raw_finding_ids, list)
-            else ()
-        )
-        raw_closing_slice_ids = item.get("closing_slice_ids")
-        closing_slice_ids = (
-            tuple(
-                slice_id
-                for value in raw_closing_slice_ids
-                if (slice_id := _safe_positive(value)) is not None
-            )
-            if isinstance(raw_closing_slice_ids, list)
-            else ()
-        )
-        treatment_kind = _safe_enum(
-            item.get("treatment_kind"), _PLAN_TREATMENT_KINDS
-        )
-        rejection_reason = _safe_enum(
-            item.get("no_code_reason"), _REJECTION_REASONS
-        )
-        if any(
-            (
-                safe_signature is not None,
-                bool(finding_ids),
-                treatment_kind is not None,
-                bool(closing_slice_ids),
-                rejection_reason is not None,
-            )
-        ):
-            plan_treatments.append(
-                RejectedPlanTreatmentShape(
-                    safe_signature,
-                    finding_ids,
-                    treatment_kind,
-                    closing_slice_ids,
-                    rejection_reason,
-                )
-            )
-
-    plan_treatment_decisions: list[RejectedPlanTreatmentDecisionShape] = []
-    for item in _mapping_items(document.get("plan_treatment_decisions")):
-        signature = item.get("signature")
-        if not isinstance(signature, str) or _SHA256_RE.fullmatch(signature) is None:
-            continue
-        plan_treatment_decisions.append(
-            RejectedPlanTreatmentDecisionShape(
-                signature,
-                _safe_enum(item.get("decision"), _PLAN_TREATMENT_DECISIONS),
-            )
-        )
-
     return RejectedNativeResponseShape(
         fields=fields,
         unknown_field_count=unknown_field_count,
@@ -451,8 +325,6 @@ def extract_rejected_native_response_shape(
         finding_dispositions=tuple(finding_dispositions),
         status_changes=tuple(status_changes),
         reclassifications=tuple(reclassifications),
-        plan_treatments=tuple(plan_treatments),
-        plan_treatment_decisions=tuple(plan_treatment_decisions),
     )
 
 
@@ -488,8 +360,6 @@ def rejected_native_response_shape_from_document(
         "finding_dispositions",
         "status_changes",
         "reclassifications",
-        "plan_treatments",
-        "plan_treatment_decisions",
     }
     if set(raw) != required:
         raise ValueError("rejected response shape fields differ from its contract")
@@ -535,38 +405,6 @@ def rejected_native_response_shape_from_document(
         exact(item, {"finding_id", "finding_class"}, "reclassification shape")
         reclassifications.append(RejectedReclassificationShape(**item))
 
-    treatments: list[RejectedPlanTreatmentShape] = []
-    for item in mappings("plan_treatments"):
-        exact(
-            item,
-            {
-                "signature",
-                "finding_ids",
-                "treatment_kind",
-                "closing_slice_ids",
-                "rejection_reason",
-            },
-            "plan treatment shape",
-        )
-        if not isinstance(item["finding_ids"], list) or not isinstance(
-            item["closing_slice_ids"], list
-        ):
-            raise ValueError("plan treatment shape identifiers must be arrays")
-        treatments.append(
-            RejectedPlanTreatmentShape(
-                item["signature"],
-                tuple(item["finding_ids"]),
-                item["treatment_kind"],
-                tuple(item["closing_slice_ids"]),
-                item["rejection_reason"],
-            )
-        )
-
-    treatment_decisions: list[RejectedPlanTreatmentDecisionShape] = []
-    for item in mappings("plan_treatment_decisions"):
-        exact(item, {"signature", "decision"}, "plan treatment decision shape")
-        treatment_decisions.append(RejectedPlanTreatmentDecisionShape(**item))
-
     return RejectedNativeResponseShape(
         fields=tuple(fields),
         unknown_field_count=raw["unknown_field_count"],
@@ -575,16 +413,12 @@ def rejected_native_response_shape_from_document(
         finding_dispositions=tuple(dispositions),
         status_changes=tuple(statuses),
         reclassifications=tuple(reclassifications),
-        plan_treatments=tuple(treatments),
-        plan_treatment_decisions=tuple(treatment_decisions),
     )
 
 
 __all__ = [
     "RejectedFindingDispositionShape",
     "RejectedNativeResponseShape",
-    "RejectedPlanTreatmentDecisionShape",
-    "RejectedPlanTreatmentShape",
     "RejectedReclassificationShape",
     "RejectedResponseFieldShape",
     "RejectedStatusChangeShape",

@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 import orchestrator
-from artifact_bridge import ArtifactBridge
+from artifact_bridge import ArtifactBridge, finding_payload
 from artifact_models import (
     BindingPayload,
     CommandSpec,
@@ -320,7 +320,6 @@ GATE_SOURCE_MAP = (
             ("FOREIGN-RUN-RECORD", "foreign-run-record-resume"),
             ("MISSING-REFERENCE", "missing-reference-resume"),
             ("FINGERPRINT-MISMATCH", "fingerprint-mismatch-resume"),
-            ("UNAUTHORIZED-PATH", "unauthorized-path-resume"),
             ("ATTESTATION-MISSING", "attestation-missing-resume"),
             ("ATTESTATION-FAILED", "attestation-failed-resume"),
         )
@@ -527,7 +526,6 @@ GATE_CASE_ORACLE = (
         "FINGERPRINT-MISMATCH",
         "resume",
     ),
-    ("unauthorized-path-resume", "bootstrap_check", "UNAUTHORIZED-PATH", "resume"),
     (
         "attestation-missing-resume",
         "bootstrap_check",
@@ -630,7 +628,6 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_run_review", "await_policy_gate"): 2,
         ("workflow.py", "_apply_review_change_boundary", "await_user_gate"): 1,
         ("workflow.py", "_apply_review_result", "await_user_gate"): 1,
-        ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
         (
             "workflow_failure_recording.py",
@@ -1882,7 +1879,6 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
         "OPERATION-NOT-FINAL",
         "PREMATURE-COMPLETION",
         "STATE-TRANSITION-MISMATCH",
-        "UNAUTHORIZED-PATH",
     }
     assert _final_review_preflight_error_codes(trees) == expected_preflight_codes
     assert expected_preflight_codes | {"FINAL-REVIEW-PREFLIGHT"} <= (
@@ -2423,7 +2419,7 @@ def _append_finding(
         and record.payload.finding_id == finding.finding_id
     )
     bridge.append(
-        orchestrator.finding_payload(
+        finding_payload(
             finding,
             work_unit_id=work_unit_id,
             action=action,

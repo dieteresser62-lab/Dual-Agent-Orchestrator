@@ -4,19 +4,18 @@ from final_review_preflight import FINAL_REVIEW_OPERATIONS, transition_fingerpri
 from workflow_state import WorkflowStep, WorkUnitKind
 
 
-def test_preflight_dispatch_is_branch_discovery_only() -> None:
+def test_preflight_dispatch_is_final_review_only() -> None:
     assert FINAL_REVIEW_OPERATIONS == frozenset(
-        {WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value}
+        {WorkflowStep.CLAUDE_FINAL_REVIEW.value}
     )
-    assert not hasattr(WorkflowStep, "CLAUDE_FINAL_REVIEW")
-    assert not hasattr(WorkUnitKind, "FINAL_REVIEW")
+    assert WorkUnitKind.FINAL_REVIEW.value == "final_review"
 
 
 def test_transition_fingerprint_binds_every_dispatch_dimension() -> None:
     common = dict(
         provider="claude",
         role="reviewer",
-        operation=WorkflowStep.CLAUDE_BRANCH_DISCOVERY.value,
+        operation=WorkflowStep.CLAUDE_FINAL_REVIEW.value,
         work_unit_id="1",
         record_head="a" * 64,
         repository_fingerprint="b" * 64,

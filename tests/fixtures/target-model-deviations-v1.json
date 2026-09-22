@@ -91,29 +91,6 @@
       ]
     },
     {
-      "id": "open-plan-finding-handoff",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "planung.clean",
-      "zug": "OFFENEN-PLANBEFUND-UEBERGEBEN",
-      "istzustand": "Vertrag: review contract reached the requested semantic state; Recordschicht: record reduction reached the requested semantic state",
-      "codestellen": [
-        "src/native_review_contract.py",
-        "src/native_finding_decisions.py",
-        "src/plan_handoff.py"
-      ]
-    },
-    {
-      "id": "separate-branch-discovery-run",
-      "klasse": "UEBERZAEHLIG",
-      "lage": "abnahme.findings.restart",
-      "zug": "BRANCH_DISCOVERY-LAUF",
-      "istzustand": "Vertrag: workflow initializer creates a dedicated discovery work unit; Recordschicht: state projection persists that work-unit kind",
-      "codestellen": [
-        "src/workflow_state.py",
-        "src/workflow.py"
-      ]
-    },
-    {
       "id": "six-part-slice-exit",
       "klasse": "UEBERZAEHLIG",
       "lage": "implementierung.clean",

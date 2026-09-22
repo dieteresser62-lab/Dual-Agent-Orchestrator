@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46",
+        "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
           "role": "codex",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "codex_implementation",
-          "request_id": "native-codex-request-28ca37e2a7197c749673eb966d174da8033a4c8cac82f511df4e7f26d388fc46",
-          "response_sha256": "a0283c507c65a366735683871fbe5bf52b2f86ad130f0788471f60a9d43a5c44",
+          "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
+          "response_sha256": "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },
@@ -146,15 +146,15 @@
       "state": {
         "approved": true,
         "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "request_id": "native-review-request-a72e6a53fe50f36b64777ca28dd44987e4ffecf408a6c569c98e5420aac8e601",
+        "request_id": "native-review-request-0fe7a370d6cedd7e726fe51c6aea1b48fe1b4da5257abe3b33b94ca25a97b918",
         "round_number": 1,
         "content_binding": {
           "role": "claude",
           "work_unit_id": 1,
           "request_sequence": 1,
           "operation": "claude_slice_review",
-          "request_id": "native-review-request-a72e6a53fe50f36b64777ca28dd44987e4ffecf408a6c569c98e5420aac8e601",
-          "response_sha256": "4c75d1b272fc17df38e75e6de6089b0a24bea49817dc8b68ac4c426023a25258",
+          "request_id": "native-review-request-0fe7a370d6cedd7e726fe51c6aea1b48fe1b4da5257abe3b33b94ca25a97b918",
+          "response_sha256": "33f599e463f7f8abab3704d33b5bbf242a39f84b8d2e27421352e425123912e3",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

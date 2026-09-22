@@ -270,8 +270,6 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     }],
                 }
             ],
-            "plan_treatments": [],
-            "plan_completion": "IMPLEMENTATION_REQUIRED",
         }
     if kind in {
         NativeCodexRequestKind.IMPLEMENTATION,
@@ -304,6 +302,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         "plan": ApprovalMarker.PLAN,
         "initial_slice": ApprovalMarker.SLICE,
         "convergence": ApprovalMarker.SLICE,
+        "final_review": ApprovalMarker.FINAL_REVIEW,
     }[form]
     context = NativeReviewContext(
         run_id="differential-claude",
@@ -311,11 +310,12 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         operation={
             ApprovalMarker.PLAN: "claude_plan_review",
             ApprovalMarker.SLICE: "claude_slice_review",
+            ApprovalMarker.FINAL_REVIEW: "claude_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.CLAUDE,
         approval_marker=marker,
-        slice_id="01",
+        slice_id="FINAL" if form == "final_review" else "01",
         round_number=2 if convergence else 1,
         previous_findings=(
             (
@@ -332,7 +332,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         test_files=("tests/test_native_contract_differential.py",),
         test_changes_approved=True,
         allow_new_observations=not convergence,
-        anchor_origin="docs/internal/plan.md",
+        anchor_origin=None if form == "final_review" else "docs/internal/plan.md",
     )
     return BoundNativeReviewContext(
         context, "native-review-request-" + "c" * 64, "c" * 64
@@ -340,6 +340,22 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
 
 
 def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
+    if bound.context.approval_marker is ApprovalMarker.FINAL_REVIEW:
+        return {
+            "schema_version": "native-agent-review-result-v2",
+            "result_type": "final_review_completed",
+            "request_id": bound.request_id,
+            "reviewer": "claude",
+            "scan_complete": True,
+            "new_findings": [],
+            "occurrences": [],
+            "review_evidence": {
+                "dimensions": "complete branch correctness and failure paths",
+                "largest_residual_risk": "future provider subset drift",
+                "break_condition": "the reviewed HEAD changes",
+            },
+            "pre_mortem": "A later provider version could change its schema subset.",
+        }
     return {
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
@@ -360,7 +376,6 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
             else []
         ),
         "reclassifications": [],
-        "plan_treatment_decisions": [],
         "anchors": [],
         "review_evidence": {
             "dimensions": "correctness, contracts, failure paths, resume",
@@ -386,7 +401,7 @@ def test_all_writer_forms_accept_their_local_domain_result() -> None:
                 "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
             }
         )
-    for form in ("plan", "initial_slice", "convergence"):
+    for form in ("plan", "initial_slice", "convergence", "final_review"):
         bound = _review_bound(form)
         response = _review_response(bound)
         writer = native_review_provider_response_schema(bound.context)

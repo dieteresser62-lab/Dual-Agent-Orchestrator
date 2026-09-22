@@ -29,7 +29,6 @@ PRODUCTION_DEPENDENCY_INVENTORY = (
     "fresh_state",
     "history",
     "inherit_redundant_test_gate",
-    "initialize_finding_handoff",
     "managed_audit_path",
     "new_watch_task_control_paths",
     "new_watch_task_preserved_paths",

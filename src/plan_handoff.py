@@ -342,87 +342,51 @@ def implementation_task_path(plan_task_path: Path) -> Path:
     return plan_task_path.with_name(stem + plan_task_path.suffix)
 
 
-def branch_discovery_task_path(source_task_path: Path) -> Path:
-    """Return the one deterministic queue path for a linked discovery run."""
+def followup_task_path(source_task_path: Path) -> Path:
+    """Return a deterministic sibling Inbox path for the next ordinary run."""
 
-    stem = source_task_path.stem
-    if stem.lower().endswith("-implement"):
-        stem = stem[:-10] + "-branch-discovery"
-    else:
-        stem += "-branch-discovery"
-    return source_task_path.with_name(stem + source_task_path.suffix)
-
-
-def remediation_plan_paths(
-    source_task_path: Path,
-    *,
-    cycle_number: int,
-) -> tuple[Path, str]:
-    """Return deterministic queue and work-plan paths for one remediation cycle."""
-
-    if cycle_number < 2:
-        raise PlanHandoffError("remediation plan requires a successor family cycle")
-    stem = source_task_path.stem
-    stem = re.sub(r"-remediation-\d+-branch-discovery$", "", stem, flags=re.IGNORECASE)
-    if stem.lower().endswith("-branch-discovery"):
-        stem = stem[:-17]
-    task_stem = f"{stem}-remediation-{cycle_number}-plan"
-    task_path = source_task_path.with_name(task_stem + source_task_path.suffix)
-    work_plan_path = f"docs/internal/{task_stem}-arbeitsplan.md"
-    return task_path, work_plan_path
-
-
-def render_remediation_plan_task(
-    *,
-    work_plan_path: str,
-    target_branch: str,
-    scope_paths: tuple[str, ...],
-    finding_handoff: tuple[str, str],
-) -> str:
-    """Render the formal PLAN_ONLY child task for an open discovery snapshot."""
-
-    source_run_id, export_record_id = finding_handoff
-    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
-        raise PlanHandoffError("finding handoff source run is invalid")
-    if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
-        raise PlanHandoffError("finding handoff export is invalid")
-    planning_scope = tuple(sorted({work_plan_path, *scope_paths}))
-    if not planning_scope:
-        raise PlanHandoffError("remediation plan requires a planning scope")
-    return (
-        "Plane die Behebung der offenen Befunde aus dem verknuepften "
-        "Entdeckungslauf.\n\n"
-        "ORCHESTRATOR_MODE: PLAN_ONLY\n"
-        f"WORK_PLAN_PATH: {work_plan_path}\n"
-        f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
-        f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
-        f"TARGET_BRANCH: {target_branch}\n"
-        f"TASK_SCOPE: {', '.join(planning_scope)}\n"
+    return source_task_path.with_name(
+        f"{source_task_path.stem}-followup{source_task_path.suffix}"
     )
 
 
-def render_branch_discovery_task(
+def render_followup_task(
     *,
     target_branch: str,
-    scope_paths: tuple[str, ...],
-    finding_handoff: tuple[str, str],
+    findings: tuple[object, ...],
 ) -> str:
-    """Render the slice-free child task consumed by BRANCH_DISCOVERY."""
+    """Render final-review findings as self-contained, correlation-free prose."""
 
-    if not scope_paths:
-        raise PlanHandoffError("branch discovery handoff requires a non-empty scope")
-    source_run_id, export_record_id = finding_handoff
-    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
-        raise PlanHandoffError("finding handoff source run is invalid")
-    if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
-        raise PlanHandoffError("finding handoff export is invalid")
+    if not findings:
+        raise PlanHandoffError("a follow-up work document requires findings")
+    sections: list[str] = []
+    for index, finding in enumerate(findings, start=1):
+        summary = str(getattr(finding, "summary", "")).strip()
+        if not summary:
+            raise PlanHandoffError("a follow-up finding requires a summary")
+        affected_paths = tuple(getattr(finding, "affected_paths", ()))
+        acceptance = getattr(finding, "acceptance_test", None)
+        acceptance_text = str(
+            getattr(acceptance, "text", None)
+            or getattr(acceptance, "command", None)
+            or acceptance
+            or ""
+        ).strip()
+        lines = [f"## Befund {index}: {summary}"]
+        if affected_paths:
+            lines.extend(
+                ("", "Betroffene Pfade:", *(f"- `{path}`" for path in affected_paths))
+            )
+        if acceptance_text:
+            lines.extend(("", "Abnahmekriterium:", acceptance_text))
+        sections.append("\n".join(lines))
     return (
-        "Pruefe den vollstaendigen Branchstand im verknuepften Entdeckungslauf.\n\n"
-        "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
-        f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
-        f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
-        f"TARGET_BRANCH: {target_branch}\n"
-        f"TASK_SCOPE: {', '.join(scope_paths)}\n"
+        "# Arbeitsauftrag aus dem Abnahmereview\n\n"
+        "Der vollstaendige Abnahmereview hat die folgenden Befunde ergeben. "
+        "Plane ihre Behebung wie bei jedem anderen Arbeitsauftrag von Grund auf.\n\n"
+        f"Zielbranch: `{target_branch}`\n\n"
+        + "\n\n".join(sections)
+        + "\n"
     )
 
 
@@ -432,7 +396,6 @@ def render_implementation_task(
     target_branch: str,
     approved_plan_commit: str,
     slices: tuple[PlannedSlice, ...],
-    finding_handoff: tuple[str, str] | None = None,
 ) -> str:
     if not slices:
         raise PlanHandoffError("implementation handoff requires at least one Slice")
@@ -441,23 +404,11 @@ def render_implementation_task(
         f"SLICE_PLAN: {item.slice_id} | {item.summary} | {', '.join(item.scope_paths)}"
         for item in slices
     )
-    handoff_markers = ""
-    if finding_handoff is not None:
-        source_run_id, export_record_id = finding_handoff
-        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
-            raise PlanHandoffError("finding handoff source run is invalid")
-        if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
-            raise PlanHandoffError("finding handoff export is invalid")
-        handoff_markers = (
-            f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
-            f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
-        )
     return (
         "Setze den freigegebenen Arbeitsplan Slice für Slice um.\n\n"
         "ORCHESTRATOR_MODE: IMPLEMENT\n"
         f"WORK_PLAN_PATH: {work_plan_path}\n"
         f"APPROVED_PLAN_COMMIT: {approved_plan_commit}\n"
-        f"{handoff_markers}"
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
         "Der Arbeitsplan ist bereits von Claude geprüft und vom "
@@ -477,7 +428,6 @@ def write_implementation_handoff(
     work_plan_path: str,
     target_branch: str,
     approved_plan_commit: str,
-    finding_handoff: tuple[str, str] | None = None,
     write_content: Callable[[Path, str], None] | None = None,
 ) -> Path:
     plan = repository_root / PurePosixPath(work_plan_path)
@@ -491,7 +441,6 @@ def write_implementation_handoff(
         target_branch=target_branch,
         approved_plan_commit=approved_plan_commit,
         slices=slices,
-        finding_handoff=finding_handoff,
     )
     target = implementation_task_path(plan_task_path)
     if target.exists():

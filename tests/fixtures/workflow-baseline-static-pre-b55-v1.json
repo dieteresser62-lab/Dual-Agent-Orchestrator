@@ -177,10 +177,9 @@
         },
         {
           "ordinal": 9,
-          "expression": "existing_replay is not None and (not import_only_prefix)",
+          "expression": "existing_replay is not None",
           "read_names": [
-            "existing_replay",
-            "import_only_prefix"
+            "existing_replay"
           ]
         },
         {

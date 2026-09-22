@@ -64,11 +64,6 @@ _TRANSLATED_STATIC_RAISE_SCOPES = (
         NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
     ),
     _TranslatedStaticRaiseScope(
-        "finding_planning.py",
-        "validate_plan_treatment_decisions",
-        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-    ),
-    _TranslatedStaticRaiseScope(
         "schema_validation.py",
         "_check_schema_node",
         NativeReviewErrorCode.SCHEMA_INVALID,
@@ -95,7 +90,6 @@ _TRANSLATION_ENTRYPOINTS = frozenset(
         "StopRequest",
         "apply_reviewer_events",
         "check_schema",
-        "validate_plan_treatment_decisions",
     }
 )
 
@@ -118,12 +112,6 @@ _EXPECTED_PASSTHROUGH_BOUNDARIES = Counter(
             NativeReviewErrorCode.STOP_CONTENT_INVALID,
             "",
             ("StopRequest",),
-        ): 1,
-        (
-            "_validate_plan_treatment_response_decisions",
-            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            "",
-            ("validate_plan_treatment_decisions",),
         ): 1,
         (
             "_merge_findings",

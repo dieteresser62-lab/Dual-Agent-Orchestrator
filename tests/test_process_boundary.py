@@ -31,6 +31,7 @@ PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b59-v1.json"
 CORPUS = ROOT / "tests/fixtures/process-boundary-corpus-v1.json"
 B60_PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b60-v1.json"
 AGENT_SOURCE = ROOT / "src/agent_runtime.py"
+TARGET_RECORD_SEQUENCE_BLOB = "5f17a97e1d0fc5f56b21a22588ed6c3dc2d3a9a3"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1087,6 +1088,16 @@ def test_b60_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None
         # The joint 67/68 cutover intentionally changes the native-provider
         # projection baseline; it is no longer a pre-cut protected artifact.
         if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
+            continue
+        if path == "tests/fixtures/workflow-record-sequence-baseline-v1.json":
+            assert _git("hash-object", str(ROOT / path)) == TARGET_RECORD_SEQUENCE_BLOB
+            assert (
+                _git(
+                    "rev-parse",
+                    f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{path}",
+                )
+                == blob
+            )
             continue
         assert _git("hash-object", str(ROOT / path)) == blob, path
         assert (

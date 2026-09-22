@@ -58,27 +58,17 @@ from native_provider_schema import (
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from rejected_response_shape import RejectedNativeResponseShape
-import native_finding_decisions
 from native_finding_decisions import (
-    ClosedFindingReviewBinding,
     NativeClosureKind,
     NativeFindingClosure,
     NativeRejectionReason,
-    PlanTreatmentDecision,
-    PlanTreatmentDecisionKind,
-    PlanTreatmentKind,
-)
-from finding_planning import (
-    PlanTreatmentProposal,
-    canonical_open_signature_groups,
-    validate_plan_treatment_decisions,
 )
 
 
 SCHEMA_VERSION = "native-agent-review-result-v2"
 MAX_NATIVE_REVIEW_DISPOSITIONS = 32
-DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS = 128
-MAX_BRANCH_DISCOVERY_NEW_FINDINGS = 512
+DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS = 128
+MAX_FINAL_REVIEW_NEW_FINDINGS = 512
 DISCOVERY_OUTPUT_LIMIT_RULE_ID = "DISCOVERY_OUTPUT_LIMIT"
 NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
 NONBLANK_LINE_PATTERN = (
@@ -357,14 +347,7 @@ def validate_native_review_disposition_budget(
     reclassifications = document.get("reclassifications")
     if not isinstance(status_changes, list) or not isinstance(reclassifications, list):
         return
-    plan_decisions = document.get("plan_treatment_decisions", [])
-    if not isinstance(plan_decisions, list):
-        return
-    actual_items = (
-        len(status_changes)
-        + len(reclassifications)
-        + len(plan_decisions)
-    )
+    actual_items = len(status_changes) + len(reclassifications)
     new_finding_capacity = len(_native_finding_id_window(context, size=32))
     maximum_items = min(
         MAX_NATIVE_REVIEW_DISPOSITIONS,
@@ -375,8 +358,7 @@ def validate_native_review_disposition_budget(
             "review disposition count "
             f"{actual_items} exceeds bound maximum {maximum_items}; "
             f"status_changes={len(status_changes)}, "
-            f"reclassifications={len(reclassifications)}, "
-            f"plan_treatment_decisions={len(plan_decisions)}"
+            f"reclassifications={len(reclassifications)}"
         )
         error = NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
@@ -391,12 +373,6 @@ def validate_native_review_disposition_budget(
 def native_review_disposition_capacity(context: NativeReviewContext) -> int:
     """Count reviewer-owned open findings eligible for one disposition."""
 
-    if context.approval_marker is ApprovalMarker.PLAN and context.plan_treatments:
-        return len(context.plan_treatments) + sum(
-            len(item.finding_ids)
-            for item in context.plan_treatments
-            if item.treatment_kind is PlanTreatmentKind.NO_CODE
-        )
     return sum(
         item.origin.reporter is context.reviewer
         for item in project_open_set(context.previous_findings).findings
@@ -453,7 +429,6 @@ class NativeReviewResult:
     anchors: tuple[NativeAnchor, ...]
     evidence: ReviewEvidence | None
     pre_mortem: str | None
-    plan_treatment_decisions: tuple[PlanTreatmentDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +439,7 @@ class NativeFindingOccurrence:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeBranchDiscoveryCompleted:
+class NativeFinalReviewCompleted:
     """E6 delivery: a completed scan, deliberately not an approval decision."""
 
     request_id: str
@@ -486,23 +461,23 @@ class NativeStopResult:
 
 
 NativeReviewResponse: TypeAlias = (
-    NativeReviewResult | NativeBranchDiscoveryCompleted | NativeStopResult
+    NativeReviewResult | NativeFinalReviewCompleted | NativeStopResult
 )
 
 
-def _validated_branch_discovery_capacity(
+def _validated_final_review_capacity(
     approval_marker: ApprovalMarker,
     capacity: int | None,
 ) -> int | None:
-    if approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+    if approval_marker is not ApprovalMarker.FINAL_REVIEW:
         if capacity is not None:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "max_new_findings is valid only for a branch discovery review",
+                "max_new_findings is valid only for a final review review",
             )
         return None
     normalized = (
-        DEFAULT_BRANCH_DISCOVERY_MAX_NEW_FINDINGS
+        DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS
         if capacity is None
         else capacity
     )
@@ -510,12 +485,12 @@ def _validated_branch_discovery_capacity(
         isinstance(normalized, bool)
         or not isinstance(normalized, int)
         or normalized < 1
-        or normalized > MAX_BRANCH_DISCOVERY_NEW_FINDINGS
+        or normalized > MAX_FINAL_REVIEW_NEW_FINDINGS
     ):
         raise NativeReviewContractError(
             NativeReviewErrorCode.CONTEXT_INVALID,
-            "branch discovery max_new_findings must be an integer from 1 to "
-            f"{MAX_BRANCH_DISCOVERY_NEW_FINDINGS}",
+            "final review max_new_findings must be an integer from 1 to "
+            f"{MAX_FINAL_REVIEW_NEW_FINDINGS}",
         )
     return normalized
 
@@ -546,15 +521,13 @@ class NativeReviewContext:
     final_review_pending_count: int | None = None
     max_new_findings: int | None = None
     planned_slices: tuple[PlannedSlice, ...] = ()
-    plan_treatments: tuple[PlanTreatmentProposal, ...] = ()
-    closed_finding_bindings: tuple[ClosedFindingReviewBinding, ...] = ()
     request_sequence: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "max_new_findings",
-            _validated_branch_discovery_capacity(
+            _validated_final_review_capacity(
                 self.approval_marker, self.max_new_findings
             ),
         )
@@ -719,8 +692,6 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "final_review_pending_count is valid only for a final review",
             )
-        _validate_plan_treatments(self)
-        _validate_closed_finding_bindings(self)
 
     @property
     def effective_known_open_findings(self) -> tuple[FindingRecord, ...]:
@@ -739,87 +710,9 @@ class NativeReviewContext:
         return "native-review-request-" + hashlib.sha256(encoded).hexdigest()
 
 
-def _validate_plan_treatments(context: NativeReviewContext) -> None:
-    treatments = context.plan_treatments
-    if any(not isinstance(item, PlanTreatmentProposal) for item in treatments):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "plan treatments must be typed",
-        )
-    if treatments and context.approval_marker is not ApprovalMarker.PLAN:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "plan treatments are valid only for a plan review",
-        )
-    if not treatments:
-        return
-    expected = canonical_open_signature_groups(context.previous_findings)
-    signatures = tuple(item.signature for item in treatments)
-    if signatures != tuple(sorted(set(signatures))):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "plan treatments must be sorted and unique by signature",
-        )
-    expected_groups = {
-        item.signature: item.finding_ids for item in expected
-    }
-    if set(signatures) != set(expected_groups):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "plan treatments must cover every canonical open signature exactly once",
-        )
-    if any(
-        item.finding_ids != expected_groups[item.signature]
-        for item in treatments
-    ):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "plan treatment Finding IDs differ from their canonical signature group",
-        )
-
-
-def _validate_closed_finding_bindings(context: NativeReviewContext) -> None:
-    bindings = context.closed_finding_bindings
-    if any(not isinstance(item, ClosedFindingReviewBinding) for item in bindings):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "closed Finding bindings must be typed",
-        )
-    if bindings and context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "closed Finding bindings are valid only for branch discovery",
-        )
-    ids = tuple(item.finding_id for item in bindings)
-    if ids != sorted_finding_ids(ids):
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.CONTEXT_INVALID,
-            "closed Finding bindings must be sorted and unique",
-        )
-    previous = {item.finding_id: item for item in context.previous_findings}
-    for binding in bindings:
-        finding = previous.get(binding.finding_id)
-        if finding is None or not is_closed_finding_status(finding.status):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                "closed Finding binding does not reference a closed offered Finding",
-            )
-        if finding_record_signature(finding) != binding.signature:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.CONTEXT_INVALID,
-                "closed Finding binding signature differs from the Finding",
-            )
-
-
 @dataclass(frozen=True, slots=True)
 class BoundNativeReviewContext:
-    """A live-provider context bound to one complete canonical request.
-
-    The provider-independent :class:`NativeReviewContext` intentionally keeps
-    its original local binding for isolated domain tests.  Productive native
-    transport, persistence, and recovery APIs use this distinct wrapper so a
-    caller cannot silently fall back to the narrower local request id.
-    """
+    """A live-provider context bound to one complete canonical request."""
 
     context: NativeReviewContext
     request_id: str
@@ -856,7 +749,7 @@ def load_native_review_schema() -> dict[str, Any]:
             source=NativeReviewRejectionSource.REQUEST_LEDGER,
         )
     _enable_native_review_finding_decision_schema(schema)
-    _enable_branch_discovery_result_schema(schema)
+    _enable_final_review_result_schema(schema)
     try:
         check_schema(schema, location="<native-review-schema>")
     except SchemaDefinitionError as exc:
@@ -868,7 +761,7 @@ def load_native_review_schema() -> dict[str, Any]:
     return schema
 
 
-def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
+def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
     """Add E6's delivery without changing the dormant reader schema on disk."""
 
     definitions = schema["$defs"]
@@ -887,7 +780,7 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
             {"type": "null"},
         ],
     }
-    definitions["branch_discovery_occurrence"] = {
+    definitions["final_review_occurrence"] = {
         "type": "object",
         "properties": {
             "finding_id": {
@@ -909,14 +802,14 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
         "required": ["finding_id", "rationale"],
         "additionalProperties": False,
     }
-    definitions["branch_discovery_completed"] = {
+    definitions["final_review_completed"] = {
         "allOf": [
             {"$ref": "#/$defs/common"},
             {
                 "type": "object",
                 "properties": {
                     "schema_version": {"const": SCHEMA_VERSION},
-                    "result_type": {"const": "branch_discovery_completed"},
+                    "result_type": {"const": "final_review_completed"},
                     "request_id": {
                         "type": "string",
                         "pattern": "^native-review-request-[0-9a-f]{64}$",
@@ -925,14 +818,14 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
                     "scan_complete": {"type": "boolean"},
                     "new_findings": {
                         "type": "array",
-                        "maxItems": MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
+                        "maxItems": MAX_FINAL_REVIEW_NEW_FINDINGS,
                         "items": {"$ref": "#/$defs/finding"},
                     },
                     "occurrences": {
                         "type": "array",
                         "maxItems": 10000,
                         "items": {
-                            "$ref": "#/$defs/branch_discovery_occurrence"
+                            "$ref": "#/$defs/final_review_occurrence"
                         },
                     },
                     "review_evidence": {"$ref": "#/$defs/evidence"},
@@ -961,14 +854,14 @@ def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
     common_result_types["enum"] = [
         "review_result",
         "stop_request",
-        "branch_discovery_completed",
+        "final_review_completed",
     ]
     schema["oneOf"].append(
-        {"$ref": "#/$defs/branch_discovery_completed"}
+        {"$ref": "#/$defs/final_review_completed"}
     )
 
 
-def _branch_discovery_provider_response_schema(
+def _final_review_provider_response_schema(
     context: NativeReviewContext,
     definitions: dict[str, Any],
 ) -> dict[str, Any]:
@@ -982,21 +875,7 @@ def _branch_discovery_provider_response_schema(
     finding["properties"]["summary"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
     )
-    predecessor_ids = tuple(
-        item.finding_id
-        for item in context.closed_finding_bindings
-        if not item.anchor_unchanged
-    )
-    finding["properties"]["predecessor_finding_ref"] = (
-        {
-            "oneOf": [
-                {"type": "string", "enum": list(predecessor_ids)},
-                {"type": "null"},
-            ]
-        }
-        if predecessor_ids
-        else {"type": "null"}
-    )
+    finding["properties"]["predecessor_finding_ref"] = {"type": "null"}
     finding["properties"]["evidence_anchor_sha256"] = {
         "oneOf": [
             {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -1006,47 +885,33 @@ def _branch_discovery_provider_response_schema(
     finding["required"].extend(
         ["predecessor_finding_ref", "evidence_anchor_sha256"]
     )
-    definitions["bound_branch_discovery_finding"] = finding
+    definitions["bound_final_review_finding"] = finding
     open_ids = tuple(
         item.finding_id for item in context.effective_known_open_findings
     )
-    stable_closed = tuple(
-        item for item in context.closed_finding_bindings if item.anchor_unchanged
-    )
-    known_ids = sorted_finding_ids(
-        (*open_ids, *(item.finding_id for item in stable_closed))
-    )
+    known_ids = sorted_finding_ids(open_ids)
     occurrence_options: list[dict[str, Any]] = []
-    stable_by_id = {item.finding_id: item for item in stable_closed}
     for finding_id in known_ids:
         option = json.loads(
-            json.dumps(definitions["branch_discovery_occurrence"])
+            json.dumps(definitions["final_review_occurrence"])
         )
         option["properties"]["finding_id"] = {
             "type": "string",
             "const": finding_id,
         }
-        binding = stable_by_id.get(finding_id)
-        option["properties"]["evidence_anchor_sha256"] = (
-            {
-                "type": "string",
-                "const": binding.current_anchor.stability_sha256,
-            }
-            if binding is not None
-            else {"type": "null"}
-        )
+        option["properties"]["evidence_anchor_sha256"] = {"type": "null"}
         option["required"].append("evidence_anchor_sha256")
         occurrence_options.append(option)
     occurrence = (
         {"oneOf": occurrence_options}
         if occurrence_options
         else _bound_review_definition(
-            definitions["branch_discovery_occurrence"], finding_ids=()
+            definitions["final_review_occurrence"], finding_ids=()
         )
     )
-    definitions["bound_branch_discovery_occurrence"] = occurrence
+    definitions["bound_final_review_occurrence"] = occurrence
     completed = json.loads(
-        json.dumps(definitions["branch_discovery_completed"]["allOf"][1])
+        json.dumps(definitions["final_review_completed"]["allOf"][1])
     )
     completed["properties"]["schema_version"] = {
         "type": "string",
@@ -1054,7 +919,7 @@ def _branch_discovery_provider_response_schema(
     }
     completed["properties"]["result_type"] = {
         "type": "string",
-        "const": "branch_discovery_completed",
+        "const": "final_review_completed",
     }
     completed["properties"]["reviewer"] = {
         "type": "string",
@@ -1068,16 +933,16 @@ def _branch_discovery_provider_response_schema(
         context.max_new_findings
     )
     completed["properties"]["new_findings"]["items"] = {
-        "$ref": "#/$defs/bound_branch_discovery_finding"
+        "$ref": "#/$defs/bound_final_review_finding"
     }
     if known_ids:
         completed["properties"]["occurrences"].update(
             maxItems=len(known_ids),
-            items={"$ref": "#/$defs/bound_branch_discovery_occurrence"},
+            items={"$ref": "#/$defs/bound_final_review_occurrence"},
         )
     else:
         _bind_required_empty_array(completed["properties"]["occurrences"])
-    definitions["bound_branch_discovery_completed"] = completed
+    definitions["bound_final_review_completed"] = completed
     stop = _bound_stop_result_definition(
         definitions["stop_request"], reviewer=context.reviewer
     )
@@ -1091,15 +956,15 @@ def _branch_discovery_provider_response_schema(
         f"Use {DISCOVERY_OUTPUT_LIMIT_RULE_ID} when the scan reaches the "
         "request-bound max_new_findings capacity; no partial result is authoritative."
     )
-    definitions["bound_branch_discovery_stop"] = stop
+    definitions["bound_final_review_stop"] = stop
     return {
-        "title": "Native branch discovery writer projection",
+        "title": "Native final review writer projection",
         "type": "object",
         "properties": {
             "result": {
                 "oneOf": [
-                    {"$ref": "#/$defs/bound_branch_discovery_completed"},
-                    {"$ref": "#/$defs/bound_branch_discovery_stop"},
+                    {"$ref": "#/$defs/bound_final_review_completed"},
+                    {"$ref": "#/$defs/bound_final_review_stop"},
                 ]
             }
         },
@@ -1157,8 +1022,8 @@ def native_review_provider_response_schema(
     definitions["anchor"]["properties"]["input_fixture"]["maxLength"] = 2000
     definitions["anchor"]["properties"]["expected"]["maxLength"] = 2000
     definitions["anchor"]["properties"]["tolerance"]["maxLength"] = 1000
-    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
-        projected_schema = _branch_discovery_provider_response_schema(
+    if context.approval_marker is ApprovalMarker.FINAL_REVIEW:
+        projected_schema = _final_review_provider_response_schema(
             context, definitions
         )
         assert_projected_provider_schema(
@@ -1276,7 +1141,6 @@ def native_review_provider_response_schema(
         own_open,
         same_response_closure_ids,
     )
-    _bind_plan_treatment_decision_collection(approved, context)
     if observations_allowed and own_open_ids:
         approved_reclassification = _bound_review_definition(
             reclassification,
@@ -1336,7 +1200,6 @@ def native_review_provider_response_schema(
     else:
         _bind_required_empty_array(denied["properties"]["status_changes"])
         _bind_required_empty_array(denied["properties"]["reclassifications"])
-    _bind_plan_treatment_decision_collection(denied, context)
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
             {"type": "null"},
@@ -1446,47 +1309,6 @@ def _bind_approved_status_changes(
         options.append(option)
     approved["properties"]["status_changes"]["items"] = {"oneOf": options}
     return maximum
-
-
-def _bind_plan_treatment_decision_collection(
-    review: dict[str, Any], context: NativeReviewContext
-) -> None:
-    decisions = review["properties"].get("plan_treatment_decisions")
-    if not isinstance(decisions, dict):
-        return
-    if not context.plan_treatments:
-        _bind_required_empty_array(decisions)
-        return
-    options: list[dict[str, Any]] = []
-    for treatment in context.plan_treatments:
-        option = {
-            "type": "object",
-            "properties": {
-                "signature": {
-                    "type": "string",
-                    "const": treatment.signature,
-                },
-                "decision": {
-                    "type": "string",
-                    "enum": [item.value for item in PlanTreatmentDecisionKind],
-                },
-                "rationale": {
-                    "type": "string",
-                    "pattern": NONBLANK_TEXT_PATTERN,
-                    "maxLength": 3000,
-                },
-            },
-            "required": ["signature", "decision", "rationale"],
-            "additionalProperties": False,
-        }
-        options.append(option)
-    decisions.update(
-        minItems=len(options),
-        maxItems=len(options),
-        items={"oneOf": options},
-    )
-    if "plan_treatment_decisions" not in review["required"]:
-        review["required"].append("plan_treatment_decisions")
 
 
 def _bound_review_definition(
@@ -1612,11 +1434,11 @@ def _parse_native_review_response(
             remediation_paths=tuple(document["remediation_paths"]),
         )
 
-    if document["result_type"] == "branch_discovery_completed":
-        if context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+    if document["result_type"] == "final_review_completed":
+        if context.approval_marker is not ApprovalMarker.FINAL_REVIEW:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.APPROVAL_INVALID,
-                "BRANCH_DISCOVERY_COMPLETED requires a branch discovery request",
+                "FINAL_REVIEW_COMPLETED requires a final review request",
             )
         try:
             discovery_evidence = ReviewEvidence(**document["review_evidence"])
@@ -1624,7 +1446,7 @@ def _parse_native_review_response(
             raise NativeReviewContractError(
                 NativeReviewErrorCode.REVIEW_CONTENT_MISSING, str(exc)
             ) from exc
-        discovery = NativeBranchDiscoveryCompleted(
+        discovery = NativeFinalReviewCompleted(
             request_id=document["request_id"],
             reviewer=reviewer,
             scan_complete=document["scan_complete"],
@@ -1649,18 +1471,18 @@ def _parse_native_review_response(
                 reviewer=reviewer,
                 rule_id=DISCOVERY_OUTPUT_LIMIT_RULE_ID,
                 rationale=(
-                    "Branch discovery reached the request-bound max_new_findings "
+                    "Final review reached the request-bound max_new_findings "
                     f"capacity of {context.max_new_findings}; the partial finding "
                     "set is not authoritative and automatic continuation is forbidden."
                 ),
             )
-        _validate_branch_discovery_completed(discovery, context)
+        _validate_final_review_completed(discovery, context)
         return discovery
 
-    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
+    if context.approval_marker is ApprovalMarker.FINAL_REVIEW:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "branch discovery cannot use approved or denied review_result",
+            "final review cannot use approved or denied review_result",
         )
 
     evidence: ReviewEvidence | None = None
@@ -1693,14 +1515,6 @@ def _parse_native_review_response(
                 rationale=item["rationale"],
             )
             for item in document["reclassifications"]
-        ),
-        plan_treatment_decisions=tuple(
-            PlanTreatmentDecision(
-                item["signature"],
-                PlanTreatmentDecisionKind(item["decision"]),
-                item["rationale"],
-            )
-            for item in document.get("plan_treatment_decisions", [])
         ),
         anchors=tuple(
             NativeAnchor(
@@ -1783,9 +1597,9 @@ def _native_response_to_contract_result(
             red_state_followup_slice=None,
         )
 
-    if isinstance(response, NativeBranchDiscoveryCompleted):
-        _validate_branch_discovery_completed(response, context)
-        findings = _merge_branch_discovery_findings(response, context)
+    if isinstance(response, NativeFinalReviewCompleted):
+        _validate_final_review_completed(response, context)
+        findings = _merge_final_review_findings(response, context)
         return ContractResult(
             reviewer=response.reviewer,
             approval=None,
@@ -1798,7 +1612,7 @@ def _native_response_to_contract_result(
             findings=findings,
             anchors=(),
             red_state_followup_slice=None,
-            delivery_kind="branch_discovery_completed",
+            delivery_kind="final_review_completed",
             occurrences=tuple(
                 FindingOccurrence(
                     item.finding_id,
@@ -1829,7 +1643,6 @@ def _native_response_to_contract_result(
         red_state_followup_slice=(
             context.red_state_followup_slice if response.approved else None
         ),
-        plan_treatment_decisions=response.plan_treatment_decisions,
         finding_closures=tuple(
             (update.finding_id, update.closure)
             for update in response.status_changes
@@ -1987,28 +1800,6 @@ def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> Non
     }
     status["required"].append("closure")
     result = definitions["review_result"]["allOf"][1]
-    definitions["plan_treatment_decision"] = {
-        "type": "object",
-        "properties": {
-            "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "decision": {
-                "type": "string",
-                "enum": [item.value for item in PlanTreatmentDecisionKind],
-            },
-            "rationale": {
-                "type": "string",
-                "pattern": NONBLANK_TEXT_PATTERN,
-                "maxLength": 3000,
-            },
-        },
-        "required": ["signature", "decision", "rationale"],
-        "additionalProperties": False,
-    }
-    result["properties"]["plan_treatment_decisions"] = {
-        "type": "array",
-        "maxItems": MAX_NATIVE_REVIEW_DISPOSITIONS,
-        "items": {"$ref": "#/$defs/plan_treatment_decision"},
-    }
 
 
 def _validate_active_native_review_field_shapes(
@@ -2056,48 +1847,6 @@ def _validate_active_native_review_field_shapes(
                             NativeReviewErrorCode.FINDING_CONTENT_INVALID,
                             "rejected closure requires named evidence",
                         )
-def _validate_plan_treatment_response_decisions(
-    response: NativeReviewResult,
-    context: NativeReviewContext,
-) -> None:
-    try:
-        validate_plan_treatment_decisions(
-            context.plan_treatments,
-            response.plan_treatment_decisions,
-            plan_approved=response.approved,
-        )
-    except ValueError as exc:
-        raise NativeReviewContractError(
-            NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-            str(exc),
-        ) from exc
-    if not response.approved or context.approval_marker is not ApprovalMarker.PLAN:
-        return
-    status_by_id = {item.finding_id: item for item in response.status_changes}
-    for treatment in context.plan_treatments:
-        for finding_id in treatment.finding_ids:
-            update = status_by_id.get(finding_id)
-            if treatment.treatment_kind is PlanTreatmentKind.IMPLEMENTATION:
-                if update is not None and is_closed_finding_status(update.status):
-                    raise NativeReviewContractError(
-                        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                        "implementation treatment cannot close its Finding in plan review",
-                    )
-                continue
-            if (
-                update is None
-                or not is_closed_finding_status(update.status)
-                or update.closure is None
-                or update.closure.kind is not NativeClosureKind.REJECTED
-                or update.closure.rejection_reason is not treatment.no_code_reason
-            ):
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.FINDING_UPDATE_MISSING,
-                    "reviewer-accepted No-Code treatment requires a matching "
-                    f"typed closure for {finding_id}",
-                )
-
-
 def _validate_finding_event_collisions(
     response: NativeReviewResult,
 ) -> tuple[list[str], list[str], list[str]]:
@@ -2163,14 +1912,12 @@ def _validate_response_events(
         response.new_findings
         or response.status_changes
         or response.reclassifications
-        or response.plan_treatment_decisions
     ) and response.evidence is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
             "review requires at least one finding event or review evidence",
         )
     _validate_finding_event_content(response)
-    _validate_plan_treatment_response_decisions(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     previous_open_ids = frozenset(
         project_open_set(context.previous_findings).finding_ids
@@ -2268,12 +2015,6 @@ def _validate_response_events(
             )
         known_signatures[signature] = [finding.finding_id]
     touched = set(status_ids) | set(class_ids)
-    if context.approval_marker is ApprovalMarker.PLAN:
-        touched.update(
-            finding_id
-            for treatment in context.plan_treatments
-            for finding_id in treatment.finding_ids
-        )
     missing_dispositions = tuple(
         finding.finding_id
         for finding in context.previous_findings
@@ -2336,28 +2077,28 @@ def _validate_finding_event_content(response: NativeReviewResult) -> None:
             max_length=3000,
             code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
-def _validate_branch_discovery_completed(
-    response: NativeBranchDiscoveryCompleted,
+def _validate_final_review_completed(
+    response: NativeFinalReviewCompleted,
     context: NativeReviewContext,
 ) -> None:
     """Validate E6 without routing inherited findings or deriving approval."""
 
-    if context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+    if context.approval_marker is not ApprovalMarker.FINAL_REVIEW:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker",
+            "FINAL_REVIEW_COMPLETED requires its dedicated request marker",
         )
     if response.scan_complete is not True:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "branch discovery completion requires scan_complete=true",
+            "final review completion requires scan_complete=true",
         )
     assert context.max_new_findings is not None
     finding_count = len(response.new_findings)
     if finding_count > context.max_new_findings:
         raise NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
-            "branch discovery new finding count "
+            "final review new finding count "
             f"{finding_count} exceeds request-bound max_new_findings "
             f"{context.max_new_findings}",
         )
@@ -2369,7 +2110,7 @@ def _validate_branch_discovery_completed(
         )
     _require_native_text(
         response.pre_mortem,
-        "branch discovery pre_mortem",
+        "final review pre_mortem",
         max_length=3000,
         code=NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
     )
@@ -2377,20 +2118,19 @@ def _validate_branch_discovery_completed(
     if validation is None or not validation.complete or not validation.passed:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "branch discovery completion requires a complete PASS attestation",
+            "final review completion requires a complete PASS attestation",
         )
     if context.test_files and not context.test_changes_approved:
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "branch discovery completion with test changes requires prior approval",
+            "final review completion with test changes requires prior approval",
         )
     occurrence_ids = tuple(item.finding_id for item in response.occurrences)
     if len(occurrence_ids) != len(set(occurrence_ids)):
         raise NativeReviewContractError(
             NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
-            "branch discovery occurrences must reference each finding at most once",
+            "final review occurrences must reference each finding at most once",
         )
-    _validate_closed_finding_rediscoveries(response, context)
     previous = {item.finding_id: item for item in context.previous_findings}
     fake = NativeReviewResult(
         request_id=response.request_id,
@@ -2414,92 +2154,8 @@ def _validate_branch_discovery_completed(
     _validate_response_events(fake, context)
 
 
-def _validate_closed_finding_rediscoveries(
-    response: NativeBranchDiscoveryCompleted,
-    context: NativeReviewContext,
-) -> None:
-    previous = {item.finding_id: item for item in context.previous_findings}
-    bindings_by_id = {
-        item.finding_id: item for item in context.closed_finding_bindings
-    }
-    bindings_by_signature: dict[str, list[ClosedFindingReviewBinding]] = {}
-    for binding in context.closed_finding_bindings:
-        bindings_by_signature.setdefault(binding.signature, []).append(binding)
-    for occurrence in response.occurrences:
-        finding = previous.get(occurrence.finding_id)
-        if finding is None:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-                "branch discovery occurrence references an unknown Finding",
-            )
-        if not is_closed_finding_status(finding.status):
-            if occurrence.evidence_anchor_sha256 is not None:
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                    "open Finding occurrence forbids a closed-disposition anchor",
-                )
-            continue
-        binding = bindings_by_id.get(occurrence.finding_id)
-        if binding is None or not binding.anchor_unchanged:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
-                "closed Finding occurrence requires an unchanged evidence anchor",
-            )
-        if (
-            occurrence.evidence_anchor_sha256
-            != binding.current_anchor.stability_sha256
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "closed Finding occurrence carries another evidence anchor",
-            )
-    for finding in response.new_findings:
-        acceptance = _native_finding_acceptance_text(finding)
-        signature = finding_signature(
-            acceptance,
-            mentioned_repository_paths(finding.summary, acceptance),
-        )
-        matching = bindings_by_signature.get(signature, [])
-        if not matching:
-            if (
-                finding.predecessor_finding_ref is not None
-                or finding.evidence_anchor_sha256 is not None
-            ):
-                raise NativeReviewContractError(
-                    NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-                    "new Finding names no matching closed predecessor",
-                )
-            continue
-        predecessor = next(
-            (
-                item
-                for item in matching
-                if item.finding_id == finding.predecessor_finding_ref
-            ),
-            None,
-        )
-        if predecessor is None:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
-                "rediscovered closed signature requires predecessor_finding_ref",
-            )
-        if predecessor.anchor_unchanged:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
-                "unchanged closed signature must be recorded as an occurrence",
-            )
-        if (
-            finding.evidence_anchor_sha256
-            != predecessor.current_anchor.stability_sha256
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_CONTENT_INVALID,
-                "new Finding generation carries another evidence anchor",
-            )
-
-
-def _merge_branch_discovery_findings(
-    response: NativeBranchDiscoveryCompleted,
+def _merge_final_review_findings(
+    response: NativeFinalReviewCompleted,
     context: NativeReviewContext,
 ) -> tuple[FindingRecord, ...]:
     previous = {item.finding_id: item for item in context.previous_findings}
@@ -2773,14 +2429,6 @@ def _validate_decision(
         if item.finding_class is FindingClass.BLOCKER
         and item.origin.reporter is context.reviewer
     )
-    if (
-        context.approval_marker is ApprovalMarker.PLAN
-        and context.plan_treatments
-    ):
-        # The legacy plan-treatment deviation may still carry this complete
-        # cohort into an approved PlanAssignment.  Its removal belongs to a
-        # separate target-model work unit.
-        own_open_blockers = ()
     if not response.approved:
         if not own_open_blockers:
             raise NativeReviewContractError(
@@ -2826,6 +2474,12 @@ def _validate_decision(
                 NativeReviewErrorCode.APPROVAL_INVALID,
                 detail,
             )
+    if context.approval_marker is ApprovalMarker.PLAN and open_findings:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "plan approval cannot leave open findings: "
+            + ", ".join(item.finding_id for item in open_findings),
+        )
     validation = context.validation_attestation
     if (
         validation is None
@@ -2972,7 +2626,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
     }
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
-    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
+    if context.approval_marker is ApprovalMarker.FINAL_REVIEW:
         binding["max_new_findings"] = context.max_new_findings
     binding["planned_slices"] = [
             {
@@ -2990,35 +2644,6 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
             }
             for item in context.planned_slices
         ]
-    treatments: list[dict[str, Any]] = []
-    for treatment in context.plan_treatments:
-        item: dict[str, Any] = {
-                "signature": treatment.signature,
-                "finding_ids": list(treatment.finding_ids),
-                "treatment_kind": treatment.treatment_kind.value,
-            }
-        if treatment.treatment_kind is PlanTreatmentKind.IMPLEMENTATION:
-            item["closing_slice_ids"] = list(treatment.closing_slice_ids)
-        else:
-            assert treatment.no_code_reason is not None
-            item["no_code_reason"] = treatment.no_code_reason.value
-            item["evidence"] = treatment.evidence
-            item["evidence_paths"] = list(treatment.evidence_paths)
-            item["affected_paths"] = list(treatment.affected_paths)
-        treatments.append(item)
-    binding["plan_treatments"] = treatments
-    binding["closed_finding_bindings"] = [
-            {
-                "finding_id": item.finding_id,
-                "signature": item.signature,
-                "source_plan_assignment_record_id": (
-                    item.source_plan_assignment_record_id
-                ),
-                "original_anchor": _no_code_anchor_binding(item.original_anchor),
-                "current_anchor": _no_code_anchor_binding(item.current_anchor),
-            }
-            for item in context.closed_finding_bindings
-    ]
     return binding
 
 
@@ -3093,22 +2718,6 @@ def _finding_binding(finding: FindingRecord) -> dict[str, Any]:
     if finding.evidence_anchor_sha256 is not None:
         binding["evidence_anchor_sha256"] = finding.evidence_anchor_sha256
     return binding
-
-
-def _no_code_anchor_binding(
-    anchor: native_finding_decisions.NoCodeEvidenceAnchor,
-) -> dict[str, Any]:
-    return {
-        "rejection_reason": anchor.rejection_reason.value,
-        "provenance_fingerprint": anchor.provenance_fingerprint,
-        "evidence_paths": list(anchor.evidence_paths),
-        "evidence_content_sha256": anchor.evidence_content_sha256,
-        "task_sha256": anchor.task_sha256,
-        "scope_sha256": anchor.scope_sha256,
-        "affected_paths": list(anchor.affected_paths),
-        "affected_content_sha256": anchor.affected_content_sha256,
-        "stability_sha256": anchor.stability_sha256,
-    }
 
 
 def _attestation_binding(
