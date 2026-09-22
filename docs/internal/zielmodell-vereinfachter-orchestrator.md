@@ -395,6 +395,56 @@ Familienbindung, ersatzlos.
 
 **Das Konzept hat damit keine offene Frage mehr.**
 
+## Ein Satz, sechs Stellen
+
+Beobachtet am 22.9.2026, nach vier Canary-Läufen gegen das umgebaute Modell.
+
+Die Kernregel dieses Modells ist **ein Satz**:
+
+> Der Reviewer schließt ein Finding, oder er lässt es offen und lehnt ab;
+> dann wird es ein Blocker.
+
+Im Code muss dieser Satz an **sechs** Stellen gleichzeitig wahr sein:
+
+```
+1  das Antwortschema        darf der Reviewer es überhaupt ausdrücken?
+2  der Reviewvertrag        nimmt er die Antwort an?
+3  der Reducer              macht er daraus den Blocker?
+4  der Auditbericht         lässt er sie durch?
+5  die Ablehnungsmeldung    sagt sie, wie es geht?
+6  die Systempolicy         weiß der Reviewer es vorher?
+```
+
+**Fünf davon richtig zu haben, hält den Lauf trotzdem an.** Genau das ist
+zweimal passiert:
+
+| Canary | fünf richtig, eine falsch |
+|---|---|
+| 30 | die Meldung nannte einen Zug, den das Schema nicht ausdrückt (Stelle 5) |
+| 31 | der Auditbericht verlangte einen Blocker, wo der Vertrag ein Finding erlaubt (Stelle 4) |
+
+Das ist **keine Schwäche des Modells**, sondern der Preis dafür, dass eine
+Regel in einem geschichteten System mehrfach ausgedrückt werden muss.
+
+### Die Folgerung
+
+Es braucht ein Werkzeug, das die Stellen **gegeneinander** hält, statt sie
+einzeln zu prüfen. Das ist `tests/target_model_oracle.py`: Es baut echte
+Antworten für jede Lage und schickt sie durch die echten Schichten. Eine
+Antwort, die eine Schicht annimmt und die nächste verwirft, ist eine
+Abweichung der Klasse `UNEINIG`.
+
+Zwei Eigenschaften sind dabei entscheidend:
+
+- **Aufrufen statt nachbeschreiben.** Eine zweite Beschreibung einer Regel
+  könnte den Widerspruch prinzipiell nicht finden — sie wäre selbst eine
+  siebte Stelle.
+- **Beabsichtigte Strengedifferenzen benennen.** Der Commitpfad ist
+  absichtlich strenger als der Reviewvertrag: Er verlangt „kein offener
+  Blocker", während eine Ablehnung schon bei einem offenen Finding zulässig
+  ist. Steht das nicht als gewollt im Fixture, gleicht es beim nächsten Umbau
+  jemand an — und weicht damit die eine Commitbedingung auf.
+
 ## Vorgehen
 
 **Der Orchestrator wird während des Umbaus nicht genutzt.** Der Operator hat
