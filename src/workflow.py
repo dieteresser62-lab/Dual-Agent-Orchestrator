@@ -374,6 +374,8 @@ class WorkflowContext:
     retry_failed_validation: bool = False
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
     transient_retry_policy: TransientRetryPolicy = TransientRetryPolicy()
+    max_transport_failures: int = 3
+    max_contract_rejections: int = 3
     require_slice_plan: bool = False
     dynamic_test_scope: bool = False
     plan_gate: bool = False
@@ -423,6 +425,12 @@ class WorkflowContext:
             raise ValueError("quota_wait_policy must be a QuotaWaitPolicy")
         if not isinstance(self.transient_retry_policy, TransientRetryPolicy):
             raise ValueError("transient_retry_policy must be a TransientRetryPolicy")
+        for value, label in (
+            (self.max_transport_failures, "max_transport_failures"),
+            (self.max_contract_rejections, "max_contract_rejections"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{label} must be a positive integer")
         if not isinstance(self.require_slice_plan, bool):
             raise ValueError("require_slice_plan must be a boolean")
         if not isinstance(self.dynamic_test_scope, bool):

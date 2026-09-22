@@ -40,6 +40,8 @@ from workflow_state import (
 
 logger = logging.getLogger("workflow")
 ErrorType = type[RuntimeError]
+TRANSPORT_FAILURE_BUDGET = "max_transport_failures"
+CONTRACT_REJECTION_BUDGET = "max_contract_rejections"
 
 
 @dataclass(frozen=True)
@@ -60,10 +62,11 @@ def _log_invocation_failure(
     physical_attempt: int,
     error: AgentInvocationError,
     automatic: bool,
-    retryable_transient: bool,
-    transient_automatic: bool,
-    prior_auto_resumes: int,
-    maximum_auto_resumes: int,
+    exhausted_budget: str | None,
+    transport_failures: int,
+    max_transport_failures: int,
+    contract_rejections: int,
+    max_contract_rejections: int,
     diagnostic_code: str,
     provider_subtype: str,
     orchestrator_diagnostic: str | None,
@@ -74,7 +77,8 @@ def _log_invocation_failure(
         logger.info(
             "provider invocation terminal role=%s operation=%s physical_attempt=%d "
             "status=failed failure_kind=%s process_exit_code=%s retry=%s "
-            "attempts_exhausted=%s diagnostic_code=%s provider_subtype=%s "
+            "exhausted_budget=%s transport_failures=%d/%d "
+            "contract_rejections=%d/%d diagnostic_code=%s provider_subtype=%s "
             "orchestrator_diagnostic=%s native_review_rejection=%s",
             role.value,
             operation,
@@ -86,11 +90,11 @@ def _log_invocation_failure(
                 else "none"
             ),
             "scheduled" if automatic else "halted",
-            str(physical_attempt)
-            if retryable_transient
-            and transient_automatic
-            and prior_auto_resumes >= maximum_auto_resumes
-            else "none",
+            exhausted_budget or "none",
+            transport_failures,
+            max_transport_failures,
+            contract_rejections,
+            max_contract_rejections,
             diagnostic_code,
             provider_subtype,
             orchestrator_diagnostic or "none",
@@ -100,7 +104,8 @@ def _log_invocation_failure(
     logger.info(
         "provider invocation terminal role=%s operation=%s physical_attempt=%d "
         "status=failed failure_kind=%s process_exit_code=%s retry=%s "
-        "attempts_exhausted=%s diagnostic_code=%s provider_subtype=%s "
+        "exhausted_budget=%s transport_failures=%d/%d "
+        "contract_rejections=%d/%d diagnostic_code=%s provider_subtype=%s "
         "orchestrator_diagnostic=%s native_review_rejection=%s "
         "native_implementer_rejection=%s",
         role.value,
@@ -109,11 +114,11 @@ def _log_invocation_failure(
         error.kind.value,
         str(error.process_exit_code) if error.process_exit_code is not None else "none",
         "scheduled" if automatic else "halted",
-        str(physical_attempt)
-        if retryable_transient
-        and transient_automatic
-        and prior_auto_resumes >= maximum_auto_resumes
-        else "none",
+        exhausted_budget or "none",
+        transport_failures,
+        max_transport_failures,
+        contract_rejections,
+        max_contract_rejections,
         diagnostic_code,
         provider_subtype,
         orchestrator_diagnostic or "none",
@@ -279,6 +284,11 @@ class _InvocationRetryDecision:
     key: str
     matching_failures: tuple[InvocationFailureRecord, ...]
     prior_auto_resumes: int
+    transport_failures: int
+    contract_rejections: int
+    max_transport_failures: int
+    max_contract_rejections: int
+    exhausted_budget: str | None
     quota_policy: Any
     transient_policy: Any
     now_utc: datetime
@@ -292,6 +302,69 @@ class _InvocationRetryDecision:
     response_diagnostics: _NativeResponseFailureDiagnostics
     native_review_retry_round: int | None
     native_implementer_retry_round: int | None
+
+
+def _prior_native_retry_counts(
+    matching_failures: tuple[InvocationFailureRecord, ...],
+) -> tuple[int, int]:
+    """Recover the two native retry counters from already persisted facts.
+
+    Automatic native contract rejections carry their closed rejection code.
+    The only automatic reviewer-output retry without that feedback is the
+    provider structured-output transport failure.  Terminal records are not
+    added here: the current failed attempt below completes the finite budget
+    again after an explicit resume.
+    """
+
+    contract_rejections = sum(
+        item.automatic_resume
+        and (
+            item.native_review_rejection is not None
+            or item.native_implementer_rejection is not None
+        )
+        for item in matching_failures
+    )
+    transport_failures = sum(
+        item.automatic_resume
+        and item.failure_kind is AgentFailureKind.OUTPUT
+        and item.native_review_rejection is None
+        and item.native_implementer_rejection is None
+        for item in matching_failures
+    )
+    return transport_failures, contract_rejections
+
+
+def _native_retry_budget(
+    diagnostic_code: str,
+    prior_transport_failures: int,
+    prior_contract_rejections: int,
+    max_transport_failures: int,
+    max_contract_rejections: int,
+) -> tuple[int, int, str | None, bool | None]:
+    """Apply the classified native failure to exactly one finite budget."""
+
+    is_transport_failure = diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+    is_contract_rejection = diagnostic_code in {
+        "NATIVE-REVIEW-FORM",
+        "NATIVE-IMPLEMENTER-FORM",
+    }
+    transport_failures = prior_transport_failures + int(is_transport_failure)
+    contract_rejections = prior_contract_rejections + int(is_contract_rejection)
+    if is_transport_failure:
+        return (
+            transport_failures,
+            contract_rejections,
+            TRANSPORT_FAILURE_BUDGET,
+            transport_failures < max_transport_failures,
+        )
+    if is_contract_rejection:
+        return (
+            transport_failures,
+            contract_rejections,
+            CONTRACT_REJECTION_BUDGET,
+            contract_rejections < max_contract_rejections,
+        )
+    return transport_failures, contract_rejections, None, None
 
 
 def _invocation_retry_decision(
@@ -319,6 +392,23 @@ def _invocation_retry_decision(
     )
     quota_policy = context.quota_wait_policy
     transient_policy = context.transient_retry_policy
+    prior_transport_failures, prior_contract_rejections = (
+        _prior_native_retry_counts(matching_failures)
+    )
+    max_transport_failures = context.max_transport_failures
+    max_contract_rejections = context.max_contract_rejections
+    (
+        transport_failures,
+        contract_rejections,
+        native_budget_name,
+        native_budget_available,
+    ) = _native_retry_budget(
+        diagnostic_code,
+        prior_transport_failures,
+        prior_contract_rejections,
+        max_transport_failures,
+        max_contract_rejections,
+    )
     reset_at, quota_resume_at, automatic_quota = _quota_resume_decision(
         error=error,
         unit_kind=unit.kind,
@@ -344,17 +434,42 @@ def _invocation_retry_decision(
         or automatic_implementer_feedback
         or automatic_structured_output
     )
-    automatic_transient = (
-        disposition_limit_failure and fingerprint is not None
-    ) or (
+    retry_budget_available = (
+        native_budget_available
+        if native_budget_available is not None
+        else prior_auto_resumes < transient_policy.maximum_auto_resumes
+    )
+    transient_policy_applies = (
         retryable_transient
         and transient_policy.automatic
         and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
-        and prior_auto_resumes < transient_policy.maximum_auto_resumes
+    )
+    automatic_transient = (
+        disposition_limit_failure and fingerprint is not None
+    ) or (
+        transient_policy_applies and retry_budget_available
+    )
+    exhausted_budget = (
+        native_budget_name
+        if transient_policy_applies
+        and native_budget_name is not None
+        and not retry_budget_available
+        else "transient_retry_maximum_auto_resumes"
+        if transient_policy_applies
+        and native_budget_name is None
+        and not retry_budget_available
+        else None
+    )
+    prior_budget_failures = (
+        prior_transport_failures
+        if native_budget_name == TRANSPORT_FAILURE_BUDGET
+        else prior_contract_rejections
+        if native_budget_name == CONTRACT_REJECTION_BUDGET
+        else prior_auto_resumes
     )
     transient_delay = min(
         transient_policy.maximum_delay_seconds,
-        transient_policy.initial_delay_seconds * (2**prior_auto_resumes),
+        transient_policy.initial_delay_seconds * (2**prior_budget_failures),
     )
     resume_at = (
         quota_resume_at
@@ -374,6 +489,11 @@ def _invocation_retry_decision(
         key=key,
         matching_failures=matching_failures,
         prior_auto_resumes=prior_auto_resumes,
+        transport_failures=transport_failures,
+        contract_rejections=contract_rejections,
+        max_transport_failures=max_transport_failures,
+        max_contract_rejections=max_contract_rejections,
+        exhausted_budget=exhausted_budget,
         quota_policy=quota_policy,
         transient_policy=transient_policy,
         now_utc=now_utc,
@@ -592,14 +712,11 @@ class WorkflowFailureRecording:
             physical_attempt=len(decision.matching_failures) + 1,
             error=error,
             automatic=decision.automatic,
-            retryable_transient=decision.retryable_transient,
-            transient_automatic=decision.transient_policy.automatic,
-            prior_auto_resumes=decision.prior_auto_resumes,
-            maximum_auto_resumes=(
-                decision.quota_policy.maximum_auto_resumes
-                if error.kind is AgentFailureKind.QUOTA
-                else decision.transient_policy.maximum_auto_resumes
-            ),
+            exhausted_budget=decision.exhausted_budget,
+            transport_failures=decision.transport_failures,
+            max_transport_failures=decision.max_transport_failures,
+            contract_rejections=decision.contract_rejections,
+            max_contract_rejections=decision.max_contract_rejections,
             diagnostic_code=classified.diagnostic_code,
             provider_subtype=decision.response_diagnostics.provider_subtype,
             orchestrator_diagnostic=payload.orchestrator_diagnostic,

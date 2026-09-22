@@ -109,7 +109,9 @@
         "plan_gate": false,
         "test_change_gate": false,
         "max_rounds_per_loop": 6,
-        "max_acceptance_reviews": 6
+        "max_acceptance_reviews": 6,
+        "max_transport_failures": 3,
+        "max_contract_rejections": 3
       },
       "validation_declared": false,
       "source": null,
@@ -236,7 +238,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 761,
+          "line": 773,
           "type": "SystemExit",
           "message": "2"
         }
@@ -262,7 +264,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 766,
+          "line": 778,
           "type": "SystemExit",
           "message": "2"
         }
@@ -288,7 +290,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 768,
+          "line": 780,
           "type": "SystemExit",
           "message": "2"
         }
@@ -314,7 +316,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 777,
+          "line": 789,
           "type": "ConfigError",
           "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"
         }
@@ -344,25 +346,25 @@
       "exception_events": [
         {
           "function": "quota_int",
-          "line": 805,
+          "line": 817,
           "type": "ValueError",
           "message": "invalid literal for int() with base 10: 'not-an-integer'"
         },
         {
           "function": "quota_int",
-          "line": 807,
+          "line": 819,
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 812,
+          "line": 824,
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 834,
+          "line": 846,
           "type": "SystemExit",
           "message": "2"
         }
@@ -388,13 +390,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 810,
+          "line": 822,
           "type": "ValueError",
           "message": "quota safety margin must be a non-negative integer"
         },
         {
           "function": "parse_args",
-          "line": 834,
+          "line": 846,
           "type": "SystemExit",
           "message": "2"
         }
@@ -420,13 +422,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 843,
+          "line": 855,
           "type": "ValueError",
           "message": "transient retry initial delay must be a positive integer"
         },
         {
           "function": "parse_args",
-          "line": 862,
+          "line": 874,
           "type": "SystemExit",
           "message": "2"
         }
@@ -453,7 +455,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 867,
+          "line": 879,
           "type": "SystemExit",
           "message": "2"
         }
@@ -479,7 +481,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 869,
+          "line": 881,
           "type": "SystemExit",
           "message": "2"
         }
@@ -506,7 +508,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 871,
+          "line": 883,
           "type": "SystemExit",
           "message": "2"
         }
@@ -531,13 +533,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 897,
+          "line": 909,
           "type": "AgentConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         },
         {
           "function": "parse_args",
-          "line": 899,
+          "line": 911,
           "type": "ConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         }
@@ -582,7 +584,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "c5d9521cf69d9e9b0a4643f56099265e50a5ff15b7dd1179ddaf3ac6acdad0b9",
+        "namespace_sha256": "1bf0b440a1050aa4ffe2eadf322b135f2c4685b65070487698333856c3fe3f21",
         "return_ordinals": [
           1,
           1,
@@ -621,7 +623,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "0cb946ebdcb80336fce88daf0844af8c2764f3b916b7de0ea3bcb487e4db9781",
+        "namespace_sha256": "1be02860a18931bcfc2ea09f5503de068dd696ed542e9b5d673e6df64921de33",
         "return_ordinals": [
           2,
           2,
@@ -651,7 +653,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "37eab8bc4c931e8669b2de76d029a8673ca0d53ef68056d1b2235ba9e5587bc5",
+        "namespace_sha256": "baa868b4017719abcc2b30eeb2060bc15888e72e1756c20afdb1921002cbf99e",
         "return_ordinals": [
           3,
           2,
@@ -688,7 +690,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "853f8a8ded3a45ba49aef20e8d6f0bae2ead2005966c82d4e384f1d3d3ceba15",
+        "namespace_sha256": "d4bca346400a33e3097997e590c459115e24e6bdb09f5248698461a2495d5a90",
         "return_ordinals": [
           2,
           2,

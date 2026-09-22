@@ -51,6 +51,8 @@ class WorkflowConfig:
     test_change_gate: bool = False
     max_rounds_per_loop: int = 6
     max_acceptance_reviews: int = 6
+    max_transport_failures: int = 3
+    max_contract_rejections: int = 3
 
 
 @dataclass(frozen=True)
@@ -280,6 +282,8 @@ def _load_workflow(data: object) -> WorkflowConfig:
             "test_change_gate",
             "max_rounds_per_loop",
             "max_acceptance_reviews",
+            "max_transport_failures",
+            "max_contract_rejections",
         },
         "[workflow]",
     )
@@ -303,6 +307,14 @@ def _load_workflow(data: object) -> WorkflowConfig:
         max_acceptance_reviews=_positive_config_int(
             table.get("max_acceptance_reviews", 6),
             "workflow.max_acceptance_reviews",
+        ),
+        max_transport_failures=_positive_config_int(
+            table.get("max_transport_failures", 3),
+            "workflow.max_transport_failures",
+        ),
+        max_contract_rejections=_positive_config_int(
+            table.get("max_contract_rejections", 3),
+            "workflow.max_contract_rejections",
         ),
     )
 

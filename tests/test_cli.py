@@ -38,6 +38,8 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     )
     assert rule.max_chars == 4_000_000
     assert rule.max_bytes == 16_000_000
+    assert config.workflow.max_transport_failures == 3
+    assert config.workflow.max_contract_rejections == 3
 
 
 def test_provider_input_budget_config_is_closed_and_complete(tmp_path: Path) -> None:
@@ -619,6 +621,8 @@ plan_gate = false
 test_change_gate = true
 max_rounds_per_loop = 5
 max_acceptance_reviews = 7
+max_transport_failures = 4
+max_contract_rejections = 8
 """.strip(),
     )
 
@@ -647,6 +651,8 @@ max_acceptance_reviews = 7
     assert config.workflow.test_change_gate is True
     assert config.workflow.max_rounds_per_loop == 5
     assert config.workflow.max_acceptance_reviews == 7
+    assert config.workflow.max_transport_failures == 4
+    assert config.workflow.max_contract_rejections == 8
 
 
 @pytest.mark.parametrize(
@@ -658,6 +664,8 @@ max_acceptance_reviews = 7
         ("[workflow]\ntest_change_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nmax_rounds_per_loop = 0\n", "must be a positive integer"),
         ("[workflow]\nmax_acceptance_reviews = 0\n", "must be a positive integer"),
+        ("[workflow]\nmax_transport_failures = 0\n", "must be a positive integer"),
+        ("[workflow]\nmax_contract_rejections = 0\n", "must be a positive integer"),
         ("[paths]\nproductive = [\"../outside/**\"]\n", "must not escape"),
         ("[paths]\nproductive = [\"C:/outside/**\"]\n", "must be relative"),
         ("[paths]\nproductive = [\"src\\\\**\"]\n", "platform-neutral separator"),

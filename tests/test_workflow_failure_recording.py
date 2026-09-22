@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import ast
+import inspect
+import textwrap
 from pathlib import Path
 
 import pytest
+
+from orchestrator_diagnostics import STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+from workflow_failure_recording import (
+    CONTRACT_REJECTION_BUDGET,
+    TRANSPORT_FAILURE_BUDGET,
+    _native_retry_budget,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +35,18 @@ EXPECTED_FAILURE_EDGES = {
     "now",
     "execution_error",
 }
+
+
+def _mutated_native_retry_budget(old: str, new: str):
+    source = textwrap.dedent(inspect.getsource(_native_retry_budget))
+    assert source.count(old) == 1
+    namespace = {
+        "STRUCTURED_OUTPUT_DIAGNOSTIC_CODE": STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+        "TRANSPORT_FAILURE_BUDGET": TRANSPORT_FAILURE_BUDGET,
+        "CONTRACT_REJECTION_BUDGET": CONTRACT_REJECTION_BUDGET,
+    }
+    exec(compile(source.replace(old, new), "<retry-budget-mutant>", "exec"), namespace)
+    return namespace["_native_retry_budget"]
 
 
 def _tree(path: Path = FAILURE_PATH, source: str | None = None) -> ast.Module:
@@ -155,6 +176,42 @@ def test_failure_record_is_appended_before_retry_state_and_mutation_turns_red() 
         1,
     )
     assert not _decision_ahead_order(mutated)
+
+
+def test_split_counter_proof_kills_shared_counter_mutation() -> None:
+    expected = _native_retry_budget("NATIVE-REVIEW-FORM", 2, 0, 3, 3)
+    mutant = _mutated_native_retry_budget(
+        "contract_rejections = prior_contract_rejections + int(is_contract_rejection)",
+        "contract_rejections = prior_transport_failures + "
+        "prior_contract_rejections + int(is_contract_rejection)",
+    )
+
+    assert expected == (2, 1, CONTRACT_REJECTION_BUDGET, True)
+    assert mutant("NATIVE-REVIEW-FORM", 2, 0, 3, 3) != expected
+
+
+def test_transport_limit_proof_kills_inclusive_boundary_mutation() -> None:
+    expected = _native_retry_budget(
+        STRUCTURED_OUTPUT_DIAGNOSTIC_CODE, 2, 0, 3, 3
+    )
+    mutant = _mutated_native_retry_budget(
+        "transport_failures < max_transport_failures",
+        "transport_failures <= max_transport_failures",
+    )
+
+    assert expected == (3, 0, TRANSPORT_FAILURE_BUDGET, False)
+    assert mutant(STRUCTURED_OUTPUT_DIAGNOSTIC_CODE, 2, 0, 3, 3) != expected
+
+
+def test_contract_limit_proof_kills_inclusive_boundary_mutation() -> None:
+    expected = _native_retry_budget("NATIVE-REVIEW-FORM", 0, 2, 3, 3)
+    mutant = _mutated_native_retry_budget(
+        "contract_rejections < max_contract_rejections",
+        "contract_rejections <= max_contract_rejections",
+    )
+
+    assert expected == (0, 3, CONTRACT_REJECTION_BUDGET, False)
+    assert mutant("NATIVE-REVIEW-FORM", 0, 2, 3, 3) != expected
 
 
 def test_engine_failure_facade_is_thin_and_retry_control_stays_in_engine() -> None:

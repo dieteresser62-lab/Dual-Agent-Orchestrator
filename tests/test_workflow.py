@@ -1506,6 +1506,24 @@ def _native_review_contract_failure(
     return failure
 
 
+def _structured_output_failure(
+    invocation_id: str, *, received_at: datetime
+) -> AgentInvocationError:
+    return classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        AgentProcessError(
+            "native Claude error",
+            exit_code=1,
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        invocation_id=invocation_id,
+        received_at=received_at,
+    )
+
+
 def _native_codex_contract_failure(
     code: NativeCodexErrorCode,
     invocation_id: str,
@@ -4549,18 +4567,8 @@ def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnosti
 ) -> None:
     now = [datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)]
     failures = [
-        classify_agent_failure(
-            "claude",
-            AgentProcessError(
-                "native Claude error",
-                exit_code=1,
-                provider_data={
-                    "type": "result",
-                    "subtype": "error_max_structured_output_retries",
-                },
-            ),
-            invocation_id=f"structured-output-{attempt}",
-            received_at=now[0],
+        _structured_output_failure(
+            f"structured-output-{attempt}", received_at=now[0]
         )
         for attempt in range(1, 3)
     ]
@@ -4596,6 +4604,134 @@ def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnosti
     )
     assert "error_max_structured_output_retries" in caplog.text
     assert "native Claude error" not in caplog.text
+
+
+def test_transport_failures_do_not_consume_contract_rejection_budget(caplog) -> None:
+    now = [datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc)]
+    contract_failure = _native_review_contract_failure(
+        NativeReviewErrorCode.FINDING_ID_INVALID,
+        "review-anchor-without-predecessor",
+        received_at=now[0],
+        detail="evidence anchor digest requires a predecessor Finding reference",
+        diagnostic=(
+            OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED
+        ),
+    )
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _structured_output_failure("transport-1", received_at=now[0]),
+            _structured_output_failure("transport-2", received_at=now[0]),
+            contract_failure,
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 4
+    assert [item.diagnostic_code for item in driver.failure_payloads] == [
+        "PROVIDER-STRUCTURED-OUTPUT",
+        "PROVIDER-STRUCTURED-OUTPUT",
+        "NATIVE-REVIEW-FORM",
+    ]
+    assert all(item.automatic_resume for item in driver.failure_payloads)
+    assert (
+        "physical_attempt=3 status=failed failure_kind=output "
+        "process_exit_code=none retry=scheduled exhausted_budget=none "
+        "transport_failures=2/3 contract_rejections=1/3"
+    ) in caplog.text
+    retry = driver.reviewer_calls[3].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"] == {
+        "prior_invocation_id": "review-anchor-without-predecessor",
+        "rejection_code": "finding-id-invalid",
+        "correction_instruction": (
+            OrchestratorDiagnostic.REVIEW_EVIDENCE_ANCHOR_PREDECESSOR_REQUIRED.text
+        ),
+    }
+
+
+def test_transport_failure_budget_halts_independently(caplog) -> None:
+    now = [datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc)]
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        reviewer_failures=[
+            _structured_output_failure("transport-limit-1", received_at=now[0]),
+            _structured_output_failure("transport-limit-2", received_at=now[0]),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    context = replace(_context(), max_transport_failures=2)
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), context)
+
+    assert not result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert [item.automatic_resume for item in driver.failure_payloads] == [
+        True,
+        False,
+    ]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert (
+        "retry=halted exhausted_budget=max_transport_failures "
+        "transport_failures=2/2 contract_rejections=0/3"
+    ) in caplog.text
+
+
+def test_contract_rejection_budget_halts_independently(caplog) -> None:
+    now = [datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc)]
+    failures = [
+        _native_review_contract_failure(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            f"contract-limit-{attempt}",
+            received_at=now[0],
+        )
+        for attempt in range(1, 3)
+    ]
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        reviewer_failures=failures,
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    context = replace(_context(), max_contract_rejections=2)
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), context)
+
+    assert not result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert [item.automatic_resume for item in driver.failure_payloads] == [
+        True,
+        False,
+    ]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert (
+        "retry=halted exhausted_budget=max_contract_rejections "
+        "transport_failures=0/3 contract_rejections=2/2"
+    ) in caplog.text
 
 
 def test_codex_timeout_retries_automatically_without_operator_input() -> None:
@@ -4674,7 +4810,10 @@ def test_codex_timeout_retry_limit_reports_exhausted_attempts(caplog) -> None:
         "resumable_halt",
     ]
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
-    assert "attempts_exhausted=3" in caplog.text
+    assert (
+        "exhausted_budget=transient_retry_maximum_auto_resumes "
+        "transport_failures=0/3 contract_rejections=0/3"
+    ) in caplog.text
 
 
 def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(

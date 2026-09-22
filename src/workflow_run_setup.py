@@ -167,6 +167,7 @@ def _context(
             f"{rendered_remediation_paths}\n"
             "Use these paths when needed; do not request them again."
         )
+    workflow_config = getattr(args.repo_config, "workflow", None)
     return WorkflowContext(
         assignment=effective_assignment,
         distilled_plan=(
@@ -183,6 +184,12 @@ def _context(
         retry_failed_validation=bool(args.retry_failed_validation),
         quota_wait_policy=args.quota_wait_policy,
         transient_retry_policy=args.transient_retry_policy,
+        max_transport_failures=getattr(
+            workflow_config, "max_transport_failures", 3
+        ),
+        max_contract_rejections=getattr(
+            workflow_config, "max_contract_rejections", 3
+        ),
         require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
         dynamic_test_scope=True,
         plan_gate=bool(getattr(args, "plan_gate", False)),

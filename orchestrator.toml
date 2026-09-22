@@ -76,3 +76,5 @@ plan_gate = false
 test_change_gate = false
 max_rounds_per_loop = 6
 max_acceptance_reviews = 6
+max_transport_failures = 3
+max_contract_rejections = 3
