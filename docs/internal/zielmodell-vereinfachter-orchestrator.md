@@ -392,6 +392,12 @@ git ableitbar, kein laufübergreifender Zustand. Die Infrastruktur dafür
 existiert — `merge-base` wird in `git_service.py` bereits verwendet, und
 `RepositoryChanges` trägt ein Feld `merge_base`.
 
+Nachtrag vom 23.9.2026: „Hauptstrang" heißt nicht zwingend `master`. Der
+Orchestrator nimmt den in `orchestrator.toml` gesetzten `[repository]
+base_branch`, sonst den lokal vorhandenen Standardbranch des Remotes, sonst den
+einzigen von `main` und `master`, sonst den einzigen lokalen Branch außerhalb
+der Aufgabenbranches. Bleibt die Lage mehrdeutig, hält er an.
+
 Damit entfällt auch `family_base_commit`, eines der drei Felder der
 Familienbindung, ersatzlos.
 

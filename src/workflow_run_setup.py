@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Callable
 
 from artifact_models import PlanPayload
-from git_service import inspect_repository, require_committed_file_at_head
+from git_service import (
+    inspect_repository,
+    require_committed_file_at_head,
+    resolve_base_branch,
+)
 from inbox_watcher import (
     attempt_sidecar_path,
     success_marker_path,
@@ -284,6 +288,7 @@ def _fresh_state(
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high"),
     max_rounds_per_loop: int = 6,
+    base_branch: str | None = None,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -296,7 +301,9 @@ def _fresh_state(
         raise StateSchemaError(
             "prepared watch-task branch HEAD changed before state initialization"
         )
-    branch_base = resolve_merge_base(repository_root, "master").commit
+    base = resolve_base_branch(repository_root, base_branch)
+    logger.info("Base branch for this run: %s", base)
+    branch_base = resolve_merge_base(repository_root, base).commit
     state = init_workflow_state(
         run_id=run_id,
         task_file=str(task_file.resolve()),

@@ -301,6 +301,7 @@ def _create_production_state(
     managed_audit_path: str | None,
     agent_settings: dict[str, Any],
     max_rounds_per_loop: int,
+    base_branch: str | None,
     fresh_state: Callable[..., WorkflowState],
 ) -> WorkflowState:
     return fresh_state(
@@ -319,6 +320,7 @@ def _create_production_state(
             agent_settings["claude"].effort,
         ),
         max_rounds_per_loop=max_rounds_per_loop,
+        base_branch=base_branch,
     )
 
 
@@ -543,6 +545,7 @@ def run_production_workflow(
             managed_audit_path=managed_audit_path,
             agent_settings=args.agent_settings,
             max_rounds_per_loop=max_rounds_per_loop,
+            base_branch=args.repo_config.repository.base_branch,
             fresh_state=dependencies.fresh_state,
         )
     state = dependencies.attach_managed_audit_paths(state)

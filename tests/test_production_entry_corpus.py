@@ -437,7 +437,10 @@ def _args(**overrides: object) -> SimpleNamespace:
         "agent_live_stream_mode": "summary",
         "agent_live_stream_channels": (),
         "strict_preflight": True,
-        "repo_config": SimpleNamespace(provider_input_budget=12345),
+        "repo_config": SimpleNamespace(
+            provider_input_budget=12345,
+            repository=SimpleNamespace(base_branch=None),
+        ),
     }
     values.update(overrides)
     return SimpleNamespace(**values)

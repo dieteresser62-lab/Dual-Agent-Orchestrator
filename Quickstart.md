@@ -1,6 +1,12 @@
 # Schnellstart
 
-Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf in einem bereits eingerichteten Projekt. Installation, Anschluss eines vorhandenen Projekts und den Start bei null beschreibt die [Einrichtung](docs/reference/einrichtung.md). [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
+> [!TIP]
+> **Noch nichts eingerichtet?** Die [Einrichtung](docs/reference/einrichtung.md)
+> führt Schritt für Schritt durch Installation, Anschluss eines vorhandenen
+> Projekts und den Start bei null mit nur einer Projektbeschreibung. Dieser
+> Schnellstart setzt dort an, wo sie endet.
+
+Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf in einem bereits eingerichteten Projekt. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
 
 ## 1. Voraussetzungen prüfen
 
@@ -13,7 +19,7 @@ codex --version
 claude --version
 ```
 
-Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt.
+Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md).
 
 ## 2. Zielrepository prüfen
 
@@ -88,7 +94,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 5. Derselbe Watch-Prozess übernimmt den Handoff unmittelbar und beginnt ohne zweite Planungsrunde mit Slice 1.
 6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Codex implementiert, der Orchestrator validiert, Claude reviewt und der Orchestrator erstellt den lokalen Slice-Commit.
 7. Technische Korrekturen an bereits freigegebenen Vorgängerslices können über eine eng geprüfte `REMEDIATION_PATHS`-Erweiterung automatisch in den laufenden Slice aufgenommen werden.
-8. Nach dem letzten Slice liest Claude im Abnahmereview den vollständigen Branch ab `git merge-base master <zielbranch>`. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
+8. Nach dem letzten Slice liest Claude im Abnahmereview den vollständigen Branch ab seinem Abzweigpunkt vom Hauptbranch des Repositorys. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
 9. Findet der Abnahmereview Restarbeit, erzeugt der Orchestrator daraus eine gewöhnliche neue Inbox-Aufgabe, und der gesamte Prozess beginnt von vorn — Planung, Umsetzung, Prüfung, Commit. Findet er nichts mehr, endet der Lauf mit Exitcode 0 und die Aufgabe wird nach `outbox/done/` verschoben. Der Zyklus ist durch `max_acceptance_reviews` begrenzt (Vorgabe 6).
 
 Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.

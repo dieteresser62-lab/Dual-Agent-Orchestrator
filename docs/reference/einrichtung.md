@@ -124,23 +124,15 @@ Die Ausgabe `0` bedeutet: Installation in Ordnung.
 ### 2.1 Was Ihr Projekt mitbringen muss
 
 - [ ] Es ist ein **Git-Repository mit mindestens einem Commit**.
-- [ ] Es hat einen Branch namens **`master`** – siehe den Hinweis unten.
 - [ ] Der Arbeitsbaum ist **sauber** (`git status --short` zeigt nichts an).
 - [ ] Es gibt einen **Testbefehl, der jetzt grün ist**.
 
-> [!WARNING]
-> **Der Branchname `master` ist derzeit Pflicht.** Der Orchestrator misst jede
-> Arbeit gegen `master`. Heißt Ihr Hauptbranch `main`, benennen Sie ihn lokal um
-> (`git branch -m main master`) oder legen `master` zusätzlich an
-> (`git branch master main`) und halten ihn auf dem Stand, von dem neue Arbeit
-> ausgehen soll. Ohne `master` endet jeder Start mit
-> `could not resolve merge-base`.
-
-In den Projektordner wechseln und auf `master` gehen:
+In den Projektordner wechseln und auf den Hauptbranch gehen – in den
+Beispielen heißt er `main`, er darf aber beliebig heißen:
 
 ```bash
 cd ~/projekte/mein-projekt
-git switch master
+git switch main
 git status --short
 ```
 
@@ -212,8 +204,8 @@ manual_slice_gate = false
 Passen Sie die Pfade an Ihr Projekt an. Was unter `[paths]` fehlt, zählt als
 Produktivcode – ein vergessenes Muster richtet also keinen Schaden an.
 
-**Jetzt den Testbefehl einmal von Hand ausführen.** Er muss auf `master` grün
-sein:
+**Jetzt den Testbefehl einmal von Hand ausführen.** Er muss auf dem Hauptbranch
+grün sein:
 
 ```bash
 python3 -m pytest tests/ -q      # oder: npm test
@@ -354,13 +346,13 @@ Der Orchestrator hat alles auf einem eigenen Branch committet, zum Beispiel
 `feature/einkaufsliste`. Zusammenführen ist Ihre Sache:
 
 ```bash
-git switch master
-git log --oneline master..feature/einkaufsliste     # was hinzukommt
+git switch main
+git log --oneline main..feature/einkaufsliste       # was hinzukommt
 git merge --no-ff feature/einkaufsliste
 ```
 
 > [!IMPORTANT]
-> **Vor der nächsten Idee zurück auf `master`.** Einen neuen Zielbranch legt der
+> **Vor der nächsten Idee zurück auf den Hauptbranch.** Einen neuen Zielbranch legt der
 > Orchestrator vom gerade aktiven Branch aus an. Steht der Arbeitsbaum noch auf
 > dem Branch der letzten Aufgabe, erbt die neue Aufgabe deren Commits – und ihre
 > Abnahme liest sie mit.
@@ -370,7 +362,7 @@ git merge --no-ff feature/einkaufsliste
 ## Teil 3 — Von null: nur eine Projektbeschreibung
 
 Ein leerer Ordner reicht dem Orchestrator nicht. Er braucht einen ersten
-Commit, einen `master`-Branch und vor allem **einen Testbefehl, der schon beim
+Commit und vor allem **einen Testbefehl, der schon beim
 ersten Arbeitspaket funktioniert** – ohne ihn kann er kein Paket validieren und
 hält beim ersten an. Diese Grundlage schaffen Sie einmal selbst; danach läuft
 alles wie in Teil 2.
@@ -380,7 +372,7 @@ alles wie in Teil 2.
 ```bash
 mkdir -p ~/projekte/mein-projekt
 cd ~/projekte/mein-projekt
-git init -b master
+git init -b main
 ```
 
 ### 3.2 Die Beschreibung ins Repository legen
@@ -466,8 +458,8 @@ Setze Abschnitt 3 aus docs/spezifikation.md um: Rezepte anlegen, bearbeiten
 und als Liste anzeigen. Speicherung und Suche folgen später.
 ```
 
-Nach jedem Zuwachs: Ergebnis ansehen, nach `master` zusammenführen, auf
-`master` bleiben (2.10) – dann die nächste Idee.
+Nach jedem Zuwachs: Ergebnis ansehen, in den Hauptbranch zusammenführen, auf
+dem Hauptbranch bleiben (2.10) – dann die nächste Idee.
 
 > [!NOTE]
 > **Warum nacheinander?** Der Orchestrator arbeitet ohnehin eine Aufgabe nach
@@ -515,6 +507,7 @@ Claude-Budget stehen bewusst nicht in der Projektdatei.
 | `[paths]` | ordnet Pfade Produktivcode, Tests, Doku und Erzeugtem zu; unbekannte Pfade zählen als Produktivcode. Die Klassen steuern unter anderem, welche Scope-Erweiterungen automatisch genehmigt werden. |
 | `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen Befehle für bestimmte Pfadmuster. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
 | `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
+| `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
 | `[workflow]` | zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate` – standardmäßig aus |
 | `[[provider_input_budget]]` | Obergrenzen für die Eingabegröße je Provider, Rolle und Operation |
 
@@ -564,11 +557,9 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 
 ### 4.6 Bekannte Grenzen
 
-- **`master` ist fest verdrahtet.** Die Basis jedes Laufs ist der Merge-Base mit
-  `master`.
-- **Neue Aufgaben zweigen vom aktiven Branch ab**, nicht von `master`. Wer
-  zwischen zwei unabhängigen Aufgaben nicht auf `master` zurückwechselt, erhält
-  gestapelte Branches.
+- **Neue Aufgaben zweigen vom aktiven Branch ab**, nicht vom Hauptbranch. Wer
+  zwischen zwei unabhängigen Aufgaben nicht auf den Hauptbranch zurückwechselt,
+  erhält gestapelte Branches.
 - **Eine Aufgabe nach der anderen.** Es gibt keine parallelen Arbeitspakete.
 - **Ohne Testbefehl kein Lauf.** Ein Projekt ohne automatische Tests muss vorher
   mindestens einen bekommen.
@@ -579,7 +570,8 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 
 | Meldung | Ursache | Abhilfe |
 |---|---|---|
-| `could not resolve merge-base (master: …)` | das Projekt hat keinen Branch `master` | 2.1 |
+| `cannot determine the base branch; candidates: …` | der Hauptbranch ist nicht eindeutig, etwa weil es `main` und `master` gibt | `[repository] base_branch` setzen (4.2) |
+| `configured base branch '…' is not a local branch` | Tippfehler, oder der Branch fehlt lokal | Namen in `orchestrator.toml` prüfen |
 | `Needed a single revision` | das Repository hat noch keinen Commit | 3.4 |
 | `automatic target-branch switch requires a clean non-ignored working tree` | eine unversionierte oder geänderte Datei liegt im Projekt | `git status --short` prüfen; Protokolle außerhalb des Projekts ablegen |
 | `validation request requires at least one command` | kein Testbefehl konfiguriert oder erkannt | `default_command` in `orchestrator.toml` setzen |

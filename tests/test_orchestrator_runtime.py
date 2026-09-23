@@ -1317,6 +1317,48 @@ def test_new_watch_task_switches_to_existing_target_and_uses_merge_base_as_ancho
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
 
 
+def test_run_base_follows_the_configured_base_branch_of_any_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init", "-b", "trunk")
+    _git(repository, "config", "user.name", "Base Test")
+    _git(repository, "config", "user.email", "base@example.invalid")
+    (repository / ".gitignore").write_text(".orchestrator/\n", encoding="utf-8")
+    (repository / "orchestrator.toml").write_text(
+        '[repository]\nbase_branch = "trunk"\n', encoding="utf-8"
+    )
+    _git(repository, "add", ".gitignore", "orchestrator.toml")
+    _git(repository, "commit", "-m", "seed")
+    fork_point = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "branch", "release")
+    _git(repository, "switch", "-c", "feature/any-base")
+    _git(repository, "commit", "--allow-empty", "-m", "feature work")
+    _git(repository, "switch", "trunk")
+    _git(repository, "commit", "--allow-empty", "-m", "later trunk work")
+    _git(repository, "switch", "feature/any-base")
+    task = tmp_path / "any-base.md"
+    _write_task(task, "feature/any-base", "src/new.py")
+    captured: dict[str, object] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        captured["state"] = real_fresh_state(**kwargs)
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, _args(repository, task), force_new=True)
+
+    assert captured["state"].branch_base == fork_point
+
+
 def test_new_watch_task_generates_and_persists_task_bound_target_branch(
     tmp_path: Path, monkeypatch
 ) -> None:

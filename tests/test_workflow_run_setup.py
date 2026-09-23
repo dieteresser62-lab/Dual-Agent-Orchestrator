@@ -363,10 +363,14 @@ def test_fresh_approved_plan_run_uses_merge_base_and_starts_implementation(
         ),
     )
     monkeypatch.setattr(
-        workflow_run_setup,
-        "resolve_merge_base",
-        lambda _root, _mainline: SimpleNamespace(commit=merge_base),
+        workflow_run_setup, "resolve_base_branch", lambda _root, _configured: "trunk"
     )
+
+    def resolve_merge_base(_root, mainline):
+        assert mainline == "trunk"
+        return SimpleNamespace(commit=merge_base)
+
+    monkeypatch.setattr(workflow_run_setup, "resolve_merge_base", resolve_merge_base)
     monkeypatch.setattr(
         workflow_run_setup, "require_committed_file_at_head", lambda *args, **kwargs: None
     )
@@ -417,10 +421,14 @@ def test_every_entry_mode_uses_the_same_git_derived_merge_base(
         ),
     )
     monkeypatch.setattr(
-        workflow_run_setup,
-        "resolve_merge_base",
-        lambda _root, _mainline: SimpleNamespace(commit=branch_base),
+        workflow_run_setup, "resolve_base_branch", lambda _root, _configured: "trunk"
     )
+
+    def resolve_merge_base(_root, mainline):
+        assert mainline == "trunk"
+        return SimpleNamespace(commit=branch_base)
+
+    monkeypatch.setattr(workflow_run_setup, "resolve_merge_base", resolve_merge_base)
 
     states = tuple(
         workflow_run_setup._fresh_state(

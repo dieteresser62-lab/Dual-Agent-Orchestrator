@@ -42,6 +42,22 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     assert config.workflow.max_contract_rejections == 3
 
 
+def test_repository_base_branch_is_optional_and_strict(tmp_path: Path) -> None:
+    assert load_repo_config(tmp_path / "missing.toml").repository.base_branch is None
+    path = _write_config(tmp_path, '[repository]\nbase_branch = "trunk"\n')
+    assert load_repo_config(path).repository.base_branch == "trunk"
+
+    for text, message in (
+        ('[repository]\nbranch = "main"\n', "Unknown key"),
+        ('[repository]\nbase_branch = ""\n', "repository.base_branch"),
+        ('[repository]\nbase_branch = "-trunk"\n', "plain branch name"),
+        ('[repository]\nbase_branch = "my trunk"\n', "plain branch name"),
+    ):
+        _write_config(tmp_path, text)
+        with pytest.raises(ConfigError, match=message):
+            load_repo_config(path)
+
+
 def test_provider_input_budget_config_is_closed_and_complete(tmp_path: Path) -> None:
     path = _write_config(
         tmp_path,

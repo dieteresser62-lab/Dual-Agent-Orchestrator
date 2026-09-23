@@ -56,6 +56,11 @@ class WorkflowConfig:
 
 
 @dataclass(frozen=True)
+class RepositoryConfig:
+    base_branch: str | None = None
+
+
+@dataclass(frozen=True)
 class RepoConfig:
     paths: PathClasses = field(default_factory=PathClasses)
     stop_rules: tuple[StopRule, ...] = ()
@@ -66,6 +71,7 @@ class RepoConfig:
     provider_input_budget: ProviderInputBudgetPolicy = field(
         default_factory=default_provider_input_budget_policy
     )
+    repository: RepositoryConfig = field(default_factory=RepositoryConfig)
 
 
 def _reject_unknown_keys(data: Mapping[str, object], allowed: set[str], location: str) -> None:
@@ -272,6 +278,19 @@ def _load_validation_command(
         raise ConfigError(f"Invalid {location}: {exc}") from exc
 
 
+def _load_repository(data: object) -> RepositoryConfig:
+    table = _require_table(data, "[repository]")
+    _reject_unknown_keys(table, {"base_branch"}, "[repository]")
+    if "base_branch" not in table:
+        return RepositoryConfig()
+    base_branch = _require_non_empty_string(
+        table["base_branch"], "repository.base_branch"
+    )
+    if base_branch.startswith("-") or any(char.isspace() for char in base_branch):
+        raise ConfigError("repository.base_branch must be a plain branch name")
+    return RepositoryConfig(base_branch=base_branch)
+
+
 def _load_workflow(data: object) -> WorkflowConfig:
     table = _require_table(data, "[workflow]")
     _reject_unknown_keys(
@@ -373,7 +392,14 @@ def load_repo_config(path: Path) -> RepoConfig:
         raise ConfigError(f"Configuration root must be a TOML table: {resolved}")
     _reject_unknown_keys(
         raw,
-        {"paths", "stop_rules", "validation", "workflow", "provider_input_budget"},
+        {
+            "paths",
+            "stop_rules",
+            "validation",
+            "workflow",
+            "provider_input_budget",
+            "repository",
+        },
         "root",
     )
     return RepoConfig(
@@ -391,6 +417,11 @@ def load_repo_config(path: Path) -> RepoConfig:
             _load_provider_input_budget(raw["provider_input_budget"])
             if "provider_input_budget" in raw
             else default_provider_input_budget_policy()
+        ),
+        repository=(
+            _load_repository(raw["repository"])
+            if "repository" in raw
+            else RepositoryConfig()
         ),
     )
 

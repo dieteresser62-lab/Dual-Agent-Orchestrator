@@ -6,7 +6,7 @@ Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als P
 
 Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
-![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
+![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/HEAD/workflow.puml)
 
 Der normale Ablauf ist:
 
@@ -468,7 +468,12 @@ timeout_seconds = 1200
 manual_slice_gate = false
 plan_gate = false
 test_change_gate = false
+
+[repository]
+base_branch = "main"
 ```
+
+`[repository] base_branch` nennt den Hauptbranch, von dessen Abzweigpunkt aus jeder Lauf misst und gegen den der Abnahmereview liest. Ohne Angabe ermittelt der Orchestrator ihn selbst: zuerst den Standardbranch des Remotes (`origin/HEAD`), sofern es ihn lokal gibt, dann den einzigen vorhandenen von `main` und `master`, dann den einzigen lokalen Branch außerhalb von `feature/…` und `codex/…`. Bleibt die Lage mehrdeutig, hält der Lauf mit einer Meldung an, die die Kandidaten nennt.
 
 `default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
 

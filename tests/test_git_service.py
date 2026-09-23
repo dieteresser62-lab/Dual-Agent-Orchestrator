@@ -43,6 +43,7 @@ from git_service import (
     preview_commit_tree,
     prepare_new_watch_task_branch,
     require_committed_file_at_head,
+    resolve_base_branch,
     resume_slice,
 )
 from repo_changes import collect_repository_changes
@@ -1193,3 +1194,81 @@ def test_repository_identity_reports_local_upstream_divergence(tmp_path: Path) -
     ahead = inspect_repository(repository)
     assert ahead.ahead == 1
     assert ahead.behind == 0
+
+
+def _base_branch_repository(tmp_path: Path, *branches: str) -> Path:
+    repository = tmp_path / "base"
+    repository.mkdir()
+    _git(repository, "init", "-b", branches[0])
+    _git(repository, "config", "user.name", "Base Test")
+    _git(repository, "config", "user.email", "base@example.invalid")
+    _git(repository, "commit", "--allow-empty", "-m", "seed")
+    for name in branches[1:]:
+        _git(repository, "branch", name)
+    return repository
+
+
+def _point_remote_default(repository: Path, name: str) -> None:
+    _git(repository, "update-ref", f"refs/remotes/origin/{name}", "HEAD")
+    _git(
+        repository,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        f"refs/remotes/origin/{name}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("branches", "expected"),
+    (
+        (("main",), "main"),
+        (("master",), "master"),
+        (("main", "develop", "feature/task-a"), "main"),
+        (("trunk", "feature/task-a", "codex/task-b"), "trunk"),
+    ),
+)
+def test_base_branch_is_derived_from_the_repository_whatever_its_name(
+    tmp_path: Path, branches: tuple[str, ...], expected: str
+) -> None:
+    repository = _base_branch_repository(tmp_path, *branches)
+
+    assert resolve_base_branch(repository) == expected
+
+
+def test_remote_default_branch_wins_when_it_exists_locally(tmp_path: Path) -> None:
+    repository = _base_branch_repository(tmp_path, "trunk", "main")
+    _point_remote_default(repository, "trunk")
+
+    assert resolve_base_branch(repository) == "trunk"
+
+
+def test_remote_default_without_a_local_branch_is_not_adopted(tmp_path: Path) -> None:
+    repository = _base_branch_repository(tmp_path, "main")
+    _point_remote_default(repository, "master")
+
+    assert resolve_base_branch(repository) == "main"
+
+
+def test_configured_base_branch_wins_and_must_exist_locally(tmp_path: Path) -> None:
+    repository = _base_branch_repository(tmp_path, "main", "release")
+
+    assert resolve_base_branch(repository, "release") == "release"
+    with pytest.raises(GitTransactionError, match="'stable' is not a local branch"):
+        resolve_base_branch(repository, "stable")
+
+
+@pytest.mark.parametrize(
+    ("branches", "listed"),
+    ((("main", "master"), "main, master"), (("trunk", "release"), "release, trunk")),
+)
+def test_ambiguous_base_branch_stops_and_names_its_candidates(
+    tmp_path: Path, branches: tuple[str, ...], listed: str
+) -> None:
+    repository = _base_branch_repository(tmp_path, *branches)
+
+    with pytest.raises(
+        GitTransactionError,
+        match=rf"candidates: {listed}; set \[repository\] base_branch",
+    ):
+        resolve_base_branch(repository)
+

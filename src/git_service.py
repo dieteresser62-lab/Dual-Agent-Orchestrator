@@ -416,6 +416,60 @@ def inspect_repository(repository_root: Path) -> RepositoryIdentity:
     return RepositoryIdentity(root, branch, head, upstream, ahead, behind)
 
 
+WELL_KNOWN_BASE_BRANCHES = ("main", "master")
+
+
+def resolve_base_branch(repository_root: Path, configured: str | None = None) -> str:
+    """Name the local branch whose fork point bounds a run, without guessing.
+
+    An explicit setting wins; otherwise the remote default branch, then a single
+    well-known name, then the single local branch outside the task namespaces.
+    Anything still ambiguous stops fail-closed and names the candidates.
+    """
+    local = tuple(
+        name
+        for name in os.fsdecode(
+            _git(
+                repository_root,
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/",
+            ).stdout
+        ).splitlines()
+        if name
+    )
+    if configured is not None:
+        if configured not in local:
+            raise GitTransactionError(
+                f"configured base branch {configured!r} is not a local branch"
+            )
+        return configured
+    remote_head = _git(
+        repository_root,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+        accepted_exit_codes=(0, 1, 128),
+    )
+    remote_default = os.fsdecode(remote_head.stdout).strip().removeprefix("origin/")
+    if remote_head.returncode == 0 and remote_default in local:
+        return remote_default
+    well_known = tuple(name for name in WELL_KNOWN_BASE_BRANCHES if name in local)
+    if len(well_known) == 1:
+        return well_known[0]
+    candidates = tuple(
+        name for name in local if not FEATURE_BRANCH_PATTERN.fullmatch(name)
+    )
+    if len(candidates) == 1 and not well_known:
+        return candidates[0]
+    listed = ", ".join(well_known or candidates) or "none"
+    raise GitTransactionError(
+        "cannot determine the base branch; candidates: "
+        f"{listed}; set [repository] base_branch in orchestrator.toml"
+    )
+
+
 def prepare_new_watch_task_branch(
     repository_root: Path,
     *,

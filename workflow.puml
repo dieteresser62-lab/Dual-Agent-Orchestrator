@@ -100,7 +100,7 @@ endwhile (no)
 
 partition "Acceptance review (last work unit of the same run)" {
   :Validate and attest the branch fingerprint;
-  :Claude reads the complete diff from git merge-base master <target-branch>;
+  :Claude reads the complete diff from git merge-base <base-branch> <target-branch>;
   :Report only new findings or recurrences of known signatures;
   if (Work remains?) then (yes)
     if (Acceptance-review limit reached?) then (yes)

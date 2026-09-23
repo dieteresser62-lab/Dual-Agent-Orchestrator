@@ -112,7 +112,7 @@ beendet den Slice negativ ohne Commit.
 ### 6.3 Abschluss
 
 Der Abnahmereview ist die letzte Arbeitseinheit desselben `IMPLEMENT`-Laufs.
-Claude liest den vollständigen Diff ab `git merge-base master <zielbranch>`
+Claude liest den vollständigen Diff ab `git merge-base <basisbranch> <zielbranch>`
 und meldet dort nur neue Findings oder das erneute Auftreten bekannter
 Signaturen; er fordert keine Sonderkorrektur an.
 
