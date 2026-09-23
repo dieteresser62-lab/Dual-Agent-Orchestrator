@@ -89,6 +89,7 @@ class PreparedProviderInput:
     command: tuple[str, ...]
     stdin_text: str | None
     components: tuple[ProviderInputComponent, ...]
+    allow_duplicate_indexed_content: bool = False
 
     def __post_init__(self) -> None:
         if not self.command or any(not isinstance(item, str) for item in self.command):
@@ -96,14 +97,17 @@ class PreparedProviderInput:
         names = tuple(item.name for item in self.components)
         if not names or len(names) != len(set(names)):
             raise ValueError("prepared provider components must have unique names")
-        content_digests = tuple(
-            hashlib.sha256(item.content.encode("utf-8")).hexdigest()
-            for item in self.components
-        )
-        if len(content_digests) != len(set(content_digests)):
-            raise ValueError(
-                "prepared provider components must have unique content"
-            )
+        seen: dict[str, str] = {}
+        for item in self.components:
+            digest = hashlib.sha256(item.content.encode("utf-8")).hexdigest()
+            prior_name = seen.get(digest)
+            if prior_name is not None and not (
+                self.allow_duplicate_indexed_content
+                and INDEXED_COMPONENT_NAME.fullmatch(prior_name)
+                and INDEXED_COMPONENT_NAME.fullmatch(item.name)
+            ):
+                raise ValueError("prepared provider components must have unique content")
+            seen[digest] = item.name
 
 
 @dataclass(frozen=True)

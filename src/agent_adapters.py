@@ -40,7 +40,8 @@ from orchestrator_diagnostics import OrchestratorDiagnostic
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
-CLAUDE_REVIEW_PACKET_CHUNK_CHARS = 24_000
+REVIEW_PACKET_CHUNK_CHARS = 24_000
+CLAUDE_REVIEW_PACKET_CHUNK_CHARS = REVIEW_PACKET_CHUNK_CHARS
 CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
 PROVIDER_FAILURE_METRIC_KEYS = (
     "duration_api_ms",
@@ -203,6 +204,71 @@ def _split_text_at_lines(text: str, max_chars: int) -> tuple[str, ...]:
         chunks.append(remaining[:boundary])
         remaining = remaining[boundary:]
     return tuple(chunks)
+
+
+def _write_review_manifest(
+    runtime_dir: Path, entries: list[tuple[str, Path, str, int, str | None, int | None]],
+) -> tuple[Path, tuple[Path, ...]]:
+    """Write a bounded manifest, paging its entries when one Read is insufficient."""
+    limit = REVIEW_PACKET_CHUNK_CHARS
+    instruction = (
+        "Read every listed file exactly once in order. Concatenate request chunks "
+        "without separators before interpreting the JSON request. For each evidence "
+        "content_ref, concatenate its numbered parts without separators before "
+        "evaluating the full-content sha256 and byte_count in the request."
+    )
+    lines = ["# Native review request manifest", "", instruction, ""]
+    for name, path, digest, byte_count, content_ref, part_number in entries:
+        relation = (
+            f" | content_ref={content_ref} | part={part_number}"
+            if content_ref is not None else ""
+        )
+        lines.append(
+            f"- `{path}` | component={name}{relation} | bytes={byte_count} | sha256={digest}"
+        )
+    manifest = runtime_dir / "native-review-manifest.md"
+    full_text = "\n".join(lines) + "\n"
+    if len(full_text) <= limit:
+        manifest.write_text(full_text, encoding="utf-8")
+        return manifest, ()
+
+    page_header = "# Native review manifest entries\n"
+    pages: list[Path] = []
+    page_lines: list[str] = []
+    for line in lines[4:]:
+        if len(page_header + line + "\n") > limit:
+            raise AgentOutputError("review manifest entry exceeds one Read")
+        candidate = page_header + "\n".join((*page_lines, line)) + "\n"
+        if len(candidate) > limit:
+            if not page_lines:
+                raise AgentOutputError("review manifest entry exceeds one Read")
+            page = runtime_dir / f"native-review-manifest-{len(pages) + 1:03d}.md"
+            page.write_text(page_header + "\n".join(page_lines) + "\n", encoding="utf-8")
+            pages.append(page)
+            page_lines = [line]
+        else:
+            page_lines.append(line)
+    if page_lines:
+        page = runtime_dir / f"native-review-manifest-{len(pages) + 1:03d}.md"
+        page.write_text(page_header + "\n".join(page_lines) + "\n", encoding="utf-8")
+        pages.append(page)
+    index_lines = [
+        "# Native review request manifest",
+        "",
+        "Read each manifest page once in order, then every file listed in those pages "
+        "once in order. " + instruction,
+        "",
+    ]
+    for page in pages:
+        data = page.read_bytes()
+        index_lines.append(
+            f"- `{page}` | bytes={len(data)} | sha256={hashlib.sha256(data).hexdigest()}"
+        )
+    index_text = "\n".join(index_lines) + "\n"
+    if len(index_text) > limit:
+        raise AgentOutputError("review manifest index exceeds one Read")
+    manifest.write_text(index_text, encoding="utf-8")
+    return manifest, tuple(pages)
 
 
 class AgentAdapter(Protocol):
@@ -651,13 +717,13 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
             raise TypeError("native Claude adapter requires NativeReviewRequestBundle")
         runtime_dir = self._new_runtime_dir()
         request_chunks = _split_text_at_lines(
-            bundle.canonical_json, CLAUDE_REVIEW_PACKET_CHUNK_CHARS
+            bundle.canonical_json, REVIEW_PACKET_CHUNK_CHARS
         )
         self._review_packet_files = tuple(
             runtime_dir / f"native-request-{index:03d}.json.part"
             for index in range(1, len(request_chunks) + 1)
         )
-        manifest_entries: list[tuple[str, Path, str, int]] = []
+        manifest_entries: list[tuple[str, Path, str, int, str | None, int | None]] = []
         for index, (packet_file, chunk) in enumerate(
             zip(self._review_packet_files, request_chunks, strict=True), start=1
         ):
@@ -668,39 +734,38 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                     packet_file,
                     hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
                     len(chunk.encode("utf-8")),
+                    None,
+                    None,
                 )
             )
 
         evidence_files: list[Path] = []
         for asset in bundle.evidence_assets:
-            target = runtime_dir.joinpath(*Path(asset.path).parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(asset.content, encoding="utf-8")
-            evidence_files.append(target)
-            manifest_entries.append(
-                (
-                    f"evidence_asset_{len(evidence_files):03d}",
-                    target,
-                    asset.sha256,
-                    asset.byte_count,
+            chunks = _split_text_at_lines(
+                asset.content, REVIEW_PACKET_CHUNK_CHARS
+            )
+            for index, chunk in enumerate(chunks, start=1):
+                target = runtime_dir.joinpath(*Path(asset.path).parts)
+                target = target.with_name(f"{target.name}.part-{index:03d}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                encoded = chunk.encode("utf-8")
+                target.write_bytes(encoded)
+                evidence_files.append(target)
+                manifest_entries.append(
+                    (
+                        f"evidence_asset_{len(evidence_files):03d}",
+                        target,
+                        hashlib.sha256(encoded).hexdigest(),
+                        len(encoded),
+                        asset.path,
+                        index,
+                    )
                 )
-            )
         self._native_evidence_files = tuple(evidence_files)
-        self._review_manifest_file = runtime_dir / "native-review-manifest.md"
-        manifest_lines = [
-            "# Native review request manifest",
-            "",
-            "Read every listed file exactly once in order. Concatenate request chunks without separators before interpreting the JSON request. Evidence assets are referenced by content_ref in that request.",
-            "",
-        ]
-        for name, path, digest, byte_count in manifest_entries:
-            manifest_lines.append(
-                f"- `{path}` | component={name} | bytes={byte_count} | sha256={digest}"
-            )
-        self._review_manifest_file.write_text(
-            "\n".join(manifest_lines) + "\n", encoding="utf-8"
+        self._review_manifest_file, manifest_pages = _write_review_manifest(
+            runtime_dir, manifest_entries
         )
-        read_call_budget = 1 + len(manifest_entries)
+        read_call_budget = 1 + len(manifest_pages) + len(manifest_entries)
         response_schema_json = bundle.provider_response_schema_json
         policy = NATIVE_CLAUDE_SYSTEM_POLICY
         boundary_evidence_withheld = any(
@@ -709,15 +774,17 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         )
         if boundary_evidence_withheld:
             directive = (
-                f"Read {self._review_manifest_file} exactly once, then every listed file "
-                "exactly once in order before using additional Read calls for repository "
+                f"Read {self._review_manifest_file} exactly once, then its manifest "
+                "pages if any and every listed request or evidence file exactly once "
+                "in order before using additional Read calls for repository "
                 "paths required by the provider-input boundary notice. Review the "
                 "reconstructed native request and current read-only repository snapshot; "
                 "return only the schema-bound JSON result."
             )
         else:
             directive = (
-                f"Read {self._review_manifest_file} exactly once, then every listed file "
+                f"Read {self._review_manifest_file} exactly once, then its manifest "
+                "pages if any and every listed request or evidence file "
                 f"exactly once in order ({read_call_budget} Read calls total). Review the "
                 "reconstructed native request and return only the schema-bound JSON result."
             )
@@ -779,21 +846,40 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 name,
                 path.read_text(encoding="utf-8"),
             )
-            for name, path, _digest, _byte_count in manifest_entries
+            for name, path, _digest, _byte_count, _content_ref, _part in manifest_entries
         ]
+        measured_manifest = stable_paths(
+            self._review_manifest_file.read_text(encoding="utf-8")
+        )
+        for index, path in enumerate(manifest_pages, start=1):
+            page_bytes = path.read_bytes()
+            measured_page = stable_paths(page_bytes.decode("utf-8"))
+            page_row = (
+                f"`{stable_paths(str(path))}` | bytes={len(page_bytes)} | sha256="
+            )
+            actual_row = page_row + hashlib.sha256(page_bytes).hexdigest()
+            if measured_manifest.count(actual_row) != 1:
+                raise AgentOutputError("review manifest page binding is missing or repeated")
+            measured_manifest = measured_manifest.replace(
+                actual_row,
+                page_row + hashlib.sha256(measured_page.encode("utf-8")).hexdigest(),
+            )
+            components.append(
+                ProviderInputComponent(f"packet_chunk_{index:03d}", measured_page)
+            )
         components.extend(
             (
-                ProviderInputComponent(
-                    "packet_manifest",
-                    stable_paths(self._review_manifest_file.read_text(encoding="utf-8")),
-                ),
+                ProviderInputComponent("packet_manifest", measured_manifest),
                 ProviderInputComponent("system_policy", policy),
                 ProviderInputComponent("response_schema", response_schema_json),
                 ProviderInputComponent("start_directive", stable_paths(directive)),
             )
         )
         self._native_request_id = bundle.bound_context.request_id
-        return PreparedProviderInput(tuple(command), None, tuple(components))
+        return PreparedProviderInput(
+            tuple(command), None, tuple(components),
+            allow_duplicate_indexed_content=True,
+        )
 
     def extract_output(
         self, stdout: str, stderr: str, extra_files: dict[str, str]

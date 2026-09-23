@@ -204,3 +204,21 @@ def test_prepared_provider_input_rejects_content_equal_components() -> None:
                 ProviderInputComponent("response_schema", "same bytes"),
             ),
         )
+
+
+def test_repeated_file_content_is_allowed_only_for_opted_in_indexed_components() -> None:
+    repeated = (
+        ProviderInputComponent("evidence_asset_001", "same bytes"),
+        ProviderInputComponent("evidence_asset_002", "same bytes"),
+    )
+    with pytest.raises(ValueError, match="unique content"):
+        PreparedProviderInput(("provider",), None, repeated)
+    assert PreparedProviderInput(
+        ("provider",), None, repeated, allow_duplicate_indexed_content=True
+    ).components == repeated
+    with pytest.raises(ValueError, match="unique content"):
+        PreparedProviderInput(
+            ("provider",), None,
+            (ProviderInputComponent("packet_manifest", "same bytes"), *repeated),
+            allow_duplicate_indexed_content=True,
+        )
