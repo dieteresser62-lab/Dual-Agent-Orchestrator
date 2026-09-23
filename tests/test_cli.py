@@ -495,12 +495,13 @@ def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
         (["--codex-model", "sol"], "gpt-6-sol", "opus"),
         (["--codex-model", "Terra"], "gpt-5.6-terra", "opus"),
         (["--codex-model", "gpt-6-luna", "--claude-model", "SONNET"], "gpt-6-luna", "sonnet"),
+        (["--codex-model", "astra", "--claude-model", "fable"], "gpt-6-astra", "fable"),
     ):
         settings = parse_args(argv, cwd=tmp_path, environ={}).agent_settings
         assert (settings["codex"].model, settings["claude"].model) == (codex, claude)
 
     for argv, message in (
-        (["--codex-model", "astra"], "codex model must be one of sol"),
+        (["--codex-model", "gpt-5.6-luna"], "codex model must be one of sol"),
         (["--codex-model", "gpt-5.5"], "codex model must be one of sol"),
         (["--claude-model", "haiku"], "claude model must be one of opus"),
     ):

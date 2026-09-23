@@ -536,7 +536,7 @@ dieses Repositorys.
 
 | | Codex (Implementierer) | Claude (Prüfer) |
 |---|---|---|
-| Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) | `opus` (Standard), `sonnet` |
+| Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
 | Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |
 | Option | `--codex-model`, `--codex-effort` | `--claude-model`, `--claude-effort` |
 | Umgebung | `RUN_TASK_CODEX_MODEL`, `RUN_TASK_CODEX_EFFORT` | `RUN_TASK_CLAUDE_MODEL`, `RUN_TASK_CLAUDE_EFFORT` |

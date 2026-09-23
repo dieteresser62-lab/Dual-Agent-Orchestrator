@@ -27,8 +27,13 @@ class AgentSettings:
 # Implementer families name their newest model explicitly, while the reviewer
 # CLI resolves its aliases to the newest model itself.
 MODEL_FAMILIES = {
-    "codex": {"sol": "gpt-6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-6-luna"},
-    "claude": {"opus": "opus", "sonnet": "sonnet"},
+    "codex": {
+        "sol": "gpt-6-sol",
+        "terra": "gpt-5.6-terra",
+        "luna": "gpt-6-luna",
+        "astra": "gpt-6-astra",
+    },
+    "claude": {"opus": "opus", "sonnet": "sonnet", "fable": "fable"},
 }
 _DEFAULT_MODELS = {
     role: next(iter(families.values())) for role, families in MODEL_FAMILIES.items()

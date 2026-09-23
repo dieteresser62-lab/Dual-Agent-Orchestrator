@@ -232,8 +232,9 @@ def _parse_cli_version(provider: str, cli_version: str) -> tuple[int, int, int]:
 
 # Schema admissibility is decided by the provider transport before any model
 # reasons: the implementer API and the reviewer CLI reject a schema up front. Probes on
-# 2026-09-23 found identical results for gpt-5.6-sol, gpt-6-sol, gpt-6-luna and
-# gpt-5.6-terra, for sonnet and opus, and from the lowest to the highest effort.
+# 2026-09-23 found identical results for gpt-5.6-sol, gpt-6-sol, gpt-6-luna,
+# gpt-5.6-terra and gpt-6-astra, for sonnet, opus and fable, and from the lowest
+# to the highest effort.
 # Model and effort therefore stay recorded but unbound here; the selectable model
 # families are enforced in agent_config, and local contract validation still
 # rejects any answer that does not fit.
