@@ -187,6 +187,20 @@ def test_render_implementation_task_binds_only_the_approved_plan() -> None:
     assert "SLICE_PLAN: 1 | implement | src/core.py" in rendered
 
 
+def test_implementation_task_sets_no_duty_on_the_slice_document() -> None:
+    # The review packet hides docs/internal/slice-* files, so a duty stated for
+    # them could never be verified and would stall the convergence round.
+    rendered = render_implementation_task(
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/implementation",
+        approved_plan_commit="a" * 40,
+        slices=(PlannedSlice(1, "implement", ("src/core.py",)),),
+    )
+
+    assert "Slice-MD dokumentiert" not in rendered
+    assert "Auditansicht des Orchestrators und nicht Gegenstand des Reviews" in rendered
+
+
 def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
     class Finding:
         summary = "Fix the complete-review defect."

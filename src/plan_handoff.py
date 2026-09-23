@@ -466,7 +466,8 @@ def render_implementation_task(
         "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder reviewe ihn "  # allowlist:german
         "nicht erneut. Verwende ihn als schreibgeschützte fachliche Quelle.\n\n"
         "Jeder Slice ändert ausschließlich seine persistierten Pfade. Das zugehörige "
-        "Slice-MD dokumentiert Umsetzung, Validierung, Findings und Freigabe.\n\n"  # allowlist:german
+        "Slice-MD ist eine Auditansicht des Orchestrators und nicht Gegenstand "  # allowlist:german
+        "des Reviews.\n\n"
         f"{records}\n"
     )
 
