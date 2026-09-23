@@ -93,7 +93,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 
 Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
-Codex läuft standardmäßig mit gpt-5.6-sol und Effort `medium`. Claude läuft standardmäßig mit Sonnet und Effort `high`.
+Codex läuft standardmäßig mit gpt-6-sol und Effort `medium`. Claude läuft standardmäßig mit Opus und Effort `high`.
 
 Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
 

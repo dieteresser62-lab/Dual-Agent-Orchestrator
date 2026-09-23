@@ -23,7 +23,7 @@ Validierungsattestierungen.
 |---|---|---|
 | Benutzer | Aufgabe, optionaler Zielbranch und echte Policyentscheidungen | technische Records oder State manuell erfinden |
 | Codex | Planung, Implementierung, Korrektur und branchweiter Vollständigkeitsbericht | eigene Arbeit freigeben, committen, pushen oder mergen |
-| Claude | Read-only Plan-, Slice-, Korrektur- und Finalreview mit Sonnet/`high` | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
+| Claude | Read-only Plan-, Slice-, Korrektur- und Finalreview mit Opus/`high` | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
 | Orchestrator | Scope, Zustand, Recordkette, Validierung, Attestierung und lokale Commits | Defekte Freigaben erfinden oder externe Gitaktionen ausführen |
 
 ## 4. Architekturprinzipien und Invarianten

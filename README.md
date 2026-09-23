@@ -178,7 +178,7 @@ Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verw
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Claude verwendet standardmäßig Sonnet mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
+Claude verwendet standardmäßig Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
 geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
@@ -385,15 +385,15 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 | Rolle | CLI-Optionen | Standards |
 |---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `sonnet`, 1800s, `high` |
+| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, 1800s, `medium` |
+| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, 1800s, `high` |
 
-`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus. Opus ist nicht der Standard; `--claude-model opus` dient ausschließlich einer expliziten Eskalation.
+`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus. Modell und Effort sind zusätzlich an das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` gebunden: Jeder Provideraufruf vergleicht sie mit dem dort eingetragenen Transportprofil. Ein abweichender Wert verlangt deshalb eine neue Merkmalsprobe und einen geänderten Registereintrag; ohne sie hält bereits der erste Aufruf fail-closed an.
 
 Beispiele:
 
 ```bash
-./run_task --claude-model sonnet --claude-effort high
+./run_task --claude-model opus --claude-effort high
 ./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
 ```
 
@@ -503,7 +503,7 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 |---|---|
 | `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
 | `CODEX.md` | Implementiererrolle und native Ergebnisvarianten. |
-| `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
+| `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Opus-/High-Profil. |
 
 Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
 erhält `native-agent-codex-request-v2` und antwortet gemäß

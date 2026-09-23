@@ -13,7 +13,7 @@
 ## State-v3 workflow
 
 - Codex plans and implements. It never approves its own work.
-- Claude reviews every plan and every implementation round. The full branch review is the final work unit of the same `IMPLEMENT` run and is bound to the complete diff from `git merge-base master <target-branch>`. Use Sonnet with effort `high`.
+- Claude reviews every plan and every implementation round. The full branch review is the final work unit of the same `IMPLEMENT` run and is bound to the complete diff from `git merge-base master <target-branch>`. Use Opus with effort `high`.
 - A reviewed plan is committed and handed to implementation automatically by default. A fingerprint-bound user gate is an explicit opt-in policy.
 - `PLAN_ONLY` runs emit exactly one executable Slice for the declared work-plan artifact. After Claude approves the plan, commit that reviewed artifact directly and create an `APPROVED_PLAN_COMMIT`-bound `IMPLEMENT` handoff; do not plan or review the committed plan a second time.
 - Every future implementation section inside a `PLAN_ONLY` artifact uses a contiguous `### Slice N - title` heading and the standalone canonical heading `**Exakter Änderungspfad**`, followed only by bullet-listed exact repository-relative paths. The parser accepts `**Exakte Änderungspfade:**` only as a compatibility spelling.

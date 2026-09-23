@@ -20,8 +20,8 @@ Orchestrator validiert, attestiert und erstellt freigegebene lokale Commits.
 - Nach einer gültigen Claude-Freigabe erstellt der Orchestrator den lokalen
   Plan-, Slice- oder Korrekturcommit idempotent.
 - Modell und Effort sind rollenbezogen konfigurierbar und im Workflowzustand
-  unveränderlich gebunden. Defaults: Codex `gpt-5.6-sol`/`medium`, Claude
-  `sonnet`/`high`.
+  unveränderlich gebunden. Defaults: Codex `gpt-6-sol`/`medium`, Claude
+  `opus`/`high`.
 
 ## 2. Letzter Abschlussmeilenstein
 

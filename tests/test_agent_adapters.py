@@ -33,7 +33,7 @@ def _settings(role: str) -> AgentSettings:
     return AgentSettings(
         role,
         role,
-        "gpt-5.6-sol" if role == "codex" else "sonnet",
+        "gpt-6-sol" if role == "codex" else "opus",
         1800,
         "medium" if role == "codex" else "high",
     )

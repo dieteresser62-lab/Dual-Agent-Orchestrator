@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import copy
+import dataclasses
+import inspect
 import json
 
 import pytest
 
 import native_provider_schema
+from agent_config import add_agent_arguments, resolve_agent_settings
 from native_provider_schema import (
     NativeProviderSchemaError,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
@@ -20,9 +24,11 @@ from native_provider_schema import (
     provider_capability,
     registered_exceptions,
 )
+from workflow_run_setup import _fresh_state
+from workflow_state import ProtocolBinding
 
 
-def _codex_command(*, model: str = "gpt-5.6-sol", effort: str = "medium") -> list[str]:
+def _codex_command(*, model: str = "gpt-6-sol", effort: str = "medium") -> list[str]:
     return [
         "/opt/bin/codex",
         "exec",
@@ -52,7 +58,7 @@ def _claude_command(*, budget: str | None = None) -> list[str]:
         "--output-format",
         "json",
         "--model",
-        "sonnet",
+        "opus",
         "--effort",
         "high",
         "--tools",
@@ -129,6 +135,26 @@ def test_every_provider_must_use_the_shared_forward_version_policy(
         native_provider_schema.load_capability_table()
 
 
+def test_every_role_default_matches_the_probed_transport_profile() -> None:
+    """A default outside the probed profile would halt the first provider call."""
+    parser = argparse.ArgumentParser()
+    add_agent_arguments(parser)
+    settings = resolve_agent_settings(parser.parse_args([]), {})
+    binding_defaults = {
+        field.name: field.default for field in dataclasses.fields(ProtocolBinding)
+    }
+    setup_defaults = inspect.signature(_fresh_state).parameters
+    for role in ("codex", "claude"):
+        profile = provider_capability(role)["transport_profile"]
+        probed = (profile["model"], profile["reasoning_or_effort"])
+        assert (settings[role].model, settings[role].effort) == probed
+        for default in (
+            binding_defaults[f"{role}_profile"],
+            setup_defaults[f"{role}_profile"].default,
+        ):
+            assert (default.model, default.effort) == probed
+
+
 def test_projection_feature_vocabulary_cannot_drift_from_capability_table(
     monkeypatch,
     tmp_path,
@@ -146,17 +172,17 @@ def test_projection_feature_vocabulary_cannot_drift_from_capability_table(
 def test_unprobed_feature_and_out_of_policy_version_fail_closed() -> None:
     with pytest.raises(NativeProviderSchemaError, match="not positively probed"):
         assert_provider_capabilities("codex", ("positional_tuple",))
-    assert compatible_cli_version("claude", "2.1.246 (Claude Code)") is True
+    assert compatible_cli_version("claude", "2.1.286 (Claude Code)") is True
     assert compatible_cli_version("claude", "2.9.0 (Claude Code)") is True
     assert compatible_cli_version("claude", "2.999.0 (Claude Code)") is True
-    assert compatible_cli_version("codex", "codex-cli 0.147.1") is True
-    assert compatible_cli_version("codex", "codex-cli 0.148.0") is True
-    assert compatible_cli_version("codex", "codex-cli 0.150.1") is True
+    assert compatible_cli_version("codex", "codex-cli 0.156.2") is True
+    assert compatible_cli_version("codex", "codex-cli 0.157.0") is True
+    assert compatible_cli_version("codex", "codex-cli 0.160.1") is True
     assert compatible_cli_version("codex", "codex-cli 0.999.0") is True
     for provider, version in (
-        ("claude", "2.1.240 (Claude Code)"),
+        ("claude", "2.1.279 (Claude Code)"),
         ("claude", "3.0.0 (Claude Code)"),
-        ("codex", "codex-cli 0.146.9"),
+        ("codex", "codex-cli 0.156.0"),
         ("codex", "codex-cli 1.0.0"),
     ):
         with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):

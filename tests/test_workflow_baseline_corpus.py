@@ -24,6 +24,7 @@ from artifact_resume import ArtifactResumeError
 from workflow import WorkflowExecutionError
 from workflow_baseline import WorkflowBaseline, WorkflowBaselineDependencies
 from workflow_state import (
+    AgentProfileBinding,
     PlannedSlice,
     ProtocolBinding,
     ProtocolMode,
@@ -354,7 +355,13 @@ def _state(
         task_scope_patterns=("src/baseline.py",),
         work_plan_path="docs/work-plan.md" if bind_plan else None,
         target_branch="feature/backlog-followups",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        # The frozen corpus records the role profiles in force when it was captured.
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
+            claude_profile=AgentProfileBinding("sonnet", "high"),
+        ),
         timestamp=STAMP,
     )
     if bind_plan:

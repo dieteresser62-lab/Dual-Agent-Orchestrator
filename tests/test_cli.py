@@ -466,11 +466,11 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
 def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     args = parse_args([], cwd=tmp_path, environ={})
 
-    assert args.agent_settings["claude"].model == "sonnet"
+    assert args.agent_settings["claude"].model == "opus"
     assert args.agent_settings["claude"].effort == "high"
     assert args.agent_settings["claude"].timeout_seconds == 1800
     assert args.agent_settings["claude"].max_budget_usd is None
-    assert args.agent_settings["codex"].model == "gpt-5.6-sol"
+    assert args.agent_settings["codex"].model == "gpt-6-sol"
     assert args.agent_settings["codex"].effort == "medium"
 
 
@@ -892,8 +892,8 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| `--agent-live-stream` / `--no-agent-live-stream` | an |" in readme
     assert "| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an |" in readme
     assert "| Claude | `--claude-binary`, `--claude-model`" in readme
-    assert "`claude`, `sonnet`, 1800s, `high`" in readme
-    assert "Opus ist nicht der Standard" in readme
-    assert "`gpt-5.6-sol`" in readme
+    assert "`claude`, `opus`, 1800s, `high`" in readme
+    assert "an das geprüfte Fähigkeitsregister" in readme
+    assert "`gpt-6-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True

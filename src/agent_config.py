@@ -24,8 +24,8 @@ class AgentSettings:
 
 
 _DEFAULT_MODELS = {
-    "codex": "gpt-5.6-sol",
-    "claude": "sonnet",
+    "codex": "gpt-6-sol",
+    "claude": "opus",
 }
 
 _DEFAULT_EFFORTS = {

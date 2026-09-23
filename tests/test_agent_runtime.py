@@ -178,7 +178,7 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
     class FakeCodex:
         name = "codex"
         cli_binary = "codex"
-        model = "gpt-5.6-sol"
+        model = "gpt-6-sol"
         effort = "medium"
         timeout = 30
         reviewer = False
@@ -186,7 +186,7 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
         capability = CapabilitySpec(
             ("--version",),
             ("exec", "--help"),
-            (r"^codex-cli 0\.147\.0$",),
+            (r"^codex-cli 0\.156\.1$",),
             ("--output-schema", "--output-last-message"),
         )
         capability_verified = False
@@ -205,7 +205,7 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
         if args[-1] == "--version":
-            return 0, "codex-cli 0.150.1\n", ""
+            return 0, "codex-cli 0.160.1\n", ""
         assert args[-2:] == ["exec", "--help"]
         return 0, "--output-schema\n--output-last-message\n", ""
 

@@ -14,7 +14,7 @@
         "__type__": "AgentSettings",
         "name": "claude",
         "binary": "claude",
-        "model": "sonnet",
+        "model": "opus",
         "timeout_seconds": 1800,
         "effort": "high",
         "max_budget_usd": null
@@ -23,7 +23,7 @@
         "__type__": "AgentSettings",
         "name": "codex",
         "binary": "codex",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-sol",
         "timeout_seconds": 1800,
         "effort": "medium",
         "max_budget_usd": null
@@ -584,7 +584,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "1bf0b440a1050aa4ffe2eadf322b135f2c4685b65070487698333856c3fe3f21",
+        "namespace_sha256": "203696d45c5c6bda83acff80b2f80f8346e5e960144a7c8f01344ac6eb303e67",
         "return_ordinals": [
           1,
           1,
@@ -623,7 +623,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "1be02860a18931bcfc2ea09f5503de068dd696ed542e9b5d673e6df64921de33",
+        "namespace_sha256": "3ff7496eeaeb81a0cc34d16e36cf37dc6abeb4c8f38ce20c669361e8cc6e590e",
         "return_ordinals": [
           2,
           2,
@@ -653,7 +653,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "baa868b4017719abcc2b30eeb2060bc15888e72e1756c20afdb1921002cbf99e",
+        "namespace_sha256": "af2ed2eb06927e8eef4b9174384f1c4e61b22b206a15044a7e50d692cdeb3768",
         "return_ordinals": [
           3,
           2,
@@ -690,7 +690,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "d4bca346400a33e3097997e590c459115e24e6bdb09f5248698461a2495d5a90",
+        "namespace_sha256": "5aa84884e46ccdd0c4d7b5ac0a4b1a6f44b299d1125253cadd667a4dd01b80dd",
         "return_ordinals": [
           2,
           2,

@@ -325,11 +325,11 @@ def test_record_authority_module_headers_match_the_root_contract() -> None:
         assert all(fragment in header for fragment in fragments), filename
 
 
-def test_claude_profile_is_persistently_sonnet_high() -> None:
+def test_claude_profile_is_persistently_opus_high() -> None:
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "Sonnet" in claude and "`high`" in claude
-    assert "Sonnet" in agents and "`high`" in agents
+    assert "Opus" in claude and "`high`" in claude
+    assert "Opus" in agents and "`high`" in agents
 
 
 def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
@@ -673,8 +673,8 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--transient-retry-initial-delay <seconds>` | `{args.transient_retry_policy.initial_delay_seconds}` |",
         f"| `--transient-retry-max-delay <seconds>` | `{args.transient_retry_policy.maximum_delay_seconds}` |",
         f"| `--transient-retry-max-auto-resumes <count>` | `{args.transient_retry_policy.maximum_auto_resumes}` |",
-        "`claude`, `sonnet`, 1800s, `high`",
-        "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
+        f"`claude`, `{args.agent_settings['claude'].model}`, 1800s, `high`",
+        f"`codex`, `{args.agent_settings['codex'].model}`, 1800s, `medium`",
         "`RUN_TASK_QUOTA_AUTO_RESUME`",
         "`RUN_TASK_QUOTA_SAFETY_MARGIN`",
         "`RUN_TASK_QUOTA_MAX_WAIT`",
@@ -760,7 +760,7 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "ORCHESTRATOR_MODE: IMPLEMENT",
         "TARGET_BRANCH:",
         "TASK_SCOPE",
-        "Claude läuft standardmäßig mit Sonnet und Effort `high`",
+        "Claude läuft standardmäßig mit Opus und Effort `high`",
         "nano inbox/meine-idee.md",
         "run_task --watch",
         "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
