@@ -1,6 +1,6 @@
 # Schnellstart
 
-Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
+Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf in einem bereits eingerichteten Projekt. Installation, Anschluss eines vorhandenen Projekts und den Start bei null beschreibt die [Einrichtung](docs/reference/einrichtung.md). [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
 
 ## 1. Voraussetzungen prüfen
 

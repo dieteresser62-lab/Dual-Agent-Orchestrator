@@ -23,6 +23,7 @@ ROLE_FILES = (ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md")
 REFERENCE_DOC_FILES = (
     ROOT / "docs" / "reference" / "architecture-and-domain-concept.md",
     ROOT / "docs" / "reference" / "market-comparison.md",
+    ROOT / "docs" / "reference" / "einrichtung.md",
 )
 USER_MARKDOWN_FILES = (
     ROOT / "README.md",
@@ -362,6 +363,10 @@ def test_active_markdown_user_documentation_is_german() -> None:
         ROOT / "example-task.md": ("## Kontext", "## Akzeptanzkriterien"),
         REFERENCE_DOC_FILES[0]: ("# Architektur- und Fachkonzept", "## 2. Fachliches Problem"),
         REFERENCE_DOC_FILES[1]: ("# Marktvergleich", "## 1. Zusammenfassung"),
+        REFERENCE_DOC_FILES[2]: (
+            "# Einrichtung: vom Download zum ersten Lauf",
+            "## Teil 1 — Einmalig: den Orchestrator installieren",
+        ),
     }
     forbidden_english_headings = (
         "## Overview",

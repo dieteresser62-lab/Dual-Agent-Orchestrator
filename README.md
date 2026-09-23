@@ -34,6 +34,7 @@ Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und c
 
 ## Referenzdokumentation
 
+- **[Einrichtung: vom Download zum ersten Lauf](docs/reference/einrichtung.md)** — Installation, Anschluss eines vorhandenen Projekts und der Start bei null mit nur einer Projektbeschreibung; für Einsteiger Schritt für Schritt, für Fortgeschrittene mit Referenzteil.
 - **[Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — der Einstieg.** Erklärt den vollständigen Ablauf in Schichten: zuerst ohne Fachbegriffe, dann ein protokollierter echter Lauf als Beispiel, dann die Regeln so genau, dass man danach prüfen kann.
 - [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md) beschreibt Systemgrenze, Domänenmodell, Invarianten, Komponenten, Zustandsmaschine, Vertrauensgrenzen und betriebliche Eigenschaften.
 - [Marktvergleich](docs/reference/market-comparison.md) ordnet den Orchestrator anhand aktueller offizieller Produktdokumentation gegenüber repräsentativen Coding-Agenten und Agentenplattformen ein.
@@ -59,7 +60,7 @@ Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzög
 
 ## Schnellstart
 
-Eine kurze vollständige Anleitung enthält [Quickstart.md](Quickstart.md).
+Eine kurze vollständige Anleitung enthält [Quickstart.md](Quickstart.md). Wer den Orchestrator erst installieren, ein Projekt anschließen oder bei null beginnen will, folgt der [Einrichtung](docs/reference/einrichtung.md).
 
 Im normalen Betrieb genügt im Zielrepository eine informelle Datei wie `inbox/meine-idee.md`:
 
