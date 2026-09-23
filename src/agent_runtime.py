@@ -26,6 +26,7 @@ from agent_adapters import (
     AgentBudgetError,
     AgentPermissionError,
     AgentOutputError,
+    PROVIDER_FAILURE_METRIC_KEYS,
     NativeCodexExecutionBoundary,
 )
 from path_policy import PathPolicyError, resolve_repository_path
@@ -2245,6 +2246,9 @@ def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
         return None
     sanitized: dict[str, object] = {}
     for key, child in value.items():
+        if key in PROVIDER_FAILURE_METRIC_KEYS:
+            sanitized[str(key)] = child
+            continue
         if key not in _PROVIDER_DIAGNOSTIC_KEYS:
             continue
         if isinstance(child, Mapping):

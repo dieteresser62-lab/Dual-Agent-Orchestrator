@@ -1112,6 +1112,14 @@ def test_native_review_content_rejection_cannot_masquerade_as_provider_failure()
 
 
 def test_adapter_structured_output_retry_exhaustion_is_classified_as_output() -> None:
+    metrics = {
+        "duration_api_ms": 64_202,
+        "num_turns": 5,
+        "total_cost_usd": 0.211611,
+        "usage": {"input_tokens": 6, "output_tokens": 5_726},
+        "modelUsage": {"claude-opus": {"outputTokens": 5_726}},
+        "permission_denials": [],
+    }
     failure = classify_agent_failure(
         "claude",
         agent_runtime.AgentOutputError(
@@ -1121,6 +1129,8 @@ def test_adapter_structured_output_retry_exhaustion_is_classified_as_output() ->
             provider_data={
                 "type": "result",
                 "subtype": "error_max_structured_output_retries",
+                **metrics,
+                "result": "provider model text must remain excluded",
             },
         ),
         invocation_id="claude-adapter-structured-output-1",
@@ -1130,6 +1140,7 @@ def test_adapter_structured_output_retry_exhaustion_is_classified_as_output() ->
     assert failure.provider_data == {
         "type": "result",
         "subtype": "error_max_structured_output_retries",
+        **metrics,
     }
     assert failure.provider_text != failure.technical_text
 

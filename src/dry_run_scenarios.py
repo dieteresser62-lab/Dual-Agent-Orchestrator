@@ -1364,8 +1364,9 @@ class ScriptedWorkflowDriver:
         payload: InvocationFailurePayload,
         provider_text: str,
         technical_text: str,
+        provider_data: Mapping[str, object] | None,
     ) -> None:
-        _ = (provider_text, technical_text)
+        _ = (provider_text, technical_text, provider_data)
         self.structured_events.append(
             ("invocation-failure-diagnostic", payload.invocation_id)
         )

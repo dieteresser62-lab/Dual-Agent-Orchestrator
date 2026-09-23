@@ -756,10 +756,11 @@ class FakeDriver:
         payload: InvocationFailurePayload,
         provider_text: str,
         technical_text: str,
+        provider_data: dict[str, object] | None,
     ) -> None:
         if self.diagnostic_failure is not None:
             raise self.diagnostic_failure
-        _ = (provider_text, technical_text)
+        _ = (provider_text, technical_text, provider_data)
         self.failure_persistence_events.append("failure-diagnostic")
         self.structured_events.append(
             ("invocation-failure-diagnostic", payload.invocation_id)

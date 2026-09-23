@@ -14,6 +14,7 @@ import artifact_store as artifact_store_module
 import orchestrator
 from agent_adapters import AgentOutputError
 from agent_runtime import (
+    AgentInvocationError,
     AgentProcessError,
     NativeAgentCodexOutput,
     classify_agent_failure,
@@ -458,6 +459,17 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     assert diagnostic["round_number"] == diagnostic["request_sequence"] == 1
     assert diagnostic["attempt_number"] == 1
     assert diagnostic["provider_text_sha256"] != diagnostic["technical_text_sha256"]
+    cleartext_path = (
+        repository
+        / ".orchestrator"
+        / "logs"
+        / "invocation-failures"
+        / "canary-review-process-failure.json"
+    )
+    assert json.loads(cleartext_path.read_text(encoding="utf-8")) == {
+        "provider_text": error.provider_text,
+        "technical_text": error.technical_text,
+    }
 
 
 def test_structured_output_subtype_reaches_safe_halt_diagnostic(
@@ -472,20 +484,37 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     assert active is not None
     now = datetime(2026, 9, 9, 2, 22, tzinfo=timezone.utc)
     provider_text = "native Claude error"
-    error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
-        AgentOutputError(
-            provider_text,
-            provider_text=provider_text,
-            technical_text=provider_text,
-            exit_code=1,
-            provider_data={
-                "type": "result",
-                "subtype": "error_max_structured_output_retries",
-            },
-        ),
+    provider_metrics = {
+        "duration_api_ms": 91_234,
+        "num_turns": 17,
+        "total_cost_usd": 0.211611,
+        "usage": {"input_tokens": 6, "output_tokens": 5_726},
+        "modelUsage": {
+            "claude-opus": {"inputTokens": 6, "outputTokens": 5_726}
+        },
+        "permission_denials": [],
+        "subtype": "error_max_structured_output_retries",
+    }
+    model_text = "MODEL_OUTPUT_MUST_NOT_REACH_THE_DIAGNOSTIC"
+    error_text = "PROVIDER_ERROR_TEXT_MUST_NOT_REACH_THE_DIAGNOSTIC"
+    error = AgentInvocationError(
+        agent_key=AgentRole.CLAUDE.value,
+        kind=AgentFailureKind.OUTPUT,
         invocation_id="structured-output-diagnostic-1",
         received_at=now,
+        provider_text=provider_text,
+        technical_text=(
+            "AgentOutputError: provider_diagnostic.subtype="
+            "error_max_structured_output_retries"
+        ),
+        exit_code=1,
+        provider_data={
+            **provider_metrics,
+            "type": "result",
+            "result": model_text,
+            "error": error_text,
+            "unknown_content": "UNKNOWN_TEXT_MUST_NOT_REACH_THE_DIAGNOSTIC",
+        },
     )
 
     caplog.set_level("INFO", logger="workflow")
@@ -518,7 +547,19 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     assert cleartext == {
         "provider_text": error.provider_text,
         "technical_text": error.technical_text,
+        "provider_metrics": provider_metrics,
     }
+    assert set(cleartext["provider_metrics"]) == {
+        "duration_api_ms",
+        "num_turns",
+        "total_cost_usd",
+        "usage",
+        "modelUsage",
+        "permission_denials",
+        "subtype",
+    }
+    assert model_text not in cleartext_path.read_text(encoding="utf-8")
+    assert error_text not in cleartext_path.read_text(encoding="utf-8")
     assert hashlib.sha256(
         cleartext["provider_text"].encode("utf-8")
     ).hexdigest() == payload.provider_text_sha256
@@ -549,6 +590,55 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     assert resumed.state.current_work_unit.invocation_failures[-1].invocation_id == (
         payload.invocation_id
     )
+
+
+def _assert_u17_provider_metric_projection() -> None:
+    metrics = {
+        "duration_api_ms": 1,
+        "num_turns": 2,
+        "total_cost_usd": 0.3,
+        "usage": {"output_tokens": 4},
+        "modelUsage": {"claude": {"outputTokens": 4}},
+        "permission_denials": [],
+        "subtype": "error_max_structured_output_retries",
+    }
+    envelope = {
+        **metrics,
+        "result": "provider model text",
+        "error": "provider error text",
+        "unknown": "unknown provider text",
+    }
+    assert orchestrator._provider_failure_metrics(envelope) == metrics
+    assert orchestrator._provider_failure_metrics(None) is None
+
+
+def test_u17_provider_metric_projection_is_exact_and_preserves_absence() -> None:
+    _assert_u17_provider_metric_projection()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("copy-envelope", "drop-usage", "materialize-absence"),
+)
+def test_u17_projection_proof_kills_allowlist_and_absence_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    original = orchestrator._provider_failure_metrics
+
+    def mutant(provider_data: object):  # type: ignore[no-untyped-def]
+        if mutation == "materialize-absence" and provider_data is None:
+            return {}
+        projected = original(provider_data)  # type: ignore[arg-type]
+        if mutation == "copy-envelope" and provider_data is not None:
+            return dict(provider_data)  # type: ignore[arg-type]
+        if mutation == "drop-usage" and projected is not None:
+            projected.pop("usage", None)
+        return projected
+
+    monkeypatch.setattr(orchestrator, "_provider_failure_metrics", mutant)
+    with pytest.raises(AssertionError):
+        _assert_u17_provider_metric_projection()
 
 
 def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(

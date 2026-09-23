@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from agent_runtime import (
     AgentInvocationError,
@@ -50,7 +50,7 @@ class WorkflowFailureRecordingDependencies:
 
     current_invocation_fingerprint: Callable[[WorkflowState], str | None]
     write_invocation_failure_diagnostic: Callable[
-        [InvocationFailurePayload, str, str], None
+        [InvocationFailurePayload, str, str, Mapping[str, object] | None], None
     ]
     persist_invocation_failure: Callable[[InvocationFailurePayload], None]
     checkpoint: Callable[[WorkflowState, Any], None]
@@ -711,6 +711,7 @@ class WorkflowFailureRecording:
                 payload,
                 error.provider_text,
                 error.technical_text,
+                error.provider_data,
             )
         except Exception as exc:
             logger.warning(

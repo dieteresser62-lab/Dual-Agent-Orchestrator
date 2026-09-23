@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import Callable, Protocol
+from typing import Callable, Mapping, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
@@ -707,6 +707,7 @@ class WorkflowDriver(Protocol):
         payload: InvocationFailurePayload,
         provider_text: str,
         technical_text: str,
+        provider_data: Mapping[str, object] | None,
     ) -> None: ...
 
     def persist_scope_extension(
@@ -1532,11 +1533,12 @@ class WorkflowEngine:
                     lambda state: self._current_invocation_fingerprint(state)
                 ),
                 write_invocation_failure_diagnostic=(
-                    lambda payload, provider_text, technical_text: (
+                    lambda payload, provider_text, technical_text, provider_data: (
                         self.driver.write_invocation_failure_diagnostic(
                             payload,
                             provider_text,
                             technical_text,
+                            provider_data,
                         )
                     )
                 ),

@@ -10,10 +10,11 @@ import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Callable, get_args, get_type_hints
+from typing import Callable, Mapping, get_args, get_type_hints
 
 from agent_adapters import (
     AgentAdapter,
+    PROVIDER_FAILURE_METRIC_KEYS,
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
 )
@@ -252,6 +253,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     from cli import parse_args as parse_cli_args
 
     return parse_cli_args(argv)
+
+
+def _provider_failure_metrics(
+    provider_data: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Project the bounded metric allowlist from a failed provider envelope."""
+
+    if provider_data is None:
+        return None
+    return {
+        key: provider_data[key]
+        for key in PROVIDER_FAILURE_METRIC_KEYS
+        if key in provider_data
+    }
+
 
 def _shorten(value: str | None, maximum: int) -> str:
     text = value or ""
@@ -1882,6 +1898,7 @@ class ProductionWorkflowDriver:
         payload: InvocationFailurePayload,
         provider_text: str,
         technical_text: str,
+        provider_data: Mapping[str, object] | None,
     ) -> None:
         """Write non-authoritative cleartext evidence for one failed invocation."""
 
@@ -1889,6 +1906,9 @@ class ProductionWorkflowDriver:
             "provider_text": provider_text,
             "technical_text": technical_text,
         }
+        provider_metrics = _provider_failure_metrics(provider_data)
+        if provider_metrics is not None:
+            document["provider_metrics"] = provider_metrics
         path = (
             self.log_dir
             / "invocation-failures"

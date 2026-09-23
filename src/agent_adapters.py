@@ -42,6 +42,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
 CLAUDE_REVIEW_PACKET_CHUNK_CHARS = 24_000
 CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
+PROVIDER_FAILURE_METRIC_KEYS = (
+    "duration_api_ms",
+    "num_turns",
+    "total_cost_usd",
+    "usage",
+    "modelUsage",
+    "permission_denials",
+    "subtype",
+)
 
 
 class AgentOutputError(RuntimeError):
@@ -794,15 +803,7 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         envelope = _json_object(stdout or "", self.name)
         self.metadata = {
             key: envelope[key]
-            for key in (
-                "duration_api_ms",
-                "num_turns",
-                "total_cost_usd",
-                "usage",
-                "modelUsage",
-                "permission_denials",
-                "subtype",
-            )
+            for key in PROVIDER_FAILURE_METRIC_KEYS
             if key in envelope
         }
         if envelope.get("is_error") is not False:
