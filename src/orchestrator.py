@@ -128,6 +128,7 @@ from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies
 from workflow_persistence import (
     WorkflowPersistence,
     WorkflowPersistenceDependencies,
+    scope_extension_source_request_id,
 )
 from workflow_baseline import (
     WorkflowBaseline,
@@ -758,6 +759,12 @@ class ProductionWorkflowDriver:
                 raise WorkflowExecutionError(
                     "quota-resume-diff decision has no authoritative invocation failure"
                 )
+        elif decision.reason is GateReason.STOP_REQUEST:
+            invocation_id = scope_extension_source_request_id(
+                bridge.store.current_chain(),
+                work_unit_id=unit_id,
+                fingerprint=decision.fingerprint,
+            )
         logical_id = f"gate-decision-{unit_id}-{gate_record.record_id[:20]}"
         return bridge.append(
             GateDecisionPayload(
@@ -1746,6 +1753,22 @@ class ProductionWorkflowDriver:
         payload: ScopeExtensionPayload,
     ) -> None:
         self._persistence_boundary().persist_scope_extension(state, payload)
+
+    def scope_extension_source_request_id(
+        self,
+        state: WorkflowState,
+        fingerprint: str,
+    ) -> str:
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError(
+                "scope-extension gate requires structured record persistence"
+            )
+        return scope_extension_source_request_id(
+            bridge.store.current_chain(),
+            work_unit_id=state.current_work_unit_id,
+            fingerprint=fingerprint,
+        )
 
     def persist_native_review_contract(
         self,

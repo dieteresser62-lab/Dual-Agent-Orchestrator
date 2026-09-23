@@ -673,6 +673,7 @@ def _run_production_transition_loop(
                     history,
                     approved=True,
                     rationale=existing_approval.rationale,
+                    path_classes=args.repo_config.paths,
                 )
                 state, history = decided.state, decided.history
             elif args.gate_decision is not None:
@@ -681,6 +682,7 @@ def _run_production_transition_loop(
                     history,
                     approved=args.gate_decision,
                     rationale=args.gate_rationale,
+                    path_classes=args.repo_config.paths,
                 )
                 state, history = decided.state, decided.history
                 if not args.gate_decision:

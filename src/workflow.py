@@ -715,6 +715,12 @@ class WorkflowDriver(Protocol):
         payload: ScopeExtensionPayload,
     ) -> None: ...
 
+    def scope_extension_source_request_id(
+        self,
+        state: WorkflowState,
+        fingerprint: str,
+    ) -> str: ...
+
     def persist_native_codex_contract(  # allowlist:provider -- canonical capability
         self,
         output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
@@ -756,6 +762,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "persist_invocation_failure",
         "write_invocation_failure_diagnostic",
         "persist_scope_extension",
+        "scope_extension_source_request_id",
         "persist_native_codex_contract",  # allowlist:provider -- canonical capability
         "persist_native_review_contract",
         "persist_review_packet",
@@ -1804,6 +1811,7 @@ class WorkflowEngine:
         *,
         approved: bool,
         rationale: str,
+        path_classes: PathClasses | None = None,
     ) -> WorkflowRunResult:
         """Record an explicit decision against the exact persisted gate evidence."""
         require_workflow_driver(self.driver)
@@ -1815,6 +1823,21 @@ class WorkflowEngine:
         if gate.fingerprint is None:
             raise WorkflowExecutionError(
                 "current gate is not a fingerprint-bound Slice-11 user gate"
+            )
+        scope_extension_gate = (
+            gate.reason is GateReason.STOP_REQUEST
+            and gate.detail is not None
+            and gate.detail.startswith(f"{SCOPE_EXTENSION_REQUESTED_RULE_ID} |")
+        )
+        source_request_id: str | None = None
+        if approved and scope_extension_gate:
+            if path_classes is None:
+                raise WorkflowExecutionError(
+                    "scope-extension approval requires the configured path classes"
+                )
+            source_request_id = self.driver.scope_extension_source_request_id(
+                state,
+                gate.fingerprint,
             )
         prior_decision_count = len(state.current_work_unit.gate_decisions)
         try:
@@ -1832,6 +1855,30 @@ class WorkflowEngine:
                 updated.current_work_unit_id,
                 updated.current_work_unit.gate_decisions[-1],
             )
+        if approved and scope_extension_gate:
+            additions = tuple(
+                sorted(set(gate.paths).difference(state.current_slice.scope_paths))
+            )
+            if additions:
+                updated = updated.approve_current_slice_scope_extension(additions)
+                assert source_request_id is not None
+                self.driver.persist_scope_extension(
+                    updated,
+                    ScopeExtensionPayload(
+                        work_unit_id=str(state.current_work_unit_id),
+                        slice_id=str(state.current_slice_id),
+                        source_request_id=source_request_id,
+                        stop_rule_id=SCOPE_EXTENSION_REQUESTED_RULE_ID,
+                        rationale=gate.detail.split(" | ", 1)[1],
+                        additions=tuple(
+                            ScopeExtensionPathPayload(
+                                path,
+                                classify_path(path, path_classes).path_class.value,
+                            )
+                            for path in additions
+                        ),
+                    ),
+                )
         self._persist_structured(self.driver.persist_gate_transition, updated)
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
@@ -3703,8 +3750,8 @@ class WorkflowEngine:
             )
         return state, False
 
-    @staticmethod
     def _halt_for_stop_request(
+        self,
         state: WorkflowState,
         context: WorkflowContext,
         stop_request: StopRequest,
@@ -3731,6 +3778,28 @@ class WorkflowEngine:
                 f"STOP_REQUESTED has invalid content for "
                 f"{stop_request.rule_id!r}: {exc}"
             ) from exc
+        if (
+            stop_request.rule_id == SCOPE_EXTENSION_REQUESTED_RULE_ID
+            and stop_request.remediation_paths
+            and state.current_work_unit.kind is WorkUnitKind.SLICE
+        ):
+            start_commit = self._change_start_commit(state)
+            # A running Slice is state-invalid without both boundary values; use
+            # the already validated boundary directly so this gate measures the
+            # same full Slice delta as persistence and later review.
+            assert start_commit is not None
+            assert state.current_slice.start_fingerprint is not None
+            try:
+                fingerprint = self.driver.collect_changes(start_commit).fingerprint
+            except NoWorkflowChangesError:
+                fingerprint = state.current_slice.start_fingerprint
+            return state.await_user_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"{stop_request.rule_id} | {stop_request.rationale}",
+                fingerprint=fingerprint,
+                paths=stop_request.remediation_paths,
+                resume_step=state.current_step,
+            )
         return state.await_policy_gate(
             reason=GateReason.STOP_REQUEST,
             detail=f"{stop_request.rule_id} | {stop_request.rationale}",

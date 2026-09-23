@@ -168,6 +168,30 @@ def workflow_policy_identity_key(unit: WorkUnitRecord, revision: int) -> str:
     )
 
 
+def scope_extension_source_request_id(
+    chain: tuple[ArtifactRecord, ...] | list[ArtifactRecord],
+    *,
+    work_unit_id: int | str,
+    fingerprint: str,
+) -> str:
+    """Resolve the stopped implementer request that opened an exact scope gate."""
+
+    matches = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, AgentResultPayload)
+        and record.payload.role is Role.CODEX  # allowlist:provider -- canonical role
+        and record.payload.work_unit_id == str(work_unit_id)
+        and record.payload.outcome == "stopped"
+        and record.fingerprint.sha256 == fingerprint
+    )
+    if not matches:
+        raise WorkflowExecutionError(
+            "scope-extension gate has no fingerprint-matching stopped implementer result"
+        )
+    return matches[-1].payload.request_id
+
+
 @dataclass(frozen=True)
 class WorkflowPersistenceDependencies:
     """Driver-owned resources and composition edges required by the sinks."""

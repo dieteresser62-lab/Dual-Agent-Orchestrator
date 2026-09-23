@@ -343,9 +343,12 @@ GATE_SOURCE_MAP = (
     GateSourceRow(
         "SCOPE-EXTENSION-REQUESTED",
         "stop_request",
-        "policy",
+        "user",
         "workflow._halt_for_stop_request",
-        ("gates.BUILTIN_STOP_RULES",),
+        (
+            "gates.BUILTIN_STOP_RULES",
+            "workflow._halt_for_stop_request",
+        ),
         ("scope-extension-requested",),
     ),
     GateSourceRow(
@@ -544,7 +547,7 @@ GATE_CASE_ORACLE = (
         "scope-extension-requested",
         "stop_request",
         "SCOPE-EXTENSION-REQUESTED",
-        "policy",
+        "user",
     ),
     ("contract-unclear", "stop_request", "CONTRACT-UNCLEAR", "policy"),
     (
@@ -622,6 +625,7 @@ EXPECTED_GATE_CALL_SITES = Counter(
             "reopen_legacy_quota_resume_diff_gate",
         ): 1,
         ("workflow.py", "reframe_unexpected_path_stop_gate", "await_user_gate"): 1,
+        ("workflow.py", "_halt_for_stop_request", "await_user_gate"): 1,
         ("workflow.py", "_apply_agent_output", "await_policy_gate"): 1,
         ("workflow.py", "_validate_plan_before_review", "await_user_gate"): 1,
         ("workflow.py", "_validate_plan_before_review", "await_policy_gate"): 1,

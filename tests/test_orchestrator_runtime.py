@@ -103,6 +103,7 @@ from contracts import (
 from error_classification import classify_exception
 from finding_reducer import reduce_findings
 from git_service import GitTransactionError
+from gates import PathClasses
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -3228,6 +3229,126 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         "docs/extra.md",
         "src/runtime.py",
     )
+
+
+@pytest.mark.parametrize("approved", (True, False), ids=("approve", "reject"))
+def test_scope_extension_user_gate_records_exact_decision_and_originating_request(
+    tmp_path: Path,
+    approved: bool,
+) -> None:
+    repository = _repository(tmp_path, "feature/scope-extension-user-gate")
+    task = repository / "task.md"
+    requested_path = "tests/existing_runtime.py"
+    _write_task(
+        task,
+        "feature/scope-extension-user-gate",
+        "src/runtime.py",
+        requested_path,
+    )
+    head = _git(repository, "rev-parse", "HEAD")
+    fingerprint = "b" * 64
+    state = init_workflow_state(
+        run_id="scope-extension-user-gate",
+        task_file=str(task),
+        branch="feature/scope-extension-user-gate",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py", requested_path),
+        target_branch="feature/scope-extension-user-gate",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint=fingerprint,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    source_request_id = "native-codex-request-" + "c" * 64
+    append_provider_decision_authority(
+        bridge,
+        AgentResultPayload(
+            Role.CODEX,
+            str(state.current_work_unit_id),
+            "stopped",
+            (),
+            "native-codex-v2",
+            source_request_id,
+            "d" * 64,
+        ),
+        logical_id="ignored-by-helper",
+        idempotency_key="scope-extension-user-gate-source",
+        fingerprint_sha256=fingerprint,
+        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+    )
+    rationale = (
+        f"Required paths: {requested_path}\n"
+        "Why required for current Slice: cover the existing integration seam"
+    )
+    pending = state.await_user_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail=f"SCOPE-EXTENSION-REQUESTED | {rationale}",
+        fingerprint=fingerprint,
+        paths=(requested_path,),
+        resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(pending, history)
+
+    result = WorkflowEngine(driver).decide_current_gate(
+        pending,
+        history,
+        approved=approved,
+        rationale="reviewed existing test for the current Slice only",
+        path_classes=PathClasses(
+            productive=("src/**",),
+            tests=("tests/**",),
+            documentation=("docs/**",),
+            generated=("build/**",),
+        ),
+    )
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    gate_record = next(
+        record
+        for record in chain
+        if isinstance(record.payload, GatePayload)
+        and record.payload.gate_kind == "stop-request"
+    )
+    decision_record = next(
+        record
+        for record in chain
+        if isinstance(record.payload, GateDecisionPayload)
+        and record.payload.gate_record_id == gate_record.record_id
+    )
+    assert gate_record.fingerprint.sha256 == fingerprint
+    assert decision_record.fingerprint.sha256 == fingerprint
+    assert decision_record.payload.paths == (requested_path,)
+    assert decision_record.payload.invocation_id == source_request_id
+    assert datetime.fromisoformat(gate_record.created_at).tzinfo is not None
+    assert datetime.fromisoformat(decision_record.created_at).tzinfo is not None
+    assert (requested_path in result.state.current_slice.scope_paths) is approved
+    assert result.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert result.state.current_work_unit.gate_decisions[-1].approved is approved
+
+    replay = replay_artifacts(chain, state.run_id)
+    assert replay.gate_decisions[-1].approved is approved
+    assert replay.gate_decisions[-1].fingerprint == fingerprint
+    assert replay.gate_decisions[-1].paths == (requested_path,)
+    assert replay.gate_decisions[-1].gate_created_at == gate_record.created_at
 
 
 @pytest.mark.parametrize(

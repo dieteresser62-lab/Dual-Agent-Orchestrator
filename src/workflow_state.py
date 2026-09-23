@@ -802,6 +802,7 @@ class GateDecisionRecord:
             GateReason.MANUAL_SLICE,
             GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
+            GateReason.STOP_REQUEST,
             GateReason.QUOTA_RESUME_DIFF,
         }:
             raise WorkflowStateValidationError(
@@ -830,10 +831,11 @@ class GateDecisionRecord:
             GateReason.MANUAL_SLICE,
             GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
+            GateReason.STOP_REQUEST,
         } and not self.paths:
             raise WorkflowStateValidationError(
-                "manual-slice, plan-approval, and unexpected-file decisions require "
-                "bound paths"
+                "manual-slice, plan-approval, unexpected-file, and stop-request "
+                "decisions require bound paths"
             )
         if self.reason in {
             GateReason.TEST_CHANGE,

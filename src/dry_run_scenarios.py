@@ -1373,6 +1373,20 @@ class ScriptedWorkflowDriver:
     def persist_scope_extension(self, state, payload) -> None:
         self.structured_events.append(("scope-extension", (state, payload)))
 
+    def scope_extension_source_request_id(
+        self,
+        state: WorkflowState,
+        fingerprint: str,
+    ) -> str:
+        _ = (state, fingerprint)
+        return next(
+            output.request_id
+            for kind, value in reversed(self.structured_events)
+            if kind == "native-codex"  # allowlist:provider -- canonical event
+            for output in (value[0],)
+            if output.result.stopped
+        )
+
     def persist_review_packet(self, packet: ReviewPacket) -> None:
         self.structured_events.append(("review-packet", packet))
 

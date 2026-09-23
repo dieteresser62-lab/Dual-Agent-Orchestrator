@@ -768,6 +768,20 @@ class FakeDriver:
     def persist_scope_extension(self, state, payload) -> None:
         self.structured_events.append(("scope-extension", (state, payload)))
 
+    def scope_extension_source_request_id(
+        self,
+        state: WorkflowState,
+        fingerprint: str,
+    ) -> str:
+        _ = (state, fingerprint)
+        return next(
+            output.request_id
+            for kind, value in reversed(self.structured_events)
+            if kind == "native-codex"
+            for output in (value[0],)
+            if output.result.stopped
+        )
+
     def persist_native_codex_contract(
         self,
         output: NativeAgentCodexOutput,
@@ -6440,6 +6454,228 @@ def test_scope_extension_persists_and_second_access_needs_no_new_request() -> No
     )
 
 
+def _requested_scope_extension_gate(
+    path: str,
+) -> tuple[WorkflowEngine, FakeDriver, WorkflowContext, WorkflowRunResult]:
+    class RequestedScopeDriver(FakeDriver):
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            self.snapshot_index += 1
+            if len(self.codex_calls) > 1:
+                return _test_native_codex_output(
+                    invocation,
+                    self.codex_outputs.pop(0),
+                )
+            assert invocation.native_request is not None
+            request_id = invocation.native_request.bound_context.request_id
+            canonical = json.dumps({"request_id": request_id}, sort_keys=True)
+            return NativeAgentCodexOutput(
+                CodexContractResult(
+                    ready=None,
+                    stopped=True,
+                    stop_request=StopRequest(
+                        SCOPE_EXTENSION_REQUESTED_RULE_ID,
+                        _scope_extension_rationale(path),
+                        (path,),
+                    ),
+                    validation=None,
+                    test_files=(),
+                    findings=invocation.previous_findings,
+                    slice_plan=(),
+                ),
+                canonical,
+                request_id,
+                hashlib.sha256(canonical.encode()).hexdigest(),
+            )
+
+    state = _scope_extension_state(path, "unowned")
+    changes = _changes("7", "src/current.py", TEST_FILE)
+    driver = RequestedScopeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        paths_existing_at_commits={(START_COMMIT, path)},
+    )
+    context = replace(
+        _context(),
+        path_classes=PathClasses(
+            productive=("src/**",),
+            tests=("tests/**",),
+            documentation=("docs/**",),
+            generated=("build/**",),
+        ),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+    engine = WorkflowEngine(driver)
+    halted = engine.run_current_work_unit(state, context)
+    return engine, driver, context, halted
+
+
+def _assert_scope_approval_is_current_slice_only(
+    before: WorkflowState,
+    after: WorkflowState,
+    path: str,
+) -> None:
+    assert path in after.current_slice.scope_paths
+    assert after.planned_slices == before.planned_slices
+    for prior, current in zip(before.slices, after.slices, strict=True):
+        if current.slice_id == after.current_slice_id:
+            continue
+        assert current.scope_paths == prior.scope_paths
+        assert path not in current.scope_paths
+
+
+def test_requested_scope_extension_is_an_exact_fingerprint_gate_and_plain_resume_stays_halted() -> None:
+    path = "tests/existing_extra.py"
+    engine, driver, context, halted = _requested_scope_extension_gate(path)
+
+    gate = halted.state.current_work_unit.gate
+    assert halted.exit_code == 4
+    assert gate.reason is GateReason.STOP_REQUEST
+    assert gate.fingerprint == "7" * 64
+    assert gate.paths == (path,)
+    assert gate.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert path not in halted.state.current_slice.scope_paths
+    assert len(driver.codex_calls) == 1
+
+    resumed_without_decision = engine.run_current_work_unit(
+        halted.state,
+        context,
+        halted.history,
+    )
+
+    assert resumed_without_decision.state == halted.state
+    assert len(driver.codex_calls) == 1
+
+
+def test_approved_scope_extension_changes_only_current_slice_and_restarts_halted_step() -> None:
+    path = "tests/existing_extra.py"
+    engine, driver, context, halted = _requested_scope_extension_gate(path)
+    original_plan = halted.state.planned_slices
+    original_later_scope = halted.state.slices[1].scope_paths
+
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        rationale="existing test reviewed for this Slice only",
+        path_classes=context.path_classes,
+    )
+
+    assert approved.state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert approved.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    _assert_scope_approval_is_current_slice_only(
+        halted.state,
+        approved.state,
+        path,
+    )
+    assert approved.state.slices[1].scope_paths == original_later_scope
+    assert path not in approved.state.slices[1].scope_paths
+    assert approved.state.planned_slices == original_plan
+    decision = approved.state.current_work_unit.gate_decisions[-1]
+    assert decision.approved is True
+    assert decision.reason is GateReason.STOP_REQUEST
+    assert decision.fingerprint == "7" * 64
+    assert decision.paths == (path,)
+    extension = next(
+        value[1]
+        for kind, value in driver.structured_events
+        if kind == "scope-extension"
+    )
+    assert extension.source_request_id.startswith("native-codex-request-")
+    assert tuple(item.path for item in extension.additions) == (path,)
+
+    driver.codex_outputs.append(_codex_ready())
+    continued, _ = engine._run_codex(
+        approved.state,
+        replace(context, current_scope_paths=approved.state.current_slice.scope_paths),
+        approved.history,
+    )
+
+    assert len(driver.codex_calls) == 2
+    assert driver.codex_calls[-1].step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert path in json.loads(
+        driver.codex_calls[-1].native_request.canonical_json
+    )["authorized_paths"]
+    assert continued.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+
+
+def test_scope_extension_proof_kills_later_slice_inheritance_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "tests/existing_extra.py"
+    engine, _driver, context, halted = _requested_scope_extension_gate(path)
+    original = WorkflowState.approve_current_slice_scope_extension
+
+    def inherit_into_later_slices(
+        state: WorkflowState,
+        additions: tuple[str, ...],
+        *,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        approved = original(state, additions, updated_at=updated_at)
+        mutated_plan = tuple(
+            item
+            if item.slice_id == approved.current_slice_id
+            else replace(
+                item,
+                scope_paths=tuple(sorted({*item.scope_paths, *additions})),
+            )
+            for item in approved.planned_slices
+        )
+        return replace(approved, planned_slices=mutated_plan)
+
+    monkeypatch.setattr(
+        WorkflowState,
+        "approve_current_slice_scope_extension",
+        inherit_into_later_slices,
+    )
+
+    mutant = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        rationale="existing test reviewed for this Slice only",
+        path_classes=context.path_classes,
+    ).state
+
+    with pytest.raises(AssertionError):
+        _assert_scope_approval_is_current_slice_only(
+            halted.state,
+            mutant,
+            path,
+        )
+
+
+def test_rejected_scope_extension_keeps_stop_and_opens_no_path() -> None:
+    path = "tests/existing_extra.py"
+    engine, driver, context, halted = _requested_scope_extension_gate(path)
+
+    rejected = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=False,
+        rationale="existing test remains outside this Slice",
+        path_classes=context.path_classes,
+    )
+
+    assert rejected.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert rejected.state.current_work_unit.gate == halted.state.current_work_unit.gate
+    assert path not in rejected.state.current_slice.scope_paths
+    assert rejected.state.current_work_unit.gate_decisions[-1].approved is False
+    assert not any(
+        kind == "scope-extension" for kind, _value in driver.structured_events
+    )
+
+    still_halted = engine.run_current_work_unit(
+        rejected.state,
+        context,
+        rejected.history,
+    )
+    assert still_halted.state == rejected.state
+    assert len(driver.codex_calls) == 1
+
+
 def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
     finding = FindingRecord(
         finding_id="C-01",
@@ -6559,7 +6795,9 @@ def test_operator_prerequisite_stop_uses_existing_policy_gate_with_full_diagnost
         "Operator action: provide app/public/assets/fonts/Brand-Regular.woff2"
     )
 
-    halted = WorkflowEngine._halt_for_stop_request(
+    halted = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )._halt_for_stop_request(
         _slice_state(),
         _context(),
         StopRequest(OPERATOR_PREREQUISITE_MISSING_RULE_ID, rationale),
@@ -6577,7 +6815,9 @@ def test_operator_prerequisite_stop_uses_existing_policy_gate_with_full_diagnost
 
 def test_operator_prerequisite_stop_cannot_bypass_content_validation() -> None:
     with pytest.raises(WorkflowExecutionError, match="requires operator action"):
-        WorkflowEngine._halt_for_stop_request(
+        WorkflowEngine(
+            FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+        )._halt_for_stop_request(
             _slice_state(),
             _context(),
             StopRequest(
@@ -6595,7 +6835,9 @@ def test_discovery_output_limit_is_a_dedicated_final_review_stop() -> None:
         "the request-bound discovery capacity was reached",
     )
 
-    halted = WorkflowEngine._halt_for_stop_request(state, _context(), stop_request)
+    halted = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )._halt_for_stop_request(state, _context(), stop_request)
 
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
     assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
