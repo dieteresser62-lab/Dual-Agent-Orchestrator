@@ -34,6 +34,7 @@ from workflow import (
     WorkflowRunResult,
     require_driver_capabilities,
     require_workflow_driver,
+    legacy_quota_automation_verdict,
     resolve_retired_iteration_limit,
     workflow_rejection_finding_ids,
 )
@@ -609,7 +610,7 @@ def _run_or_return_retired_iteration_verdict(
 ) -> WorkflowRunResult:
     """Return a retired gate verdict before entering the preserved core loop."""
 
-    if workflow_rejection_finding_ids(state, history):
+    if workflow_rejection_finding_ids(state, history) or legacy_quota_automation_verdict(state):
         return WorkflowRunResult(state, history)
     return _run_production_transition_loop(
         root=root,

@@ -598,19 +598,9 @@ def _invocation_failure_documents(
             else None
         ),
     )
-    quota_terminal_verdict = (
-        error.kind is AgentFailureKind.QUOTA
-        and not decision.automatic_quota
-        and (
-            state.current_work_unit.kind is WorkUnitKind.PLAN
-            or fingerprint is not None
-        )
-    )
     effective_failure_class = (
         FailureClass.TRANSIENT
         if decision.automatic
-        else FailureClass.TERMINAL_REJECTION
-        if quota_terminal_verdict
         else FailureClass.RESUMABLE_HALT
         if classified.failure_class is FailureClass.TRANSIENT
         else classified.failure_class

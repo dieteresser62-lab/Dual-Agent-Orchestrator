@@ -145,6 +145,7 @@ from workflow_state import (
     ProtocolBinding,
     ProtocolMode,
     Reviewer,
+    SliceStatus,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -517,6 +518,7 @@ def _native_plan_output(
     *,
     summary: str,
     scope_paths: tuple[str, ...],
+    second_scope_paths: tuple[str, ...] | None = None,
 ) -> NativeAgentCodexOutput:
     bundle = invocation.native_request
     assert bundle is not None
@@ -538,6 +540,16 @@ def _native_plan_output(
             }
         ],
     }
+    if second_scope_paths is not None:
+        document["slice_plan"].append({
+            "slice_id": 2,
+            "summary": "complete second slice",
+            "scope_paths": list(second_scope_paths),
+            "acceptance_criteria": [{
+                "text": "complete second slice",
+                "measured_against": "SOURCE",
+            }],
+        })
     canonical = canonical_native_codex_json(document)
     return NativeAgentCodexOutput(
         result=parse_bound_native_codex_contract_result(
@@ -6661,6 +6673,105 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
         for record in resumed_chain
     ) == 1
     assert list(followup.parent.glob("*followup*")) == [followup]
+
+
+def test_quota_pause_replays_and_resumes_review_before_next_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/quota-review-resume")
+    task = tmp_path / "quota-review-resume.md"
+    _write_task(task, "feature/quota-review-resume", "src/one.py", "src/two.py")
+    calls: list[str] = []
+    review_attempts = 0
+
+    def implement(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            calls.append("plan")
+            target = repository / "src" / "one.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("value = 0\n", encoding="utf-8")
+            return _native_plan_output(
+                invocation,
+                summary="complete first slice",
+                scope_paths=("src/one.py",),
+                second_scope_paths=("src/two.py",),
+            )
+        calls.append(f"implement-{invocation.work_unit_id - 1}")
+        if invocation.work_unit_id == 3:
+            raise agent_runtime.classify_agent_failure(
+                AgentRole.CODEX.value,
+                agent_runtime.AgentProcessError("usage limit", exit_code=1),
+                invocation_id="second-slice-quota",
+            )
+        (repository / "src" / "one.py").write_text("value = 1\n", encoding="utf-8")
+        return _native_implementation_output(invocation)
+
+    def review(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        nonlocal review_attempts
+        if invocation.step is WorkflowStep.CLAUDE_PLAN_REVIEW:
+            calls.append("plan-review")
+            return _native_review_approval(invocation)
+        assert invocation.step is WorkflowStep.CLAUDE_SLICE_REVIEW
+        review_attempts += 1
+        calls.append(f"review-{invocation.work_unit_id - 1}-{review_attempts}")
+        if review_attempts == 1:
+            raise agent_runtime.classify_agent_failure(
+                AgentRole.CLAUDE.value,
+                agent_runtime.AgentProcessError("usage limit", exit_code=1),
+                invocation_id="first-slice-review-quota",
+            )
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", implement)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
+    monkeypatch.chdir(repository)
+
+    first = run_production_workflow(task, _args(repository, task))
+
+    assert first.state.current_work_unit_id == 2
+    assert first.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert first.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert first.state.current_work_unit.gate.reason is GateReason.QUOTA
+    assert first.state.current_slice.status is SliceStatus.AWAITING_RESUME
+    assert not first.workflow_rejected
+    pause = WatchTaskResult.from_workflow(first)
+    assert pause.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert pause.resume_available and pause.step == WorkflowStep.CLAUDE_SLICE_REVIEW.value
+    assert pause.work_unit_id == 2
+    assert calls == ["plan", "plan-review", "implement-1", "review-1-1"]
+    replayed = resolve_resume_state(repository, first.state.run_id).state
+    assert replayed.current_work_unit_id == 2
+    assert replayed.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert replayed.current_work_unit.gate.reason is GateReason.QUOTA
+
+    resumed_args = _args(repository, task)
+    resumed_args.resume = True
+    resumed = run_production_workflow(task, resumed_args)
+
+    assert calls == [
+        "plan", "plan-review", "implement-1", "review-1-1",
+        "review-1-2", "implement-2",
+    ]
+    assert resumed.state.work_units[1].status is WorkUnitStatus.COMPLETED
+    assert resumed.state.slices[0].status is SliceStatus.COMPLETED
+    assert resumed.state.current_work_unit_id == 3
+    assert resumed.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert resumed.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    chain = ArtifactStore(repository, first.state.run_id).load_chain()
+    transitions = [
+        record.payload for record in chain
+        if isinstance(record.payload, WorkflowTransitionPayload)
+    ]
+    assert any(
+        item.work_unit_id == "2" and item.step == "claude_slice_review"
+        and item.work_unit_status == "awaiting_resume"
+        for item in transitions
+    )
+    assert resolve_resume_state(repository, first.state.run_id).state == resumed.state
 
 
 def test_sixth_acceptance_review_keeps_evidence_and_creates_no_followup(

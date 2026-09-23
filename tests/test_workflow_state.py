@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
+import workflow_production
 import workflow_requests
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
@@ -713,7 +715,7 @@ def test_native_codex_retry_feedback_roundtrips_in_state() -> None:
     assert loaded.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
 
 
-def test_nonautomatic_quota_failure_completes_as_terminal_verdict() -> None:
+def test_nonautomatic_quota_failure_remains_resumable_on_same_step() -> None:
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-terminal",
         idempotency_key="run-1:1:codex_plan:codex",
@@ -733,17 +735,58 @@ def test_nonautomatic_quota_failure_completes_as_terminal_verdict() -> None:
         failure, wait_automatically=False
     )
 
-    terminal = halted.complete_quota_automation_verdict()
-    result = WorkflowRunResult(terminal, WorkflowHistory(1))
+    result = WorkflowRunResult(halted, WorkflowHistory(1))
 
-    assert terminal.current_work_unit.status is WorkUnitStatus.COMPLETED
-    assert terminal.current_step is WorkflowStep.CODEX_PLAN
-    assert terminal.current_work_unit.gate.status is GateStatus.CLEAR
-    assert terminal.current_slice.status is SliceStatus.IN_PROGRESS
+    assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert halted.current_step is WorkflowStep.CODEX_PLAN
+    assert halted.current_work_unit.gate.status is GateStatus.AWAITING_RESUME
+    assert halted.current_work_unit.gate.reason is GateReason.QUOTA
+    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
+    assert halted.current_slice.status is SliceStatus.AWAITING_RESUME
+    assert not result.workflow_rejected
+    assert result.exit_code == 2
+    assert WorkflowState.from_dict(halted.to_dict()) == halted
+    assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+
+
+def test_prior_terminal_quota_record_fails_closed_before_next_work_unit() -> None:
+    failure = InvocationFailureRecord(
+        invocation_id="prior-quota",
+        idempotency_key="run-1:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.QUOTA,
+        provider_text="usage limit",
+        received_at="2026-08-12T10:00:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
+        automatic_resume=False,
+    )
+    halted = make_state().record_invocation_failure(
+        failure, wait_automatically=False
+    )
+    old_unit = replace(
+        halted.current_work_unit,
+        status=WorkUnitStatus.COMPLETED,
+        gate=GateRecord(),
+    )
+    prior_state = replace(
+        halted,
+        work_units=(old_unit,),
+        slices=(replace(halted.slices[0], status=SliceStatus.IN_PROGRESS), *halted.slices[1:]),
+    )
+    assert WorkflowState.from_dict(prior_state.to_dict()) == prior_state
+    result = workflow_production._run_or_return_retired_iteration_verdict(
+        root=Path("/repo"), task_file=Path("/repo/task.md"),
+        assignment="", args=None, dependencies=None, state=prior_state,
+        history=WorkflowHistory(1), effective_resume=True, driver=None,
+        engine=None,
+    )
+    assert result.state.current_work_unit_id == 1
     assert result.rejection_code == "QUOTA-AUTOMATION-STOPPED"
-    assert result.rejection_exception_type == "QuotaAutomationVerdict"
-    assert result.exit_code == 5
-    assert WorkflowState.from_dict(terminal.to_dict()) == terminal
 
 
 def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() -> None:

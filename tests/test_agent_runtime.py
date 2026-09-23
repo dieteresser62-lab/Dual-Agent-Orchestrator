@@ -1018,6 +1018,102 @@ def test_structured_output_retry_exhaustion_is_classified_as_output() -> None:
     assert failure.provider_text != failure.technical_text
 
 
+def test_structured_output_retry_exhaustion_preserves_metrics() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentOutputError(
+            "usage limit",
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+                "modelUsage": {"review": {"cacheCreationInputTokens": 26429}},
+            },
+        ),
+        invocation_id="structured-output-with-metric",
+    )
+
+    assert failure.kind is AgentFailureKind.OUTPUT
+    assert failure.provider_data is not None
+    assert failure.provider_data["modelUsage"] == {
+        "review": {"cacheCreationInputTokens": 26429}
+    }
+
+
+def test_structured_output_retry_exhaustion_precedes_diagnostic_quota_text() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentOutputError(
+            "structured output retries exhausted",
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+                "message": "usage limit reached",
+            },
+        ),
+        invocation_id="reviewer-structured-output-diagnostic",
+    )
+
+    assert failure.kind is AgentFailureKind.OUTPUT
+    assert failure.provider_data is not None
+    assert failure.provider_data["message"] == "usage limit reached"
+
+
+@pytest.mark.parametrize("number", [429, 1429, 4291, 0.4291, 429.1, "1,429"])
+@pytest.mark.parametrize("field", ["cacheCreationInputTokens", "costUsd", "durationMs"])
+def test_numeric_diagnostic_fields_never_indicate_quota(field: str, number: float | str) -> None:
+    diagnostic = json.dumps({field: number})
+    assert not agent_runtime.is_quota_or_rate_limit_error(diagnostic)
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError(
+            diagnostic,
+            provider_data={"type": "error", field: number},
+            exit_code=1,
+        ),
+        invocation_id=f"metric-{field}-{number}",
+    )
+    assert failure.kind is not AgentFailureKind.QUOTA
+
+
+@pytest.mark.parametrize("message", ["429", "rate limit", "usage limit"])
+def test_standalone_quota_markers_remain_recognized(message: str) -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError(message, exit_code=1),
+        invocation_id=f"quota-{message}",
+    )
+    assert isinstance(failure, QuotaReachedError)
+
+
+def test_numeric_status_code_429_remains_recognized() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError(
+            "provider error",
+            provider_data={"status": 429},
+            exit_code=1,
+        ),
+        invocation_id="status-429",
+    )
+    assert isinstance(failure, QuotaReachedError)
+
+
+def test_quota_markers_inside_words_or_numbers_do_not_match() -> None:
+    for message in ("14291", "prequotaed", "rate limiter", "usage limitation"):
+        assert not agent_runtime.is_quota_or_rate_limit_error(message)
+
+
+def test_reviewer_session_limit_remains_recognized() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError(
+            "You've hit your session limit", exit_code=1
+        ),
+        invocation_id="session-limit",
+    )
+    assert isinstance(failure, QuotaReachedError)
+
+
 def test_builtin_failure_keeps_provider_and_technical_evidence_independent() -> None:
     failure = classify_agent_failure(
         "codex",

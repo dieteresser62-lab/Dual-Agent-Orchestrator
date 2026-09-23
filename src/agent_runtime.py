@@ -2202,7 +2202,16 @@ def _structured_reset_candidates(
 
 
 def is_quota_or_rate_limit_error(text: str) -> bool:
-    raw = re.sub(r"[_-]+", " ", (text or "").lower())
+    numeric_field = re.compile(
+        r'(?P<key>"[^"\n]+"|[A-Za-z_][\w-]*)\s*[:=]\s*'
+        r'"?-?\d+(?:[.,]\d+)*(?:[eE][+-]?\d+)?"?'
+    )
+
+    def hide_numeric_value(match: re.Match[str]) -> str:
+        key = match.group("key").strip('"').lower()
+        return match.group() if key in {"status", "code", "status_code"} else " "
+
+    raw = re.sub(r"[_-]+", " ", numeric_field.sub(hide_numeric_value, text or "").lower())
     markers = (
         "quota",
         "hit your limit",
@@ -2216,7 +2225,15 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
         "usage limit",
         "resource exhausted",
     )
-    return any(marker in raw for marker in markers)
+    return any(
+        re.search(
+            r"(?<![\w.])(?<!\d,)429(?!\w|[.,]\d)"
+            if marker == "429"
+            else rf"(?<!\w){re.escape(marker)}(?!\w)",
+            raw,
+        ) is not None
+        for marker in markers
+    )
 
 
 _CLAUDE_SESSION_LIMIT_PATTERN = re.compile(
@@ -2318,11 +2335,20 @@ def classify_agent_failure(
         if technical_text == provider_text:
             technical_text += "; classified=output"
     lowered = technical_text.lower()
-    structured_text = (
-        json.dumps(provider_data, ensure_ascii=False, sort_keys=True)
-        if isinstance(provider_data, Mapping)
-        else ""
-    )
+    def diagnostic_texts(value: object) -> list[str]:
+        if not isinstance(value, Mapping):
+            return []
+        found: list[str] = []
+        for key, child in value.items():
+            if isinstance(child, Mapping):
+                found.extend(diagnostic_texts(child))
+            elif isinstance(child, str) and key in _PROVIDER_DIAGNOSTIC_KEYS:
+                found.append(child)
+            elif key in {"status", "code"} and isinstance(child, int):
+                found.append(str(child))
+        return found
+
+    structured_text = " ".join(diagnostic_texts(provider_data))
     claude_technical_session_limit = (
         agent_key == "claude"
         and (
@@ -2349,6 +2375,9 @@ def classify_agent_failure(
         # semantics.  Provider-like words inside its prose cannot turn that
         # response-content fact into a transient quota or transport failure.
         kind = AgentFailureKind.OUTPUT
+    elif structured_output_retry_exhaustion:
+        # A completed provider result with this subtype identifies output exhaustion.
+        kind = AgentFailureKind.OUTPUT
     elif (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -2371,10 +2400,6 @@ def classify_agent_failure(
             technical_text=technical_text,
             orchestrator_diagnostic=orchestrator_diagnostic,
         )
-    elif structured_output_retry_exhaustion:
-        # The provider completed, but its internal retries did not produce a
-        # schema-conforming result. Keep that cause distinct from transport.
-        kind = AgentFailureKind.OUTPUT
     elif isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
     elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:

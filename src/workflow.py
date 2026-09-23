@@ -1244,7 +1244,7 @@ class WorkflowRunResult:
     def workflow_rejected(self) -> bool:
         """Whether the workflow ended with a reviewer or input-boundary denial."""
 
-        if self._provider_input_boundary_verdict or self._quota_automation_verdict:
+        if self._provider_input_boundary_verdict or self.legacy_quota_automation_verdict:
             return True
         if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
             # The terminal review may complete with new open findings. They are
@@ -1270,16 +1270,9 @@ class WorkflowRunResult:
         )
 
     @property
-    def _quota_automation_verdict(self) -> bool:
-        unit = self.state.current_work_unit
-        return (
-            unit.status is WorkUnitStatus.COMPLETED
-            and unit.current_step is not WorkflowStep.COMPLETED
-            and bool(unit.invocation_failures)
-            and unit.invocation_failures[-1].failure_kind is AgentFailureKind.QUOTA
-            and not unit.invocation_failures[-1].automatic_resume
-            and unit.invocation_failures[-1].step is unit.current_step
-        )
+    def legacy_quota_automation_verdict(self) -> bool:
+        """Keep previously persisted terminal quota states from advancing."""
+        return legacy_quota_automation_verdict(self.state)
 
     @property
     def rejection_code(self) -> str | None:
@@ -1287,7 +1280,7 @@ class WorkflowRunResult:
             return None
         if self._provider_input_boundary_verdict:
             return "PROVIDER-INPUT-BUDGET"
-        if self._quota_automation_verdict:
+        if self.legacy_quota_automation_verdict:
             return "QUOTA-AUTOMATION-STOPPED"
         return "SLICE-REVIEW-DENIED"
 
@@ -1297,7 +1290,7 @@ class WorkflowRunResult:
             return None
         if self._provider_input_boundary_verdict:
             return "ProviderInputBoundaryVerdict"
-        if self._quota_automation_verdict:
+        if self.legacy_quota_automation_verdict:
             return "QuotaAutomationVerdict"
         return "SliceReviewVerdict"
 
@@ -1320,14 +1313,10 @@ class WorkflowRunResult:
                 "safe evidence compaction; no provider was started; measurement="
                 f"{fact.transition_fingerprint}"
             )
-        if self._quota_automation_verdict:
-            failure = self.state.current_work_unit.invocation_failures[-1]
-            reset = failure.reset_at_utc or "unknown"
+        if self.legacy_quota_automation_verdict:
             return (
-                "QUOTA-AUTOMATION-STOPPED | automatic continuation requires a "
-                "recognized release time plus progress since the prior quota; the "
-                "absolute continuation backstop also remains authoritative; "
-                f"reset={reset} continuations={failure.auto_resume_count}"
+                "QUOTA-AUTOMATION-STOPPED | this persisted terminal quota "
+                "state predates resumable quota pauses and cannot advance"
             )
         remaining = project_open_set(self.history.findings).finding_ids
         round_limit_reached = (
@@ -1373,6 +1362,18 @@ class WorkflowRunResult:
             if self.completed
             else 1
         )
+
+
+def legacy_quota_automation_verdict(state: WorkflowState) -> bool:
+    unit = state.current_work_unit
+    return (
+        unit.status is WorkUnitStatus.COMPLETED
+        and unit.current_step is not WorkflowStep.COMPLETED
+        and bool(unit.invocation_failures)
+        and unit.invocation_failures[-1].failure_kind is AgentFailureKind.QUOTA
+        and not unit.invocation_failures[-1].automatic_resume
+        and unit.invocation_failures[-1].step is unit.current_step
+    )
 
 
 def workflow_rejection_finding_ids(
@@ -3293,18 +3294,6 @@ class WorkflowEngine:
                     native_response_retry_allowed,
                 )
                 if not failure.automatic_resume:
-                    if (
-                        failure.failure_kind is AgentFailureKind.QUOTA
-                        and (
-                            state.current_work_unit.kind is WorkUnitKind.PLAN
-                            or failure.diff_fingerprint is not None
-                        )
-                    ):
-                        state = state.complete_quota_automation_verdict()
-                        self._persist_structured(
-                            self.driver.persist_gate_transition, state
-                        )
-                        self.driver.checkpoint(state, history)
                     return state, None
                 assert failure.resume_at_utc is not None
                 resume_at = datetime.fromisoformat(

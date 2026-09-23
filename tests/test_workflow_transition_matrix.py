@@ -598,7 +598,7 @@ GATE_FOREIGN_PREFIXES = {
     "SLICE-REVIEW-DENIED": "terminal no-progress Slice verdict is not a resumable gate",
     "AGENT-PROFILE-DIFF": "resume profile validation raises before workflow execution",
     "PROVIDER-INPUT-BUDGET": "terminal provider-input verdict is not a resumable gate",
-    "QUOTA-AUTOMATION-STOPPED": "terminal quota verdict is not a resumable gate",
+    "QUOTA-AUTOMATION-STOPPED": "prior terminal quota verdict is not a resumable gate",
     "TASK-SCOPE": "invalid Codex slice plans raise a workflow contract error",
 }
 
@@ -661,7 +661,6 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "continue_retired_iteration_limit", "GateRecord"): 1,
         ("workflow_state.py", "record_invocation_failure", "GateRecord"): 1,
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
-        ("workflow_state.py", "complete_quota_automation_verdict", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_invocation_halt", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_user_decision", "GateRecord"): 1,
     }
@@ -678,7 +677,6 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "record_review_denial"): 1,
         ("workflow_state.py", "continue_retired_iteration_limit"): 1,
         ("workflow_state.py", "record_invocation_failure"): 1,
-        ("workflow_state.py", "complete_quota_automation_verdict"): 1,
         ("workflow_state.py", "await_bootstrap_resume"): 1,
         ("workflow_state.py", "resume_after_invocation_halt"): 1,
         ("workflow_state.py", "resume_after_user_decision"): 1,
