@@ -463,7 +463,7 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
             "RUN_TASK_CLAUDE_TIMEOUT": "999",
             "RUN_TASK_CLAUDE_EFFORT": "low",
             "RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1.0",
-            "RUN_TASK_CODEX_MODEL": "gpt-env",
+            "RUN_TASK_CODEX_MODEL": "luna",
             "RUN_TASK_CODEX_EFFORT": "high",
         },
     )
@@ -475,7 +475,7 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
     assert claude.effort == "high"
     assert claude.max_budget_usd == 2.5
     assert set(args.agent_settings) == {"codex", "claude"}
-    assert args.agent_settings["codex"].model == "gpt-env"
+    assert args.agent_settings["codex"].model == "gpt-6-luna"
     assert args.agent_settings["codex"].effort == "high"
 
 
@@ -487,7 +487,32 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.agent_settings["claude"].timeout_seconds == 1800
     assert args.agent_settings["claude"].max_budget_usd is None
     assert args.agent_settings["codex"].model == "gpt-6-sol"
-    assert args.agent_settings["codex"].effort == "medium"
+    assert args.agent_settings["codex"].effort == "high"
+
+
+def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
+    for argv, codex, claude in (
+        (["--codex-model", "sol"], "gpt-6-sol", "opus"),
+        (["--codex-model", "Terra"], "gpt-5.6-terra", "opus"),
+        (["--codex-model", "gpt-6-luna", "--claude-model", "SONNET"], "gpt-6-luna", "sonnet"),
+    ):
+        settings = parse_args(argv, cwd=tmp_path, environ={}).agent_settings
+        assert (settings["codex"].model, settings["claude"].model) == (codex, claude)
+
+    for argv, message in (
+        (["--codex-model", "astra"], "codex model must be one of sol"),
+        (["--codex-model", "gpt-5.5"], "codex model must be one of sol"),
+        (["--claude-model", "haiku"], "claude model must be one of opus"),
+    ):
+        with pytest.raises(ConfigError, match=message):
+            parse_args(argv, cwd=tmp_path, environ={})
+
+
+def test_effort_is_freely_selectable_within_the_known_levels(tmp_path: Path) -> None:
+    settings = parse_args(
+        ["--codex-effort", "xhigh", "--claude-effort", "max"], cwd=tmp_path, environ={}
+    ).agent_settings
+    assert (settings["codex"].effort, settings["claude"].effort) == ("xhigh", "max")
 
 
 def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> None:
@@ -909,7 +934,7 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an |" in readme
     assert "| Claude | `--claude-binary`, `--claude-model`" in readme
     assert "`claude`, `opus`, 1800s, `high`" in readme
-    assert "an das geprüfte Fähigkeitsregister" in readme
+    assert "nicht Modell und Effort" in readme
     assert "`gpt-6-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True

@@ -386,15 +386,18 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 | Rolle | CLI-Optionen | Standards |
 |---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, 1800s, `medium` |
+| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, 1800s, `high` |
 | Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, 1800s, `high` |
 
-`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus. Modell und Effort sind zusätzlich an das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` gebunden: Jeder Provideraufruf vergleicht sie mit dem dort eingetragenen Transportprofil. Ein abweichender Wert verlangt deshalb eine neue Merkmalsprobe und einen geänderten Registereintrag; ohne sie hält bereits der erste Aufruf fail-closed an.
+`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus.
+
+Das Modell wählt man über seine Familie: für Codex `sol` (`gpt-6-sol`, Standard), `terra` (`gpt-5.6-terra`) oder `luna` (`gpt-6-luna`), für Claude `opus` (Standard) oder `sonnet`; die Claude-Aliase zeigen immer auf das neueste Modell. Andere Werte weist der Orchestrator vor dem ersten Aufruf ab. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
 
 Beispiele:
 
 ```bash
-./run_task --claude-model opus --claude-effort high
+./run_task --codex-effort xhigh --claude-effort max
+./run_task --codex-model luna --claude-model sonnet --codex-effort medium
 ./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
 ```
 

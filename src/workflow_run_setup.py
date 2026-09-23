@@ -285,7 +285,7 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
-    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "medium"),
+    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high"),
     max_rounds_per_loop: int = 6,
     base_branch: str | None = None,

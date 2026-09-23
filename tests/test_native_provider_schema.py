@@ -9,7 +9,7 @@ import json
 import pytest
 
 import native_provider_schema
-from agent_config import add_agent_arguments, resolve_agent_settings
+from agent_config import MODEL_FAMILIES, add_agent_arguments, resolve_agent_settings
 from native_provider_schema import (
     NativeProviderSchemaError,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
@@ -135,8 +135,7 @@ def test_every_provider_must_use_the_shared_forward_version_policy(
         native_provider_schema.load_capability_table()
 
 
-def test_every_role_default_matches_the_probed_transport_profile() -> None:
-    """A default outside the probed profile would halt the first provider call."""
+def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     parser = argparse.ArgumentParser()
     add_agent_arguments(parser)
     settings = resolve_agent_settings(parser.parse_args([]), {})
@@ -144,15 +143,39 @@ def test_every_role_default_matches_the_probed_transport_profile() -> None:
         field.name: field.default for field in dataclasses.fields(ProtocolBinding)
     }
     setup_defaults = inspect.signature(_fresh_state).parameters
+    expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
     for role in ("codex", "claude"):
-        profile = provider_capability(role)["transport_profile"]
-        probed = (profile["model"], profile["reasoning_or_effort"])
-        assert (settings[role].model, settings[role].effort) == probed
+        assert expected[role][0] in MODEL_FAMILIES[role].values()
+        assert (settings[role].model, settings[role].effort) == expected[role]
         for default in (
             binding_defaults[f"{role}_profile"],
             setup_defaults[f"{role}_profile"].default,
         ):
-            assert (default.model, default.effort) == probed
+            assert (default.model, default.effort) == expected[role]
+
+
+def test_model_and_effort_are_recorded_but_do_not_bind_the_transport() -> None:
+    for model in MODEL_FAMILIES["codex"].values():
+        for effort in ("low", "xhigh"):
+            profile = normalize_transport_profile(
+                "codex", _codex_command(model=model, effort=effort)
+            )
+            assert (profile.model, profile.reasoning_or_effort) == (model, effort)
+            assert_provider_capabilities("codex", (), profile=profile)
+    for model in MODEL_FAMILIES["claude"].values():
+        command = _claude_command()
+        command[command.index("--model") + 1] = model
+        command[command.index("--effort") + 1] = "max"
+        assert_provider_capabilities(
+            "claude", (), profile=normalize_transport_profile("claude", command)
+        )
+
+    probed = normalize_transport_profile("codex", _codex_command())
+    drifted = dataclasses.replace(
+        probed, semantic_flags=(*probed.semantic_flags, "--future-switch")
+    )
+    with pytest.raises(NativeProviderSchemaError, match="transport profile differs"):
+        assert_provider_capabilities("codex", (), profile=drifted)
 
 
 def test_projection_feature_vocabulary_cannot_drift_from_capability_table(

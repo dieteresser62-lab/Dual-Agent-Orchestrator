@@ -1434,7 +1434,7 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
     assert resumed.agent_settings["claude"].effort == "medium"
 
     mismatched = parse_args(
-        ["--task-file", str(task), "--codex-model", "different"],
+        ["--task-file", str(task), "--codex-model", "terra"],
         cwd=repository,
         environ={},
     )

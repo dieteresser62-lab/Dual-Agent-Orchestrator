@@ -294,6 +294,18 @@ Braucht Ihr Testbefehl eine virtuelle Umgebung oder bestimmte
 Umgebungsvariablen, richten Sie sie **vor** dem Start im selben Terminal ein.
 Der Orchestrator führt die Tests mit genau dieser Umgebung aus.
 
+> [!TIP]
+> **Wie gründlich gedacht wird, entscheiden Sie beim Start.** Standard ist für
+> beide Agenten Effort `high`. Für eine knifflige Aufgabe:
+>
+> ```bash
+> run_task --watch --codex-effort xhigh --claude-effort max --verbose
+> ```
+>
+> Für eine einfache Aufgabe geht es mit `medium` oder `low` schneller und
+> günstiger. Die Einstellung gilt für jede Aufgabe, die diese Wache neu
+> beginnt; mehr dazu in 4.3.
+
 > [!WARNING]
 > Keine Protokolldatei **im** Projektordner ablegen. Eine unversionierte fremde
 > Datei macht den Arbeitsbaum „schmutzig", und der Orchestrator verweigert dann
@@ -522,13 +534,28 @@ dieses Repositorys.
 
 ### 4.3 Modelle und CLI-Versionen
 
-Codex läuft mit `gpt-6-sol` und Effort `medium`, Claude mit `opus` und Effort
-`high`. Beides ist nicht frei wählbar: Jeder Provideraufruf vergleicht Modell und
-Effort mit dem geprüften Fähigkeitsregister
-[`schemas/native-provider-schema-capabilities-v1.json`](../../schemas/native-provider-schema-capabilities-v1.json).
-Ein abweichender Wert über `--codex-model`, `--claude-model` oder `--*-effort`
-hält beim ersten Aufruf an. Ein Modellwechsel verlangt eine neue Merkmalsprobe
-und einen geänderten Registereintrag.
+| | Codex (Implementierer) | Claude (Prüfer) |
+|---|---|---|
+| Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) | `opus` (Standard), `sonnet` |
+| Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |
+| Option | `--codex-model`, `--codex-effort` | `--claude-model`, `--claude-effort` |
+| Umgebung | `RUN_TASK_CODEX_MODEL`, `RUN_TASK_CODEX_EFFORT` | `RUN_TASK_CLAUDE_MODEL`, `RUN_TASK_CLAUDE_EFFORT` |
+
+Die Claude-Aliase zeigen immer auf das neueste Modell ihrer Familie; bei Codex
+nennt der Orchestrator das neueste Modell je Familie ausdrücklich. Andere Werte
+weist er ab, bevor ein Agent startet.
+
+Modell und Effort werden beim Start eines Laufs festgeschrieben. Eine Wache
+verwendet ihre Angaben für jede Aufgabe, die sie neu beginnt. Ein bereits
+begonnener Lauf behält seine Werte; wird er mit abweichenden Angaben
+fortgesetzt, hält er mit `AGENT-PROFILE-DIFF` an – starten Sie die Wache zum
+Fortsetzen also ohne oder mit denselben Angaben.
+
+Das Fähigkeitsregister
+[`schemas/native-provider-schema-capabilities-v1.json`](../../schemas/native-provider-schema-capabilities-v1.json)
+bindet die Aufrufform der beiden Kommandozeilen, nicht Modell und Effort. Die
+Schemamerkmale wurden am 23.9.2026 für alle wählbaren Modelle und Effort-Stufen
+gemessen und waren überall gleich.
 
 Dasselbe Register legt die geprüften CLI-Versionen fest. Neuere Versionen
 derselben Hauptversion werden akzeptiert, ältere und andere Hauptversionen
@@ -576,7 +603,9 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 | `automatic target-branch switch requires a clean non-ignored working tree` | eine unversionierte oder geänderte Datei liegt im Projekt | `git status --short` prüfen; Protokolle außerhalb des Projekts ablegen |
 | `validation request requires at least one command` | kein Testbefehl konfiguriert oder erkannt | `default_command` in `orchestrator.toml` setzen |
 | `Unsupported codex CLI version` oder `Unsupported claude CLI version` | CLI zu alt oder aus einer anderen Hauptversion | CLI aktualisieren |
-| `transport differs from its probed schema capability` | Modell oder Effort weicht vom Register ab | Modell- und Effort-Optionen weglassen |
+| `model must be one of …` | ein Modell außerhalb der wählbaren Familien | einen der genannten Werte verwenden (4.3) |
+| `AGENT-PROFILE-DIFF` | ein begonnener Lauf wurde mit anderem Modell oder Effort fortgesetzt | ohne abweichende Angaben fortsetzen (4.3) |
+| `transport differs from its probed schema capability` | die Aufrufform einer Kommandozeile weicht vom Register ab, etwa nach einem größeren CLI-Update | CLI-Version prüfen, Orchestrator aktualisieren |
 | `Another watcher is already running on inbox` | es läuft schon eine Wache für dieses Projekt | die laufende Sitzung verwenden (`tmux attach`) |
 | `fatal: stash failed` beim Zusammenführen | Git ist auf automatisches Zwischenspeichern eingestellt | `git -c merge.autoStash=false merge --no-ff <branch>` |
 | `Explicit --agents-file does not exist` | ein ausdrücklich angegebener Pfad fehlt | Pfad korrigieren; ohne Angabe gilt `AGENTS.md` im Projektordner |

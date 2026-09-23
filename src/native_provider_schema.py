@@ -230,6 +230,24 @@ def _parse_cli_version(provider: str, cli_version: str) -> tuple[int, int, int]:
     return major, minor, patch
 
 
+# Schema admissibility is decided by the provider transport before any model
+# reasons: the implementer API and the reviewer CLI reject a schema up front. Probes on
+# 2026-09-23 found identical results for gpt-5.6-sol, gpt-6-sol, gpt-6-luna and
+# gpt-5.6-terra, for sonnet and opus, and from the lowest to the highest effort.
+# Model and effort therefore stay recorded but unbound here; the selectable model
+# families are enforced in agent_config, and local contract validation still
+# rejects any answer that does not fit.
+UNBOUND_TRANSPORT_PROFILE_FIELDS = frozenset({"model", "reasoning_or_effort"})
+
+
+def _bound_profile(document: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in document.items()
+        if key not in UNBOUND_TRANSPORT_PROFILE_FIELDS
+    }
+
+
 def assert_provider_capabilities(
     provider: str,
     required_features: Iterable[str],
@@ -249,7 +267,9 @@ def assert_provider_capabilities(
             raise NativeProviderSchemaError(
                 f"{provider} CLI version differs from the probed capability policy"
             )
-    if profile is not None and profile.document != capability["transport_profile"]:
+    if profile is not None and _bound_profile(profile.document) != _bound_profile(
+        capability["transport_profile"]
+    ):
         raise NativeProviderSchemaError(
             f"{provider} transport profile differs from the probed capability"
         )

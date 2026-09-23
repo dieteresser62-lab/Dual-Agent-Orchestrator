@@ -25,7 +25,7 @@
         "binary": "codex",
         "model": "gpt-6-sol",
         "timeout_seconds": 1800,
-        "effort": "medium",
+        "effort": "high",
         "max_budget_usd": null
       }
     },
@@ -588,7 +588,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "de9dbd8911dfdc81b98215a04ad76ec921beae81f5184401c2ea704c21ea41a6",
+        "namespace_sha256": "3bf8701a61add1a057f27cd2c189f37fdf7d519e3acac9aef5b6120a5b43b333",
         "return_ordinals": [
           1,
           1,
@@ -627,7 +627,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "71e53f2abc13deb3fe8a82919c4ed8bcddbd6b754793fac40bcfc41096f7cb88",
+        "namespace_sha256": "37be40072c2d62300280f1eb5c75bfcd881e11daea0734465d0dc522ed3ecb93",
         "return_ordinals": [
           2,
           2,
@@ -657,7 +657,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "4f21201630ae0e69c8392a7a5dd85da1716baac87c45b3a9ce46201c7ecc7dfe",
+        "namespace_sha256": "f12a87b6b05e34a60790062387ded295bd53b4c212284fd995d2867c780efb89",
         "return_ordinals": [
           3,
           2,
@@ -694,7 +694,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "7fa6f4bddca75fee5f9333c68a01ff78df919deee442162435ab1996df4a0130",
+        "namespace_sha256": "f34bc68c4fff1e613b6a2650613e46897fbb5a7cf6734f3bda90bd47daee70b0",
         "return_ordinals": [
           2,
           2,

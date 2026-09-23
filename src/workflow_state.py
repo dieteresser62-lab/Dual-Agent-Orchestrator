@@ -232,7 +232,7 @@ class ProtocolBinding:
     schema_version: str
     claude_review_transport: str | None = NATIVE_CLAUDE_REVIEW_TRANSPORT
     codex_result_transport: str | None = NATIVE_CODEX_RESULT_TRANSPORT
-    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "medium")
+    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high")
     claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high")
 
     def __post_init__(self) -> None:

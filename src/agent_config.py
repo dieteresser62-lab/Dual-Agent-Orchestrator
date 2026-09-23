@@ -23,13 +23,19 @@ class AgentSettings:
     max_budget_usd: float | None = None
 
 
+# The selectable model families per role; the first family is the default.
+# Implementer families name their newest model explicitly, while the reviewer
+# CLI resolves its aliases to the newest model itself.
+MODEL_FAMILIES = {
+    "codex": {"sol": "gpt-6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-6-luna"},
+    "claude": {"opus": "opus", "sonnet": "sonnet"},
+}
 _DEFAULT_MODELS = {
-    "codex": "gpt-6-sol",
-    "claude": "opus",
+    role: next(iter(families.values())) for role, families in MODEL_FAMILIES.items()
 }
 
 _DEFAULT_EFFORTS = {
-    "codex": "medium",
+    "codex": "high",
     "claude": "high",
 }
 
@@ -42,7 +48,10 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     )
     parser.add_argument(
         f"--{role}-model",
-        help=f"{label} model (default: RUN_TASK_{role.upper()}_MODEL or role default).",
+        help=(
+            f"{label} model family: {', '.join(MODEL_FAMILIES[role])} "
+            f"(default: RUN_TASK_{role.upper()}_MODEL or {_DEFAULT_MODELS[role]})."
+        ),
     )
     parser.add_argument(
         f"--{role}-timeout",
@@ -112,6 +121,17 @@ def _resolve(
     return default
 
 
+def _selectable_model(role: str, value: str) -> str:
+    families = MODEL_FAMILIES[role]
+    model = families.get(value.lower(), value)
+    if model not in families.values():
+        allowed = ", ".join(f"{name} ({slug})" for name, slug in families.items())
+        raise AgentConfigError(
+            f"{role} model must be one of {allowed}; got {value!r}"
+        )
+    return model
+
+
 def resolve_agent_settings(
     args: argparse.Namespace,
     environ: Mapping[str, str],
@@ -127,9 +147,12 @@ def resolve_agent_settings(
             _resolve(args, environ, role, "binary", default_binaries[role]),
             f"{role} binary",
         )
-        model = _non_empty(
-            _resolve(args, environ, role, "model", _DEFAULT_MODELS[role]),
-            f"{role} model",
+        model = _selectable_model(
+            role,
+            _non_empty(
+                _resolve(args, environ, role, "model", _DEFAULT_MODELS[role]),
+                f"{role} model",
+            ),
         )
         timeout_seconds = _positive_int(
             _resolve(args, environ, role, "timeout", DEFAULT_TIMEOUT_SECONDS),
