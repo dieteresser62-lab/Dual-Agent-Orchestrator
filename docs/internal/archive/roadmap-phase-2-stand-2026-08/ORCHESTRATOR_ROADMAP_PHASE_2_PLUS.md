@@ -1,6 +1,11 @@
 # Orchestrator-Roadmap – Phase 2 und Folgephasen
 
 **Stand:** 27. August 2026
+
+> Archiviert am 23. September 2026. Die Roadmap wurde nach dem 27. August nicht
+> mehr fortgeschrieben; Stabilisierung, gemeinsamer Cutover und Zielmodellumbau
+> fehlen darin. Den erreichten Stand beschreibt
+> [`docs/reference/ablauf-des-orchestrators.md`](../../../reference/ablauf-des-orchestrators.md).
 **Aktive Topologie:** Codex plant und implementiert; Claude reviewt; der
 Orchestrator validiert, attestiert und erstellt freigegebene lokale Commits.
 
@@ -20,8 +25,8 @@ Orchestrator validiert, attestiert und erstellt freigegebene lokale Commits.
 - Nach einer gültigen Claude-Freigabe erstellt der Orchestrator den lokalen
   Plan-, Slice- oder Korrekturcommit idempotent.
 - Modell und Effort sind rollenbezogen konfigurierbar und im Workflowzustand
-  unveränderlich gebunden. Defaults: Codex `gpt-6-sol`/`medium`, Claude
-  `opus`/`high`.
+  unveränderlich gebunden. Defaults: Codex `gpt-5.6-sol`/`medium`, Claude
+  `sonnet`/`high`.
 
 ## 2. Letzter Abschlussmeilenstein
 
@@ -54,7 +59,7 @@ Rohantwortpersistenz bleiben für Diagnosen erhalten.
 ### 3.2 Erreicht: Native-only-Cutover, Textparser-Retirement und strukturelle Eingabereduktion
 
 Das umgesetzte Arbeitspaket
-[`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](archive/native-only-transport-parser-retirement-und-evidenzeffizienz/native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
+[`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](../native-only-transport-parser-retirement-und-evidenzeffizienz/native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
 macht die nativen Codex- und Claude-Verträge verpflichtend, entfernt die noch
 produktive Textresultat-, Marker- und LLM-Reparaturarchitektur und ersetzt
 redundante Vollplan-/Prompt-/Korrekturevidenz durch digestgebundene
@@ -92,7 +97,7 @@ geschlossenen Szenarioinventar zusammen. Ein realer Provider-Canary bleibt
 bewusst ein nachgelagerter Produktionsnachweis und ist kein Bestandteil der
 Repositorysuite. Der vollständig freigegebene Arbeits- und Reviewnachweis ist
 unter
-[`archive/orchestrator-transition-matrix-output-resilience/`](archive/orchestrator-transition-matrix-output-resilience/)
+[`archive/orchestrator-transition-matrix-output-resilience/`](../orchestrator-transition-matrix-output-resilience/)
 archiviert.
 
 Danach folgen kleine reale Inbox-Aufgaben und anschließend längere

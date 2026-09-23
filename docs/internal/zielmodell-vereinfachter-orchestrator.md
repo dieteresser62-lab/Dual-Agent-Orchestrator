@@ -4,7 +4,9 @@ Festgelegt vom Operator am 21.9.2026, nach einem Tag mit fünf Vertragsbefunden,
 die alle aus dem Zusammenspiel von Regeln entstanden sind, nicht aus
 Programmfehlern.
 
-Dieses Dokument beschreibt den **Sollzustand**. Es ist noch nicht umgesetzt.
+Dieses Dokument beschreibt den **Sollzustand**. Er ist umgesetzt: Das
+Zielmodell-Orakel (`tests/target_model_oracle.py`) spielt 43 Lagen mit 473
+Zugbewertungen gegen den Code durch und misst am 23.9.2026 keine Abweichung.
 
 ## Der Fluss
 

@@ -6,19 +6,19 @@ Unterlagen.
 > **Wie der Orchestrator tatsächlich arbeitet**, steht nicht hier, sondern in
 > [`docs/reference/ablauf-des-orchestrators.md`](../reference/ablauf-des-orchestrators.md).
 > Dieses Verzeichnis enthält Arbeits- und Auditunterlagen; das Zielmodell
-> unten beschreibt den **Sollstand** für den laufenden Umbau, die Referenz
-> den erreichten **Ist-Stand**. Weichen beide voneinander ab, ist das ein
-> Befund, kein Widerspruch in der Dokumentation.
+> unten beschreibt den **Sollstand**, die Referenz den erreichten
+> **Ist-Stand**. Weichen beide voneinander ab, ist das ein Befund, kein
+> Widerspruch in der Dokumentation.
 
 ## Aktive Dokumente
 
 - [Zielmodell: vereinfachter Orchestrator](zielmodell-vereinfachter-orchestrator.md) —
-  vom Operator am 21.9.2026 festgelegt. **Die Referenz für den laufenden
-  Umbau.** Beschreibt den Sollfluss aus Planung, Implementierung je Slice und
-  Abnahme, die Eskalationsregel `abgelehnt ∧ nicht geschlossen ⇒ Blocker`, die
-  eine Commitbedingung und die Rundengrenzen. Alles, was diesem Modell
-  widerspricht, ist Umbaustoff — nicht umgekehrt.
-- [Roadmap für Phase 2 und Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
+  vom Operator am 21.9.2026 festgelegt und seither umgesetzt. Beschreibt den
+  Sollfluss aus Planung, Implementierung je Slice und Abnahme, die
+  Eskalationsregel `abgelehnt ∧ nicht geschlossen ⇒ Blocker`, die eine
+  Commitbedingung und die Rundengrenzen. Das Zielmodell-Orakel
+  (`tests/target_model_oracle.py`) hält den Code dagegen und misst derzeit
+  keine Abweichung; eine neue Abweichung lässt die Suite scheitern.
 - [S2-Übergangs- und Divergenzmatrix](stabilisierung-s2-uebergangsmatrix.md) —
   die Inventur der Record-Mirror-Kanten. Sie bleibt aktiv, obwohl die
   Stabilisierung abgeschlossen ist: Sie ist die eine Inventur, auf die
@@ -104,3 +104,21 @@ Der Ordner
 enthält die drei Symptom-Hotfixes zum PLAN_ONLY-Finding-Handoff vom 29. August
 2026 und das zugehörige Claude-Review. Ihre Invarianten wurden in der
 Stabilisierung zentral definiert.
+
+Der Ordner
+[`archive/manueller-track-2026-09/`](archive/manueller-track-2026-09/)
+enthält die Sliceberichte der ohne Orchestrator beauftragten Arbeitspakete
+B02, B91, B94, B101, B113, B114, B116 und B117 sowie die Baseline des
+Findingflusses der Läufe 4, 7 und 8, die als Vorleistung zu Backlogpunkt 68
+erhoben wurde.
+
+Der Ordner
+[`archive/orchestrator-modernization/`](archive/orchestrator-modernization/)
+enthält Anforderungen, Arbeitsplan, Übergabe und alle 19 Sliceberichte der
+Orchestrator-Modernisierung sowie die damaligen Referenzverträge für
+Zielrepositorys.
+
+Der Ordner
+[`archive/roadmap-phase-2-stand-2026-08/`](archive/roadmap-phase-2-stand-2026-08/)
+enthält die Roadmap für Phase 2 mit Stand 27. August 2026. Sie wurde danach
+nicht mehr fortgeschrieben.
