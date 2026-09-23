@@ -1,10 +1,10 @@
 # JSON-Statusausgabe zum Statusbefehl hinzufügen
 
-> Formales Expertenbeispiel für einen bereits freigegebenen Implementierungsauftrag. Für den normalen Inbox-Ablauf genügt eine freie Ideenbeschreibung; `TARGET_BRANCH` ist eine optionale ausdrückliche Vorgabe. Der Orchestrator erstellt Planung, Handoff und Slices automatisch.
+> Formales Beispiel für einen direkten Umsetzungsauftrag ohne vorherigen Planlauf – für Fortgeschrittene und maschinell erzeugte Aufträge. Im normalen Betrieb genügt eine Idee in normaler Sprache; Plan, Übergabe und Arbeitspakete erzeugt der Orchestrator selbst (siehe [Einrichtung](docs/reference/einrichtung.md)). `TARGET_BRANCH` ist optional. Die Datei dient außerdem dem Probelauf `run_task --dry-run --task-file example-task.md`.
 
 ORCHESTRATOR_MODE: IMPLEMENT
 TARGET_BRANCH: feature/status-json
-TASK_SCOPE: src/status_cli.py, tests/test_status_cli.py, README.md, docs/internal/orchestrator-work-plan.md, docs/internal/slice-status-json.md
+TASK_SCOPE: src/status_cli.py, tests/test_status_cli.py, README.md
 
 ## Kontext
 
@@ -19,10 +19,8 @@ Ergänze den Statusbefehl um `--json`. Mit dieser Option wird genau ein JSON-Obj
 - `src/status_cli.py`
 - `tests/test_status_cli.py`
 - `README.md`
-- `docs/internal/orchestrator-work-plan.md`
-- `docs/internal/slice-status-json.md`
 
-Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden. Wird ein weiterer Pfad benötigt, ist anzuhalten und eine Scope-Entscheidung anzufordern.
+Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden. Wird ein weiterer Pfad gebraucht, meldet Codex eine Scope-Erweiterung an; der Orchestrator genehmigt sie je nach Pfadart selbst oder legt sie zur Entscheidung vor.
 
 ## Anforderungen
 
@@ -31,21 +29,20 @@ Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden. Wird ein weiter
 3. `checked_at_utc` als ISO-8601-UTC-Zeitstempel mit abschließendem `Z` formatieren.
 4. Exitcode und Ausgabe des vorhandenen Textmodus bytegenau kompatibel halten.
 5. Fokussierte Tests für JSON-Modus, Textmoduskompatibilität und eine ungültige Option ergänzen.
-6. Das Befehlsbeispiel in der README und das vorbereitete Slice-Auditdokument aktualisieren.
+6. Das Befehlsbeispiel in der README aktualisieren.
 
 ## Akzeptanzkriterien
 
 - `status --json` endet mit Code 0 und gibt genau ein JSON-Objekt aus.
 - Das Objekt besitzt exakt die Schlüssel `checked_at_utc`, `status` und `version`.
 - Der vorhandene Befehl ohne `--json` besteht unverändert seinen Snapshot-Test.
-- Ungültige Optionen liefern weiterhin den von Argument-Parser erzeugten Usage-Fehler mit einem von null verschiedenen Exitcode.
-- Die konfigurierte Validierungsmatrix ist für den geprüften Diff-Fingerprint erfolgreich.
-- Keine Datei außerhalb des erlaubten Scope wird geändert oder commitet.
+- Ungültige Optionen liefern weiterhin den vom Argument-Parser erzeugten Usage-Fehler mit einem von null verschiedenen Exitcode.
+- Die konfigurierte Validierungsmatrix ist für den geprüften Stand grün.
+- Keine Datei außerhalb des erlaubten Scope wird geändert oder committet.
 
 ## Validierung
 
-- `python3 -m pytest tests/test_status_cli.py -v`
-- `python3 -m pytest tests/ -v`
+Dieser Auftrag legt keine eigenen Befehle fest. Der Orchestrator führt nach jedem Arbeitspaket die in `orchestrator.toml` konfigurierte Validierungsmatrix aus; Befehle in einer Aufgabendatei führt er nicht aus.
 
 ## Nicht-Scope
 

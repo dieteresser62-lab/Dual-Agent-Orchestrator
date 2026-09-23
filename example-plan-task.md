@@ -1,66 +1,39 @@
 # Arbeitsplan für einen begrenzten Gap erstellen
 
-> Formales Expertenbeispiel für einen bewusst separat gestarteten Planlauf. Für den normalen Inbox-Ablauf genügt eine freie Ideenbeschreibung; `TARGET_BRANCH` ist eine optionale ausdrückliche Vorgabe. Der Orchestrator leitet daraus sicher den Planauftrag ab.
+> Formales Beispiel für einen bewusst getrennt gestarteten Planlauf – für Fortgeschrittene und maschinell erzeugte Aufträge. Im normalen Betrieb genügt eine Idee in normaler Sprache; den Planlauf leitet der Orchestrator daraus selbst ab (siehe [Einrichtung](docs/reference/einrichtung.md)). Die maschinenlesbare Form des Arbeitsplans teilt er dem Planer ebenfalls selbst mit – sie gehört nicht in die Aufgabe. `TARGET_BRANCH` ist optional.
 
 ORCHESTRATOR_MODE: PLAN_ONLY
-WORK_PLAN_PATH: docs/internal/beispiel-work-plan.md
+WORK_PLAN_PATH: docs/internal/beispiel-arbeitsplan.md
 TARGET_BRANCH: feature/beispiel-gap
-TASK_SCOPE: docs/internal/beispiel-work-plan.md
+TASK_SCOPE: docs/internal/beispiel-arbeitsplan.md
 
 ## Kontext
 
-Beschreibe hier den festgestellten Gap kurz und konkret. Verweise auf vorhandene Anforderungen, Architektur- oder Referenzdokumente, sofern sie für die Analyse maßgeblich sind.
+Beschreibe hier kurz und konkret, was fehlt und warum. Verweise auf vorhandene Anforderungen, Architektur- oder Referenzdokumente, sofern sie für die Planung maßgeblich sind.
 
 ## Ziel
 
-Erstelle ausschließlich den vollständigen Arbeitsplan unter `docs/internal/beispiel-work-plan.md`. Produktivcode, Tests, Konfigurationen und generierte Artefakte dürfen in diesem Lauf nicht verändert werden.
+Erstelle ausschließlich den Arbeitsplan unter `docs/internal/beispiel-arbeitsplan.md`. Produktivcode, Tests und Konfiguration bleiben in diesem Lauf unverändert.
 
-Der Arbeitsplan muss enthalten:
-
-- Ziel und Nicht-Scope;
-- relevante Ist-Architektur und fachliche Invarianten;
-- konkrete Anforderungen und Akzeptanzkriterien;
-- geordnete, 1-basierte zukünftige Implementierungsslices;
-- je zukünftigem Slice Zweck, exakte Pfade, Abnahmekriterien und Validierung;
-- Risiken, Abhängigkeiten und Stopbedingungen.
-
-Jeder zukünftige Umsetzungsslice verwendet diese maschinenlesbare Struktur:
-
-```markdown
-### Slice 1 - Kurzer eindeutiger Titel
-
-**Exakter Änderungspfad**
-
-- `src/exakter-pfad.py`
-- `tests/exakter-test.py`
-```
-
-Die Slice-Nummern beginnen bei 1 und bleiben lückenlos. Unter
-`**Exakter Änderungspfad**` stehen ausschließlich konkrete
-repositoryrelative Einzelpfade, keine Globs, Alternativen oder Verzeichnisse.
+Der Arbeitsplan beschreibt Ziel und Nicht-Scope, die relevante Ist-Architektur, fachliche Invarianten und Risiken sowie geordnete Arbeitspakete mit exakten Pfaden und Akzeptanzkriterien.
 
 ## Erlaubter Scope
 
-- `docs/internal/beispiel-work-plan.md`
+- `docs/internal/beispiel-arbeitsplan.md`
 
 ## Akzeptanzkriterien
 
-- Das Arbeitsplan-MD ist vollständig, widerspruchsfrei und konkret umsetzbar.
-- Die zukünftigen Slice-Überschriften beginnen bei Slice 1 und sind lückenlos nummeriert.
-- Jeder zukünftige Slice enthält genau den kanonischen Abschnitt `**Exakter Änderungspfad**` mit mindestens einem exakten Pfad.
-- Claude hat denselben Planfingerprint freigegeben.
-- Falls `--plan-gate` aktiviert wurde, wird es vor dem Dokumentationscommit fingerprintgebunden freigegeben; im automatischen Standardpfad entfällt dieser zusätzliche Schritt.
-- Keine Datei außerhalb des erlaubten Scope wurde geändert oder commitet.
+- Der Arbeitsplan ist vollständig, widerspruchsfrei und konkret umsetzbar.
+- Claude hat denselben Planstand freigegeben.
+- Keine Datei außerhalb des erlaubten Scope wurde geändert oder committet.
 
 ## Nicht-Scope
 
-- Keine Umsetzung der im Arbeitsplan beschriebenen zukünftigen Slices.
-- Keine Änderung von Produktivcode, Tests oder Konfigurationen.
-- Kein Branchwechsel durch einen Agenten.
+- Keine Umsetzung der geplanten Arbeitspakete.
+- Keine Änderung von Produktivcode, Tests oder Konfiguration.
 - Kein Push, Merge, Release oder Deployment.
 
 ## Stopbedingungen
 
 - Anhalten, wenn ein vollständiger Arbeitsplan einen weiteren Pfad benötigt.
-- Anhalten, wenn die fachliche Sollrichtung mehrere wesentlich unterschiedliche Varianten zulässt.
-- Anhalten, wenn der aktive Branch nicht exakt `feature/beispiel-gap` ist.
+- Anhalten, wenn die fachliche Richtung mehrere wesentlich unterschiedliche Varianten zulässt.
