@@ -6524,7 +6524,7 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     assert result.exit_code == 4
     assert result.state.current_work_unit.gate.reason.value == "stop_request"
     assert "NO-IMPLEMENTATION-CHANGES" in result.state.current_work_unit.gate.detail
-    assert not (repository / "inbox" / "task-followup.md").exists()
+    assert not any((repository / "inbox").glob("*followup*"))
     args.force_overwrite_state = True
     args.resume = False
     assert run_pipeline(task, args, force_new=True) == 4
@@ -6584,7 +6584,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
     )
     assert len(final_reviews) == len(completions) == 1
 
-    followup = repository / "inbox" / "task-followup.md"
+    followup = repository / "inbox" / "task_followup01.md"
     assert followup.is_file()
     followup_text = followup.read_text(encoding="utf-8")
     assert "The completed branch still needs remediation." in followup_text
@@ -6600,7 +6600,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
         and record.payload.phase == "result"
     )
     assert sum(
-        payload.operation[0] == "inbox/task-followup.md"
+        payload.operation[0] == "inbox/task_followup01.md"
         for payload in file_results
     ) == 1
 
@@ -6618,7 +6618,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
         isinstance(record.payload, WorkflowCompletionPayload)
         for record in resumed_chain
     ) == 1
-    assert len(list(followup.parent.glob("task-followup.md"))) == 1
+    assert list(followup.parent.glob("*followup*")) == [followup]
 
 
 def test_sixth_acceptance_review_keeps_evidence_and_creates_no_followup(
@@ -6677,7 +6677,7 @@ def test_sixth_acceptance_review_keeps_evidence_and_creates_no_followup(
         isinstance(record.payload, FinalReviewCompletedPayload)
         for record in chain
     ) == 1
-    assert not (repository / "inbox" / "task-followup.md").exists()
+    assert not any((repository / "inbox").glob("*followup*"))
     persisted_audit_path = repository / persisted["audit_report_path"]
     assert persisted_audit_path.is_file()
     assert "The completed branch still needs remediation." in persisted_audit_path.read_text(

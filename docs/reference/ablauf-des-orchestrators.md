@@ -103,18 +103,23 @@ Ordner. Eine Planung erzeugt die zugehörige Umsetzungsaufgabe, ein
 Abnahmereview mit Restarbeit erzeugt eine Folgeaufgabe. Dieselbe Wache nimmt
 sie unmittelbar auf.
 
-Aus dem Lauf vom 22. September, vollständig ohne menschliches Zutun nach der
-ersten Datei:
+Der Lauf vom 22. September, vollständig ohne menschliches Zutun nach der
+ersten Datei, mit den Dateinamen nach heutiger Regel:
 
 ```
-einkaufsliste.md                               → Plan       → done
-einkaufsliste-implement.md                     → 7 Pakete   → done   (Abnahme: 1 Befund)
-einkaufsliste-implement-followup.md            → Plan       → done
-einkaufsliste-implement-followup-implement.md  → 1 Paket    → done   (Abnahme: sauber)
+einkaufsliste.md                       → Plan       → done
+einkaufsliste-implement.md             → 7 Pakete   → done   (Abnahme: 1 Befund)
+einkaufsliste_followup01.md            → Plan       → done
+einkaufsliste_followup01-implement.md  → 1 Paket    → done   (Abnahme: sauber)
 ```
 
 Vier Aufgaben, eine davon von Ihnen, drei vom System. Der Eingang ist am Ende
 leer — das ist das Abschlusskriterium.
+
+Eine Folgeaufgabe behält den Gegenstand der ersten Datei und zählt die
+Abnahmereviews hoch: `_followup01` nach dem ersten, `_followup02` nach dem
+zweiten und so fort. Die Nummer stammt aus dem Zähler
+`ACCEPTANCE_REVIEW_NUMBER` im Dokument, nicht aus dem Dateinamen.
 
 ### Wenn eine Aufgabe nicht durchgeht
 

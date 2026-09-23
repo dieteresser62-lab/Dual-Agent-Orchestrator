@@ -11,6 +11,7 @@ from plan_handoff import (
     extract_implementation_slices,
     extract_slice_requirements,
     followup_task_path,
+    implementation_task_path,
     render_followup_task,
     render_implementation_task,
 )
@@ -192,13 +193,13 @@ def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
         affected_paths = ("src/core.py", "tests/test_core.py")
         acceptance_test = "The regression is covered and passes."
 
-    source = followup_task_path(Path("inbox/doing/change-implement.md"))
+    source = followup_task_path(Path("inbox/doing/change-implement.md"), 1)
     rendered = render_followup_task(
         target_branch="feature/implementation",
         findings=(Finding(),),
     )
 
-    assert source == Path("inbox/doing/change-implement-followup.md")
+    assert source == Path("inbox/doing/change_followup01.md")
     assert "Fix the complete-review defect." in rendered
     assert "`src/core.py`" in rendered
     assert "The regression is covered and passes." in rendered
@@ -206,6 +207,31 @@ def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
     assert "ar1-" not in rendered
     assert "ACCEPTANCE_REVIEW_NUMBER: 2" in rendered
     assert acceptance_review_number(rendered) == 2
+
+
+def test_followup_names_keep_the_subject_and_count_instead_of_growing() -> None:
+    names = ["einkaufsliste.md"]
+    for completed_review in range(1, 6):
+        implement = implementation_task_path(Path("inbox") / names[-1])
+        followup = followup_task_path(implement, completed_review)
+        names.extend((implement.name, followup.name))
+
+    assert names == [
+        "einkaufsliste.md",
+        "einkaufsliste-implement.md",
+        "einkaufsliste_followup01.md",
+        "einkaufsliste_followup01-implement.md",
+        "einkaufsliste_followup02.md",
+        "einkaufsliste_followup02-implement.md",
+        "einkaufsliste_followup03.md",
+        "einkaufsliste_followup03-implement.md",
+        "einkaufsliste_followup04.md",
+        "einkaufsliste_followup04-implement.md",
+        "einkaufsliste_followup05.md",
+    ]
+    assert followup_task_path(Path("inbox/task.md"), 1) == Path("inbox/task_followup01.md")
+    with pytest.raises(PlanHandoffError, match="completed acceptance review"):
+        followup_task_path(Path("inbox/task.md"), 0)
 
 
 def test_acceptance_review_number_defaults_to_first_review_and_rejects_duplicates() -> None:

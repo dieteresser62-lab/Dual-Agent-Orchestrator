@@ -1980,7 +1980,7 @@ class ProductionWorkflowDriver:
             source_task.relative_to(self.root)
         except ValueError:
             source_task = self.root / "inbox" / source_task.name
-        target = followup_task_path(source_task)
+        target = followup_task_path(source_task, review_number)
         content = render_followup_task(
             target_branch=state.target_branch or state.branch,
             findings=findings,

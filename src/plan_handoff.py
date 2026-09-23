@@ -342,11 +342,24 @@ def implementation_task_path(plan_task_path: Path) -> Path:
     return plan_task_path.with_name(stem + plan_task_path.suffix)
 
 
-def followup_task_path(source_task_path: Path) -> Path:
-    """Return a deterministic sibling Inbox path for the next ordinary run."""
+_FOLLOWUP_STEM_SUFFIX = re.compile(r"_followup[0-9]{2,}$")
 
+
+def followup_task_path(source_task_path: Path, completed_review_number: int) -> Path:
+    """Return a deterministic sibling Inbox path for the next ordinary run.
+
+    The name keeps the task subject and numbers the follow-up after the
+    completed acceptance review instead of growing by one suffix per round.
+    """
+
+    if completed_review_number < 1:
+        raise PlanHandoffError("a follow-up requires a completed acceptance review")
+    stem = source_task_path.stem
+    if stem.lower().endswith("-implement"):
+        stem = stem[: -len("-implement")]
+    stem = _FOLLOWUP_STEM_SUFFIX.sub("", stem) or source_task_path.stem
     return source_task_path.with_name(
-        f"{source_task_path.stem}-followup{source_task_path.suffix}"
+        f"{stem}_followup{completed_review_number:02d}{source_task_path.suffix}"
     )
 
 
