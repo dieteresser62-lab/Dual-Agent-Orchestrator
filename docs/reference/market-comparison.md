@@ -1,194 +1,355 @@
 # Marktvergleich
 
-**Dokumentstatus:** Produktvergleich zu einem festen Zeitpunkt
+**Recherchestand:** 2026-09-23 · **Orchestrator-Funktionsstand:** 2026-09-23 · **Evidenzrichtlinie:** ausschließlich offizielle Produktseiten und Dokumentationen
 
-**Recherchestand:** 2026-08-13
-
-**Orchestrator-Funktionsstand:** 2026-08-16
-
-**Evidenzrichtlinie:** ausschließlich offizielle Produktseiten und Dokumentationen
+Wie sich der Dual-Agent Task Orchestrator zu fünfzehn Coding-Agenten, Agentenplattformen und Prüfwerkzeugen verhält – gemessen an dem, was deren offizielle Dokumentation heute ausdrücklich beschreibt.
 
 ## 1. Zusammenfassung
 
-Der Dual-Agent Task Orchestrator besetzt eine engere Kategorie als die meisten Produkte in diesem Vergleich. Codex, Claude Code, Google Antigravity, GitHub Copilot, Cursor, OpenHands und aider stellen primär einen Agenten, einen Agenten-Workspace, eine Entwicklungsoberfläche oder eine Agentenplattform bereit. Dieses Projekt ist eine lokale Workflow-Steuerungsebene, die Codex und Claude in festen Rollen aufruft und deterministische Evidenz, unabhängige Reviews, fortsetzbare Gates und eine exakte lokale Commit-Autorisierung ergänzt.
+Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.
 
-Sein stärkstes Alleinstellungsmerkmal ist die Kombination aus:
+> [!TIP]
+> **Das Ergebnis dieser Recherche in drei Sätzen.**
+> Fast jedes Produkt hat inzwischen eine eigene Prüfinstanz – die Idee „einer baut, ein anderer prüft" ist im Markt angekommen. Was keines der verglichenen Produkte in seinen offiziellen Quellen nachweist, ist die Kombination aus Freigabe und Testergebnis, die an denselben exakten Stand gebunden sind, einer Testausführung außerhalb des Agenten und einer Wiederaufnahme, die abgeschlossene Schritte nicht wiederholt. Dafür verzichtet der Orchestrator auf alles, worin die anderen stark sind: Parallelität, Cloud, Pull Requests und Oberfläche.
 
-- benannter providerübergreifender Trennung zwischen Implementierer und zwei Reviewern;
-- kanonischer Git-Evidenz und Reviewentscheidungen, die an exakte SHA-256-Diff-Fingerprints gebunden sind;
-- Orchestrator-eigener Validierung, die von den Reviewern wiederverwendet wird;
-- schreibgeschützten Reviewer-Workspaces;
-- persistierter Finding-Zuständigkeit und exakter Schrittfortsetzung;
-- pfadbegrenzten, lokal verifizierten Plan-, Slice- und Korrekturcommits ohne Push- oder Merge-Berechtigung;
-- einem menschenfreundlichen Inbox-Intake, der freie Prosa mit optionalem Zielbranch zunächst in einen unabhängig geprüften Arbeitsplan überführt;
-- einem vollständig automatischen Standardpfad vom Plan über alle Slices bis zum dreifachen Abschlussreview, während echte Produkt- und Richtlinienentscheidungen weiterhin sicher anhalten.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/marktkarte-dunkel.svg">
+  <img alt="Positionierungskarte: waagrecht die Betriebsbreite, senkrecht die Prozessbindung. Der Dual-Agent Orchestrator steht allein oben links, alle übrigen Produkte liegen in einem Band zwischen 1,5 und 3 Punkten Prozessbindung." src="assets/marktkarte-hell.svg" width="800">
+</picture>
 
-Diese Kontrolle bringt bewusste Nachteile mit sich. Der Orchestrator besitzt keine IDE, keine gehostete Ausführungsflotte, keinen Browseragenten, keine Pull-Request-Oberfläche, keinen Modellmarktplatz, keine verteilte Warteschlange und keine parallele Slice-Ausführung. Mehrere Marktprodukte sind in diesen Bereichen deutlich stärker.
+> [!NOTE]
+> **Wie die Karte zu lesen ist.** Beide Achsen sind aus den Matrizen in Abschnitt 4 und 5 abgezählt, nicht geschätzt. Die senkrechte Achse besteht aus genau den sechs Eigenschaften, für die dieser Orchestrator gebaut wurde; dass er dort oben steht, folgt aus der Wahl der Achse. Die Karte zeigt deshalb eine **Bauentscheidung**, keine Rangfolge: wer auf Breite setzt und wer auf Bindung.
 
-## 2. Lesart des Vergleichs
+## 2. Lesart
 
-Dies ist kein Benchmark für Modellintelligenz, Qualität des generierten Codes, Preis oder Geschwindigkeit. Diese Eigenschaften ändern sich schnell und erfordern kontrollierte Arbeitslasten. Der Vergleich untersucht stattdessen, welche Workflowfähigkeiten in aktuellen offiziellen Dokumentationen ausdrücklich beschrieben werden.
+Verglichen wird, was die offiziellen Quellen eines Produkts ausdrücklich beschreiben. Modellqualität, Codequalität, Preis und Geschwindigkeit sind **nicht** Gegenstand; sie ändern sich schnell und lassen sich nur mit kontrollierten Arbeitslasten vergleichen.
 
-In den Matrizen werden folgende Begriffe verwendet:
+| Zeichen | Bedeutung |
+|:---:|---|
+| ● | fester Bestandteil des Standardablaufs |
+| ◐ | vorhanden, aber optional, konfigurierbar oder nur in einem Teil des Produkts |
+| ○ | in den geprüften offiziellen Quellen nicht nachgewiesen – das heißt nicht, dass es unmöglich ist |
+| — | passt nicht zum Zuschnitt des Produkts |
 
-- **Integriert:** Die zitierte Dokumentation beschreibt die Fähigkeit als Produktfunktion.
-- **Konfigurierbar:** Die Fähigkeit lässt sich mit Produktkonfiguration, Hooks, SDKs oder separaten Produktfunktionen zusammensetzen, ist aber nicht die hier verglichene Standardtopologie.
-- **Nicht nachgewiesen:** Die geprüften offiziellen Quellen belegen die konkrete Fähigkeit nicht. Das beweist nicht, dass sie unmöglich ist.
-- **Anderer Scope:** Das Produkt löst ein verwandtes Problem auf einer anderen Ebene.
+## 3. Die Vergleichsprodukte
 
-Produktnamen beziehen sich auf die in den verlinkten Quellen beschriebenen Oberflächen, nicht auf jede unter derselben Marke angebotene Fähigkeit.
-
-## 3. Vergleichsprodukte
-
-| Produkt oder Oberfläche | Primäre Kategorie | Grund für die Vergleichbarkeit |
+| Gruppe | Produkt | Was es ist |
 |---|---|---|
-| Dual-Agent Task Orchestrator | Lokale Multi-Agenten-Workflow-Steuerung | Referenz: begrenzte Implementierung, Review, Validierung, Fortsetzung und Git-Transaktion. |
-| OpenAI Codex | Lokaler/Cloud-Coding-Agent und Multi-Agenten-Kommandozentrale | Stellt den hier verwendeten Implementierer bereit und unterstützt parallele Agentenarbeit. |
-| Claude Code Agent Teams | Terminalzentrierte Multi-Agenten-Entwicklungsumgebung | Stellt den hier verwendeten primären Reviewer bereit und unterstützt explizite Agentenkoordination. |
-| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |
-| GitHub Copilot Cloud Agent und Code Review | GitHub-native Coding- und Reviewdienste | Automatisiert Issue-zu-PR-Arbeit und Reviews innerhalb der Hostingplattform. |
-| Cursor Cloud Agents | Gehostete Coding-Agenten-Ausführung und PR-Workflow | Bietet parallele Cloud-VMs, umfangreiche Artefakte, Integrationen und Freigabewerkzeuge. |
-| OpenHands | Open-Source-Agenten-SDK, Runtime, CLI und Cloudplattform | Bietet modellunabhängige lokale, selbst gehostete und Cloud-Agenteninfrastruktur. |
-| aider | Lokaler Terminal-Pair-Programmer | Bietet einen schlanken Multi-Modell-Bearbeitungsworkflow mit enger Git-Integration. |
+| **Die beiden Motoren** | OpenAI Codex | Coding-Agent von OpenAI, lokal und in der Cloud – im Orchestrator der Implementierer |
+| | Claude Code | Coding-Agent von Anthropic, lokal und in der Cloud – im Orchestrator der Prüfer |
+| **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; externes Vergleichsprodukt und kein Bestandteil dieses Orchestrators |
+| **Plattformen mit Prüfdienst** | GitHub Copilot | Cloud Agent, Code Review und Agent HQ für Claude und Codex auf GitHub |
+| | Cursor | KI-IDE mit Cloud Agents, Bugbot und Freigabeagenten |
+| | Devin | Autonomer Cloud-Agent von Cognition, dazu Devin Desktop und Devin Review |
+| **Agentenplattformen** | Kiro | Spezifikationsgetriebene IDE, CLI und Cloud-Agent von AWS |
+| | Factory Droid | Agentenplattform mit Spec Mode und Missions |
+| | Amp | Coding-Agent mit herstellerübergreifendem Zweitmodell |
+| **Offene Grundlagen** | OpenHands | Quelloffene Agentenplattform und SDK |
+| | aider | Quelloffener Terminal-Paarprogrammierer |
+| **Nächste Verwandte** | Agent Orchestrator (AO) | Lokale Steuerung vieler Agenten-CLIs mit getrennten Prüfagenten |
+| | Conductor | Mac-App für parallele Claude-Code- und Codex-Workspaces |
+| | Codex-Plugin für Claude Code | Codex als schreibgeschützter Prüfer in Claude Code |
+| | CodeRabbit | Unabhängiger KI-Prüfer für Pull Requests und Agentenschleifen |
 
-## 4. Betriebsmodell-Matrix
+## 4. Nachweis und Prozessbindung
 
-| Produkt | Ausführungsoberfläche | Ort der Laufzeit | Agenten-/Modelltopologie | Parallele Arbeit | Primäre Git-Übergabe |
-|---|---|---|---|---|---|
-| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |
-| OpenAI Codex | CLI, IDE, Desktop-App und Cloudaufgaben | Lokale Sandbox oder isolierte Cloudumgebungen | OpenAI-Coding-Agenten; mehrere isolierte Threads/Worktrees | Aufgabenübergreifend integriert | Cloud-Commit, lokaler Checkout oder Pull Request |
-| Claude Code Agent Teams | Terminal, Desktop, IDE, Web und Automatisierungsoberflächen | Primär lokale Sitzungen; Web-/Cloudoberfläche ebenfalls verfügbar | Claude-Teamlead, Teammates und Subagenten mit getrennten Kontexten | Integriert; gemeinsame Aufgabenliste und direkte Nachrichten | Repositoryänderungen im Git-Workflow des Benutzers |
-| Google Antigravity 2.0 | Eigenständige App, CLI und IDE-Ökosystem | Projektbezogene lokale/Worktree-Ausführung plus Managed-Agent-Optionen | Mehrere Unterhaltungen, dynamische Subagenten, Custom Agents, Skills und MCP | Projekt- und subagentenübergreifend integriert | Projekt-/Worktree-Änderungen; externe SCM-Aktionen abhängig von der Oberfläche |
-| GitHub Copilot Cloud Agent | GitHub-Issue/-PR und verbundene Entwicklungsoberflächen | Temporäre GitHub-Actions-Umgebung | Copilot Cloud Agent; separater Copilot-Code-Review-Dienst und Drittanbieteragenten | Mehrere Zuweisungen können unabhängig laufen | Branch und Pull Request auf GitHub |
-| Cursor Cloud Agents | Web, Desktop, Mobilgeräte, Chatintegrationen, SCM und API | Von Cursor verwaltete isolierte VMs | Kuratierte wählbare Modelle und Subagenten | Integriert; viele Cloud Agents parallel möglich | Separater Branch wird zur Übergabe eines mergefähigen PR gepusht |
-| OpenHands | Python-/REST-SDK, CLI, lokale GUI, Cloud und Enterprise | Lokal, Managed Cloud, Docker oder Kubernetes | Modellunabhängige Agenten und individuelle Multi-Agenten-Anwendungen | Durch SDK-/Plattformentwurf unterstützt | Durch Anwendung oder GitHub-Workflow konfigurierbar |
-| aider | Terminalchat | Lokaler Worktree | Flexible Modellauswahl; Architect-/Editor-Zwei-Modell-Modus | Nicht der primär dokumentierte Workflow | Standardmäßig automatische lokale Commits |
+Die sechs Merkmale, auf die der Orchestrator ausgelegt ist:
 
-## 5. Governance- und Evidenzmatrix
+| Produkt | Plan vor Code | Prüfinstanz | Fremdprüfer | Standbindung | Tests extern | Wiederaufnahme |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Dual-Agent Orchestrator** | ● | ● | ● | ● | ● | ● |
+| OpenAI Codex | ◐ | ◐ | ○ | ◐ | ○ | ◐ |
+| Claude Code | ◐ | ◐ | ○ | ◐ | ◐ | ◐ |
+| Google Antigravity | ◐ | ◐ | ○ | ○ | ○ | ◐ |
+| GitHub Copilot | ◐ | ◐ | ◐ | ◐ | ◐ | ○ |
+| Cursor | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Devin | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Kiro | ● | ◐ | ◐ | ○ | ◐ | ◐ |
+| Factory Droid | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Amp | ○ | ◐ | ◐ | ○ | ○ | ◐ |
+| OpenHands | ◐ | ◐ | ◐ | ○ | ◐ | ◐ |
+| aider | ◐ | ○ | ○ | ○ | ◐ | ◐ |
+| Agent Orchestrator (AO) | ◐ | ◐ | ◐ | ○ | ◐ | ◐ |
+| Conductor | ◐ | ◐ | ◐ | ○ | ◐ | ◐ |
+| Codex-Plugin für Claude Code | — | ● | ● | ○ | ○ | ◐ |
+| CodeRabbit | — | ● | ● | ◐ | ○ | ○ |
 
-| Fähigkeit | Dual-Agent Orchestrator | Codex | Claude Teams | Antigravity | GitHub Copilot | Cursor Cloud | OpenHands | aider |
-|---|---|---|---|---|---|---|---|---|
-| Feste Trennung von Implementierer und Reviewer | Über drei benannte Provider integriert | In geprüftem Produktablauf nicht nachgewiesen | Mit Teammates/Subagenten konfigurierbar | Mit Custom Agents/Subagenten konfigurierbar | Coding und Review sind separate Dienste | Mit Review- und Freigabeagenten konfigurierbar | In einer Anwendung konfigurierbar | Architect-/Editor-Trennung verfügbar, aber keine unabhängige Freigabekette |
-| Review an exakten kanonischen Diff-Fingerprint gebunden | Integriert | Nicht nachgewiesen | Nicht nachgewiesen | Nicht nachgewiesen | PR-/Commitkontext, aber dieser exakte Vertrag ist nicht nachgewiesen | PR-/Laufkontext, aber dieser exakte Vertrag ist nicht nachgewiesen | Konfigurierbar | Nicht nachgewiesen |
-| Eine deterministische Validierungsattestierung für alle Reviewer | Integriert | Terminal-/Testevidenz vorhanden, aber dieses Eigentumsmodell nicht nachgewiesen | Hooks und Werkzeuge vorhanden, aber dieses Eigentumsmodell nicht nachgewiesen | Agenten-Verifikationsartefakte integriert | Agententests und Code Review vorhanden, aber getrennte Abläufe | Build-/Testartefakte und Reviewsysteme vorhanden | Werkzeuge, Ereignisse, Sicherheit und Tracing konfigurierbar | Bearbeitender Agent kann Tests ausführen; keine separate gemeinsame Attestierung nachgewiesen |
-| Quell-Workspace des Reviewers konstruktiv schreibgeschützt | Integriert | Nicht als Invariante einer Reviewerrolle nachgewiesen | Planmodus kann schreibgeschützt sein; Berechtigungsverhalten je Team unterschiedlich | Begrenzte Berechtigungen integriert; feste Reviewer-Unveränderlichkeit nicht nachgewiesen | Code-Review-Kommentare statt beschreibbarer Implementierungssitzung | Schreibgeschützte Erkundungsrunden vorhanden; feste reviewerübergreifende Isolation nicht nachgewiesen | Aktionsbestätigung und Sandboxing konfigurierbar | Ask-Modus schreibgeschützt, aber keine verpflichtende Reviewstufe |
-| Persistierter eigentümerspezifischer Finding-Lebenszyklus | Integriert | Anderer Scope | Anderer Scope | Artefaktfeedback integriert | PR-Reviewthreads stellen Plattformlebenszyklus bereit | PR-Review- und Freigabesysteme stellen Plattformlebenszyklus bereit | Konfigurierbar | Chat-/Git-Historie statt strukturiertem reviewer-eigenem Lebenszyklus |
-| Fingerprint-gebundene menschliche Richtlinien-Gates | Integriert | Freigabemodi vorhanden; exakte Bindung nicht nachgewiesen | Berechtigungsabfragen und Planfreigabe vorhanden; exakte Bindung nicht nachgewiesen | Begrenzte Freigaben vorhanden; exakte Bindung nicht nachgewiesen | Repository- und Organisationsrichtlinien gelten in GitHub | Freigaberichtlinien und Risikoschwellen integriert | Konfigurierbar | Interaktive Bestätigung statt persistiertem Richtlinienzustand |
-| Exakte Schrittfortsetzung nach Quota-, Prozess- oder Benutzerhalt | Integriert | Sitzungskontinuität vorhanden; exakte Zustandsmaschine nicht nachgewiesen | Agent-Team-Fortsetzung besitzt dokumentierte Grenzen | Persistente Projekte/Unterhaltungen vorhanden | Cloudaufgaben-/PR-Fortsetzung wird von der Plattform verwaltet | Cloudlauf- und Folgeaktivitätshistorie vorhanden | Unterhaltungspersistenz konfigurierbar | Chathistorie wiederherstellbar; exakte Zustandsmaschine nicht nachgewiesen |
-| Commit auf geprüfte Pfad-Allowlist begrenzt | Integriert | Nicht nachgewiesen | Nicht nachgewiesen | Projekt-/Worktree-Scope, aber exakte Commit-Allowlists nicht nachgewiesen | PR-Diff ist die Reviewgrenze | PR-Diff ist die Reviewgrenze | Konfigurierbar | Automatische Commits decken die Bearbeitungssitzung ab, nicht eine separat freigegebene Allowlist |
+<details>
+<summary><b>Was die Spalten genau verlangen</b></summary>
 
-## 6. Produktprofile
+| Merkmal | ● heißt | ◐ heißt |
+|---|---|---|
+| **Plan vor Code** | Der dokumentierte Standardablauf verlangt einen freigegebenen Plan vor der Umsetzung | Ein Planmodus existiert, ist aber optional |
+| **Prüfinstanz** | Eine vom Implementierer getrennte Instanz prüft in jedem Durchlauf | Eine Prüffunktion existiert oder lässt sich konfigurieren |
+| **Fremdprüfer** | Der Prüfer stammt fest von einem anderen Hersteller als der Implementierer | Ein Prüfmodell eines anderen Herstellers ist wählbar oder baubar |
+| **Standbindung** | Freigabe und Testergebnis gelten nur für einen exakten Fingerabdruck des Diffs und verfallen bei jeder Änderung | Die Prüfung bezieht sich auf einen benannten Commit- oder PR-Stand |
+| **Tests extern** | Das Werkzeug selbst – nicht der Agent – führt die Tests aus und bindet das Ergebnis an den geprüften Stand | Ein vom Agenten getrennter Prüfschritt ist integriert oder anschließbar: CI, Hook oder Validator |
+| **Wiederaufnahme** | Nach einem Absturz fortsetzbar, ohne abgeschlossene Schritte wie Commits oder Provideraufrufe zu wiederholen | Sitzung oder Zustand lässt sich fortsetzen |
 
-### 6.1 OpenAI Codex
+</details>
 
-OpenAI beschreibt Codex als Coding-Agenten für CLI-, IDE-, Desktop- und Cloudoberflächen. Cloudaufgaben laufen in isolierten Umgebungen; die Codex-App unterstützt mehrere Agenten parallel mit integrierten Worktrees. Abgeschlossene Arbeit kann geprüft, überarbeitet, lokal ausgecheckt oder in einen Pull Request überführt werden. Damit ist Codex als Implementierungs-Workspace breiter und ausgereifter als dieser Orchestrator.
+## 5. Betrieb und Reichweite
 
-Der Orchestrator verwendet Codex für eine engere Verantwortung: Planung, Implementierung, Korrektur und Abschlussbericht innerhalb einer anderswo besessenen Zustandsmaschine. Sein Zusatznutzen ist keine weitere Codex-Ausführungsoberfläche, sondern ein unabhängiges Claude-Urteil plus deterministische Commit-Autorisierung.
+Die Merkmale, auf die der Orchestrator bewusst verzichtet:
 
-Offizielle Quellen: [Einführung der Codex-App](https://openai.com/index/introducing-the-codex-app/), [Einführung von Codex](https://openai.com/index/introducing-codex/), [Codex-CLI-Überblick](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started).
+| Produkt | Lokal | Cloud | Parallel | PR-Übergabe | Mehrere Hersteller |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Dual-Agent Orchestrator** | ● | ○ | ○ | ○ | ● |
+| OpenAI Codex | ● | ● | ● | ● | ◐ |
+| Claude Code | ● | ● | ● | ● | ○ |
+| Google Antigravity | ● | ○ | ● | ○ | ● |
+| GitHub Copilot | ○ | ● | ● | ● | ● |
+| Cursor | ● | ● | ● | ● | ● |
+| Devin | ● | ● | ● | ● | ● |
+| Kiro | ● | ● | ● | ● | ● |
+| Factory Droid | ● | ● | ● | ● | ● |
+| Amp | ● | ● | ● | ● | ● |
+| OpenHands | ● | ● | ● | ● | ● |
+| aider | ● | ○ | ○ | ○ | ● |
+| Agent Orchestrator (AO) | ● | ○ | ● | ● | ● |
+| Conductor | ● | ◐ | ● | ◐ | ● |
+| Codex-Plugin für Claude Code | ● | ○ | ◐ | ○ | ● |
+| CodeRabbit | ◐ | ● | — | — | — |
 
-### 6.2 Claude Code Agent Teams
+<details>
+<summary><b>Was die Spalten genau verlangen</b></summary>
 
-Claude Code Agent Teams koordinieren einen Lead und mehrere unabhängige Claude-Sitzungen über eine gemeinsame Aufgabenliste und direkte Nachrichten. Sie sind stark bei paralleler Recherche, Reviews, konkurrierenden Hypothesen und Implementierungen mit getrennten Dateien. Teams können Planfreigaben verlangen und Lebenszyklusregeln mit Hooks erzwingen. Anthropic kennzeichnet die Funktion derzeit als experimentell und dokumentiert Grenzen bei Fortsetzung, Synchronisation des Aufgabenstatus, Herunterfahren, Verschachtelung und fester Führung.
+| Merkmal | ● heißt | ◐ heißt |
+|---|---|---|
+| **Lokal** | läuft auf dem eigenen Rechner | lokaler Client, die Verarbeitung geschieht beim Anbieter |
+| **Cloud** | Ausführung beim Anbieter verfügbar | als optionale Zusatzstufe verfügbar |
+| **Parallel** | mehrere Agenten arbeiten dokumentiert gleichzeitig | Hintergrundaufträge, aber keine parallelen Arbeitsbereiche |
+| **PR-Übergabe** | Branch und Pull Request entstehen durch das Werkzeug | der Mensch löst sie aus der Oberfläche aus |
+| **Mehrere Hersteller** | Modelle mehrerer Hersteller arbeiten im selben Produkt | andere Anbieter lassen sich per API anbinden |
 
-Diese Topologie begünstigt kollaborative parallele Ausführung. Der Dual-Agent Orchestrator priorisiert dagegen eine sequenzielle Kette mit Providerdiversität und unveränderlichen Rollengrenzen. Claude kann sich nicht selbst vom Reviewer zum Implementierer befördern; seine fingerprintgebundene Freigabe autorisiert ausschließlich den nachgelagerten lokalen Orchestratorcommit.
+</details>
 
-Offizielle Quellen: [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams), [Claude Code Subagenten](https://code.claude.com/docs/en/sub-agents), [Funktionsweise von Claude Code](https://code.claude.com/docs/en/how-claude-code-works).
+## 6. Der Orchestrator im Profil
 
-### 6.3 Google Antigravity 2.0
+Eine Aufgabe ist eine Markdown-Datei in normaler Sprache, abgelegt im Eingangsordner. Codex (GPT-6 Sol) schreibt daraus einen Arbeitsplan mit überschaubaren Arbeitspaketen, Claude (Opus 5.5) prüft ihn, bis kein Befund mehr offen ist. Danach setzt Codex Paket für Paket um; jedes Paket darf nur die Pfade ändern, die der Plan ihm zuweist. Der Orchestrator führt die Testsuite des Zielrepositorys selbst aus, bindet das Ergebnis an einen SHA-256-Fingerabdruck des Diffs und legt beides Claude vor, das in einer schreibgeschützten Kopie prüft. Commit gibt es nur, wenn für genau diesen Stand kein Blocker offen ist. Am Ende liest Claude den gesamten Branch; was dabei auffällt, wird als neue Aufgabe in den Eingang gelegt.
 
-Google positioniert Antigravity 2.0 als eigenständige Kommandozentrale für synchrone und asynchrone Agenten. Projekte können mehrere Ordner umfassen, Git-Worktrees verwenden, begrenzte Einstellungen und Berechtigungen anwenden und dynamische Subagenten ausführen. Das breitere Ökosystem enthält CLI- und IDE-Oberflächen, Browserinteraktion, Artefakte, geplante Aufgaben, Skills, Hooks und MCP-Integration.
+Jede Tatsache landet in einer Aufzeichnungskette, die nur angehängt wird. Jeder Commit und jeder Provideraufruf ist darin vorher angekündigt und nachher bestätigt, sodass ein Lauf nach Absturz, Neustart oder Kontingentende exakt an der Stelle fortsetzt, ohne einen abgeschlossenen Schritt zu wiederholen. Fünfzehn Absturzszenarien belegen das. Nichts verlässt den Rechner: kein Push, kein Pull Request, kein Merge.
 
-Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.
+**Aus dem Betrieb.** Ein Referenzlauf vom 22. September machte aus einer Beschreibung in normalem Deutsch vier Aufgaben und zwölf Commits in 2 Stunden 2 Minuten – ohne menschliches Zutun nach der ersten Datei. Über drei vollständige Läufe mit 109 Providerversuchen scheiterte jeder vierte an etwas Sachfremdem: 16 % Transportabbrüche der Agenten-CLIs, 8 % formal ungültige Antworten. Die Budgets fangen das ab, kosten aber Laufzeit.
 
-Offizielle Quellen: [Antigravity-2.0-Überblick](https://antigravity.google/docs/overview), [Antigravity-2.0-Funktionen](https://antigravity.google/docs/features?app=antigravity), [Antigravity-CLI-Agenten](https://antigravity.google/docs/cli/commands/agents?hl=en), [Google-Entwicklerankündigung](https://developers.googleblog.com/build-with-google-antigravity-our-new-agentic-development-platform/).
+## 7. Produktprofile
 
-### 6.4 GitHub Copilot Cloud Agent und Code Review
+<details>
+<summary><b>OpenAI Codex</b> – der Implementierer im Orchestrator</summary>
 
-GitHubs Cloud Agent kann ein Issue übernehmen, das Repository untersuchen, Änderungen in einer temporären GitHub-Actions-Umgebung implementieren, Tests und Linter ausführen und einen Pull Request öffnen. Copilot Code Review ist eine separate Reviewoberfläche mit Repositorykontext, konfigurierbaren Anweisungen, Skills und MCP-Zugriff. Das ist attraktiv, wenn GitHub-Issues, Pull Requests, Berechtigungen und Organisationsrichtlinien die natürliche Steuerungsebene bilden.
+Codex läuft lokal als CLI, IDE-Erweiterung und seit 9. Juli 2026 in der ChatGPT-Desktop-App, dazu in isolierten Cloud-Umgebungen von OpenAI. Seit dem 22. September stehen GPT-6 Sol und GPT-6 Luna bereit. Subagents, Worktrees und Cloud-Tasks arbeiten parallel; ein Planmodus ist vorhanden. `/review` prüft ungesicherte Änderungen, den Diff gegen die Merge-Base oder einen bestimmten Commit, ohne den Arbeitsbaum zu verändern, und das Prüfmodell ist über `review_model` getrennt wählbar. Tests führt der Agent selbst aus. CLI und SDK stehen unter Apache-2.0.
 
-Der Dual-Agent Orchestrator arbeitet lokal und unabhängig vom Hostingprovider. Er endet bei verifizierten lokalen Commits und bietet strengere Slice-Pfad- und Fingerprint-Invarianten, besitzt aber weder GitHubs Zusammenarbeit und PR-Review noch Organisationsverwaltung und gehostete Ausführung.
+**Im Vergleich:** Als Arbeitsumgebung ist Codex weit breiter als der Orchestrator, der davon nur `codex exec` mit festem Antwortschema nutzt. Er ergänzt, was Codex nicht festlegt: einen Prüfer eines anderen Herstellers, eine vom Agenten getrennte Testausführung und die Bindung beider an denselben Stand.
 
-Offizielle Quellen: [Passendes GitHub-KI-Werkzeug auswählen](https://docs.github.com/en/copilot/concepts/tools/ai-tools), [Über Copilot Code Review](https://docs.github.com/en/copilot/concepts/agents/code-review), [Fehlersuche und Umgebung des Copilot Cloud Agent](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/troubleshoot-cloud-agent), [Firewall des Cloud Agent](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/customize-the-agent-firewall).
+Quellen: [Neuerungen](https://learn.chatgpt.com/docs/whats-new) · [Code Review](https://learn.chatgpt.com/docs/code-review) · [Freigaben und Sicherheit](https://learn.chatgpt.com/docs/agent-approvals-security) · [Cloud-Umgebung](https://learn.chatgpt.com/docs/environments/cloud-environment)
 
-### 6.5 Cursor Cloud Agents
+</details>
 
-Cursor Cloud Agents laufen in isolierten verwalteten VMs mit Repositorys, Abhängigkeiten, Geheimnissen, Netzwerkrichtlinien, MCP-Servern, Hooks, Browser-/Desktopsteuerung und umfangreichen Artefakten. Viele Agenten können parallel arbeiten, auch an Aufgaben über mehrere Repositorys. Sie arbeiten auf separaten Branches, pushen zur Übergabe und erzeugen mergefähige Pull Requests. Cursor bietet außerdem Bugbot, Security Agents sowie risikobasiertes PR Routing & Approval.
+<details>
+<summary><b>Claude Code</b> – der Prüfer im Orchestrator</summary>
 
-Cursor deckt dadurch mehr vom gehosteten Entwicklungslebenszyklus ab. Die offizielle Dokumentation weist nicht dieselbe feste providerübergreifende sequenzielle Reviewfolge, die Wiederverwendung einer einzelnen Attestierung oder eine lokale Exakt-Pfad-Committransaktion nach. Teams mit Bedarf an verwalteter Kapazität, reichhaltigen Artefakten, Integrationen und PR-Automatisierung können Cursor bevorzugen; Teams mit Fokus auf eine kleine auditierbare lokale Steuerungsebene eher diesen Orchestrator.
+Claude Code arbeitet im Terminal, in IDEs, als Desktop-App, im Web als „Cloud sessions" und in GitHub Actions – lokal oder in von Anthropic verwalteten VMs. Standardmodell ist seit dem 22. September Opus 5.5. Subagents laufen parallel, Agent Teams mit gemeinsamer Aufgabenliste sind experimentell. Der Planmodus ist nur lesend. Code Review (Research Preview für Team und Enterprise) prüft Pull Requests mit mehreren spezialisierten Agenten und hängt einen Check an den Commit, der allerdings immer „neutral" endet und keinen Merge blockiert. Hooks wie `TaskCompleted` können deterministisch blockieren.
 
-Offizielle Quellen: [Cursor Cloud Agents](https://cursor.com/docs/cloud-agent), [Cursor PR Routing & Approval](https://cursor.com/docs/approval-agents).
+**Im Vergleich:** Claude Code prüft Claude-Arbeit mit Claude; ein Prüfer eines anderen Herstellers ist nicht nachgewiesen. Der Orchestrator setzt Claude umgekehrt ein: ausschließlich lesend, als Prüfer fremder Arbeit, mit einer Freigabe, die nur für den exakt geprüften Stand gilt.
 
-### 6.6 OpenHands
+Quellen: [Changelog](https://code.claude.com/docs/en/changelog) · [Code Review](https://code.claude.com/docs/en/code-review) · [Agent Teams](https://code.claude.com/docs/en/agent-teams) · [Berechtigungsmodi](https://code.claude.com/docs/en/permission-modes)
 
-OpenHands ist die unmittelbar erweiterbarste Plattform dieser Auswahl. Das MIT-lizenzierte Software Agent SDK stellt Python- und REST-APIs, vorgefertigte Coding-Werkzeuge, lokale oder Cloudausführung und einen mit Docker oder Kubernetes betreibbaren Agentenserver bereit. Es ist modellunabhängig und unterstützt ausdrücklich individuelle Verhaltensweisen sowie größere Multi-Agenten-Aufgaben.
+</details>
 
-OpenHands ist daher eine starke Grundlage für eine allgemeine oder selbst gehostete Agentenplattform. Die Nachbildung des exakten Workflows dieses Projekts auf OpenHands wäre ein eigener Anwendungsentwurf: Rollentrennung, Fingerprintregeln, Reviewerisolation, Finding-Zuständigkeit, Gates und Commit-Autorisierung müssten konfiguriert oder implementiert werden. Der Dual-Agent Orchestrator liefert diese Festlegungen integriert, ist aber wesentlich weniger allgemein.
+<details>
+<summary><b>Google Antigravity</b> – Kommandozentrale für lokale Agenten</summary>
 
-Offizielle Quellen: [OpenHands Software Agent SDK](https://docs.openhands.dev/sdk/index), [OpenHands-Schnellstart](https://docs.openhands.dev/overview/quickstart), [OpenHands-Runtimearchitektur](https://docs.openhands.dev/openhands/usage/architecture/runtime).
+Google Antigravity ist seit Mai 2026 als Version 2 eine Desktop-App (aktuell 2.16), dazu kommen IDE, IDE-Erweiterungen und eine CLI, die seit Juni die Gemini CLI für Einzelnutzer ersetzt. Agenten laufen lokal, parallel und im Worktree-Modus, neben Gemini- auch mit Claude- und GPT-OSS-Modellen; die Terminal-Sandbox ist standardmäßig aktiv. Der Planning Mode erzeugt Plan, Aufgabenliste und Walkthrough, und „Review" heißt, dass ein Mensch diese Artefakte prüft. Ein Prüfagent und eine von Google gehostete Cloud-Ausführung sind nicht nachgewiesen.
 
-### 6.7 aider
+**Im Vergleich:** eine starke Bedienoberfläche mit Artefakten und Sandbox; die Prüfung bleibt beim Menschen. Googles asynchroner Cloud-Agent Jules ist weiter verfügbar, sein letzter Changelog-Eintrag stammt vom März 2026.
 
-aider ist ein lokaler Terminal-Pair-Programmer mit breiter Modellunterstützung und enger Git-Integration. Sein Architect-Modus trennt ein Planungsmodell von einem Editormodell; der Ask-Modus schreibt keine Dateien. Standardmäßig erstellt aider beschreibende Commits für Änderungen und bietet direkte Undo- und Diff-Befehle.
+Quellen: [Changelog](https://antigravity.google/changelog/) · [Version 2](https://antigravity.google/blog/introducing-google-antigravity-2) · [Übergang der Gemini CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/) · [Artefakt-Review](https://antigravity.google/docs/artifact-review/) · [Jules-Changelog](https://jules.google/docs/changelog/)
 
-Damit lässt sich aider deutlich leichter installieren, verstehen und für interaktive Entwicklung verwenden. Es dokumentiert keine verpflichtende unabhängige Kette aus zwei Reviewern, Fingerprint-gebundene Attestierungen, strukturierte Finding-Zuständigkeit oder exakten Gate-Zustand. Es ist am besten als effizienter Bearbeitungsagent und nicht als Workflow-Governance-Schicht einzuordnen.
+</details>
 
-Offizielle Quellen: [aider-Chatmodi](https://aider.chat/docs/usage/modes.html), [aider-Git-Integration](https://aider.chat/docs/git.html).
+<details>
+<summary><b>GitHub Copilot</b> – Cloud Agent, Code Review und Agent HQ</summary>
 
-## 7. Stärken des Dual-Agent Orchestrator
+Der Cloud Agent übernimmt ein Issue, arbeitet in einer flüchtigen GitHub-Actions-Umgebung und liefert genau einen Entwurfs-PR auf eigenem Branch; seinen PR kann er weder freigeben noch mergen. Über Agent HQ laufen Claude und Codex als Drittanbieter-Agenten auf derselben Plattform (Public Preview), und CodeQL, Advisory-Datenbank und Secret-Scanning prüfen auch deren Arbeit. Copilot Code Review ist ein eigener Dienst; seit dem 1. September darf er PRs genehmigen (Public Preview, standardmäßig aus), und die Genehmigung verfällt bei neuen Commits. Einen Prüfer eines anderen Herstellers gibt es ausdrücklich über GitHub Agentic Workflows (Public Preview): Dort ist die Engine wählbar – Copilot, Claude, Codex oder Gemini – und der Agent-Job standardmäßig nur lesend.
 
-Das Projekt eignet sich besonders, wenn alle folgenden Punkte wichtig sind:
+**Im Vergleich:** die stärkste Wahl, wenn Issues, Pull Requests und Organisationsrichtlinien ohnehin die Steuerung bilden. Der Orchestrator arbeitet dagegen lokal, unabhängig vom Hoster, und endet vor jedem Pull Request.
 
-- Arbeit muss lokal im Repository bleiben, bis ein Mensch eine externe Git-Aktion auswählt.
-- Der Implementierer darf nicht der einzige Reviewer sein.
-- Reviewerdiversität über Provider hinweg wird gegenüber mehreren Instanzen derselben Plattform bevorzugt.
-- Tests müssen von einer deterministischen Steuerung ausgeführt und an den exakt geprüften Diff gebunden werden.
-- Kleine, pfadbegrenzte Commits sind einem großen autonomen Änderungspaket vorzuziehen.
-- Quota-Unterbrechungen, Neustarts und Benutzergates müssen fortsetzbar sein, ohne abgeschlossene Seiteneffekte zu wiederholen.
-- Auditevidenz soll sowohl maschinenlesbar als auch in commitetem Markdown prüfbar sein.
+Quellen: [Drittanbieter-Agenten](https://docs.github.com/en/copilot/concepts/agents/about-third-party-coding-agents) · [Code Review](https://docs.github.com/en/copilot/concepts/agents/code-review) · [Agentic Workflows](https://docs.github.com/en/copilot/concepts/agents/about-github-agentic-workflows) · [Genehmigungen durch Code Review](https://github.blog/changelog/2026-09-01-copilot-code-review-can-now-approve-pull-requests/)
 
-## 8. Stärken anderer Produkte
+</details>
 
-Ein anderes oder ergänzendes Produkt ist geeigneter, wenn folgende Anforderung dominiert:
+<details>
+<summary><b>Cursor</b> – IDE und Cloud Agents mit Prüf- und Freigabeagenten</summary>
 
-| Anforderung | Stärkere Wahl aus diesem Vergleich |
+Cloud Agents laufen in isolierten microVMs, beliebig viele parallel, klonen aus GitHub, GitLab, Azure DevOps, Bitbucket oder dem seit August eigenen Hosting „Origin" und öffnen Entwurfs-PRs. Seit September koordiniert in „Projects" (Beta) ein Agent, der selbst keinen Code schreibt, die Arbeit von Subagents. Bugbot prüft PRs als Check und bricht einen laufenden Review bei einem neueren Commit ab; PR Routing & Approval genehmigt PRs mit geringem Risiko nach einer Richtliniendatei. Subagents haben ein eigenes Modellfeld und ein `readonly`-Flag – ein fremder, lesender Prüfer lässt sich bauen, ist aber keine fertige Funktion. Cloud Agents führen Terminalbefehle ohne Rückfrage aus.
+
+**Im Vergleich:** gehostet, breit und mit eigener Prüf- und Freigabekette; der Orchestrator bleibt lokal und legt die Rollen fest, statt sie konfigurierbar zu machen.
+
+Quellen: [Cloud Agents](https://cursor.com/docs/cloud-agent) · [Bugbot](https://cursor.com/docs/bugbot) · [PR Routing & Approval](https://cursor.com/docs/approval-agents) · [Subagents](https://cursor.com/docs/subagents)
+
+</details>
+
+<details>
+<summary><b>Devin</b> – autonomer Cloud-Agent mit eigenem Review</summary>
+
+Devin arbeitet je Sitzung in einer isolierten VM; Koordinator-Sitzungen starten Unter-Sitzungen in eigenen VMs. Windsurf heißt inzwischen Devin Desktop, dazu kommen Devin CLI und Devin Local. Im Modus „Fusion" plant und prüft ein Frontier-Modell, während ein günstigeres umsetzt. Devin Review prüft PRs bei jedem neuen Commit, überspringt den erneuten Review bei unverändertem Diff und enthält seit September immer einen Sicherheitsscan. Quick Review in Devin Desktop ist ein separater Agent mit wählbarem Modell, auch von anderen Herstellern – allerdings nur für Änderungen von Devin Local. VM-Zustände bleiben erhalten.
+
+**Im Vergleich:** kommt dem Gedanken „einer baut, ein anderer prüft" innerhalb einer Plattform am nächsten; getestet wird aber im Agenten, übergeben wird per Pull Request.
+
+Quellen: [Devin Review](https://docs.devin.ai/work-with-devin/devin-review) · [Quick Review](https://docs.devin.ai/desktop/quick-review) · [Release Notes 2026](https://docs.devin.ai/release-notes/2026) · [Devin Desktop](https://devin.ai/blog/windsurf-is-now-devin-desktop)
+
+</details>
+
+<details>
+<summary><b>Kiro</b> – spezifikationsgetriebene Entwicklung von AWS</summary>
+
+Kiros Kernablauf führt eine Aufgabe durch requirements.md, design.md und tasks.md, bevor umgesetzt wird, mit Freigabestufen dazwischen; nur „Quick Spec" verzichtet ausdrücklich darauf. Kiro Web ist seit dem 1. September allgemein verfügbar: Je Aufgabe entstehen Branch, Commits und Pull Request, gemergt wird nie automatisch. Modelle stammen von mehreren Herstellern, und Kiro Crew kann seit September auch Claude Code oder Codex als Agent nutzen. Hooks führen deterministische Shell-Befehle aus. Einen eingebauten Prüfer gibt es nicht; ein lesender Review-Agent ist als Konfigurationsbeispiel dokumentiert.
+
+**Im Vergleich:** Kiros Spezifikationsablauf ähnelt dem Planschritt des Orchestrators am stärksten. Der Unterschied liegt dahinter: Die Umsetzung prüft keine getrennte Instanz.
+
+Quellen: [Specs](https://kiro.dev/docs/specs/) · [GitHub-Anbindung](https://kiro.dev/docs/autonomous-agent/github/) · [Cloud Sessions](https://kiro.dev/docs/cloud-sessions/) · [Changelog](https://kiro.dev/changelog/)
+
+</details>
+
+<details>
+<summary><b>Factory Droid</b> – Agentenplattform mit Spec Mode und Missions</summary>
+
+Droid läuft als Desktop-App, CLI, headless oder per Delegation aus Slack, Linear und Jira – lokal, auf verwalteten Droid Computers oder eigenen Maschinen. Der Spec Mode ist schreibgeschützt und endet mit einer Freigabe. In Missions sind Orchestrator, Worker und Validator getrennt mit Modellen belegbar; Validatoren prüfen am Ende jedes Meilensteins. `/review` prüft gegen einen Basis-Branch, ungesicherte Änderungen oder einen Commit; im CI-Review ist das Prüfmodell frei wählbar, die Action braucht aber Schreibrechte. Die OS-Sandbox ist standardmäßig aus.
+
+**Im Vergleich:** Missions kommen der Rollentrennung des Orchestrators nahe; eine Testausführung außerhalb der Agenten und eine Bindung an den geprüften Stand sind nicht nachgewiesen.
+
+Quellen: [Code Review in CI](https://docs.factory.ai/software-factory/code-review-ci.md) · [Missions](https://docs.factory.ai/missions/reference.md) · [Specification Mode](https://docs.factory.ai/autonomy-and-safety/specification-mode.md) · [Release Notes](https://docs.factory.ai/changelog/release-notes.md)
+
+</details>
+
+<details>
+<summary><b>Amp</b> – Agent mit herstellerübergreifendem Zweitmodell</summary>
+
+Amp gehört seit Dezember 2025 zur eigenständigen Amp Frontier Corporation und läuft lokal, in Cloud-VMs („Orbs") oder auf eigenen Runnern. Jede Stufe paart ein Agentenmodell mit einem „Oracle"-Modell, in den oberen Stufen von verschiedenen Herstellern; das Oracle kann die Änderungen des letzten Commits prüfen. Amp fragt vor Werkzeugaufrufen nicht nach und pusht beim Ausliefern standardmäßig direkt auf den Basis-Branch; Richtlinien lassen sich per Plugin nachrüsten.
+
+**Im Vergleich:** der Gegenpol zum Orchestrator – ein fremdes Zweitmodell als Berater, aber größtmögliche Autonomie statt Freigabepflicht.
+
+Quellen: [Modelle](https://ampcode.com/models) · [Ausliefern aus Orbs](https://ampcode.com/docs/orbs/shipping) · [Chronik](https://ampcode.com/chronicle) · [Amp Inc.](https://ampcode.com/news/amp-inc)
+
+</details>
+
+<details>
+<summary><b>OpenHands</b> – quelloffene Agentenplattform</summary>
+
+OpenHands (MIT) bietet ein Agent SDK für Python, TypeScript und REST, einen Agent Server und eine Cloud; betreiben lässt es sich lokal, in Docker, Kubernetes oder der eigenen VPC. Seit Ende Juli 2026 ist Agent Canvas die Hauptoberfläche und kann auch Claude Code, Codex oder Gemini CLI als Agenten einbinden. Der PR-Review-Workflow läuft mit Leserechten und frei wählbarem Modell; ein Critic-Modell bewertet Ergebnisse. Zustand und Ereignisprotokoll erlauben die Wiederaufnahme. Die Quellen widersprechen sich bei der CLI: Das Repository ist seit dem 11. August als „no longer actively maintained" markiert, die Dokumentation nennt sie „primarily maintained for stability".
+
+**Im Vergleich:** die offenste Grundlage; den Ablauf dieses Orchestrators müsste man darauf selbst bauen.
+
+Quellen: [Dokumentation](https://docs.openhands.dev/) · [PR-Review-Workflow](https://docs.openhands.dev/sdk/guides/github-workflows/pr-review.md) · [Sicherheit](https://docs.openhands.dev/sdk/guides/security.md) · [CLI-Repository](https://github.com/OpenHands/OpenHands-CLI)
+
+</details>
+
+<details>
+<summary><b>aider</b> – Terminal-Paarprogrammierer</summary>
+
+aider (Apache-2.0) arbeitet lokal mit Modellen vieler Hersteller. Im Architect-Modus plant ein Modell und ein zweites setzt um; jede Änderung wird standardmäßig automatisch committet. Nach Änderungen laufen Linter und, mit `--auto-test`, das konfigurierte Testkommando. Die Aktivität ist deutlich gesunken: letzter Release-Tag v0.86.2 vom 12. Februar 2026, letzter Commit auf `main` vom 22. Mai 2026.
+
+**Im Vergleich:** leicht und direkt für interaktive Arbeit, ohne Prüfinstanz.
+
+Quellen: [Chatmodi](https://aider.chat/docs/usage/modes.html) · [Tags](https://github.com/Aider-AI/aider/tags) · [Commits](https://github.com/Aider-AI/aider/commits/main)
+
+</details>
+
+<details>
+<summary><b>Agent Orchestrator (AO)</b> – lokale Steuerung vieler Agenten-CLIs</summary>
+
+AO (Apache-2.0, früher ComposioHQ/agent-orchestrator) ist eine lokale Desktop-Anwendung, die 27 Agenten-CLIs steuert, darunter Claude Code, Codex, Cursor und aider. Ein Projekt-Orchestrator zerlegt Aufgaben und verteilt sie an Worker in eigenen Worktrees; die Worker verantworten Umsetzung, Tests, Commits und Pull Requests, gemergt wird nur ausdrücklich. Prüfagenten werden getrennt von den Workern konfiguriert, auch von einem anderen Hersteller, und prüfen den Pull Request eines Workers. Der Zustand liegt in SQLite und übersteht Neustarts; die CI beobachtet AO, führt Tests aber nicht selbst aus.
+
+**Im Vergleich:** der nächste Verwandte in der Orchestrierungsidee – auf Parallelität und Durchsatz ausgelegt statt auf Standbindung.
+
+Quellen: [Repository](https://github.com/Untrivial-ai/agent-orchestrator) · [Review-Schleife](https://orchestrator.inc/docs/guides/review-loop/) · [Projektkonfiguration](https://orchestrator.inc/docs/configuration/projects/)
+
+</details>
+
+<details>
+<summary><b>Conductor</b> – parallele Agenten auf dem Mac</summary>
+
+Conductor startet Claude Code, Codex, Cursor und OpenCode parallel in eigenen Git-Worktrees; seit Version 0.85 gibt es optional Cloud-Workspaces. Die Review-Aktion lässt einen Agenten den aktuellen Diff prüfen, das Prüfmodell ist separat einstellbar. Commit, Push, Pull Request und Merge löst der Mensch aus. Checkpoints je Runde erlauben den Rücksprung; lokale Workspaces enden mit der App.
+
+**Im Vergleich:** eine komfortable Oberfläche für parallele Agenten mit dem Menschen als Integrator, ohne festen Prüfablauf.
+
+Quellen: [Review und Merge](https://www.conductor.build/docs/guides/review-and-merge) · [Einstellungen](https://www.conductor.build/docs/reference/settings/reference) · [Changelog](https://www.conductor.build/changelog)
+
+</details>
+
+<details>
+<summary><b>Codex-Plugin für Claude Code</b> – dieselbe Grundidee, umgekehrt</summary>
+
+Das offizielle Plugin von OpenAI (Apache-2.0) bindet Codex als Prüfer in Claude Code ein. `/codex:review` ist nur lesend und prüft ungesicherte Änderungen oder mit `--base` den Branch-Diff; ein optionales Review-Gate blockiert per Stop-Hook den Abschluss, bis die Befunde behoben sind. Das Plugin committet nicht und führt keine Tests aus.
+
+**Im Vergleich:** das Werkzeug mit der ähnlichsten Grundidee, in umgekehrter Rollenverteilung – Claude baut, Codex prüft – und als leichter Baustein ohne Zustandsmaschine, Testattestierung und Commitsteuerung.
+
+Quellen: [Repository](https://github.com/openai/codex-plugin-cc) · [Releases](https://github.com/openai/codex-plugin-cc/releases)
+
+</details>
+
+<details>
+<summary><b>CodeRabbit</b> – unabhängiger Prüfer für jeden Agenten</summary>
+
+CodeRabbit prüft Pull Requests auf GitHub, GitLab, Azure DevOps und Bitbucket sowie lokal über CLI und IDE. Die CLI ist ausdrücklich als Prüfschritt in Agentenschleifen dokumentiert – umsetzen, prüfen, korrigieren, wiederholen –, ändert selbst keinen Code und liefert für Agenten JSON. Am Pull Request prüft CodeRabbit nach jedem Push inkrementell die neuen Commits; Pre-Merge-Checks können den Merge blockieren. Tests führt es nicht aus.
+
+**Im Vergleich:** ein reiner Prüfer, der sich hinter jeden Agenten schalten lässt – er ergänzt einen Ablauf, statt ihn zu ersetzen.
+
+Quellen: [CLI](https://docs.coderabbit.ai/cli) · [Claude-Code-Integration](https://docs.coderabbit.ai/cli/claude-code-integration) · [Pre-Merge-Checks](https://docs.coderabbit.ai/pr-reviews/pre-merge-checks)
+
+</details>
+
+## 8. Stärken und Grenzen
+
+| Wo der Orchestrator stark ist | Wo andere stärker sind |
 |---|---|
-| Ausgereifte Multi-Agenten-Desktop-Kommandozentrale und parallele Worktrees | OpenAI Codex App oder Google Antigravity 2.0 |
-| Claude-native kollaborative Teams mit direkten Nachrichten zwischen Agenten | Claude Code Agent Teams |
-| GitHub-Issue-zu-PR-Automatisierung und organisationsnativer Review | GitHub Copilot Cloud Agent und Code Review |
-| Verwaltete parallele VMs, umfangreiche UI-/Browserartefakte, Integrationen und PR-Automatisierung | Cursor Cloud Agents |
-| Modellunabhängiges SDK, Selbsthosting, Docker/Kubernetes oder individuelle Agentenprodukte | OpenHands |
-| Minimales lokales Terminal-Pairing mit komfortabler automatischer Git-Historie | aider |
-| Paralleler Implementierungsdurchsatz | Codex, Claude Teams, Antigravity, Cursor oder ein OpenHands-basierter Entwurf |
+| Ein Prüfer eines anderen Herstellers in **jeder** Runde – nicht als Option, sondern als Bauweise | Parallelität: Er arbeitet ein Paket nach dem anderen ab |
+| Tests laufen im Orchestrator, nicht im Agenten; Testergebnis und Freigabe gelten nur für den exakt geprüften Stand | Cloud-Betrieb: Er läuft nur auf dem eigenen Rechner |
+| Jedes Paket darf nur seine zugewiesenen Pfade ändern; mehr nur auf Anmeldung mit Freigabe | Oberfläche: Terminal und Markdown, keine IDE, keine Kommandozentrale |
+| Absturzsicher: Wiederaufnahme ohne doppelten Commit oder Provideraufruf | Integration: keine Issues, Pull Requests oder CI-Anbindung |
+| Nichts verlässt den Rechner ohne den Menschen – kein Push, kein Pull Request, kein Merge | Auswahl: genau zwei Hersteller in festen Rollen, Modelle an ein geprüftes Fähigkeitsregister gebunden |
+| Formlose Eingabe: aus einer Beschreibung werden Plan, Umsetzung, Abnahme und Folgeaufgaben | Betriebskosten: jeder vierte Providerversuch scheitert an etwas Sachfremdem |
 
-## 9. Positionierung und Ergänzbarkeit
+## 9. Wann etwas anderes besser passt
 
-Der Orchestrator lässt sich am besten als **richtliniendurchsetzende, evidenzgebundene lokale Auslieferungspipeline für Coding-Agenten** beschreiben. Er ist kein universelles Multi-Agenten-Framework und sollte nicht als überlegener Ersatz für die von ihm aufgerufenen Produkte vermarktet werden.
+| Wenn vor allem zählt … | … dann eher |
+|---|---|
+| viele Aufgaben gleichzeitig | Cursor, Devin, OpenAI Codex, Claude Code oder Agent Orchestrator (AO) |
+| Issue rein, Pull Request raus – im Rahmen einer Organisation | GitHub Copilot, Cursor oder Devin |
+| eine grafische Kommandozentrale | Codex in der ChatGPT-Desktop-App, Google Antigravity, Conductor oder Devin Desktop |
+| ein Spezifikationsablauf mit Freigabestufen | Kiro oder Factory Droid |
+| eine eigene, selbst betriebene Agentenplattform | OpenHands |
+| schnelles Paarprogrammieren im Terminal | aider, Claude Code oder die Codex CLI |
+| ein zweites Paar Augen für einen vorhandenen Agenten | CodeRabbit oder das Codex-Plugin für Claude Code |
+| dass jede Freigabe nachweislich zum geprüften Stand gehört | dieser Orchestrator |
 
-Die Beziehung ist häufig komplementär:
+## 10. Ergänzen statt ersetzen
 
-- Codex und Claude bleiben die Reasoning- und Coding-Engines des Orchestrators; weitere Produkte sind ausschließlich Vergleichsgegenstände.
-- Ein Hostingprodukt kann die verifizierten lokalen Commits weiterhin in einem späteren, menschlich gesteuerten PR-Schritt übernehmen.
-- OpenHands könnte eine zukünftige alternative Ausführungsbasis bilden, wenn die feste Adaptergrenze bewusst verallgemeinert würde.
-- Repository-Hooks und CI bleiben als zusätzliche Verteidigung nach der lokalen Validierung des Orchestrators sinnvoll.
+Der Orchestrator ersetzt keines der Werkzeuge, die er aufruft, und sollte auch nicht so beschrieben werden. Die Beziehung ist oft ergänzend:
 
-Die belastbare Produktaussage betrifft Prozessintegrität: Das System kann zeigen, welche begrenzten Änderungen validiert wurden, welche Evidenz jeder Reviewer gesehen hat, wem jedes Finding gehörte, warum ein Gate den Fortschritt stoppte und welche exakten Pfade in den resultierenden lokalen Commit gelangten.
+- **Codex und Claude** bleiben die Motoren. Der Orchestrator steuert beide über ihre Kommandozeilen und fügt den Prozess hinzu.
+- **Hosting-Plattformen** können die geprüften lokalen Commits später übernehmen. Wer danach einen Pull Request öffnet, kann ihn zusätzlich von Copilot Code Review, Bugbot, Devin Review oder CodeRabbit prüfen lassen.
+- **CI und Repository-Hooks** bleiben als weitere Verteidigungslinie nach der lokalen Validierung sinnvoll.
 
-## 10. Entscheidungshilfe
+Die belastbare Produktaussage betrifft die Nachvollziehbarkeit: Das System kann zeigen, welcher Stand getestet wurde, was der Prüfer gesehen hat, welcher Befund offen war, warum ein Lauf anhielt und welche Pfade in welchen Commit gelangten.
 
-Der Dual-Agent Task Orchestrator ist passend, wenn die meisten dieser Fragen mit „ja“ beantwortet werden:
+## 11. Entscheidungshilfe
 
-1. Muss die Arbeit lokal bleiben und in lokalen Commits statt automatischen Pull Requests enden?
-2. Sind zwei geordnete, vom Implementierer unabhängige Reviewerrollen erforderlich?
-3. Muss die Validierung einmal pro exaktem Diff erzeugt und als unveränderliche Evidenz wiederverwendet werden?
-4. Benötigen Unterbrechungen eine explizite persistierte Zustandsmaschine und fortsetzbare Gates?
-5. Ist eine strikte Pfad-Allowlist je Slice wichtiger als breite Agentenfreiheit?
-6. Ist der Verzicht auf parallele Ausführung und eine reichhaltige Oberfläche zugunsten von Nachvollziehbarkeit und Kontrolle akzeptabel?
+Der Orchestrator passt, wenn die meisten dieser Fragen mit „ja" beantwortet werden:
 
-Werden die meisten Fragen mit „nein“ beantwortet, ist ein einzelner Coding-Agent, ein gehosteter Cloud-Agent, eine IDE-zentrierte Plattform oder ein allgemeines Agenten-SDK normalerweise einfacher.
+- [ ] Soll die Arbeit lokal bleiben und in lokalen Commits statt automatischen Pull Requests enden?
+- [ ] Soll ein Agent eines anderen Herstellers jede Runde prüfen – als Pflicht, nicht als Option?
+- [ ] Sollen die Tests von einer Instanz laufen, die nicht der Implementierer ist?
+- [ ] Soll jede Freigabe nachweislich für genau den geprüften Stand gelten?
+- [ ] Muss ein Lauf nach Absturz oder Kontingentende fortsetzbar sein, ohne Schritte zu wiederholen?
+- [ ] Ist Nachvollziehbarkeit wichtiger als Durchsatz, Parallelität und Oberfläche?
 
-## 11. Pflegerichtlinie
+Überwiegt „nein", ist ein einzelner Coding-Agent, ein Cloud-Agent oder eine IDE-zentrierte Plattform meist einfacher.
 
-Dieser Vergleich ist zeitabhängig. Vor einer Verwendung für Beschaffung, Preisentscheidung, Sicherheitszertifizierung oder öffentliche Wettbewerbsbehauptung muss er erneut verifiziert werden. Mindestens jede offizielle Quelle und der Recherchestand sind zu aktualisieren, sobald ein verglichenes Produkt Ausführungsmodell, Reviewfunktionen, Persistenz, Git-Verhalten, Lizenzierung oder Bereitstellungsoptionen ändert.
+## 12. Methode und Pflege
 
-Aussagen zum Fehlen einer Fähigkeit müssen als „in den geprüften offiziellen Quellen nicht nachgewiesen“ qualifiziert bleiben. Marketingformulierungen und Anbieterbenchmarks dürfen ohne unabhängige Evaluation nicht in vergleichende Qualitätsaussagen überführt werden.
+Die Recherche vom 23. September 2026 stützt sich ausschließlich auf Produktseiten, Dokumentation, Changelogs und offizielle Repositories; jede verlinkte Quelle wurde an diesem Tag abgerufen. Die Seiten unter openai.com waren nicht abrufbar; die Angaben zu Codex stammen aus learn.chatgpt.com, wohin die frühere Codex-Dokumentation weiterleitet.
+
+**Nicht aufgenommen:** Vibe Kanban (Einstellung im April 2026 angekündigt, seither von der Community gepflegt), Crystal (abgekündigt zugunsten von Nimbalyst), Claude Squad, Sculptor und Emdash (Werkzeuge für parallele Sitzungen ohne Prüfrolle, neben Conductor ohne eigenen Beitrag), PAL MCP (seit Dezember 2025 ohne Commit) sowie Graphite und Qodo (PR-Review-Plattformen, weniger auf Agentenschleifen ausgerichtet).
+
+Dieser Vergleich ist zeitabhängig. Vor einer Verwendung für Beschaffung, Preisentscheidung, Sicherheitsbewertung oder öffentliche Wettbewerbsaussagen ist er neu zu prüfen. Aussagen über das Fehlen einer Fähigkeit bleiben als „in den geprüften offiziellen Quellen nicht nachgewiesen" formuliert. Marketingformulierungen und Anbieterbenchmarks werden nicht in Qualitätsaussagen übersetzt.

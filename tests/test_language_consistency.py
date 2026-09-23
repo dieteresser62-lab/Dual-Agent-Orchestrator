@@ -790,8 +790,8 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
         assert f"]({relative})" in readme
 
     assert "**Zuletzt verifiziert:** 2026-08-16" in architecture
-    assert "**Recherchestand:** 2026-08-13" in comparison
-    assert "**Orchestrator-Funktionsstand:** 2026-08-16" in comparison
+    assert "**Recherchestand:** 2026-09-23" in comparison
+    assert "**Orchestrator-Funktionsstand:** 2026-09-23" in comparison
 
     for heading in (
         "Zweck",
@@ -808,12 +808,20 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
 
     for product in (
         "OpenAI Codex",
-        "Claude Code Agent Teams",
-        "Google " + "Anti" + "gravity 2.0",
-        "GitHub Copilot Cloud Agent",
-        "Cursor Cloud Agents",
+        "Claude Code",
+        "Google " + "Anti" + "gravity",
+        "GitHub Copilot",
+        "Cursor",
+        "Devin",
+        "Kiro",
+        "Factory Droid",
+        "Amp",
         "OpenHands",
         "aider",
+        "Agent Orchestrator (AO)",
+        "Conductor",
+        "Codex-Plugin für Claude Code",
+        "CodeRabbit",
     ):
         assert product in comparison
     assert "ausschließlich offizielle Produktseiten und Dokumentationen" in comparison
@@ -823,7 +831,9 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
     unresolved = []
     for document in REFERENCE_DOC_FILES:
         text = document.read_text(encoding="utf-8")
-        for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", text):
+        targets = re.findall(r"!?\[[^]]*\]\(([^)]+)\)", text)
+        targets += re.findall(r'(?:src|srcset)="([^"]+)"', text)
+        for target in targets:
             if target.startswith(("http://", "https://", "#")):
                 continue
             resolved = (document.parent / target).resolve()
@@ -1067,16 +1077,24 @@ def _retirement_active_files(root: Path = ROOT) -> tuple[Path, ...]:
 
 _ALLOWED_MARKET_ANTIGRAVITY_LINES = frozenset(
     {
-        "Der Dual-Agent Task Orchestrator besetzt eine engere Kategorie als die meisten Produkte in diesem Vergleich. Codex, Claude Code, Google Antigravity, GitHub Copilot, Cursor, OpenHands und aider stellen primär einen Agenten, einen Agenten-Workspace, eine Entwicklungsoberfläche oder eine Agentenplattform bereit. Dieses Projekt ist eine lokale Workflow-Steuerungsebene, die Codex und Claude in festen Rollen aufruft und deterministische Evidenz, unabhängige Reviews, fortsetzbare Gates und eine exakte lokale Commit-Autorisierung ergänzt.",
-        "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |",
-        "| Google Antigravity 2.0 | Eigenständige App, CLI und IDE-Ökosystem | Projektbezogene lokale/Worktree-Ausführung plus Managed-Agent-Optionen | Mehrere Unterhaltungen, dynamische Subagenten, Custom Agents, Skills und MCP | Projekt- und subagentenübergreifend integriert | Projekt-/Worktree-Änderungen; externe SCM-Aktionen abhängig von der Oberfläche |",
-        "| Fähigkeit | Dual-Agent Orchestrator | Codex | Claude Teams | Antigravity | GitHub Copilot | Cursor Cloud | OpenHands | aider |",
-        "### 6.3 Google Antigravity 2.0",
-        "Google positioniert Antigravity 2.0 als eigenständige Kommandozentrale für synchrone und asynchrone Agenten. Projekte können mehrere Ordner umfassen, Git-Worktrees verwenden, begrenzte Einstellungen und Berechtigungen anwenden und dynamische Subagenten ausführen. Das breitere Ökosystem enthält CLI- und IDE-Oberflächen, Browserinteraktion, Artefakte, geplante Aufgaben, Skills, Hooks und MCP-Integration.",
-        "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.",
-        "Offizielle Quellen: [Antigravity-2.0-Überblick](https://antigravity.google/docs/overview), [Antigravity-2.0-Funktionen](https://antigravity.google/docs/features?app=antigravity), [Antigravity-CLI-Agenten](https://antigravity.google/docs/cli/commands/agents?hl=en), [Google-Entwicklerankündigung](https://developers.googleblog.com/build-with-google-antigravity-our-new-agentic-development-platform/).",
-        "| Ausgereifte Multi-Agenten-Desktop-Kommandozentrale und parallele Worktrees | OpenAI Codex App oder Google Antigravity 2.0 |",
-        "| Paralleler Implementierungsdurchsatz | Codex, Claude Teams, Antigravity, Cursor oder ein OpenHands-basierter Entwurf |",
+        '| **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; externes Vergleichsprodukt und kein Bestandteil dieses Orchestrators |',
+        '| Google Antigravity | ◐ | ◐ | ○ | ○ | ○ | ◐ |',
+        '| Google Antigravity | ● | ○ | ● | ○ | ● |',
+        '<summary><b>Google Antigravity</b> – Kommandozentrale für lokale Agenten</summary>',
+        'Google Antigravity ist seit Mai 2026 als Version 2 eine Desktop-App (aktuell 2.16), dazu kommen IDE, IDE-Erweiterungen und eine CLI, die seit Juni die Gemini CLI für Einzelnutzer ersetzt. Agenten laufen lokal, parallel und im Worktree-Modus, neben Gemini- auch mit Claude- und GPT-OSS-Modellen; die Terminal-Sandbox ist standardmäßig aktiv. Der Planning Mode erzeugt Plan, Aufgabenliste und Walkthrough, und „Review" heißt, dass ein Mensch diese Artefakte prüft. Ein Prüfagent und eine von Google gehostete Cloud-Ausführung sind nicht nachgewiesen.',
+        'Quellen: [Changelog](https://antigravity.google/changelog/) · [Version 2](https://antigravity.google/blog/introducing-google-antigravity-2) · [Übergang der Gemini CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/) · [Artefakt-Review](https://antigravity.google/docs/artifact-review/) · [Jules-Changelog](https://jules.google/docs/changelog/)',
+        '| eine grafische Kommandozentrale | Codex in der ChatGPT-Desktop-App, Google Antigravity, Conductor oder Devin Desktop |',
+    }
+)
+_MARKET_MAP_PATHS = frozenset(
+    {
+        ROOT / "docs/reference/assets/marktkarte-hell.svg",
+        ROOT / "docs/reference/assets/marktkarte-dunkel.svg",
+    }
+)
+_ALLOWED_MARKET_MAP_ANTIGRAVITY_LINES = frozenset(
+    {
+        '<text class="lbl" x="368.0" y="377.5" text-anchor="middle">Google Antigravity</text>',
     }
 )
 _ALLOWED_INTERNAL_RETIREMENT_LINK_LINES = frozenset(
@@ -1091,6 +1109,8 @@ def _allowed_retirement_reference_line(path: Path, line: str) -> bool:
     stripped = line.strip()
     if path == ROOT / "docs/reference/market-comparison.md":
         return stripped in _ALLOWED_MARKET_ANTIGRAVITY_LINES
+    if path in _MARKET_MAP_PATHS:
+        return stripped in _ALLOWED_MARKET_MAP_ANTIGRAVITY_LINES
     if path == ROOT / "docs/internal/README.md":
         return stripped in _ALLOWED_INTERNAL_RETIREMENT_LINK_LINES
     return False
@@ -1364,20 +1384,20 @@ def test_market_comparison_allows_only_exact_external_product_lines() -> None:
     ("current_line", "retired_line"),
     (
         (
-            "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |",
-            "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Stellt den hier verwendeten unabhängigen Reviewer bereit und unterstützt Projekte, Worktrees und Subagenten. |",
+            '| **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; externes Vergleichsprodukt und kein Bestandteil dieses Orchestrators |',
+            '| **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; stellt den unabhängigen Abschlussprüfer dieses Orchestrators |',
         ),
         (
-            "| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |",
-            "| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude → Antigravity; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |",
+            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.',
+            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die drei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, **Antigravity** prüft abschließend, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.',
         ),
         (
-            "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.",
-            "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. In diesem Projekt wird es bewusst auf einen unabhängigen, schreibgeschützten Abschlussreviewer nach Claude begrenzt.",
+            'Google Antigravity ist seit Mai 2026 als Version 2 eine Desktop-App (aktuell 2.16), dazu kommen IDE, IDE-Erweiterungen und eine CLI, die seit Juni die Gemini CLI für Einzelnutzer ersetzt. Agenten laufen lokal, parallel und im Worktree-Modus, neben Gemini- auch mit Claude- und GPT-OSS-Modellen; die Terminal-Sandbox ist standardmäßig aktiv. Der Planning Mode erzeugt Plan, Aufgabenliste und Walkthrough, und „Review" heißt, dass ein Mensch diese Artefakte prüft. Ein Prüfagent und eine von Google gehostete Cloud-Ausführung sind nicht nachgewiesen.',
+            'Google Antigravity ist seit Mai 2026 als Version 2 eine Desktop-App (aktuell 2.16), dazu kommen IDE, IDE-Erweiterungen und eine CLI, die seit Juni die Gemini CLI für Einzelnutzer ersetzt. Agenten laufen lokal, parallel und im Worktree-Modus, neben Gemini- auch mit Claude- und GPT-OSS-Modellen; die Terminal-Sandbox ist standardmäßig aktiv. Der Planning Mode erzeugt Plan, Aufgabenliste und Walkthrough, und „Review" heißt, dass ein Mensch diese Artefakte prüft. Ein Prüfagent und eine von Google gehostete Cloud-Ausführung sind nicht nachgewiesen. In diesem Projekt übernimmt es den abschließenden Review nach Claude.',
         ),
         (
-            "| Fähigkeit | Dual-Agent Orchestrator | Codex | Claude Teams | Antigravity | GitHub Copilot | Cursor Cloud | OpenHands | aider |",
-            "| Dual-Agent Orchestrator | Rollen | Codex, Claude und Antigravity sind die drei aktiven Prozessrollen dieses Orchestrators |",
+            '| Google Antigravity | ◐ | ◐ | ○ | ○ | ○ | ◐ |',
+            '| Google Antigravity | Abschlussprüfer dieses Orchestrators | ● | ● | ● | ● |',
         ),
     ),
 )
