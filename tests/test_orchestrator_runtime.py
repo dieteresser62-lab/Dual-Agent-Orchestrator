@@ -3283,6 +3283,34 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         "docs/extra.md",
         "src/runtime.py",
     )
+    retry_key = "authorized-remediation-reprompt:" + hashlib.sha256(
+        b"docs/extra.md"
+    ).hexdigest()
+    reprompt = expanded.mark_side_effect_completed(retry_key).start_recomposed_request()
+    driver.checkpoint(reprompt, WorkflowHistory(reprompt.current_work_unit_id))
+    reprompt_chain = ArtifactStore(repository, state.run_id).load_chain()
+    identity_index = next(
+        index
+        for index, record in enumerate(reprompt_chain)
+        if isinstance(record.payload, WorkflowPolicyPayload)
+        and "recomposed-request:2" in record.idempotency_key
+        and record.payload.work_unit_id == str(state.current_work_unit_id)
+    )
+    retry_index = next(
+        index
+        for index, record in enumerate(reprompt_chain)
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.operation == (retry_key,)
+        and record.payload.phase == "result"
+    )
+    assert identity_index < retry_index
+    replayed = resolve_resume_state(repository, state.run_id)
+    assert replayed.state.current_work_unit.request_sequence == 2
+    assert replayed.state.current_work_unit.has_completed_side_effect(retry_key)
+    (repository / ".orchestrator" / "state.json").unlink()
+    assert resolve_resume_state(
+        repository, state.run_id
+    ).state.current_work_unit.request_sequence == 2
 
 
 @pytest.mark.parametrize("approved", (True, False), ids=("approve", "reject"))
@@ -3376,6 +3404,25 @@ def test_scope_extension_user_gate_records_exact_decision_and_originating_reques
     )
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
+    if approved:
+        identity_index = next(
+            index
+            for index, record in enumerate(chain)
+            if isinstance(record.payload, WorkflowPolicyPayload)
+            and f"recomposed-request:2" in record.idempotency_key
+            and record.payload.work_unit_id == str(state.current_work_unit_id)
+        )
+        retry_key = "authorized-remediation-reprompt:" + hashlib.sha256(
+            requested_path.encode("utf-8")
+        ).hexdigest()
+        retry_index = next(
+            index
+            for index, record in enumerate(chain)
+            if isinstance(record.payload, SideEffectPayload)
+            and record.payload.operation == (retry_key,)
+            and record.payload.phase == "result"
+        )
+        assert identity_index < retry_index
     gate_record = next(
         record
         for record in chain
@@ -3397,12 +3444,176 @@ def test_scope_extension_user_gate_records_exact_decision_and_originating_reques
     assert (requested_path in result.state.current_slice.scope_paths) is approved
     assert result.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
     assert result.state.current_work_unit.gate_decisions[-1].approved is approved
+    assert result.state.current_work_unit.request_sequence == (2 if approved else 1)
 
     replay = replay_artifacts(chain, state.run_id)
     assert replay.gate_decisions[-1].approved is approved
     assert replay.gate_decisions[-1].fingerprint == fingerprint
     assert replay.gate_decisions[-1].paths == (requested_path,)
     assert replay.gate_decisions[-1].gate_created_at == gate_record.created_at
+    resumed = resolve_resume_state(repository, state.run_id)
+    assert resumed.state.current_work_unit.request_sequence == (2 if approved else 1)
+    if approved:
+        repeated = result.state.await_user_gate(
+            reason=GateReason.STOP_REQUEST,
+            detail=f"SCOPE-EXTENSION-REQUESTED | {rationale}",
+            fingerprint=fingerprint,
+            paths=(requested_path,),
+            resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        driver.checkpoint(repeated, history)
+        approved_again = WorkflowEngine(driver).decide_current_gate(
+            repeated,
+            history,
+            approved=True,
+            rationale="reapprove the same Slice scope after the stale stop",
+            path_classes=PathClasses(
+                productive=("src/**",),
+                tests=("tests/**",),
+                documentation=("docs/**",),
+                generated=("build/**",),
+            ),
+        )
+        assert approved_again.state.current_work_unit.request_sequence == 3
+        assert resolve_resume_state(
+            repository, state.run_id
+        ).state.current_work_unit.request_sequence == 3
+        (repository / ".orchestrator" / "state.json").unlink()
+        assert resolve_resume_state(
+            repository, state.run_id
+        ).state.current_work_unit.request_sequence == 3
+
+
+@pytest.mark.parametrize("approval", ("operator", "automatic"))
+def test_persisted_scope_stop_reprompts_new_implementer_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, approval: str
+) -> None:
+    branch = f"feature/persisted-scope-{approval}"
+    repository = _repository(tmp_path, branch)
+    requested_path = (
+        "tests/existing_runtime.py" if approval == "operator" else "docs/extra.md"
+    )
+    (repository / "src").mkdir()
+    (repository / "src/runtime.py").write_text("value = 1\n", encoding="utf-8")
+    if approval == "operator":
+        (repository / "tests").mkdir()
+        (repository / requested_path).write_text("pass\n", encoding="utf-8")
+    seed_paths = ["src/runtime.py"]
+    if approval == "operator":
+        seed_paths.append(requested_path)
+    _git(repository, "add", *seed_paths)
+    _git(repository, "commit", "-m", "seed implementation scope")
+    head = _git(repository, "rev-parse", "HEAD")
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py", requested_path)
+    state = init_workflow_state(
+        run_id=f"persisted-scope-{approval}",
+        task_file=str(task),
+        branch=branch,
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
+        task_scope_patterns=("src/runtime.py", requested_path),
+        target_branch=branch,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).bind_slice_plan(
+        (PlannedSlice(1, "implement runtime", ("src/runtime.py",)),),
+        first_start_commit=head,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="a" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.bind_work_unit(state)
+    driver.checkpoint(state, history)
+    context = WorkflowContext(
+        "Implement the bounded task.",
+        "The plan is approved.",
+        "Implement runtime.",
+        current_scope_paths=state.current_slice.scope_paths,
+        path_classes=PathClasses(
+            productive=("src/**",),
+            tests=("tests/**",),
+            documentation=("docs/**",),
+            generated=("build/**",),
+        ),
+    )
+    calls: list[CodexInvocation] = []
+
+    def implement(invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        calls.append(invocation)
+        assert len(calls) <= 2, "scope approval must not reuse the stopped response"
+        bundle = invocation.native_request
+        assert bundle is not None
+        if len(calls) == 1:
+            document = {
+                "schema_version": "native-agent-codex-result-v2",
+                "result_type": "stop_result",
+                "request_id": bundle.bound_context.request_id,
+                "rule_id": "SCOPE-EXTENSION-REQUESTED",
+                "rationale": (
+                    f"Required paths: {requested_path}\n"
+                    "Why required for current Slice: complete the implementation"
+                ),
+                "remediation_paths": [requested_path],
+            }
+        else:
+            return _native_implementation_output(invocation)
+        canonical = canonical_native_codex_json(document)
+        return NativeAgentCodexOutput(
+            result=parse_bound_native_codex_contract_result(
+                document, bundle.bound_context
+            ),
+            canonical_json=canonical,
+            request_id=bundle.bound_context.request_id,
+            response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+
+    monkeypatch.setattr(driver, "invoke_codex", implement)
+    engine = WorkflowEngine(driver)
+    after_stop, history = engine._run_codex(state, context, history)
+    if approval == "operator":
+        assert after_stop.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+        approved = engine.decide_current_gate(
+            after_stop,
+            history,
+            approved=True,
+            rationale="approved for this Slice only",
+            path_classes=context.path_classes,
+        )
+        after_stop, history = approved.state, approved.history
+        after_stop, history = engine._run_codex(after_stop, context, history)
+    assert after_stop.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert [call.request_sequence for call in calls] == [1, 2]
+    assert calls[0].native_request is not None
+    assert calls[1].native_request is not None
+    assert calls[0].native_request.bound_context.request_id != (
+        calls[1].native_request.bound_context.request_id
+    )
+    assert requested_path in json.loads(calls[1].native_request.canonical_json)[
+        "authorized_paths"
+    ]
+    assert "APPROVED" in calls[1].native_request.canonical_json
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    assert [
+        record.payload.round_number
+        for record in chain
+        if isinstance(record.payload, ProviderContentPayload)
+        and record.payload.work_unit_id == str(state.current_work_unit_id)
+    ] == [1, 2]
 
 
 @pytest.mark.parametrize(
@@ -3997,6 +4208,28 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     )
     assert len(provider_attempts) == 2
     assert {item.payload.phase for item in provider_attempts} == {"started", "failed"}
+
+    next_contract = replace(contract, request_sequence=2)
+    next_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=replace(native_context, contract=next_contract),
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("docs/approved.md", "src/runtime.py"),
+            assignment="Implement runtime with the approved scope.",
+            work_context="The scope extension is approved for this Slice.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
+                ),
+            ),
+        )
+    )
+    assert driver.recover_pending_native_codex(
+        replace(invocation, request_sequence=2, native_request=next_bundle),
+        next_contract,
+        WorkflowHistory(state.current_work_unit_id),
+    ) is None
 
     tampered_request = json.loads(persisted_request)
     assert tampered_request["evidence_assets"]

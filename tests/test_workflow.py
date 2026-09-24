@@ -6613,6 +6613,228 @@ def test_approved_scope_extension_changes_only_current_slice_and_restarts_halted
     assert continued.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
 
 
+def _record_ahead_scope_reprompt(
+    approval: str,
+    *,
+    repeat_request: bool = False,
+) -> tuple[WorkflowState, list[CodexInvocation], list[tuple[int, str]]]:
+    path = (
+        "tests/existing_extra.py" if approval == "operator" else "docs/extra.md"
+    )
+
+    class RecordAheadDriver(FakeDriver):
+        def __init__(self) -> None:
+            super().__init__(
+                snapshots=[
+                    _changes("7", "src/current.py", TEST_FILE),
+                    _changes("7", "src/current.py", TEST_FILE),
+                ],
+                codex_outputs=[],
+                reviewer_outputs=[],
+                paths_existing_at_commits={(START_COMMIT, path)},
+            )
+            self.responses: dict[int, NativeAgentCodexOutput] = {}
+            self.recovery_attempts: list[tuple[int, str]] = []
+
+        def recover_pending_native_codex(
+            self,
+            invocation: CodexInvocation,
+            contract: CodexStepContract,
+            history: WorkflowHistory,
+        ) -> NativeAgentCodexOutput | None:
+            _ = (contract, history)
+            assert invocation.native_request is not None
+            self.recovery_attempts.append(
+                (invocation.request_sequence, invocation.native_request.bound_context.request_id)
+            )
+            return self.responses.get(invocation.request_sequence)
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            request_sequence: int,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            super().persist_native_codex_contract(
+                output, request_sequence, previous_findings
+            )
+            self.responses[request_sequence] = output
+
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            self.snapshot_index += 1
+            assert len(self.codex_calls) <= 2, "scope re-prompt must not circle"
+            if len(self.codex_calls) == 2 and not repeat_request:
+                return _test_native_codex_output(invocation, _codex_ready())
+            assert invocation.native_request is not None
+            request_id = invocation.native_request.bound_context.request_id
+            canonical = json.dumps({"request_id": request_id}, sort_keys=True)
+            return NativeAgentCodexOutput(
+                CodexContractResult(
+                    ready=None,
+                    stopped=True,
+                    stop_request=StopRequest(
+                        SCOPE_EXTENSION_REQUESTED_RULE_ID,
+                        _scope_extension_rationale(path),
+                        (path,),
+                    ),
+                    validation=None,
+                    test_files=(),
+                    findings=invocation.previous_findings,
+                    slice_plan=(),
+                ),
+                canonical,
+                request_id,
+                hashlib.sha256(canonical.encode()).hexdigest(),
+            )
+
+    state = _scope_extension_state(
+        path, "current" if approval == "already" else "unowned"
+    )
+    driver = RecordAheadDriver()
+    context = replace(
+        _context(),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+    engine = WorkflowEngine(driver)
+    if approval == "operator":
+        halted = engine.run_current_work_unit(state, context)
+        assert halted.exit_code == 4
+        state = engine.decide_current_gate(
+            halted.state,
+            halted.history,
+            approved=True,
+            rationale="reviewed for the current Slice only",
+            path_classes=context.path_classes,
+        ).state
+        assert state.current_work_unit.request_sequence == 2
+        state, _ = engine._run_codex(state, context, halted.history)
+    else:
+        state, _ = engine._run_codex(
+            state, context, WorkflowHistory(state.current_work_unit_id)
+        )
+    assert len(driver.codex_calls) == 2
+    assert [call.request_sequence for call in driver.codex_calls] == [1, 2]
+    assert driver.codex_calls[0].native_request is not None
+    assert driver.codex_calls[1].native_request is not None
+    assert (
+        driver.codex_calls[0].native_request.bound_context.request_id
+        != driver.codex_calls[1].native_request.bound_context.request_id
+    )
+    request = json.loads(driver.codex_calls[1].native_request.canonical_json)
+    assert path in request["authorized_paths"]
+    assert (
+        "OPERATOR-APPROVED IMPLEMENTER SCOPE EXTENSION"
+        if approval == "operator"
+        else "REMEDIATION PATHS ALREADY AUTHORIZED"
+        if approval == "already"
+        else "AUTOMATIC IMPLEMENTER SCOPE EXTENSION"
+    ) in driver.codex_calls[1].native_request.canonical_json
+    assert driver.recovery_attempts[1][0] == 2
+    return state, driver.codex_calls, driver.recovery_attempts
+
+
+@pytest.mark.parametrize("approval", ("operator", "automatic"))
+def test_record_ahead_scope_stop_uses_new_request_after_approval(approval: str) -> None:
+    state, _calls, _attempts = _record_ahead_scope_reprompt(approval)
+    assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert state.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+@pytest.mark.parametrize("approval", ("operator", "automatic", "already"))
+def test_record_ahead_scope_reprompt_repeated_paths_halt_once(approval: str) -> None:
+    state, _calls, _attempts = _record_ahead_scope_reprompt(
+        approval, repeat_request=True
+    )
+    assert state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+
+
+def test_automatic_scope_approval_hint_survives_context_rebuild() -> None:
+    path = "docs/extra.md"
+    original = _scope_extension_state(path, "unowned")
+    key = WorkflowEngine._authorized_remediation_reprompt_key((path,))
+    resumed = (
+        original.approve_current_slice_scope_extension((path,))
+        .mark_side_effect_completed(key)
+        .start_recomposed_request()
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    engine = WorkflowEngine(driver)
+    _is_plan, _contract, invocation, _recovered, _history = (
+        engine._prepare_agent_dispatch(
+            resumed,
+            replace(_context(), current_scope_paths=original.current_slice.scope_paths),
+            WorkflowHistory(resumed.current_work_unit_id),
+        )
+    )
+    assert invocation.native_request is not None
+    assert "APPROVED IMPLEMENTER SCOPE FOR CURRENT SLICE" in (
+        invocation.native_request.canonical_json
+    )
+    assert path in json.loads(invocation.native_request.canonical_json)[
+        "authorized_paths"
+    ]
+
+
+def test_scope_reprompt_identity_without_once_key_still_stops_repeat() -> None:
+    path = "docs/extra.md"
+    original = _scope_extension_state(path, "unowned")
+    resumed = original.approve_current_slice_scope_extension(
+        (path,)
+    ).start_recomposed_request()
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    engine = WorkflowEngine(driver)
+    context = replace(
+        _context(), current_scope_paths=original.current_slice.scope_paths
+    )
+    _is_plan, _contract, invocation, _recovered, _history = (
+        engine._prepare_agent_dispatch(
+            resumed, context, WorkflowHistory(resumed.current_work_unit_id)
+        )
+    )
+    assert invocation.native_request is not None
+    assert "APPROVED IMPLEMENTER SCOPE FOR CURRENT SLICE" in (
+        invocation.native_request.canonical_json
+    )
+    assert engine._expand_approved_remediation_scope(
+        resumed,
+        context,
+        StopRequest(
+            SCOPE_EXTENSION_REQUESTED_RULE_ID,
+            _scope_extension_rationale(path),
+            (path,),
+        ),
+    ) is None
+
+
+def test_scope_reprompt_proof_kills_old_response_recovery_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        WorkflowState,
+        "start_recomposed_request",
+        lambda state: state,
+    )
+    with pytest.raises(AssertionError, match="assert 1 == 2"):
+        _record_ahead_scope_reprompt("automatic")
+
+
+def test_scope_reprompt_proof_kills_missing_once_key_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = WorkflowState.mark_side_effect_completed
+
+    def omit_once_key(state: WorkflowState, key: str, *, updated_at=None):
+        if key.startswith("authorized-remediation-reprompt:"):
+            return state
+        return original(state, key, updated_at=updated_at)
+
+    monkeypatch.setattr(WorkflowState, "mark_side_effect_completed", omit_once_key)
+    with pytest.raises(AssertionError, match="scope re-prompt must not circle"):
+        _record_ahead_scope_reprompt("already", repeat_request=True)
+
+
 def test_scope_extension_proof_kills_later_slice_inheritance_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

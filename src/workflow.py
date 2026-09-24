@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Iterable, Mapping, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
@@ -1882,6 +1882,12 @@ class WorkflowEngine:
                         ),
                     ),
                 )
+            updated = updated.mark_side_effect_completed(
+                self._authorized_remediation_reprompt_key(gate.paths)
+            )
+            # The stopped response belongs to the request before approval.
+            # A fresh sequence prevents record-ahead recovery from replaying it.
+            updated = updated.start_recomposed_request()
         self._persist_structured(self.driver.persist_gate_transition, updated)
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
@@ -1963,7 +1969,10 @@ class WorkflowEngine:
         NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
         WorkflowHistory,
     ]:
-        unit = state.current_work_unit
+        unit, context = (
+            state.current_work_unit,
+            self._context_with_scope_approval(state, context),
+        )
         is_plan = state.current_step in (
             WorkflowStep.CODEX_PLAN,
             WorkflowStep.CODEX_PLAN_REVISION,
@@ -2075,6 +2084,60 @@ class WorkflowEngine:
             else:
                 history = authoritative_history
         return is_plan, contract, invocation, recovered, history
+
+    def _context_with_scope_approval(
+        self, state: WorkflowState, context: WorkflowContext
+    ) -> WorkflowContext:
+        """Rebuild the approval notice from durable current-Slice state."""
+        unit = state.current_work_unit
+        decision = next(
+            (
+                item
+                for item in reversed(unit.gate_decisions)
+                if item.approved
+                and item.reason is GateReason.STOP_REQUEST
+                and item.resume_step is state.current_step
+                and item.paths
+                and set(item.paths).issubset(state.current_slice.scope_paths)
+            ),
+            None,
+        )
+        if decision is not None:
+            return replace(
+                context,
+                current_scope_paths=state.current_slice.scope_paths,
+                slice_summary=(
+                    f"{context.slice_summary}\n\n"
+                    "OPERATOR-APPROVED IMPLEMENTER SCOPE EXTENSION\n"
+                    "Approved paths for this Slice: "
+                    + ", ".join(decision.paths)
+                    + "\nApproval reason: "
+                    + decision.rationale
+                ),
+            )
+        approved_scope = any(
+            key.startswith("authorized-remediation-reprompt:")
+            for key in unit.completed_side_effects
+        ) or bool(self._approved_scope_additions(state))
+        if approved_scope and not any(
+            heading in context.slice_summary
+            for heading in (
+                "AUTOMATIC IMPLEMENTER SCOPE EXTENSION",
+                "AUTOMATIC PRIOR-SLICE REMEDIATION",
+                "REMEDIATION PATHS ALREADY AUTHORIZED",
+            )
+        ):
+            return replace(
+                context,
+                current_scope_paths=state.current_slice.scope_paths,
+                slice_summary=(
+                    f"{context.slice_summary}\n\n"
+                    "APPROVED IMPLEMENTER SCOPE FOR CURRENT SLICE\n"
+                    "Authorized paths: "
+                    + ", ".join(state.current_slice.scope_paths)
+                ),
+            )
+        return context
 
     def _run_codex(
         self,
@@ -2281,7 +2344,11 @@ class WorkflowEngine:
         stop_request: StopRequest,
         scope_approval: ApprovedScopeExtension,
     ) -> tuple[WorkflowState, WorkflowHistory]:
-        expanded = scope_approval.state
+        expanded = (
+            scope_approval.state.mark_side_effect_completed(
+                self._authorized_remediation_reprompt_key(stop_request.remediation_paths)
+            ).start_recomposed_request()
+        )
         if scope_approval.additions:
             self.driver.persist_scope_extension(
                 expanded,
@@ -3859,9 +3926,12 @@ class WorkflowEngine:
 
         additions = tuple(sorted(requested.difference(state.current_slice.scope_paths)))
         if not additions:
-            digest = hashlib.sha256("\0".join(sorted(requested)).encode("utf-8")).hexdigest()
-            retry_key = f"authorized-remediation-reprompt:{digest}"
-            if state.current_work_unit.has_completed_side_effect(retry_key):
+            retry_key = self._authorized_remediation_reprompt_key(requested)
+            if state.current_work_unit.has_completed_side_effect(retry_key) or (
+                state.current_work_unit.request_sequence
+                > state.current_work_unit.round_number
+                and requested.intersection(self._approved_scope_additions(state))
+            ):
                 return None
             return ApprovedScopeExtension(
                 state.mark_side_effect_completed(retry_key),
@@ -3874,6 +3944,24 @@ class WorkflowEngine:
             state.approve_current_slice_scope_extension(additions),
             classified,
         )
+
+    @staticmethod
+    def _authorized_remediation_reprompt_key(paths: Iterable[str]) -> str:
+        digest = hashlib.sha256("\0".join(sorted(paths)).encode("utf-8")).hexdigest()
+        return f"authorized-remediation-reprompt:{digest}"
+
+    @staticmethod
+    def _approved_scope_additions(state: WorkflowState) -> frozenset[str]:
+        planned = next(
+            (
+                item for item in state.planned_slices
+                if item.slice_id == state.current_slice_id
+            ),
+            None,
+        )
+        if planned is None:
+            return frozenset()
+        return frozenset(state.current_slice.scope_paths).difference(planned.scope_paths)
 
     @staticmethod
     def _protected_scope_extension_paths(state: WorkflowState) -> frozenset[str]:

@@ -222,13 +222,17 @@ class WorkflowPersistence:
         active_state: WorkflowState | None,
         state: WorkflowState,
     ) -> bool:
-        """Recognize an in-progress transition to the next provider request."""
+        """Persist a new request identity before its approval marker is recorded."""
 
         return (
             active_state is not None
             and active_state.run_id == state.run_id
             and active_state.current_work_unit_id == state.current_work_unit_id
-            and active_state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+            and active_state.current_work_unit.status
+            in {
+                WorkUnitStatus.IN_PROGRESS,
+                WorkUnitStatus.AWAITING_USER_DECISION,
+            }
             and state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
             and state.current_work_unit.request_sequence
             == active_state.current_work_unit.request_sequence + 1
