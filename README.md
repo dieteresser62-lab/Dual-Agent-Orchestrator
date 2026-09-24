@@ -118,7 +118,7 @@ Im Modus `IMPLEMENT` überführt Codex den Auftrag in einen oder mehrere persist
 SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>
 ```
 
-Die aufgeführten Pfade bilden exakte Commit-Allowlists. Ein Slice darf gemäß den konfigurierten Pfadklassen höchstens zehn produktive Dateigruppen enthalten. Tests und Dokumentation können separat klassifiziert werden; ein nicht klassifizierter Pfad gilt vorsichtshalber als produktiv.
+Die aufgeführten Pfade bilden exakte Commit-Allowlists. Eine feste Obergrenze für die Zahl der Dateien je Slice gibt es nicht; geschnitten wird nach fachlichem Zusammenhang und Prüfbarkeit. Tests und Dokumentation können separat klassifiziert werden; ein nicht klassifizierter Pfad gilt vorsichtshalber als produktiv. Die Pfadklassen steuern unter anderem, welche vom Implementierer angemeldeten Umfangserweiterungen automatisch genehmigt werden (`[workflow] scope_extension_gate`).
 
 Bereits bei der Planung werden alle `SLICE_PLAN`-Pfade gegen den Task-Scope geprüft. Unerwartete Pfade, ein geänderter Branch, ein geänderter Taskinhalt, ein geänderter Slice-Startcommit oder ein nach dem Review abweichender Fingerprint blockieren den Lauf.
 
@@ -179,7 +179,7 @@ Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verw
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Claude verwendet standardmäßig Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
+Claude verwendet standardmäßig Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
 geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
@@ -207,8 +207,7 @@ Die wichtigsten Gates sind:
 
 - geänderte Tests ohne vorherige Autorisierung;
 - ein optionales manuelles Gate vor jedem Slice-Commit;
-- mehr als zehn produktive Änderungsgruppen;
-- eine repositorydefinierte Stopregel oder ein Agentendatensatz `STOP_REQUESTED`;
+- eine repositorydefinierte Stopregel oder ein Agentendatensatz `STOP_REQUESTED`; eine angemeldete Umfangserweiterung genehmigt der Orchestrator bei ausgeschaltetem `scope_extension_gate` (Standard) selbst, außer für Arbeitsplan und Prüfberichte;
 - Pfade außerhalb des persistierten Slice-Umfangs;
 - Abweichungen bei Branch, HEAD, Diff-Fingerprint oder Validierungsattestierung;
 - fehlende oder nicht verfügbare Validierung;
