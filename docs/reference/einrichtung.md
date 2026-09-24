@@ -10,9 +10,52 @@ wollen, was dabei im Einzelnen geschieht und wo die Grenzen liegen.
 
 > [!TIP]
 > **Der kürzeste Weg.** Teil 1 einmal erledigen. Danach entweder Teil 2
-> (vorhandenes Projekt) oder Teil 3 (Neuanfang). Wer verstehen möchte, was der
-> Orchestrator während eines Laufs tut, liest
+> (vorhandenes Projekt) oder Teil 3 (Neuanfang). Oder Sie überlassen das
+> Abarbeiten einem Agenten – siehe den nächsten Abschnitt. Wer verstehen
+> möchte, was der Orchestrator während eines Laufs tut, liest
 > [Wie der Orchestrator arbeitet](ablauf-des-orchestrators.md).
+
+## Die Einrichtung einem Agenten überlassen
+
+Codex und Claude Code brauchen Sie ohnehin. Einer von beiden kann diese
+Anleitung auch selbst abarbeiten; Sie treffen nur noch die Entscheidungen.
+
+**Was Sie selbst tun müssen**, weil es kein Agent für Sie kann:
+
+1. Codex CLI und Claude Code installieren und **anmelden** (1.1).
+2. Name und E-Mail-Adresse für Git nennen, wenn der Agent danach fragt.
+
+**Dann** starten Sie Claude Code im Projektordner (`claude`) und geben diesen
+Auftrag – für ein **vorhandenes Projekt**:
+
+```text
+Klone https://github.com/dieteresser62-lab/Dual-Agent-Orchestrator nach
+~/werkzeuge/Dual-Agent-Orchestrator, falls es dort noch nicht liegt, und lies
+dort docs/reference/einrichtung.md. Erledige Teil 1, soweit er fehlt, und
+schließe dieses Projekt nach Teil 2 an. Frag mich, statt zu raten: beim
+Testbefehl, bei den Pfadklassen, beim Inhalt der AGENTS.md und vor jeder
+Installation. Starte keinen Lauf. Zeig mir am Ende jeden Schritt mit Ergebnis.
+```
+
+Für einen **Neuanfang** lautet der mittlere Satz stattdessen: *„Lege nach
+Teil 3 in diesem Ordner ein neues Projekt aus der Beschreibung
+/pfad/zu/beschreibung.md an.“* Dann fragt der Agent zusätzlich nach Sprache und
+Werkzeugen und nach allem, was Sie vorab liefern müssen (3.6).
+
+Claude Code eignet sich dafür besser als Codex: Es fragt vor jeder Installation
+nach, während Codex in seiner Sandbox meist keinen Netzzugang hat.
+
+**Fertig ist die Einrichtung**, wenn der Bericht des Agenten zeigt:
+
+- `run_task --help` funktioniert;
+- das Projekt steht auf dem Hauptbranch, `git status --short` ist leer;
+- `.gitignore`, `orchestrator.toml` und `AGENTS.md` sind committet;
+- der Testbefehl – und jeder zusätzliche Prüfbefehl aus 2.3 – ist grün;
+- der Ordner `inbox/` existiert.
+
+Die erste Idee (2.6) und den Start (2.7) übernehmen Sie selbst. Diese
+Anleitung bleibt die Referenz: Jeder Schritt, den der Agent getan hat, steht
+hier zum Nachlesen.
 
 ---
 
