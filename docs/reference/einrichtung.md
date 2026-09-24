@@ -134,7 +134,14 @@ git clone https://github.com/dieteresser62-lab/Dual-Agent-Orchestrator.git \
 > [!TIP]
 > **Unter WSL2** gehören Orchestrator und Projekte ins Linux-Dateisystem, also
 > unter `~/`, nicht unter `/mnt/c/…`. Dateizugriffe über die Windows-Grenze
-> sind erheblich langsamer, und der Orchestrator liest viel.
+> sind erheblich langsamer – gemessen rund 57-mal bei `git status` –, und der
+> Orchestrator liest viel.
+>
+> Ausnahme: Ein Projekt, dessen Ergebnis unter Windows gebaut wird, etwa eine
+> Tauri- oder andere `.exe`, kann unter `/mnt/c/…` bleiben. Der Orchestrator
+> arbeitet dort genauso, nur langsamer. Sprechen Sie dort Dateinamen exakt in
+> der Schreibweise an, die Git kennt: Das Windows-Dateisystem unterscheidet
+> Groß- und Kleinschreibung nicht, Git schon.
 
 ### 1.3 Als Befehl verfügbar machen
 
