@@ -80,7 +80,7 @@ from native_review_contract import (
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_work_unit
-from review_packets import ReviewPacket
+from review_packets import BinaryFileMetadata, ReviewPacket
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
     CodexInvocation,
@@ -1017,6 +1017,50 @@ def test_recomposed_request_round_builds_slice_packet_and_keeps_open_findings() 
     assert review.review_packet.purpose == "slice"
     packet = json.loads(review.review_packet.canonical_bytes)
     assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
+
+
+def test_green_binary_asset_slice_reaches_reviewer_request() -> None:
+    asset = b"\x00font-data"
+    digest = hashlib.sha256(asset).hexdigest()
+    asset_path = "assets/font.ttf"
+    binary_diff = (
+        f"diff --git a/{asset_path} b/{asset_path}\n"
+        "new file mode 100644\n--- /dev/null\n"
+        f"+++ b/{asset_path}\n"
+        f"Binary file; size={len(asset)}; sha256={digest}\n"
+    )
+    text_diff = _changes("b", TEST_FILE).full_diff
+    changes = WorkflowChanges(
+        start_commit=START_COMMIT, fingerprint="b" * 64,
+        paths=tuple(sorted((asset_path, TEST_FILE))),
+        full_diff=binary_diff + text_diff,
+        binary_metadata=(BinaryFileMetadata(
+            asset_path, "added", None, None, len(asset), digest
+        ),),
+    )
+    state = replace(
+        _slice_state(scope_paths=changes.paths),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    driver = FakeDriver(
+        snapshots=[changes, changes], codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    WorkflowEngine(driver).run_current_work_unit(
+        state, replace(_context(), approved_plan_text=_packet_plan()),
+        WorkflowHistory(state.current_work_unit_id),
+    )
+    assert driver.validation_calls == [changes.fingerprint]
+    assert len(driver.reviewer_calls) == 1
+    review = driver.reviewer_calls[0]
+    assert review.review_packet is not None
+    packet = json.loads(review.review_packet.canonical_bytes)
+    assert packet["manifest"]["diff_coverage"][0]["new_sha256"] == digest
+    assert "font-data" not in review.review_packet.text
 
 
 def _denied_slice_round(

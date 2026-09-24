@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import difflib
 import hashlib
 import json
@@ -13,7 +14,7 @@ from typing import Iterable, Mapping, Sequence
 
 from semantic_markdown import SemanticMarkdownError, canonical_semantic_markdown
 from path_policy import PathPolicyError, resolve_path_within_roots
-from review_packets import exclude_review_diff_paths
+from review_packets import BinaryFileMetadata, exclude_review_diff_paths
 
 
 UNTRACKED_PREVIEW_LIMIT = 256_000
@@ -74,6 +75,17 @@ class ChangeFingerprintEntry:
         }
 
 
+class ReviewDiff(str):
+    """A diff string carrying independently measured binary file metadata."""
+
+    def __new__(
+        cls, value: str, binary_metadata: tuple[BinaryFileMetadata, ...]
+    ) -> ReviewDiff:
+        instance = super().__new__(cls, value)
+        instance.binary_metadata = binary_metadata
+        return instance
+
+
 @dataclass(frozen=True)
 class RepositoryChanges:
     repository_root: Path
@@ -82,6 +94,7 @@ class RepositoryChanges:
     diff_text: str
     fingerprint: str
     fingerprint_entries: tuple[ChangeFingerprintEntry, ...] = ()
+    binary_metadata: tuple[BinaryFileMetadata, ...] = ()
 
     @property
     def paths(self) -> tuple[str, ...]:
@@ -185,6 +198,7 @@ class _UntrackedPayload:
     preview: bytes
     truncated: bool
     mode: int
+    is_binary: bool = False
 
 
 def _display_path(path: str) -> str:
@@ -393,6 +407,8 @@ def _read_path_payload(
         )
 
     digest = hashlib.sha256()
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    is_binary = False
     preview = bytearray()
     markdown_content = (
         bytearray()
@@ -422,6 +438,14 @@ def _read_path_payload(
                 if not block:
                     break
                 digest.update(block)
+                if not is_binary:
+                    if b"\x00" in block:
+                        is_binary = True
+                    else:
+                        try:
+                            decoder.decode(block)
+                        except UnicodeDecodeError:
+                            is_binary = True
                 if markdown_content is not None:
                     markdown_content.extend(block)
                 if len(preview) < UNTRACKED_PREVIEW_LIMIT:
@@ -436,6 +460,11 @@ def _read_path_payload(
             f"could not read untracked path {relative_path!r}: {exc}"
         ) from exc
     raw_digest = digest.hexdigest()
+    if not is_binary:
+        try:
+            decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            is_binary = True
     fingerprint_size = opened_size
     fingerprint_digest = raw_digest
     if markdown_content is not None:
@@ -465,6 +494,7 @@ def _read_path_payload(
         preview=bytes(preview),
         truncated=opened_size_for_preview > len(preview),
         mode=normalized_mode,
+        is_binary=is_binary,
     )
 
 
@@ -556,17 +586,14 @@ def _render_untracked_diff(path: str, payload: _UntrackedPayload) -> str:
         return "\n".join(
             [*header, f"[untracked special file; sha256={payload.digest}]"]
         )
-    try:
-        text = payload.preview.decode("utf-8")
-        if "\x00" in text:
-            raise UnicodeDecodeError("utf-8", payload.preview, 0, 1, "NUL byte")
-    except UnicodeDecodeError:
+    if _is_binary_payload(payload):
         return "\n".join(
             [
                 *header,
                 f"Binary file; size={payload.size}; sha256={payload.digest}",
             ]
         )
+    text = payload.preview.decode("utf-8")
     lines = text.splitlines()
     rendered = [*header, f"@@ -0,0 +1,{len(lines)} @@"]
     rendered.extend(f"+{line}" for line in lines)
@@ -575,6 +602,92 @@ def _render_untracked_diff(path: str, payload: _UntrackedPayload) -> str:
             f"+...[untracked preview truncated; size={payload.size}; sha256={payload.digest}]"
         )
     return "\n".join(rendered)
+
+
+def _is_binary_payload(payload: _UntrackedPayload) -> bool:
+    return payload.content_type == "regular" and payload.is_binary
+
+
+def _is_binary_bytes(content: bytes) -> bool:
+    if b"\x00" in content:
+        return True
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _binary_metadata(
+    root: Path, merge_base: str, entries: list[ChangedPath],
+    payloads: dict[str, _UntrackedPayload], tracked_diff: bytes,
+) -> tuple[BinaryFileMetadata, ...]:
+    binary_paths: set[str] = set()
+    tracked_lines = tracked_diff.splitlines()
+    starts = [index for index, line in enumerate(tracked_lines) if line.startswith(b"diff --git ")]
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(tracked_lines)
+        lines = tracked_lines[start:end]
+        if not any(
+            line == b"GIT binary patch" or line.startswith(b"Binary files ")
+            for line in lines
+        ):
+            continue
+        header = os.fsdecode(lines[0][len(b"diff --git "):])
+        for entry in entries:
+            if entry.tracked and header == f"a/{_display_path(entry.path)} b/{_display_path(entry.path)}":
+                binary_paths.add(entry.path)
+                break
+        else:
+            raise RepositoryChangeError("Git binary diff path is not a known change")
+    binary_paths.update(
+        entry.path for entry in entries
+        if not entry.tracked and _is_binary_payload(payloads[entry.path])
+    )
+    binary_paths.update(
+        entry.path for entry in entries
+        if entry.tracked and entry.kind != "deleted" and _is_binary_payload(payloads[entry.path])
+    )
+    old_binary: dict[str, bytes] = {}
+    for entry in entries:
+        if not entry.tracked or entry.kind == "added":
+            continue
+        old = _git(root, ("show", f"{merge_base}:{entry.old_path or entry.path}")).stdout
+        if _is_binary_bytes(old):
+            old_binary[entry.path] = old
+            binary_paths.add(entry.path)
+    result: list[BinaryFileMetadata] = []
+    for entry in entries:
+        if entry.path not in binary_paths:
+            continue
+        old_size: int | None = None
+        old_digest: str | None = None
+        if entry.tracked and entry.kind != "added":
+            tree = _git(root, ("ls-tree", "-z", merge_base, "--", entry.path)).stdout
+            records = [part for part in tree.split(b"\0") if part]
+            if len(records) != 1 or b"\t" not in records[0]:
+                raise RepositoryChangeError(f"binary old path is not a regular Git file: {entry.path}")
+            descriptor, tree_path = records[0].split(b"\t", 1)
+            if tree_path != os.fsencode(entry.path) or not descriptor.startswith(
+                (b"100644 blob ", b"100755 blob ")
+            ):
+                raise RepositoryChangeError(f"binary old path is not a regular Git file: {entry.path}")
+            old = old_binary.get(entry.path)
+            if old is None:
+                old = _git(root, ("show", f"{merge_base}:{entry.path}")).stdout
+            old_size, old_digest = len(old), hashlib.sha256(old).hexdigest()
+        new_size: int | None = None
+        new_digest: str | None = None
+        if entry.kind != "deleted":
+            payload = payloads[entry.path]
+            if payload.content_type != "regular":
+                raise RepositoryChangeError(f"binary new path is not a regular file: {entry.path}")
+            new_size, new_digest = payload.size, payload.digest
+        result.append(BinaryFileMetadata(
+            entry.path, "added" if entry.kind == "untracked" else entry.kind,
+            old_size, old_digest, new_size, new_digest,
+        ))
+    return tuple(result)
 
 
 def collect_repository_changes(
@@ -729,13 +842,19 @@ def collect_repository_changes(
         for entry in entries
         if not entry.tracked and entry.path in payloads
     )
+    binary_metadata = _binary_metadata(
+        root, canonical_merge_base, entries, payloads, tracked_diff
+    )
     return RepositoryChanges(
         repository_root=root,
         merge_base=canonical_merge_base,
         entries=tuple(entries),
-        diff_text="\n\n".join(part for part in diff_parts if part),
+        diff_text=ReviewDiff(
+            "\n\n".join(part for part in diff_parts if part), binary_metadata
+        ),
         fingerprint=fingerprint,
         fingerprint_entries=fingerprint_entries,
+        binary_metadata=binary_metadata,
     )
 
 

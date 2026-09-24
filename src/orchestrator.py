@@ -1476,7 +1476,7 @@ class ProductionWorkflowDriver:
         manifest_paths: tuple[str, ...] | None = None
         if invocation.review_packet is not None:
             self._materialize_review_packet(invocation.review_packet)
-            manifest_paths = invocation.review_packet.manifest.paths
+            manifest_paths = invocation.review_packet.manifest.snapshot_paths
         state = self.active_state
         if (
             state is None

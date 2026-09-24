@@ -99,8 +99,10 @@ from gates import (
     validate_builtin_stop_content,
 )
 from review_packets import (
-    ReviewPacket, ReviewPacketError, build_review_packet, exclude_review_diff_paths,
+    BinaryFileMetadata, ReviewPacket, ReviewPacketError, build_review_packet,
+    exclude_review_diff_paths,
 )
+from repo_changes import ReviewDiff
 from task_contract import TaskMode
 from validation_matrix import (
     ValidationCommand,
@@ -327,8 +329,13 @@ class WorkflowChanges:
     paths: tuple[str, ...]
     full_diff: str
     gate_paths: tuple[str, ...] = ()
+    binary_metadata: tuple[BinaryFileMetadata, ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.full_diff, ReviewDiff):
+            if self.binary_metadata and self.binary_metadata != self.full_diff.binary_metadata:
+                raise ValueError("workflow binary metadata differs from the collected diff")
+            object.__setattr__(self, "binary_metadata", self.full_diff.binary_metadata)
         if not self.start_commit.strip():
             raise ValueError("workflow changes require a start commit")
         if not SHA256_PATTERN.fullmatch(self.fingerprint):
@@ -2649,6 +2656,9 @@ class WorkflowEngine:
                 unit.open_findings
                 if packet_purpose == "correction"
                 else ()
+            ),
+            binary_metadata=tuple(
+                item for item in changes.binary_metadata if item.path in packet_paths
             ),
         )
 

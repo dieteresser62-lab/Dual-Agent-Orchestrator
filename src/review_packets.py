@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from typing import Mapping
 
 from contracts import FindingRecord, ValidationAttestation
 from finding_order import finding_id_sort_key, sorted_finding_ids
@@ -22,11 +23,43 @@ class ReviewPacketError(ValueError):
 
 
 @dataclass(frozen=True)
+class BinaryFileMetadata:
+    path: str
+    change_type: str
+    old_size: int | None
+    old_sha256: str | None
+    new_size: int | None
+    new_sha256: str | None
+
+    def __post_init__(self) -> None:
+        _validate_repository_path(self.path)
+        if self.change_type not in {"added", "modified", "deleted"}:
+            raise ReviewPacketError("binary change type is invalid")
+        for size, digest in ((self.old_size, self.old_sha256), (self.new_size, self.new_sha256)):
+            if (size is None) != (digest is None):
+                raise ReviewPacketError("binary size and SHA-256 must occur together")
+            if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 0):
+                raise ReviewPacketError("binary size is invalid")
+            if digest is not None and (
+                not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None
+            ):
+                raise ReviewPacketError("binary SHA-256 is invalid")
+        if (self.old_size is None) != (self.change_type == "added") or (
+            (self.new_size is None) != (self.change_type == "deleted")
+        ):
+            raise ReviewPacketError("binary sides contradict change type")
+
+
+@dataclass(frozen=True)
 class DiffCoverageEntry:
     path: str
     change_type: str
     section_sha256: str
     hunk_headers: tuple[str, ...]
+    old_size: int | None = None
+    old_sha256: str | None = None
+    new_size: int | None = None
+    new_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _validate_repository_path(self.path)
@@ -37,6 +70,16 @@ class DiffCoverageEntry:
         for header in self.hunk_headers:
             if not _HUNK_HEADER.fullmatch(header):
                 raise ReviewPacketError(f"invalid diff hunk header: {header!r}")
+        if not self.hunk_headers:
+            BinaryFileMetadata(self.path, self.change_type, self.old_size,
+                               self.old_sha256, self.new_size, self.new_sha256)
+        elif any(value is not None for value in (self.old_size, self.old_sha256,
+                                                  self.new_size, self.new_sha256)):
+            raise ReviewPacketError("text coverage cannot carry binary metadata")
+
+    @property
+    def is_binary(self) -> bool:
+        return not self.hunk_headers
 
 
 @dataclass(frozen=True)
@@ -62,6 +105,15 @@ class ReviewPacketManifest:
                 raise ReviewPacketError("diff coverage manifest digest does not match entries")
         elif self.diff_coverage_digest is not None:
             raise ReviewPacketError("legacy manifest cannot carry a coverage digest")
+
+    @property
+    def snapshot_paths(self) -> tuple[str, ...]:
+        if not self.diff_coverage:
+            return self.paths
+        return tuple(
+            item.path for item in self.diff_coverage
+            if not item.is_binary and item.change_type != "deleted"
+        )
 
 
 @dataclass(frozen=True)
@@ -172,6 +224,7 @@ def build_review_packet(
     attestation: ValidationAttestation,
     findings: tuple[FindingRecord, ...],
     affected_finding_ids: tuple[str, ...] = (),
+    binary_metadata: tuple[BinaryFileMetadata, ...] = (),
 ) -> ReviewPacket:
     """Build the role-neutral, content-addressed Slice/correction evidence packet."""
     if purpose not in {"slice", "correction"}:
@@ -185,7 +238,14 @@ def build_review_packet(
             "review packet requires a fingerprint-bound complete attestation"
         )
     base_manifest = ReviewPacketManifest(paths=paths)
-    review_diff, coverage = _canonicalize_diff(review_diff, base_manifest.paths)
+    expected_binary = {item.path: item for item in binary_metadata}
+    if len(expected_binary) != len(binary_metadata):
+        raise ReviewPacketError("duplicate binary metadata path")
+    review_diff, coverage = _canonicalize_diff(
+        review_diff, base_manifest.paths, expected_binary=expected_binary
+    )
+    if {item.path for item in coverage if item.is_binary} != set(expected_binary):
+        raise ReviewPacketError("binary metadata does not match diff coverage")
     manifest = ReviewPacketManifest(
         paths=paths,
         diff_coverage=coverage,
@@ -282,13 +342,20 @@ def build_review_packet(
 
 _DIFF_HEADER = re.compile(r"^diff --git a/([^\s]+) b/([^\s]+)$")
 _HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: .*)?$")
+_UNTRACKED_BINARY = re.compile(r"^Binary file; size=(0|[1-9][0-9]*); sha256=([0-9a-f]{64})$")
+_CANONICAL_BINARY = re.compile(
+    r"^Binary file; old_size=(-|0|[1-9][0-9]*); old_sha256=(-|[0-9a-f]{64}); "
+    r"new_size=(-|0|[1-9][0-9]*); new_sha256=(-|[0-9a-f]{64})$"
+)
 _AUDIT_EDGE = re.compile(
     r"^<!-- audit:(?P<key>[a-z0-9-]+):(?P<edge>begin|end) -->$"
 )
 
 
 def _canonicalize_diff(
-    review_diff: str, paths: tuple[str, ...]
+    review_diff: str, paths: tuple[str, ...],
+    *, expected_binary: Mapping[str, BinaryFileMetadata] | None = None,
+    allow_canonical_binary: bool = False,
 ) -> tuple[str, tuple[DiffCoverageEntry, ...]]:
     normalized = review_diff.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.splitlines(keepends=True)
@@ -317,6 +384,15 @@ def _canonicalize_diff(
             raise ReviewPacketError(f"duplicate diff section for path: {path}")
         seen.add(path)
         text_lines = [line.rstrip("\n") for line in section_lines]
+        _validate_regular_modes(text_lines)
+        if (expected_binary is not None and path in expected_binary) or any(
+               line == "GIT binary patch" or line.startswith("Binary file;")
+               or line.startswith("Binary files ") for line in text_lines):
+            section, entry = _canonicalize_binary_section(
+                path, text_lines, expected_binary, allow_canonical_binary
+            )
+            sections.append((path, section, entry))
+            continue
         hunk_indexes = [index for index, line in enumerate(text_lines) if line.startswith("@@")]
         if not hunk_indexes:
             raise ReviewPacketError("text diff section requires valid hunk headers")
@@ -364,6 +440,101 @@ def _canonicalize_diff(
     return canonical_diff, tuple(item[2] for item in sections)
 
 
+def _validate_regular_modes(lines: list[str]) -> None:
+    for line in lines[1:]:
+        if line.startswith(("new file mode ", "deleted file mode ", "old mode ", "new mode ")):
+            if line.rsplit(" ", 1)[-1] not in {"100644", "100755"}:
+                raise ReviewPacketError("special file modes are unsupported")
+        elif line.startswith("index "):
+            parts = line.split(" ")
+            if len(parts) == 3 and parts[-1].isdigit() and parts[-1] not in {"100644", "100755"}:
+                raise ReviewPacketError("special file modes are unsupported")
+
+
+def _canonicalize_binary_section(
+    path: str, lines: list[str],
+    expected: Mapping[str, BinaryFileMetadata] | None,
+    allow_canonical: bool,
+) -> tuple[str, DiffCoverageEntry]:
+    while lines and not lines[-1]:
+        lines = lines[:-1]
+    if any(line.startswith(("rename from ", "rename to ", "copy from ", "copy to "))
+           for line in lines):
+        raise ReviewPacketError("rename and copy sections are unsupported")
+    added = [line for line in lines if line.startswith("new file mode ")]
+    deleted = [line for line in lines if line.startswith("deleted file mode ")]
+    if len(added) > 1 or len(deleted) > 1 or (added and deleted):
+        raise ReviewPacketError("binary change metadata is contradictory")
+    if any(line not in {"new file mode 100644", "new file mode 100755",
+                        "deleted file mode 100644", "deleted file mode 100755"}
+           for line in added + deleted):
+        raise ReviewPacketError("binary special files are unsupported")
+    change_type = "added" if added else "deleted" if deleted else "modified"
+    metadata_lines = [line for line in lines if line.startswith("Binary file;")]
+    canonical_lines = [line for line in metadata_lines if _CANONICAL_BINARY.fullmatch(line)]
+    if allow_canonical and len(lines) == 2 and len(canonical_lines) == 1:
+        canonical_match = _CANONICAL_BINARY.fullmatch(canonical_lines[0])
+        assert canonical_match is not None
+        change_type = (
+            "added" if canonical_match.group(1) == "-" else
+            "deleted" if canonical_match.group(3) == "-" else "modified"
+        )
+    source = expected.get(path) if expected is not None else None
+    if source is None and not (allow_canonical and len(lines) == 2 and len(canonical_lines) == 1):
+        raise ReviewPacketError("binary section lacks authoritative metadata")
+    if source is not None:
+        if source.change_type != change_type:
+            raise ReviewPacketError("binary change type differs from authoritative metadata")
+        if len(metadata_lines) > 1:
+            raise ReviewPacketError("binary section has multiple metadata lines")
+        if metadata_lines:
+            raw = _UNTRACKED_BINARY.fullmatch(metadata_lines[0])
+            if raw is None or change_type != "added" or (
+                int(raw.group(1)), raw.group(2)
+            ) != (source.new_size, source.new_sha256):
+                raise ReviewPacketError("binary metadata line is missing or manipulated")
+            if lines != [
+                f"diff --git a/{path} b/{path}", added[0],
+                "--- /dev/null", f"+++ b/{path}", metadata_lines[0],
+            ]:
+                raise ReviewPacketError("untracked binary section has unsupported content")
+        elif "GIT binary patch" not in lines and not any(
+            line.startswith("Binary files ") for line in lines
+        ):
+            old_header = "--- /dev/null" if change_type == "added" else f"--- a/{path}"
+            new_header = "+++ /dev/null" if change_type == "deleted" else f"+++ b/{path}"
+            if old_header not in lines or new_header not in lines or not any(
+                _HUNK_HEADER.fullmatch(line) for line in lines
+            ):
+                raise ReviewPacketError("binary section lacks a valid Git diff body")
+        metadata = source
+    else:
+        raw = _CANONICAL_BINARY.fullmatch(canonical_lines[0])
+        assert raw is not None
+        old_size, old_digest, new_size, new_digest = raw.groups()
+        metadata = BinaryFileMetadata(
+            path, change_type,
+            None if old_size == "-" else int(old_size),
+            None if old_digest == "-" else old_digest,
+            None if new_size == "-" else int(new_size),
+            None if new_digest == "-" else new_digest,
+        )
+    def value(item: object) -> str:
+        return "-" if item is None else str(item)
+    canonical = (
+        f"diff --git a/{path} b/{path}\n"
+        f"Binary file; old_size={value(metadata.old_size)}; "
+        f"old_sha256={value(metadata.old_sha256)}; "
+        f"new_size={value(metadata.new_size)}; "
+        f"new_sha256={value(metadata.new_sha256)}\n"
+    )
+    entry = DiffCoverageEntry(
+        path, metadata.change_type, hashlib.sha256(canonical.encode()).hexdigest(), (),
+        metadata.old_size, metadata.old_sha256, metadata.new_size, metadata.new_sha256,
+    )
+    return canonical, entry
+
+
 def _validate_semantic_marker_hunks(lines: list[str]) -> None:
     """Reject review diffs that expose bytes inside a managed projection body."""
     for prefixes in ((" ", "-"), (" ", "+")):
@@ -409,21 +580,30 @@ def exclude_review_diff_paths(review_diff: str, excluded_paths: tuple[str, ...])
 
 
 def _coverage_entry_to_dict(item: DiffCoverageEntry) -> dict[str, object]:
-    return {
+    result = {
         "path": item.path,
         "change_type": item.change_type,
         "section_sha256": item.section_sha256,
         "hunk_headers": list(item.hunk_headers),
     }
+    if item.is_binary:
+        result.update(old_size=item.old_size, old_sha256=item.old_sha256,
+                      new_size=item.new_size, new_sha256=item.new_sha256)
+    return result
 
 
 def _coverage_entry_from_dict(raw: object) -> DiffCoverageEntry:
-    if not isinstance(raw, dict) or set(raw) != {"path", "change_type", "section_sha256", "hunk_headers"}:
+    common = {"path", "change_type", "section_sha256", "hunk_headers"}
+    binary = {"old_size", "old_sha256", "new_size", "new_sha256"}
+    if not isinstance(raw, dict) or set(raw) not in (common, common | binary):
         raise ReviewPacketError("diff coverage entry has invalid fields")
     headers = raw["hunk_headers"]
     if not isinstance(headers, list) or not all(isinstance(item, str) for item in headers):
         raise ReviewPacketError("diff coverage hunk headers are invalid")
-    return DiffCoverageEntry(str(raw["path"]), str(raw["change_type"]), str(raw["section_sha256"]), tuple(headers))
+    return DiffCoverageEntry(str(raw["path"]), str(raw["change_type"]),
+                             str(raw["section_sha256"]), tuple(headers),
+                             *(raw[key] for key in ("old_size", "old_sha256", "new_size", "new_sha256"))
+                             if set(raw) == common | binary else ())
 
 
 def _coverage_digest(entries: tuple[DiffCoverageEntry, ...]) -> str:
@@ -471,7 +651,10 @@ def _validate_packet_document(packet: ReviewPacket) -> None:
         raise ReviewPacketError("review packet coverage digest differs from canonical bytes")
     if manifest_raw.get("diff_coverage") != [_coverage_entry_to_dict(item) for item in packet.manifest.diff_coverage]:
         raise ReviewPacketError("review packet coverage entries differ from canonical bytes")
-    canonical_diff, coverage = _canonicalize_diff(str(payload.get("diff", "")), packet.manifest.paths)
+    canonical_diff, coverage = _canonicalize_diff(
+        str(payload.get("diff", "")), packet.manifest.paths,
+        allow_canonical_binary=True,
+    )
     if canonical_diff != payload.get("diff") or coverage != packet.manifest.diff_coverage:
         raise ReviewPacketError("review packet diff coverage differs from canonical diff")
 
@@ -484,6 +667,6 @@ def _compact_one_line(value: str, maximum: int = 240) -> str:
 
 
 __all__ = [
-    "DiffCoverageEntry", "ReviewPacket", "ReviewPacketError", "ReviewPacketManifest",
+    "BinaryFileMetadata", "DiffCoverageEntry", "ReviewPacket", "ReviewPacketError", "ReviewPacketManifest",
     "build_review_packet", "exclude_review_diff_paths", "extract_slice_requirements",
 ]

@@ -768,8 +768,8 @@ def _copy_review_snapshot(
     manifest_paths: tuple[str, ...] | None = None,
 ) -> int:
     if manifest_paths is not None:
-        if not manifest_paths or manifest_paths != tuple(sorted(set(manifest_paths))):
-            raise RuntimeError("reviewer snapshot manifest must be sorted, unique, and non-empty")
+        if manifest_paths != tuple(sorted(set(manifest_paths))):
+            raise RuntimeError("reviewer snapshot manifest must be sorted and unique")
         destination.mkdir()
         copied = 0
         for raw in manifest_paths:
