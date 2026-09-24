@@ -52,6 +52,7 @@ bleibt Ihre Entscheidung.
 | Linux, macOS oder Windows mit WSL2 | – | natives Windows wird nicht unterstützt |
 | Python | 3.11 | `python3 --version` |
 | Git | – | `git --version` |
+| eine Git-Identität | – | `git config user.name` und `git config user.email` |
 | Codex CLI | 0.156.1 | `codex --version` |
 | Claude Code | 2.1.280 | `claude --version` |
 | ein ChatGPT-Konto mit Zugriff auf **GPT-6 Sol** | – | `codex login` |
@@ -69,6 +70,15 @@ npm install -g @anthropic-ai/claude-code
 > Beide Programme müssen **angemeldet** sein, bevor der Orchestrator startet.
 > Er fragt nicht nach Zugangsdaten und legt keine an. Ältere Versionen als die
 > oben genannten weist er beim ersten Aufruf ab.
+
+Der Orchestrator committet unter der Git-Identität des Projekts. Fehlt sie,
+scheitert schon der erste Commit mit `Author identity unknown`. Einmalig
+einrichten:
+
+```bash
+git config --global user.name "Ihr Name"
+git config --global user.email "ihre@adresse.example"
+```
 
 ### 1.2 Herunterladen
 
@@ -177,6 +187,7 @@ default_timeout_seconds = 1200
 plan_gate = false
 test_change_gate = false
 manual_slice_gate = false
+scope_extension_gate = false
 ```
 
 <details>
@@ -197,12 +208,41 @@ default_timeout_seconds = 1200
 plan_gate = false
 test_change_gate = false
 manual_slice_gate = false
+scope_extension_gate = false
 ```
 
 </details>
 
 Passen Sie die Pfade an Ihr Projekt an. Was unter `[paths]` fehlt, zählt als
 Produktivcode – ein vergessenes Muster richtet also keinen Schaden an.
+
+**Mehr als ein Prüfbefehl.** Geprüft wird nur, was ein Befehl prüft. Laufen etwa
+Typprüfung oder Build nicht mit, rutschen Typfehler durch, oder ein
+Akzeptanzkriterium wie „der Build läuft“ lässt sich nicht belegen. Zusätzliche
+Befehle hängen Sie als Regeln an; sie laufen immer dann, wenn ein Arbeitspaket
+einen passenden Pfad ändert:
+
+```toml
+[validation]
+default_command = ["npm", "test"]
+default_timeout_seconds = 1200
+
+[[validation.rules]]
+patterns = ["src/**", "package.json", "tsconfig.json"]
+command = ["npm", "run", "typecheck"]
+timeout_seconds = 600
+
+[[validation.rules]]
+patterns = ["src/**", "index.html", "package.json", "vite.config.ts"]
+command = ["npm", "run", "build"]
+timeout_seconds = 600
+```
+
+Einfacher, aber gröber: ein Sammelskript in `package.json`, etwa
+`"check": "tsc --noEmit && vitest run && vite build"`, und
+`default_command = ["npm", "run", "check"]`. Für Akzeptanzkriterien gegen das
+Bauergebnis oder das laufende Produkt gibt es zusätzlich `required_artifacts`
+und `product_command` (4.2).
 
 **Jetzt den Testbefehl einmal von Hand ausführen.** Er muss auf dem Hauptbranch
 grün sein:
@@ -344,6 +384,10 @@ Eine Entscheidung erteilen Sie mit Begründung:
 run_task --watch --resume --approve-gate --gate-rationale "Pfade geprüft, passt"
 ```
 
+Nach Exitcode `3` wegen dreier Abbrüche eines Agenten ist das
+Wiederholungsbudget des Arbeitspakets aufgebraucht. Jedes weitere Fortsetzen
+bringt dann genau einen neuen Versuch.
+
 > [!IMPORTANT]
 > Niemals Dateien unter `.orchestrator/` von Hand ändern oder löschen, während
 > eine Aufgabe unterwegs ist. Daran hängt die Fähigkeit, nach jedem Abbruch
@@ -401,7 +445,15 @@ cp /pfad/zu/meiner/beschreibung.md docs/spezifikation.md
 ### 3.3 Ein Gerüst mit einem grünen Test
 
 Entscheiden Sie Sprache und Werkzeuge und legen Sie ein minimales Gerüst mit
-**einem** Test an, der besteht. Für Python:
+**einem** Test an, der besteht.
+
+> [!IMPORTANT]
+> **Die vollständige Werkzeugkette gehört ins Gerüst.** Die Agenten installieren
+> keine Pakete nach. Verlangt die Beschreibung TypeScript, einen Bundler oder
+> eine Browser-Testumgebung, muss all das schon installiert und mit einem
+> Skript aufrufbar sein – sonst hält das erste Arbeitspaket, das es braucht, an.
+
+Für Python:
 
 ```bash
 mkdir -p src/meinprojekt tests
@@ -428,10 +480,17 @@ npm test
 
 </details>
 
+Das Beispiel legt reines JavaScript an. Für TypeScript mit Vite gehören
+zusätzlich `typescript` und `vite` dazu, ein Skript `typecheck`
+(`tsc --noEmit`) und ein Skript `build`.
+
 Wer das Gerüst lieber erzeugen lässt, fragt Codex oder Claude **direkt**, ohne
 Orchestrator – etwa: *„Lies docs/spezifikation.md. Richte ein leeres Projekt mit
 der passenden Werkzeugkette und genau einem bestehenden Test ein. Noch keine
-Fachlogik."* Prüfen Sie danach selbst, dass der Test grün ist.
+Fachlogik."* Der Agent braucht dafür Netzzugang, um Pakete zu installieren.
+Claude Code fragt vor `npm install` nach; in Codex ist das Netz in der Sandbox
+meist gesperrt. Prüfen Sie danach selbst, dass Test, Typprüfung und Build grün
+sind.
 
 ### 3.4 Einrichten und festschreiben
 
@@ -452,11 +511,26 @@ git commit -m "chore: establish the project baseline"
 mkdir -p inbox
 ```
 
-### 3.5 Die Beschreibung in Schritte teilen
+### 3.5 Alles auf einmal oder in Zuwächsen
 
-Geben Sie nicht die ganze Beschreibung auf einmal in den Eingang. Schneiden Sie
-sie in **Zuwächse**, von denen jeder für sich etwas Nutzbares ergibt, und geben
-Sie sie **nacheinander** hinein:
+**Alles auf einmal** funktioniert. Eine einzige Idee genügt, der Orchestrator
+schneidet die Arbeit selbst in Arbeitspakete:
+
+```markdown
+# Version 1 aus der Beschreibung aufbauen
+
+Baue die Anwendung vollständig nach docs/spezifikation.md auf. Fertig ist
+sie, wenn jede Funktion aus dem Abschnitt „Umfang“ benutzbar ist.
+```
+
+Ein Beispiel: Eine Beschreibung einer Kochbuch-App mit rund zwanzig Funktionen
+wurde so in 18 Arbeitspaketen und drei Nacharbeiten der Abnahme vollständig
+umgesetzt.
+
+**In Zuwächsen** lohnt es sich, wenn Sie Zwischenstände ansehen und die
+Richtung unterwegs ändern wollen. Schneiden Sie die Beschreibung dann in
+Teile, von denen jeder für sich etwas Nutzbares ergibt, und geben Sie sie
+**nacheinander** hinein:
 
 1. Ein erster, durchgehender Kern – das Kleinste, das schon benutzbar ist.
 2. Danach je Zuwachs ein Merkmal aus der Beschreibung.
@@ -486,6 +560,20 @@ lizenzierte Schriften oder Bilder, eine Testumgebung für Browseroberflächen.
 Stellen Sie so etwas bereit, **bevor** die Aufgabe es braucht. Fehlt es, hält
 der Programmierer mit dem Grund `OPERATOR-PREREQUISITE-MISSING` an und nennt,
 was fehlt.
+
+Die häufigsten Fälle:
+
+- **Browseroberflächen testen:** In Node fehlt ein `document`. Installieren Sie
+  eine Umgebung wie `jsdom` (`npm install --save-dev jsdom`) und schreiben Sie in
+  die `AGENTS.md`, wie ein Test sie einschaltet – bei Vitest etwa mit der ersten
+  Zeile `// @vitest-environment jsdom`.
+- **Weitere Browser-APIs:** Auch `jsdom` kennt manches nicht, etwa IndexedDB.
+  Entweder Sie installieren vorab einen Ersatz (zum Beispiel `fake-indexeddb`),
+  oder Sie verlangen in der Idee, dass der Speicherzugriff über eine austauschbare
+  Schnittstelle mit einer Testvariante im Speicher läuft.
+- **Schriften, Bilder, Daten:** Legen Sie die Dateien ins Projekt und nennen Sie
+  in der `AGENTS.md`, wo sie liegen. Ein Agent ohne Netz kann sie nicht
+  herunterladen und würde sie sonst erfinden.
 
 ---
 
@@ -520,7 +608,7 @@ Claude-Budget stehen bewusst nicht in der Projektdatei.
 | `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen Befehle für bestimmte Pfadmuster. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
 | `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
 | `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
-| `[workflow]` | zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate` – standardmäßig aus |
+| `[workflow]` | zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. `scope_extension_gate` steht nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
 | `[[provider_input_budget]]` | Obergrenzen für die Eingabegröße je Provider, Rolle und Operation |
 
 Ohne `default_command` sucht der Orchestrator selbst: zuerst `pyproject.toml`
@@ -590,8 +678,10 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 - **Eine Aufgabe nach der anderen.** Es gibt keine parallelen Arbeitspakete.
 - **Ohne Testbefehl kein Lauf.** Ein Projekt ohne automatische Tests muss vorher
   mindestens einen bekommen.
-- **Providerfehler kosten Zeit.** Etwa jeder vierte Aufruf der Agenten-CLIs
-  scheitert an etwas Sachfremdem und wird automatisch wiederholt.
+- **Providerfehler kosten Zeit.** Wie oft ein Aufruf an etwas Sachfremdem
+  scheitert und wiederholt wird, hängt stark vom Modell ab: Mit Opus als Prüfer
+  lief im September 2026 kein einziger von über 100 Aufrufen schief, mit Sonnet
+  etwa jeder dritte.
 
 ### 4.7 Fehlerbilder
 

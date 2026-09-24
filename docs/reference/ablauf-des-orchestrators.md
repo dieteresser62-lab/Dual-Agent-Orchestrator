@@ -387,7 +387,7 @@ ausführbar, hält er an, statt ungeprüft zu committen.
 | `2` | Quotenfortsetzung ohne sichere Repositorybindung | ja |
 | `3` | Agent fehlgeschlagen, abgelaufen oder nicht verfügbar | ja |
 | `4` | Benutzerentscheidung oder Richtlinien-Gate nötig | ja |
-| `5` | terminales Urteil: Ablehnung, Eingabegrenze, Quotenende | nein |
+| `5` | terminales Urteil: Ablehnung, Eingabegrenze | nein |
 
 Bei 2, 3 und 4 bleibt ein fortsetzbarer Zustand zurück; nach Behebung setzt
 `--resume` denselben Lauf fort.
@@ -406,6 +406,11 @@ Die Entscheidung wird mit Zeitpunkt, bestätigtem Fingerabdruck, betroffenen
 Pfaden und auslösender Aufruf-Kennung festgehalten. Ohne diese ausdrückliche
 Freigabe bleibt der Lauf angehalten — ein gewöhnliches `--resume` genehmigt
 nichts.
+
+Vier Gates sind Schalter in `[workflow]` und standardmäßig aus: Freigabe des
+Plans, Freigabe von Teständerungen, Freigabe jedes Pakets und Freigabe von
+Umfangserweiterungen. Ausgeschaltet entscheidet der Orchestrator selbst; die
+Einzelheiten stehen in der [Einrichtung](einrichtung.md), Abschnitt 4.2.
 
 ### Fail-closed
 
