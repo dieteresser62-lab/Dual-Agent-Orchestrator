@@ -471,6 +471,7 @@ timeout_seconds = 1200
 manual_slice_gate = false
 plan_gate = false
 test_change_gate = false
+scope_extension_gate = false
 
 [repository]
 base_branch = "main"

@@ -49,6 +49,7 @@ class WorkflowConfig:
     manual_slice_gate: bool = False
     plan_gate: bool = False
     test_change_gate: bool = False
+    scope_extension_gate: bool = False
     max_rounds_per_loop: int = 6
     max_acceptance_reviews: int = 6
     max_transport_failures: int = 3
@@ -299,6 +300,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
             "manual_slice_gate",
             "plan_gate",
             "test_change_gate",
+            "scope_extension_gate",
             "max_rounds_per_loop",
             "max_acceptance_reviews",
             "max_transport_failures",
@@ -309,16 +311,20 @@ def _load_workflow(data: object) -> WorkflowConfig:
     manual_slice_gate = table.get("manual_slice_gate", False)
     plan_gate = table.get("plan_gate", False)
     test_change_gate = table.get("test_change_gate", False)
+    scope_extension_gate = table.get("scope_extension_gate", False)
     if not isinstance(manual_slice_gate, bool):
         raise ConfigError("workflow.manual_slice_gate must be a boolean")
     if not isinstance(plan_gate, bool):
         raise ConfigError("workflow.plan_gate must be a boolean")
     if not isinstance(test_change_gate, bool):
         raise ConfigError("workflow.test_change_gate must be a boolean")
+    if not isinstance(scope_extension_gate, bool):
+        raise ConfigError("workflow.scope_extension_gate must be a boolean")
     return WorkflowConfig(
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
         test_change_gate=test_change_gate,
+        scope_extension_gate=scope_extension_gate,
         max_rounds_per_loop=_positive_config_int(
             table.get("max_rounds_per_loop", 6),
             "workflow.max_rounds_per_loop",

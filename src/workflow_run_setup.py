@@ -179,6 +179,7 @@ def _context(
         ),
         slice_summary=slice_summary,
         test_changes_approved=not bool(getattr(args, "test_change_gate", False)),
+        scope_extension_gate=bool(getattr(workflow_config, "scope_extension_gate", False)),
         manual_slice_gate=bool(args.manual_slice_gate),
         path_classes=args.repo_config.paths,
         stop_rules=args.repo_config.stop_rules,

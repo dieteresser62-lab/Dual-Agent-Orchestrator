@@ -235,6 +235,7 @@ def test_context_matches_every_workflow_context_field(
             workflow=SimpleNamespace(
                 max_transport_failures=4,
                 max_contract_rejections=5,
+                scope_extension_gate=True,
             ),
         ),
         test_command="python3 -m pytest 'tests/a b.py'",
@@ -302,6 +303,7 @@ def test_context_matches_every_workflow_context_field(
         slice_summary="Plan the requested work.",
         expected_test_files=(),
         test_changes_approved=False,
+        scope_extension_gate=True,
         test_path_patterns=("tests/**",),
         manual_slice_gate=True,
         approved_anchors=(),

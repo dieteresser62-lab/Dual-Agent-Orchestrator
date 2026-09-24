@@ -74,6 +74,7 @@ max_bytes = 16000000
 manual_slice_gate = false
 plan_gate = false
 test_change_gate = false
+scope_extension_gate = false
 max_rounds_per_loop = 6
 max_acceptance_reviews = 6
 max_transport_failures = 3

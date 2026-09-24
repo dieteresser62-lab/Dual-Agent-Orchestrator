@@ -385,6 +385,7 @@ class WorkflowContext:
     approved_plan_text: str | None = None
     audit_report_path: str | None = None
     current_scope_paths: tuple[str, ...] = ()
+    scope_extension_gate: bool = False
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -437,6 +438,8 @@ class WorkflowContext:
             raise ValueError("dynamic_test_scope must be a boolean")
         if not isinstance(self.plan_gate, bool):
             raise ValueError("plan_gate must be a boolean")
+        if not isinstance(self.scope_extension_gate, bool):
+            raise ValueError("scope_extension_gate must be a boolean")
         if not isinstance(self.plan_only, bool):
             raise ValueError("plan_only must be a boolean")
         if self.plan_only and (
@@ -3917,11 +3920,13 @@ class WorkflowEngine:
                 if path_class is PathClass.TEST:
                     if not self.driver.path_exists_at_commit(start_commit, path):
                         continue
-                    return None
+                    if context.scope_extension_gate or not context.test_changes_approved:
+                        return None
+                    continue
                 if path_class is PathClass.PRODUCTIVE:
-                    if path not in later_owned_paths:
-                        continue
-                    return None
+                    if context.scope_extension_gate and path in later_owned_paths:
+                        return None
+                    continue
                 return None
 
         additions = tuple(sorted(requested.difference(state.current_slice.scope_paths)))

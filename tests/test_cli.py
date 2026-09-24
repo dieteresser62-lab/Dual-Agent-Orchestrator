@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -554,6 +555,34 @@ def test_workflow_gates_default_to_automatic_and_allow_explicit_overrides(
     assert overridden.target_branch == "feature/plan"
 
 
+def _assert_scope_extension_default_is_automatic(repo: Path) -> None:
+    _write_config(repo, "[workflow]\n")
+    assert load_repo_config(repo / "orchestrator.toml").workflow.scope_extension_gate is False
+    assert parse_args([], cwd=repo, environ={}).repo_config.workflow.scope_extension_gate is False
+
+
+def test_scope_extension_gate_default_and_configured_value(tmp_path: Path) -> None:
+    _assert_scope_extension_default_is_automatic(tmp_path)
+    _write_config(tmp_path, "[workflow]\nscope_extension_gate = true\n")
+    assert parse_args([], cwd=tmp_path, environ={}).repo_config.workflow.scope_extension_gate is True
+
+
+def test_scope_extension_default_proof_kills_true_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    original = cli._load_workflow
+
+    def default_true(data: object) -> cli.WorkflowConfig:
+        configured = original(data)
+        if isinstance(data, dict) and "scope_extension_gate" not in data:
+            return replace(configured, scope_extension_gate=True)
+        return configured
+
+    monkeypatch.setattr(cli, "_load_workflow", default_true)
+    with pytest.raises(AssertionError):
+        _assert_scope_extension_default_is_automatic(tmp_path)
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -661,6 +690,7 @@ command = ["npm", "run", "build:engine"]
 manual_slice_gate = true
 plan_gate = false
 test_change_gate = true
+scope_extension_gate = true
 max_rounds_per_loop = 5
 max_acceptance_reviews = 7
 max_transport_failures = 4
@@ -691,6 +721,7 @@ max_contract_rejections = 8
     assert config.workflow.manual_slice_gate is True
     assert config.workflow.plan_gate is False
     assert config.workflow.test_change_gate is True
+    assert config.workflow.scope_extension_gate is True
     assert config.workflow.max_rounds_per_loop == 5
     assert config.workflow.max_acceptance_reviews == 7
     assert config.workflow.max_transport_failures == 4
@@ -704,6 +735,7 @@ max_contract_rejections = 8
         ("[workflow]\nmanual_slice_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nplan_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\ntest_change_gate = \"yes\"\n", "must be a boolean"),
+        ("[workflow]\nscope_extension_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nmax_rounds_per_loop = 0\n", "must be a positive integer"),
         ("[workflow]\nmax_acceptance_reviews = 0\n", "must be a positive integer"),
         ("[workflow]\nmax_transport_failures = 0\n", "must be a positive integer"),

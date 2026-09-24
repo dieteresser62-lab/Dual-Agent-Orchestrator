@@ -6215,18 +6215,19 @@ def _scope_extension_state(
     )
 
 
+@pytest.mark.parametrize("scope_extension_gate", (False, True))
 @pytest.mark.parametrize(
     ("path_kind", "path", "ownership", "exists_at_start", "approved"),
     (
         ("productive", "src/extra.py", "current", True, True),
         ("productive", "src/extra.py", "unowned", True, True),
-        ("productive", "src/extra.py", "later", True, False),
+        ("productive", "src/extra.py", "later", True, True),
         ("test-new", "tests/new_extra.py", "current", False, True),
         ("test-new", "tests/new_extra.py", "unowned", False, True),
         ("test-new", "tests/new_extra.py", "later", False, True),
         ("test-existing", "tests/existing_extra.py", "current", True, True),
-        ("test-existing", "tests/existing_extra.py", "unowned", True, False),
-        ("test-existing", "tests/existing_extra.py", "later", True, False),
+        ("test-existing", "tests/existing_extra.py", "unowned", True, True),
+        ("test-existing", "tests/existing_extra.py", "later", True, True),
         ("documentation", "docs/guide.md", "current", True, True),
         ("documentation", "docs/guide.md", "unowned", True, True),
         ("documentation", "docs/guide.md", "later", True, True),
@@ -6236,6 +6237,7 @@ def _scope_extension_state(
     ),
 )
 def test_scope_extension_policy_matrix(
+    scope_extension_gate: bool,
     path_kind: str,
     path: str,
     ownership: str,
@@ -6260,6 +6262,7 @@ def test_scope_extension_policy_matrix(
             generated=("build/**",),
         ),
         current_scope_paths=state.current_slice.scope_paths,
+        scope_extension_gate=scope_extension_gate,
     )
     request = StopRequest(
         SCOPE_EXTENSION_REQUESTED_RULE_ID,
@@ -6273,14 +6276,23 @@ def test_scope_extension_policy_matrix(
         request,
     )
 
-    assert (decision is not None) is approved, (
+    gated_by_existing_policy = (
+        (path_kind == "productive" and ownership == "later")
+        or (path_kind == "test-existing" and ownership != "current")
+    )
+    expected_approval = approved and not (
+        scope_extension_gate and gated_by_existing_policy
+    )
+    assert (decision is not None) is expected_approval, (
         path_kind,
         ownership,
+        scope_extension_gate,
     )
     if decision is not None and ownership != "current":
         assert path in decision.state.current_slice.scope_paths
 
 
+@pytest.mark.parametrize("scope_extension_gate", (False, True))
 @pytest.mark.parametrize("ownership", ("current", "unowned", "later"))
 @pytest.mark.parametrize(
     ("path", "audit_report_path"),
@@ -6298,6 +6310,7 @@ def test_scope_extension_rejects_review_artifact_at_every_ownership(
     path: str,
     audit_report_path: str,
     ownership: str,
+    scope_extension_gate: bool,
 ) -> None:
     state = _scope_extension_state(
         path,
@@ -6308,7 +6321,11 @@ def test_scope_extension_rejects_review_artifact_at_every_ownership(
 
     decision = WorkflowEngine(driver)._expand_approved_remediation_scope(
         state,
-        replace(_context(), current_scope_paths=state.current_slice.scope_paths),
+        replace(
+            _context(),
+            current_scope_paths=state.current_slice.scope_paths,
+            scope_extension_gate=scope_extension_gate,
+        ),
         StopRequest(
             SCOPE_EXTENSION_REQUESTED_RULE_ID,
             _scope_extension_rationale(path),
@@ -6319,7 +6336,10 @@ def test_scope_extension_rejects_review_artifact_at_every_ownership(
     assert decision is None
 
 
-def test_scope_extension_rejects_generated_path_without_a_policy_row() -> None:
+@pytest.mark.parametrize("scope_extension_gate", (False, True))
+def test_scope_extension_rejects_generated_path_without_a_policy_row(
+    scope_extension_gate: bool,
+) -> None:
     path = "build/generated.json"
     state = _scope_extension_state(path, "unowned")
     driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
@@ -6335,6 +6355,7 @@ def test_scope_extension_rejects_generated_path_without_a_policy_row() -> None:
                 generated=("build/**",),
             ),
             current_scope_paths=state.current_slice.scope_paths,
+            scope_extension_gate=scope_extension_gate,
         ),
         StopRequest(
             SCOPE_EXTENSION_REQUESTED_RULE_ID,
@@ -6469,6 +6490,10 @@ def test_scope_extension_persists_and_second_access_needs_no_new_request() -> No
 
 def _requested_scope_extension_gate(
     path: str,
+    *,
+    ownership: str = "unowned",
+    scope_extension_gate: bool = True,
+    test_changes_approved: bool = True,
 ) -> tuple[WorkflowEngine, FakeDriver, WorkflowContext, WorkflowRunResult]:
     class RequestedScopeDriver(FakeDriver):
         def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
@@ -6501,7 +6526,7 @@ def _requested_scope_extension_gate(
                 hashlib.sha256(canonical.encode()).hexdigest(),
             )
 
-    state = _scope_extension_state(path, "unowned")
+    state = _scope_extension_state(path, ownership)
     changes = _changes("7", "src/current.py", TEST_FILE)
     driver = RequestedScopeDriver(
         snapshots=[changes],
@@ -6518,6 +6543,8 @@ def _requested_scope_extension_gate(
             generated=("build/**",),
         ),
         current_scope_paths=state.current_slice.scope_paths,
+        scope_extension_gate=scope_extension_gate,
+        test_changes_approved=test_changes_approved,
     )
     engine = WorkflowEngine(driver)
     halted = engine.run_current_work_unit(state, context)
@@ -6617,8 +6644,17 @@ def _record_ahead_scope_reprompt(
     approval: str,
     *,
     repeat_request: bool = False,
-) -> tuple[WorkflowState, list[CodexInvocation], list[tuple[int, str]]]:
-    path = (
+    path: str | None = None,
+    ownership: str = "unowned",
+    scope_extension_gate: bool = False,
+    test_changes_approved: bool = True,
+) -> tuple[
+    WorkflowState,
+    list[CodexInvocation],
+    list[tuple[int, str]],
+    list[tuple[str, object]],
+]:
+    path = path or (
         "tests/existing_extra.py" if approval == "operator" else "docs/extra.md"
     )
 
@@ -6689,12 +6725,14 @@ def _record_ahead_scope_reprompt(
             )
 
     state = _scope_extension_state(
-        path, "current" if approval == "already" else "unowned"
+        path, "current" if approval == "already" else ownership
     )
     driver = RecordAheadDriver()
     context = replace(
         _context(),
         current_scope_paths=state.current_slice.scope_paths,
+        scope_extension_gate=scope_extension_gate or approval == "operator",
+        test_changes_approved=test_changes_approved,
     )
     engine = WorkflowEngine(driver)
     if approval == "operator":
@@ -6731,23 +6769,142 @@ def _record_ahead_scope_reprompt(
         else "AUTOMATIC IMPLEMENTER SCOPE EXTENSION"
     ) in driver.codex_calls[1].native_request.canonical_json
     assert driver.recovery_attempts[1][0] == 2
-    return state, driver.codex_calls, driver.recovery_attempts
+    return state, driver.codex_calls, driver.recovery_attempts, driver.structured_events
 
 
 @pytest.mark.parametrize("approval", ("operator", "automatic"))
 def test_record_ahead_scope_stop_uses_new_request_after_approval(approval: str) -> None:
-    state, _calls, _attempts = _record_ahead_scope_reprompt(approval)
+    state, _calls, _attempts, _events = _record_ahead_scope_reprompt(approval)
     assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert state.current_work_unit.gate.status is GateStatus.CLEAR
 
 
 @pytest.mark.parametrize("approval", ("operator", "automatic", "already"))
 def test_record_ahead_scope_reprompt_repeated_paths_halt_once(approval: str) -> None:
-    state, _calls, _attempts = _record_ahead_scope_reprompt(
+    state, _calls, _attempts, _events = _record_ahead_scope_reprompt(
         approval, repeat_request=True
     )
     assert state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
     assert state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+
+
+@pytest.mark.parametrize(
+    ("path", "ownership", "category"),
+    (
+        ("src/future_extra.py", "later", "productive"),
+        ("tests/existing_extra.py", "unowned", "test"),
+    ),
+)
+def test_scope_extension_default_automatically_records_and_reprompts(
+    path: str, ownership: str, category: str
+) -> None:
+    state, calls, attempts, events = _record_ahead_scope_reprompt(
+        "automatic", path=path, ownership=ownership
+    )
+    assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert state.current_work_unit.gate_decisions == ()
+    assert path in state.current_slice.scope_paths
+    assert path not in state.planned_slices[0].scope_paths
+    assert (path in state.planned_slices[1].scope_paths) is (ownership == "later")
+    assert len(calls) == 2
+    assert [attempt[0] for attempt in attempts] == [1, 2]
+    extensions = [value for kind, value in events if kind == "scope-extension"]
+    assert len(extensions) == 1
+    assert isinstance(extensions[0][1], ScopeExtensionPayload)
+    assert tuple((item.path, item.category) for item in extensions[0][1].additions) == (
+        (path, category),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "ownership"),
+    (
+        ("src/future_extra.py", "later"),
+        ("tests/existing_extra.py", "unowned"),
+    ),
+)
+def test_scope_extension_enabled_preserves_operator_gate(
+    path: str, ownership: str
+) -> None:
+    _engine, driver, _context_value, halted = _requested_scope_extension_gate(
+        path, ownership=ownership, scope_extension_gate=True
+    )
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.codex_calls) == 1
+    assert path not in halted.state.current_slice.scope_paths
+
+
+def test_test_change_gate_retains_existing_test_scope_gate_when_scope_gate_off() -> None:
+    path = "tests/existing_extra.py"
+    _engine, driver, _context_value, halted = _requested_scope_extension_gate(
+        path,
+        scope_extension_gate=False,
+        test_changes_approved=False,
+    )
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.codex_calls) == 1
+    assert path not in halted.state.current_slice.scope_paths
+
+
+@pytest.mark.parametrize(
+    ("path", "ownership"),
+    (
+        ("src/future_extra.py", "later"),
+        ("tests/existing_extra.py", "unowned"),
+    ),
+)
+def test_new_automatic_scope_paths_reprompt_once_then_gate(
+    path: str, ownership: str
+) -> None:
+    state, calls, _attempts, events = _record_ahead_scope_reprompt(
+        "automatic", path=path, ownership=ownership, repeat_request=True
+    )
+    assert state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(calls) == 2
+    assert sum(kind == "scope-extension" for kind, _value in events) == 1
+
+
+@pytest.mark.parametrize("scope_extension_gate", (False, True))
+def test_work_plan_extension_always_reaches_gate(scope_extension_gate: bool) -> None:
+    path = "docs/internal/plan.md"
+    _engine, driver, _context_value, halted = _requested_scope_extension_gate(
+        path, scope_extension_gate=scope_extension_gate
+    )
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.codex_calls) == 1
+    assert not any(kind == "scope-extension" for kind, _value in driver.structured_events)
+
+
+def test_protected_scope_proof_kills_automatic_approval_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "docs/internal/plan.md"
+    state = _scope_extension_state(path, "unowned")
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    context = replace(_context(), current_scope_paths=state.current_slice.scope_paths)
+    request = StopRequest(
+        SCOPE_EXTENSION_REQUESTED_RULE_ID, _scope_extension_rationale(path), (path,)
+    )
+
+    def assert_protected() -> None:
+        assert WorkflowEngine(driver)._expand_approved_remediation_scope(
+            state, context, request
+        ) is None
+
+    assert_protected()
+    monkeypatch.setattr(
+        WorkflowEngine,
+        "_protected_scope_extension_paths",
+        staticmethod(lambda _state: frozenset()),
+    )
+    with pytest.raises(AssertionError):
+        assert_protected()
 
 
 def test_automatic_scope_approval_hint_survives_context_rebuild() -> None:
