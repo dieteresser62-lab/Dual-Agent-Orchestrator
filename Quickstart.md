@@ -3,8 +3,9 @@
 > [!TIP]
 > **Noch nichts eingerichtet?** Die [Einrichtung](docs/reference/einrichtung.md)
 > führt Schritt für Schritt durch Installation, Anschluss eines vorhandenen
-> Projekts und den Start bei null mit nur einer Projektbeschreibung. Dieser
-> Schnellstart setzt dort an, wo sie endet.
+> Projekts und den Start bei null mit nur einer Projektbeschreibung – oder
+> lässt sich von Claude Code abarbeiten. Dieser Schnellstart setzt dort an, wo
+> sie endet.
 
 Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf in einem bereits eingerichteten Projekt. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Wer zuerst verstehen möchte, **was** dabei geschieht, liest [Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — dort steht der vollständige Ablauf, beginnend ohne Fachbegriffe. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
 
@@ -97,7 +98,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 8. Nach dem letzten Slice liest Claude im Abnahmereview den vollständigen Branch ab seinem Abzweigpunkt vom Hauptbranch des Repositorys. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
 9. Findet der Abnahmereview Restarbeit, erzeugt der Orchestrator daraus eine gewöhnliche neue Inbox-Aufgabe, und der gesamte Prozess beginnt von vorn — Planung, Umsetzung, Prüfung, Commit. Findet er nichts mehr, endet der Lauf mit Exitcode 0 und die Aufgabe wird nach `outbox/done/` verschoben. Der Zyklus ist durch `max_acceptance_reviews` begrenzt (Vorgabe 6).
 
-Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
+Plan-, Teständerungs-, Slice-Commit- und Umfangs-Gates sind standardmäßig aus; eine angemeldete Umfangserweiterung genehmigt der Orchestrator selbst. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
 Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich beides beim Start wählen, etwa `run_task --watch --codex-effort xhigh --claude-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
 
