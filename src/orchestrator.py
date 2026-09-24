@@ -146,13 +146,10 @@ from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
 from workflow_audit_projection import (
     _archive_stale_untracked_audit_reports,
     _attach_managed_audit_paths,
-    _audit_projection,
-    _authorized_test_approval,
     _hydrate_record_history,
     _is_managed_audit_path,
     _managed_audit_path,
     _managed_slice_scope_pattern,
-    _overall_audit_entries,
     _recover_final_review_attestation,
 )
 from workflow_git_commit import (
@@ -418,9 +415,6 @@ class ProductionWorkflowDriver:
                 side_effect_executor=self._side_effect_executor,
                 side_effect_spec=self._side_effect_spec,
                 bound_task_control_paths=_bound_task_control_paths,
-                overall_audit_entries=_overall_audit_entries,
-                authorized_test_approval=_authorized_test_approval,
-                audit_projection=_audit_projection,
             )
         )
 
@@ -2465,7 +2459,7 @@ class ProductionWorkflowDriver:
         except Exception as exc:
             if persisted.effective_protocol_mode is ProtocolMode.STRUCTURED_V2:
                 raise WorkflowExecutionError(
-                    f"structured audit dual-write mismatch: {exc}"
+                    f"structured audit projection failed: {exc}"
                 ) from exc
             raise
         if persisted.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3:

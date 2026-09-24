@@ -10,7 +10,6 @@ PROJECTION_PATH = ROOT / "src/workflow_audit_projection.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
-    "artifact_bridge",
     "artifact_models",
     "artifact_replay",
     "audit_trail",
@@ -29,25 +28,18 @@ EXPECTED_PROJECTION_FUNCTIONS = {
     "_attach_managed_audit_paths",
     "_attach_record_events",
     "_hydrate_record_history",
-    "_audit_projection",
-    "_authorized_test_approval",
     "_is_managed_audit_path",
     "_is_planned_slice_document",
-    "_latest_review_approved",
     "_managed_audit_path",
     "_managed_slice_scope_pattern",
-    "_overall_audit_entries",
     "_persisted_histories",
     "_recover_final_review_attestation",
 }
 EXPECTED_PROJECTION_EDGES = Counter(
     {
-        ("_audit_projection", "_authorized_test_approval"): 1,
         ("_persisted_histories", "_attach_record_events"): 2,
         ("_hydrate_record_history", "_attach_record_events"): 1,
         ("_recover_final_review_attestation", "_persisted_histories"): 1,
-        ("_overall_audit_entries", "_persisted_histories"): 1,
-        ("_overall_audit_entries", "_audit_projection"): 1,
         ("_is_managed_audit_path", "_is_planned_slice_document"): 1,
         ("_is_managed_audit_path", "_managed_slice_scope_pattern"): 1,
     }
@@ -188,7 +180,7 @@ def test_existing_projection_handoffs_remain_exactly_bound() -> None:
     audit_bindings = _keyword_bindings("_audit_boundary")
     production_bindings = _keyword_bindings("_production_workflow_dependencies")
 
-    assert audit_bindings["overall_audit_entries"] == "_overall_audit_entries"
+    assert "overall_audit_entries" not in audit_bindings
     assert production_bindings["archive_stale_untracked_audit_reports"] == (
         "_archive_stale_untracked_audit_reports"
     )

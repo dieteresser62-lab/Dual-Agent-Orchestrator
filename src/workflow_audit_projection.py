@@ -1,9 +1,9 @@
-"""Record-backed history reconstruction and managed audit projection inputs.
+"""Record-backed history reconstruction and managed audit target paths.
 
 ``workflow_audit`` owns driver-side document rendering and the final audit
 commit boundary.  This module owns the persisted facts supplied to that
-boundary: workflow-history reconstruction, audit-entry projection, and the
-managed audit target lifecycle.  The orchestrator remains the sole production
+boundary: workflow-history reconstruction and the managed audit target
+lifecycle.  The orchestrator remains the sole production
 composition root; this module imports neither the orchestrator nor the
 driver-side ``workflow_audit`` boundary.
 """
@@ -16,12 +16,8 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from artifact_bridge import review_payload_matches_result
 from artifact_models import (
-    AgentResultPayload,
-    ProviderContentPayload,
     ReviewPacketPayload,
-    ReviewPayload,
     WorkflowTransitionPayload,
 )
 from artifact_replay import (
@@ -30,9 +26,6 @@ from artifact_replay import (
     project_validation_attestations,
 )
 from audit_trail import (
-    AuditProjection,
-    AuthorizedTestChanges,
-    OverallAuditEntry,
     ReviewAuditEvent,
     ValidationAuditEvent,
     allowed_review_finding_origins,
@@ -40,7 +33,6 @@ from audit_trail import (
 )
 from contracts import (
     ContractResult,
-    FindingRecord,
     PlannedSlice,
     ValidationAttestation,
 )
@@ -52,127 +44,14 @@ from repo_changes import collect_repository_changes
 from review_packets import ReviewPacket
 from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_state import (
-    GateReason,
     SliceStatus,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
-    WorkUnitRecord,
-    WorkUnitStatus,
 )
 
 
 logger = logging.getLogger(__name__)
-
-
-def _authorized_test_approval(
-    unit: WorkUnitRecord,
-    structured_replay: ArtifactReplayResult | None,
-) -> AuthorizedTestChanges | None:
-    if unit.active_test_fingerprint is None or structured_replay is None:
-        return None
-    decision = next(
-        (
-            item
-            for item in reversed(structured_replay.gate_decisions)
-            if item.work_unit_id == str(unit.work_unit_id)
-            if item.approved
-            and item.reason == GateReason.TEST_CHANGE.value
-            and item.fingerprint == unit.active_test_fingerprint
-            and item.paths == unit.active_test_paths
-        ),
-        None,
-    )
-    if decision is None:
-        return None
-    return AuthorizedTestChanges(
-        approved=True,
-        paths=decision.paths,
-        approved_by=decision.authority.value,
-        rationale=decision.rationale,
-        approved_at=decision.gate_created_at,
-        diff_fingerprint=decision.fingerprint,
-    )
-
-
-def _latest_review_approved(history: WorkflowHistory) -> bool:
-    """Report whether this work unit's own latest review approved its work."""
-
-    latest = next(
-        (
-            event
-            for event in reversed(history.events)
-            if isinstance(event, ReviewAuditEvent)
-        ),
-        None,
-    )
-    return latest is not None and latest.result.approval is True
-
-
-def _audit_projection(
-    state: WorkflowState,
-    unit: WorkUnitRecord,
-    history: WorkflowHistory,
-    approval: AuthorizedTestChanges | None = None,
-    structured_replay: ArtifactReplayResult | None = None,
-) -> AuditProjection:
-    slice_record = next(item for item in state.slices if item.slice_id == unit.slice_id)
-    implementation_ready = (
-        None
-        if unit.kind is WorkUnitKind.PLAN
-        else unit.current_step not in {
-            WorkflowStep.CODEX_IMPLEMENTATION,
-            WorkflowStep.CODEX_CORRECTION,
-        }
-    )
-    commit_authorized = (
-        unit.kind is WorkUnitKind.SLICE
-        and (
-            unit.current_step is WorkflowStep.SLICE_COMMIT
-            or slice_record.status is SliceStatus.COMPLETED
-        )
-    )
-    latest_review = next(
-        (
-            event.result
-            for event in reversed(history.events)
-            if isinstance(event, ReviewAuditEvent)
-        ),
-        None,
-    )
-    review_record = None
-    if (
-        structured_replay is not None
-        and latest_review is not None
-        and latest_review.validation is not None
-    ):
-        review_record = next(
-            (
-                record
-                for record in reversed(structured_replay.records)
-                if isinstance(record.payload, ReviewPayload)
-                and record.payload.work_unit_id == str(unit.work_unit_id)
-                and record.payload.verdict == "approved"
-                and record.fingerprint.sha256
-                == latest_review.validation.diff_fingerprint
-                and review_payload_matches_result(record.payload, latest_review)
-            ),
-            None,
-        )
-    return AuditProjection(
-        slice_id=unit.slice_id,
-        events=history.events,
-        test_approval=approval or _authorized_test_approval(unit, structured_replay),
-        implementation_ready=implementation_ready,
-        commit_authorized=commit_authorized,
-        red_state_followup_slice=(
-            None
-            if review_record is None
-            else review_record.payload.red_state_followup_slice
-        ),
-        review_record=review_record,
-        review_work_unit_id=str(unit.work_unit_id),
-    )
 
 
 def _persisted_histories(
@@ -440,74 +319,6 @@ def _recover_final_review_attestation(
         events=events,
         attestations=carried,
     )
-
-
-def _overall_audit_entries(
-    state: WorkflowState,
-    structured_replay: ArtifactReplayResult | None = None,
-    read_blob: Callable[[object], bytes] | None = None,
-) -> tuple[OverallAuditEntry, ...]:
-    histories = _persisted_histories(state, structured_replay, read_blob)
-    entries: list[OverallAuditEntry] = []
-    for unit in state.work_units:
-        history = histories.get(unit.work_unit_id, WorkflowHistory(unit.work_unit_id))
-        planned = next(
-            (item for item in state.planned_slices if item.slice_id == unit.slice_id),
-            None,
-        )
-        if unit.kind is WorkUnitKind.PLAN:
-            label = "Arbeitseinheit %02d – Planung" % unit.work_unit_id
-            summary = "Planung und Review der geordneten Implementierungsslices"
-            scope = tuple(
-                sorted(
-                    {
-                        *state.task_scope_patterns,
-                        *((state.audit_report_path,) if state.audit_report_path else ()),
-                        *(
-                            path
-                            for item in state.planned_slices
-                            for path in item.scope_paths
-                        ),
-                    }
-                )
-            )
-        elif unit.kind is WorkUnitKind.FINAL_REVIEW:
-            label = "Arbeitseinheit %02d – Branch-Entdeckung" % unit.work_unit_id
-            summary = "Branchweiter Entdeckungsreview durch Claude"
-            scope = tuple(
-                sorted({path for item in state.slices for path in item.scope_paths})
-            )
-        else:
-            label = "Arbeitseinheit %02d – Slice %02d" % (
-                unit.work_unit_id,
-                unit.slice_id,
-            )
-            summary = (
-                planned.summary
-                if planned is not None
-                else "Direkte Implementierungseinheit"
-            )
-            scope = (
-                planned.scope_paths
-                if planned is not None
-                else next(
-                    item for item in state.slices if item.slice_id == unit.slice_id
-                ).scope_paths
-            )
-        entries.append(
-            OverallAuditEntry(
-                label=label,
-                summary=summary,
-                scope_paths=scope,
-                projection=_audit_projection(
-                    state,
-                    unit,
-                    history,
-                    structured_replay=structured_replay,
-                ),
-            )
-        )
-    return tuple(entries)
 
 
 def _managed_audit_path(task_file: Path, task_digest: str) -> str:

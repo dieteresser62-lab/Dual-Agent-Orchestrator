@@ -560,9 +560,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "apply_finding_response", "apply_reviewer_finding_update"
     }
     expected_consumers = {
-        "artifact_projection.py",
         "artifact_replay.py",
-        "audit_trail.py",
         "contracts.py",
         "git_service.py",
         "native_codex_contract.py",
@@ -570,6 +568,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "native_review_contract.py",
         "orchestrator.py",
         "provider_input_efficiency.py",
+        "readable_audit.py",
         "review_packets.py",
         "workflow.py",
         "workflow_audit_projection.py",

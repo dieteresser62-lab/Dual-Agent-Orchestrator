@@ -33,41 +33,16 @@ USER_MARKDOWN_FILES = (
     *REFERENCE_DOC_FILES,
 )
 USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
-AUDIT_TRAIL_PATH = ROOT / "src" / "audit_trail.py"
-WORKFLOW_AUDIT_PROJECTION_PATH = ROOT / "src" / "workflow_audit_projection.py"
+READABLE_AUDIT_PATH = ROOT / "src" / "readable_audit.py"
 _AUDIT_FRAME_ENTRY_POINTS_BY_PATH = {
-    # This is the guard's sole operational inventory: helpers and constants are
-    # discovered transitively from these audit-generation entry points.
-    AUDIT_TRAIL_PATH: frozenset(
-        {
-            "prepare_managed_work_plan_document",
-            "prepare_managed_overall_document",
-            "prepare_managed_slice_document",
-            "project_slice_audit",
-            "project_managed_slice_audit",
-            "project_work_plan_audit",
-            "project_overall_audit",
-            "project_structured_slice_audit",
-            "project_structured_work_plan_audit",
-        }
-    ),
-    WORKFLOW_AUDIT_PROJECTION_PATH: frozenset({"_overall_audit_entries"}),
+    READABLE_AUDIT_PATH: frozenset({
+        "render_slice", "render_plan_appendix", "render_overall",
+    }),
 }
-_B73_AUDIT_FRAME_WRITER_REGRESSION_SET = frozenset(
-    {
-        "prepare_managed_work_plan_document",
-        "prepare_managed_overall_document",
-        "prepare_managed_slice_document",
-        "project_overall_audit",
-        "_render_reviews",
-        "_render_validations",
-        "_render_test_approval",
-        "_render_findings",
-        "_render_codex_responses",
-        "_render_decision_table",
-        "_render_approval_status",
-    }
-)
+_B73_AUDIT_FRAME_WRITER_REGRESSION_SET = frozenset({
+    "render_slice", "render_plan_appendix", "render_overall",
+    "_quote", "_cell",
+})
 _FORBIDDEN_ENGLISH_AUDIT_FRAME_FRAGMENTS = (
     "# Overall audit",
     "Work Unit",
@@ -124,6 +99,13 @@ def _iter_content_files() -> list[Path]:
 
 
 def _is_allowlisted_line(path: Path, line: str) -> bool:
+    if path in {
+        ROOT / "src" / "audit_document_contract.py",
+        ROOT / "src" / "readable_audit.py",
+        ROOT / "tests" / "test_readable_audit.py",
+    }:
+        # The human audit frame is required to use German labels and states.
+        return True
     if "# allowlist:german" in line:
         return True
     if path == THIS_FILE:
@@ -522,9 +504,9 @@ def test_generated_audit_frame_has_no_english_headings() -> None:
 
 
 def test_audit_frame_call_closure_contains_every_b73_writer() -> None:
-    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    source = READABLE_AUDIT_PATH.read_text(encoding="utf-8")
     _, reachable = _audit_frame_call_closure(
-        source, _AUDIT_FRAME_ENTRY_POINTS_BY_PATH[AUDIT_TRAIL_PATH]
+        source, _AUDIT_FRAME_ENTRY_POINTS_BY_PATH[READABLE_AUDIT_PATH]
     )
 
     assert _B73_AUDIT_FRAME_WRITER_REGRESSION_SET <= reachable
@@ -560,48 +542,38 @@ def _source_with_new_audit_writer(
 
 @pytest.mark.parametrize(
     "entry_point",
-    sorted(_AUDIT_FRAME_ENTRY_POINTS_BY_PATH[AUDIT_TRAIL_PATH]),
+    sorted(_AUDIT_FRAME_ENTRY_POINTS_BY_PATH[READABLE_AUDIT_PATH]),
 )
 def test_generated_audit_frame_guard_rejects_a_new_reachable_writer(
     entry_point: str,
 ) -> None:
-    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    source = READABLE_AUDIT_PATH.read_text(encoding="utf-8")
     mutated = _source_with_new_audit_writer(source, reachable_from=entry_point)
 
     assert _generated_audit_frame_language_hits(
-        {AUDIT_TRAIL_PATH: mutated}
-    ) == ("src/audit_trail.py: # Overall audit",)
+        {READABLE_AUDIT_PATH: mutated}
+    ) == ("src/readable_audit.py: # Overall audit",)
 
 
 def test_generated_audit_frame_guard_ignores_a_new_unreachable_writer() -> None:
-    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    source = READABLE_AUDIT_PATH.read_text(encoding="utf-8")
     mutated = _source_with_new_audit_writer(source, reachable_from=None)
 
-    assert _generated_audit_frame_language_hits({AUDIT_TRAIL_PATH: mutated}) == ()
+    assert _generated_audit_frame_language_hits({READABLE_AUDIT_PATH: mutated}) == ()
 
 
 def test_generated_audit_frame_guard_rejects_an_english_heading_mutation() -> None:
-    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    source = READABLE_AUDIT_PATH.read_text(encoding="utf-8")
     mutated = source.replace("# Gesamtaudit", "# Overall audit", 1)
 
     assert mutated != source
     assert _generated_audit_frame_language_hits(
-        {AUDIT_TRAIL_PATH: mutated}
-    ) == ("src/audit_trail.py: # Overall audit",)
-
-
-def test_generated_audit_frame_guard_rejects_an_english_work_unit_mutation() -> None:
-    source = WORKFLOW_AUDIT_PROJECTION_PATH.read_text(encoding="utf-8")
-    mutated = source.replace("Arbeitseinheit", "Work Unit")
-
-    assert mutated != source
-    assert _generated_audit_frame_language_hits(
-        {WORKFLOW_AUDIT_PROJECTION_PATH: mutated}
-    ) == ("src/workflow_audit_projection.py: Work Unit",)
+        {READABLE_AUDIT_PATH: mutated}
+    ) == ("src/readable_audit.py: # Overall audit",)
 
 
 def test_generated_audit_frame_guard_ignores_english_provider_evidence() -> None:
-    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    source = READABLE_AUDIT_PATH.read_text(encoding="utf-8")
     english_review_evidence = (
         "# Overall audit; review evidence remains verbatim provider output."
     )
@@ -611,7 +583,7 @@ def test_generated_audit_frame_guard_ignores_english_provider_evidence() -> None
 
     assert english_review_evidence not in source
     assert _generated_audit_frame_language_hits(
-        {AUDIT_TRAIL_PATH: source_with_external_provider_fixture}
+        {READABLE_AUDIT_PATH: source_with_external_provider_fixture}
     ) == ()
 
 

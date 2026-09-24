@@ -716,23 +716,7 @@ def _run_correction_journey(
         assert boundary.scope_change_groups == tuple(
             (path,) for path in boundary.scope_paths
         )
-        monkeypatch.setattr(
-            workflow_audit_projection,
-            "_audit_projection",
-            lambda *_args, **_kwargs: object(),
-        )
-        audit_entries = workflow_audit_projection._overall_audit_entries(state)
-        correction_audit = next(
-            item for item in audit_entries if "Abschlusskorrektur" in item.label
-        )
-        final_audit = next(
-            item for item in audit_entries if "Gesamtreview" in item.label
-        )
-        assert correction_audit.scope_paths == boundary.scope_paths
-        assert correction_audit.summary == (
-            "Abschlusskorrektur für " + ", ".join(expected_ledger)
-        )
-        assert set(final_audit.scope_paths) == set(boundary.scope_paths)
+        assert not hasattr(workflow_audit_projection, "_overall_audit_entries")
 
         codex = next(
             item

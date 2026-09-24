@@ -1560,6 +1560,7 @@ def run_provider_free_harness(
     """Execute S5's standard mode; no provider adapter is constructed or called."""
 
     import agent_runtime
+    import readable_audit
 
     manifest = CrashHarnessManifest.load(manifest_path)
     work_root.mkdir(parents=True, exist_ok=True)
@@ -1567,6 +1568,7 @@ def run_provider_free_harness(
     real_provider_process_starts = 0
     original_run_agent = agent_runtime.run_agent
     original_popen = agent_runtime.subprocess.Popen
+    original_read_plan = readable_audit.read_approved_plan
 
     def forbidden_provider_start(*args: object, **kwargs: object) -> str:
         nonlocal real_provider_starts
@@ -1578,8 +1580,17 @@ def run_provider_free_harness(
         real_provider_process_starts += 1
         raise CrashHarnessError("provider-free harness attempted a real provider process")
 
+    def scripted_approved_plan(_root: Path, commit: str, path: str) -> str:
+        if commit != "b" * 40 or path != "docs/internal/s5-work-plan.md":
+            raise CrashHarnessError("unexpected approved plan binding in scripted journey")
+        plan = work_root / "journeys" / path
+        return plan.read_text(encoding="utf-8").split(
+            "\n## Orchestrator-Prüfprotokoll\n", 1
+        )[0]
+
     agent_runtime.run_agent = forbidden_provider_start
     agent_runtime.subprocess.Popen = forbidden_provider_process
+    readable_audit.read_approved_plan = scripted_approved_plan
     try:
         matrix = run_crash_matrix(work_root / "matrix", manifest)
         semantic = prove_foreign_reducer_rejected_before_state(work_root / "semantic")
@@ -1589,6 +1600,7 @@ def run_provider_free_harness(
     finally:
         agent_runtime.run_agent = original_run_agent
         agent_runtime.subprocess.Popen = original_popen
+        readable_audit.read_approved_plan = original_read_plan
     if real_provider_starts != 0 or real_provider_process_starts != 0:
         raise CrashHarnessError("provider-free harness crossed the real provider boundary")
     heads = {

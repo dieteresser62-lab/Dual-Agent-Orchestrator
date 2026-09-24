@@ -32,7 +32,7 @@ from agent_runtime import (
     TransientRetryPolicy,
     run_native_codex_agent_checked,
 )
-from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_approval
+from audit_trail import ValidationAuditEvent
 from artifact_models import (
     _IDENTIFIER_RE,
     AgentResultPayload,
@@ -5647,11 +5647,12 @@ def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audi
 
     overall = repository / "docs/internal/structured-audit-review-12345678.md"
     slice_audit = repository / slice_path
-    assert "<!-- artifact-records:approval-status:begin -->" in overall.read_text(
+    assert "<!-- audit:overview:begin -->" in overall.read_text(
         encoding="utf-8"
     )
     rendered = slice_audit.read_text(encoding="utf-8")
-    assert "Semantischer Record-Digest" in rendered
+    assert "<!-- audit:status:begin -->" in rendered
+    assert "artifact-records" not in rendered
     assert "`src/runtime.py`" in rendered
 
 
@@ -5684,7 +5685,7 @@ def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
     driver.bind_work_unit(state)
     mismatched = replace(state, task_scope_patterns=("src/other.py",))
 
-    with pytest.raises(WorkflowExecutionError, match="audit dual-write mismatch"):
+    with pytest.raises(WorkflowExecutionError, match="audit projection failed"):
         driver.checkpoint(mismatched, WorkflowHistory(1))
 
 
@@ -6062,18 +6063,14 @@ def test_audit_test_approval_is_projected_from_gate_record_authority_and_time(
     )
     replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
 
-    approval = orchestrator._authorized_test_approval(unit, replay)
-
-    assert approval is not None
-    assert _render_test_approval(AuditProjection(1, test_approval=approval)) == (
-        "- Teständerungsfreigabe: `YES`\n"  # allowlist:german
-        "- Freigebende Stelle: user\n"  # allowlist:german
-        f"- Freigabezeitpunkt: {created_at}\n"  # allowlist:german
-        f"- Test-Diff-Fingerprint: `{'a' * 64}`\n"
-        "- Begründung: reviewed exact test delta\n"
-        "- Pfade: `tests/test_gate.py`\n"
-        "- Pre-Mortems: keine erfasst."
+    from readable_audit import AuditFacts, render_overall
+    rendered = render_overall(
+        AuditFacts(replay, read_blob=bridge.store.read_blob, read_plan=lambda _commit, _path: ""),
+        task="gate task", branch=state.branch,
     )
+    assert "Entscheidung: freigegeben. Begründung: reviewed exact test delta" in rendered  # allowlist:german
+    assert "Test-Diff-Fingerprint" not in rendered
+    assert created_at not in rendered
 
 
 def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(

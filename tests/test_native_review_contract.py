@@ -9,7 +9,7 @@ import finding_reducer
 import native_review_contract
 
 from audit_trail import (
-    AuditProjection,
+    AuditEventSequence,
     AuditTrailError,
     ReviewAuditEvent,
     ValidationAuditEvent,
@@ -370,9 +370,9 @@ def test_canary_30_proof_kills_both_contract_mutations(
         _assert_canary_30_review_paths()
 
 
-def _project_canary_31_audit(result: ContractResult) -> AuditProjection:
+def _project_canary_31_audit(result: ContractResult) -> AuditEventSequence:
     assert result.validation is not None
-    return AuditProjection(
+    return AuditEventSequence(
         slice_id=1,
         events=(
             ValidationAuditEvent(1, 1, result.validation),

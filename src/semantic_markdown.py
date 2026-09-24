@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from audit_document_contract import (
+    OVERALL_SECTIONS, PLAN_APPENDIX_HEADING, PLAN_SECTIONS, SLICE_SECTIONS,
+)
+
 
 MANAGED_SECTION_KEYS = (
     "claude-review",  # allowlist:provider -- canonical managed marker
@@ -43,6 +47,9 @@ class SemanticMarkdownKind(str, Enum):
     SLICE_AUDIT = "slice-audit"
     AUDIT_APPENDIX = "audit-appendix"
     LEGACY_WORK_PLAN = "legacy-work-plan"
+    READABLE_SLICE = "readable-slice"
+    READABLE_OVERALL = "readable-overall"
+    READABLE_APPENDIX = "readable-appendix"
 
 
 class SemanticMarkdownError(ValueError):
@@ -71,7 +78,10 @@ class SemanticMarkdownDocument:
     appendix_start: int | None
 
     def semantic_text(self, *, remove_appendix: bool = False) -> str:
-        if remove_appendix and self.kind is SemanticMarkdownKind.AUDIT_APPENDIX:
+        if remove_appendix and self.kind in {
+            SemanticMarkdownKind.AUDIT_APPENDIX,
+            SemanticMarkdownKind.READABLE_APPENDIX,
+        }:
             assert self.appendix_start is not None
             return self.markdown[: self.appendix_start].rstrip("\r\n") + "\n"
         rendered = self.markdown
@@ -138,12 +148,27 @@ def parse_semantic_markdown(
         return SemanticMarkdownDocument(path, inferred, markdown, (), None)
 
     keys = [record[0] for record in records]
-    unknown = sorted(set(keys) - set(MANAGED_SECTION_KEYS))
+    layouts = {
+        SemanticMarkdownKind.READABLE_SLICE: SLICE_SECTIONS,
+        SemanticMarkdownKind.READABLE_OVERALL: OVERALL_SECTIONS,
+        SemanticMarkdownKind.READABLE_APPENDIX: PLAN_SECTIONS,
+    }
+    inferred = kind
+    if inferred is None:
+        if markdown.startswith("# Gesamtaudit –") and tuple(keys[::2]) == tuple(k for k, _ in OVERALL_SECTIONS):
+            inferred = SemanticMarkdownKind.READABLE_OVERALL
+        elif markdown.startswith("# Slice ") and tuple(keys[::2]) == tuple(k for k, _ in SLICE_SECTIONS):
+            inferred = SemanticMarkdownKind.READABLE_SLICE
+        elif f"## {PLAN_APPENDIX_HEADING}\n" in markdown and tuple(keys[::2]) == tuple(k for k, _ in PLAN_SECTIONS):
+            inferred = SemanticMarkdownKind.READABLE_APPENDIX
+    layout = layouts.get(inferred)
+    expected_keys = tuple(key for key, _ in layout) if layout is not None else MANAGED_SECTION_KEYS
+    unknown = sorted(set(keys) - set(expected_keys))
     if unknown:
         raise SemanticMarkdownError(
             path, "unknown managed audit section", ", ".join(unknown)
         )
-    if len(records) != 2 * len(MANAGED_SECTION_KEYS):
+    if len(records) != 2 * len(expected_keys):
         raise SemanticMarkdownError(
             path, "marker-set", "every managed section requires exactly one marker pair"
         )
@@ -151,7 +176,6 @@ def parse_semantic_markdown(
     appendix_matches = list(
         re.finditer(r"(?m)^## Orchestrator-Prüfprotokoll[ \t]*\r?$", markdown)
     )
-    inferred = kind
     if inferred is None:
         inferred = (
             SemanticMarkdownKind.AUDIT_APPENDIX
@@ -162,7 +186,7 @@ def parse_semantic_markdown(
         )
     appendix_start: int | None = None
     expected_level = 2
-    if inferred is SemanticMarkdownKind.AUDIT_APPENDIX:
+    if inferred in {SemanticMarkdownKind.AUDIT_APPENDIX, SemanticMarkdownKind.READABLE_APPENDIX}:
         if len(appendix_matches) != 1:
             raise SemanticMarkdownError(
                 path, "appendix-heading", "requires exactly one level-two appendix heading"
@@ -176,6 +200,7 @@ def parse_semantic_markdown(
     for key, edge, start, end, heading_two, heading_three in records:
         owner_heading = heading_two if expected_level == 2 else heading_three
         expected_headings = (
+            dict(layout) if layout is not None else
             _LEGACY_WORK_PLAN_HEADINGS
             if inferred is SemanticMarkdownKind.LEGACY_WORK_PLAN
             else MANAGED_SECTION_HEADINGS
@@ -201,7 +226,7 @@ def parse_semantic_markdown(
         stack = None
     if stack is not None:
         raise SemanticMarkdownError(path, "marker-set", f"missing end marker for {stack[0]}")
-    if tuple(completed) != MANAGED_SECTION_KEYS:
+    if tuple(completed) != expected_keys:
         raise SemanticMarkdownError(path, "marker-order", "managed sections are out of order")
     return SemanticMarkdownDocument(path, inferred, markdown, tuple(sections), appendix_start)
 

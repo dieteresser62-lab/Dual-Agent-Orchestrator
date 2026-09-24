@@ -27,7 +27,7 @@ import artifact_models
 import git_service
 import workflow_persistence
 from audit_trail import (
-    AuditProjection,
+    AuditEventSequence,
     ReviewAuditEvent,
     ValidationAuditEvent,
     allowed_review_finding_origins,
@@ -1151,7 +1151,7 @@ def _audit_probe(
                 ),
             )
         )
-        projection = AuditProjection(slice_id=slice_id, events=tuple(events))
+        projection = AuditEventSequence(slice_id=slice_id, events=tuple(events))
         review = projection.latest_review(AgentRole.CLAUDE)
         matched = review is not None and _semantic_match(review.result.findings, probe)
         return matched, (
