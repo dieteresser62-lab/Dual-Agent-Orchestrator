@@ -1834,8 +1834,12 @@ class WorkflowEngine:
             )
         gate = state.current_work_unit.gate
         if gate.fingerprint is None:
+            stop_reason = gate.detail.split(" | ", 1)[0] if gate.detail else "unspecified"
             raise WorkflowExecutionError(
-                "current gate is not a fingerprint-bound Slice-11 user gate"
+                f"current gate has no fingerprint (gate reason: {gate.reason.value}; "
+                f"stop reason: {stop_reason}); no approval is required. "
+                "Provide the prerequisite, then run_task --watch --resume "
+                "without --approve-gate."
             )
         scope_extension_gate = (
             gate.reason is GateReason.STOP_REQUEST

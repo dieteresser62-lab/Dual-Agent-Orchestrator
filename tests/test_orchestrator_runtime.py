@@ -6151,6 +6151,58 @@ def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(
     assert result.state.current_work_unit.gate_decisions[0].resume_step is WorkflowStep.CODEX_PLAN
 
 
+def test_policy_gate_approval_error_preserves_chain_and_plain_resume(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/policy-resume")
+    task = repository / "task.md"
+    task.write_text("gate task", encoding="utf-8")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="policy-resume",
+        task_file=str(task),
+        branch="feature/policy-resume",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest="d" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/policy-resume",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    pending = state.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="OPERATOR-PREREQUISITE-MISSING | Install the test tool",
+    )
+    driver.checkpoint(pending, history)
+    before = ArtifactStore(repository, state.run_id).load_chain()
+
+    with pytest.raises(WorkflowExecutionError) as raised:
+        WorkflowEngine(driver).decide_current_gate(
+            pending,
+            history,
+            approved=True,
+            rationale="incorrect approval",
+        )
+
+    assert "OPERATOR-PREREQUISITE-MISSING" in str(raised.value)
+    assert "run_task --watch --resume without --approve-gate" in str(raised.value)
+    assert ArtifactStore(repository, state.run_id).load_chain() == before
+    resumed = pending.resume_after_user_decision()
+    driver.checkpoint(resumed, history)
+    restored = resolve_resume_state(repository, resumed).state
+    assert restored.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+
+
 def test_quota_resume_diff_approval_record_binds_timeout_invocation_and_time(
     tmp_path: Path,
 ) -> None:

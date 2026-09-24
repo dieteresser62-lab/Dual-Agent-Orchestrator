@@ -81,7 +81,8 @@ from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_work_unit
 from review_packets import BinaryFileMetadata, ReviewPacket
-from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
+from validation_matrix import ValidationCommand, ValidationMatrix, ValidationMatrixRunner, ValidationRequest, ValidationRule
+from cli import load_repo_config
 from workflow import (
     CodexInvocation,
     EvidenceKind,
@@ -2093,6 +2094,43 @@ def test_claude_reuses_single_fingerprint_attestation_without_matrix_rerun() -> 
     assert driver.commit_calls[0].attestation.diff_fingerprint == changes.fingerprint
 
 
+def test_structured_workflow_attests_explicit_shell_argv_from_subdirectory(
+    tmp_path,
+) -> None:
+    (tmp_path / "app").mkdir()
+    config_path = tmp_path / "orchestrator.toml"
+    config_path.write_text(
+        '[validation]\ndefault_command = ["sh", "-c", "cd app && pwd"]\n',
+        encoding="utf-8",
+    )
+    matrix = load_repo_config(config_path).validation
+
+    class MatrixDriver(FakeDriver):
+        def validate(self, changes, request):  # noqa: ANN001
+            self.validation_requests.append(request)
+            return ValidationMatrixRunner(tmp_path).run(request)
+
+    driver = MatrixDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    state = _combined_native_slice_state()
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        replace(_context(), validation_matrix=matrix),
+    )
+
+    assert result.completed
+    assert len(driver.validation_requests) == 1
+    request = driver.validation_requests[0]
+    assert request.commands[0].argv == ("sh", "-c", "cd app && pwd")
+    assert result.history.attestations[0].passed
+    kinds = [kind for kind, _value in driver.structured_events]
+    assert kinds.index("validation-request") < kinds.index("validation-attestation")
+    assert len(result.history.attestations) == 1
+
+
 def test_incomplete_attestation_never_reaches_claude_or_commit() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     driver = FakeDriver(
@@ -4048,6 +4086,43 @@ def test_reopened_exact_gate_reuses_immutable_approval_without_dual_write() -> N
         "fingerprint-bound hotfix reviewed"
     )
     assert len(persisted) == 1
+
+
+def test_policy_gate_rejects_approval_without_writing_and_resumes() -> None:
+    gated = _slice_state().await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="OPERATOR-PREREQUISITE-MISSING | Install the project test tool",
+    )
+    history = WorkflowHistory(gated.current_work_unit_id)
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    engine = WorkflowEngine(driver)
+
+    with pytest.raises(WorkflowExecutionError) as raised:
+        engine.decide_current_gate(
+            gated,
+            history,
+            approved=True,
+            rationale="incorrect approval attempt",
+        )
+
+    message = str(raised.value)
+    assert "gate reason: stop_request" in message
+    assert "stop reason: OPERATOR-PREREQUISITE-MISSING" in message
+    assert "no approval is required" in message
+    assert "run_task --watch --resume without --approve-gate" in message
+    assert driver.structured_events == []
+    assert driver.checkpoints == []
+    assert gated.current_work_unit.gate_decisions == ()
+
+    resumed = gated.resume_after_user_decision()
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    continued = engine.run_current_work_unit(resumed, _context(), history)
+    assert continued.completed
+    assert driver.validation_requests
 
 
 def test_plan_only_rejects_future_product_slices_as_executable_records() -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shlex
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -23,7 +22,7 @@ from inbox_watcher import (
 from repo_changes import resolve_merge_base
 from state_io import StateSchemaError
 from task_contract import TaskContract, TaskMode
-from validation_matrix import ValidationCommand, ValidationMatrix
+from validation_matrix import ValidationCommand, ValidationMatrix, ValidationMatrixError, text_command_argv
 from workflow import (
     WorkflowContext,
     WorkflowExecutionError,
@@ -66,12 +65,16 @@ def _context(
     validation_matrix = args.repo_config.validation
     if validation_matrix.default_command is None and str(args.test_command or "").strip():
         raw_command = str(args.test_command).strip()
-        validation_matrix = ValidationMatrix(
-            default_command=(
-                ValidationCommand(argv=tuple(shlex.split(raw_command)))
+        try:
+            command = (
+                ValidationCommand(argv=text_command_argv(raw_command))
                 if state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
                 else ValidationCommand(shell_command=raw_command)
-            ),
+            )
+        except ValidationMatrixError as exc:
+            raise WorkflowExecutionError(str(exc)) from exc
+        validation_matrix = ValidationMatrix(
+            default_command=command,
             rules=validation_matrix.rules,
             required_artifacts=validation_matrix.required_artifacts,
             product_command=validation_matrix.product_command,
