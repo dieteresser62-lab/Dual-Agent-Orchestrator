@@ -15,6 +15,7 @@ import tomllib
 
 from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
+from artifact_models import ArtifactValidationError, validate_archive_run_directory
 from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
 from validation_matrix import (
     DEFAULT_VALIDATION_TIMEOUT_SECONDS,
@@ -47,6 +48,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class WorkflowConfig:
     merge_completed_branch: bool = True
+    archive_run_directory: str = "{run_id}"
     manual_slice_gate: bool = False
     plan_gate: bool = False
     test_change_gate: bool = False
@@ -300,6 +302,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
         {
             "manual_slice_gate",
             "merge_completed_branch",
+            "archive_run_directory",
             "plan_gate",
             "test_change_gate",
             "scope_extension_gate",
@@ -314,6 +317,12 @@ def _load_workflow(data: object) -> WorkflowConfig:
     merge_completed_branch = table.get("merge_completed_branch", True)
     if not isinstance(merge_completed_branch, bool):
         raise ConfigError("workflow.merge_completed_branch must be a boolean")
+    try:
+        archive_run_directory = validate_archive_run_directory(
+            table.get("archive_run_directory", "{run_id}")
+        )
+    except ArtifactValidationError as exc:
+        raise ConfigError(f"workflow.{exc}") from exc
     plan_gate = table.get("plan_gate", False)
     test_change_gate = table.get("test_change_gate", False)
     scope_extension_gate = table.get("scope_extension_gate", False)
@@ -327,6 +336,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
         raise ConfigError("workflow.scope_extension_gate must be a boolean")
     return WorkflowConfig(
         merge_completed_branch=merge_completed_branch,
+        archive_run_directory=archive_run_directory,
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
         test_change_gate=test_change_gate,
@@ -640,6 +650,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rationale recorded for an explicit v3 gate decision.",
     )
     parser.add_argument(
+        "--acknowledge-post-merge",
+        metavar="MERGE_COMMIT",
+        help="With --resume and --task-file, acknowledge one uncertain post-merge hook outcome.",
+    )
+    parser.add_argument(
+        "--post-merge-rationale",
+        help="Reason recorded for an uncertain post-merge hook acknowledgment.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate agent responses and tests to validate workflow wiring.",
@@ -925,6 +944,15 @@ def parse_args(
     elif args.gate_rationale is not None:
         parser.error("--gate-rationale requires --approve-gate or --reject-gate")
     args.gate_decision = gate_decision
+    if args.acknowledge_post_merge is not None:
+        if args.resume is not True or not args.task_file_explicit:
+            parser.error("--acknowledge-post-merge requires --resume and --task-file")
+        if not (args.post_merge_rationale or "").strip():
+            parser.error("--acknowledge-post-merge requires --post-merge-rationale")
+        if gate_decision is not None:
+            parser.error("post-merge acknowledgment cannot be combined with a gate decision")
+    elif args.post_merge_rationale is not None:
+        parser.error("--post-merge-rationale requires --acknowledge-post-merge")
 
     if args.test_command is None:
         if "RUN_TASK_TEST_CMD" in env:

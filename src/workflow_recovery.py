@@ -867,7 +867,8 @@ class WorkflowRecovery:
                     f"pending queue effect {item.effect_key!r} has an unknown outcome"
                 )
             raise SideEffectReconciliationError(
-                f"pending {item.effect_class} effect {item.effect_key!r} has no runtime reconciler"
+                f"pending {item.effect_class} effect {item.effect_key!r} "
+                f"operation={item.operation!r} has no runtime reconciler"
             )
         return changed
 

@@ -50,6 +50,23 @@ def test_merge_completion_setting_defaults_true_and_accepts_false(tmp_path: Path
     assert load_repo_config(path).workflow.merge_completed_branch is False
 
 
+@pytest.mark.parametrize("pattern", (
+    "", "/{run_id}", "../{run_id}", "x//{run_id}",
+    "x/./{run_id}", "x/../{run_id}", "{run_id}.txt", "{foo}/{run_id}",
+    "{run_id}\\other", "{run_id}/", "{run_id}/a b",
+))
+def test_archive_pattern_rejects_unsafe_config(tmp_path: Path, pattern: str) -> None:
+    path = _write_config(tmp_path, f"[workflow]\narchive_run_directory = {json.dumps(pattern)}\n")
+    with pytest.raises(ConfigError, match="workflow.archive_run_directory"):
+        load_repo_config(path)
+
+
+def test_archive_pattern_defaults_and_accepts_documented_tokens(tmp_path: Path) -> None:
+    assert load_repo_config(tmp_path / "missing.toml").workflow.archive_run_directory == "{run_id}"
+    path = _write_config(tmp_path, '[workflow]\narchive_run_directory = "{year}-feature/{run_id}"\n')
+    assert load_repo_config(path).workflow.archive_run_directory == "{year}-feature/{run_id}"
+
+
 def test_repository_base_branch_is_optional_and_strict(tmp_path: Path) -> None:
     assert load_repo_config(tmp_path / "missing.toml").repository.base_branch is None
     path = _write_config(tmp_path, '[repository]\nbase_branch = "trunk"\n')
@@ -633,6 +650,29 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
 
     assert args.gate_decision is True
     assert args.gate_rationale == "reviewed exact persisted evidence"
+
+
+@pytest.mark.parametrize("arguments", (
+    ["--acknowledge-post-merge", "a" * 40, "--post-merge-rationale", "reviewed"],
+    ["--resume", "--acknowledge-post-merge", "a" * 40,
+     "--post-merge-rationale", "reviewed"],
+    ["--resume", "--task-file", "task.md", "--acknowledge-post-merge", "a" * 40],
+    ["--resume", "--task-file", "task.md", "--post-merge-rationale", "reviewed"],
+))
+def test_post_merge_acknowledgment_requires_task_resume_commit_and_reason(
+    arguments: list[str], tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(arguments, cwd=tmp_path, environ={})
+
+
+def test_post_merge_acknowledgment_parses_exact_commit(tmp_path: Path) -> None:
+    args = parse_args([
+        "--resume", "--task-file", "task.md", "--acknowledge-post-merge", "a" * 40,
+        "--post-merge-rationale", "reviewed unknown outcome",
+    ], cwd=tmp_path, environ={})
+    assert args.acknowledge_post_merge == "a" * 40
+    assert args.post_merge_rationale == "reviewed unknown outcome"
 
 
 @pytest.mark.parametrize(

@@ -501,6 +501,7 @@ def wait_until_quota_resume(
 @dataclass
 class OrchestratorConfig:
     merge_completed_branch: bool = True
+    archive_run_directory: str = "{run_id}"
     base_branch: str | None = None
     dry_run: bool = False
     agent_output_mode: str = "summary"

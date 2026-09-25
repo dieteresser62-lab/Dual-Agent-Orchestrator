@@ -274,6 +274,15 @@ def _direct_b65_helper_call(statement: ast.stmt) -> ast.Call | None:
 
 def _logical_parse_args_function(tree: ast.Module) -> ast.FunctionDef:
     function = copy.deepcopy(_parse_args_function(tree))
+    # The post-merge acknowledgment is a later public contract. Keep the
+    # historical B64/B65 parser proof scoped to its original decision tree.
+    acknowledgment = [
+        statement for statement in function.body
+        if isinstance(statement, ast.If)
+        and ast.unparse(statement.test) == "args.acknowledge_post_merge is not None"
+    ]
+    assert len(acknowledgment) == 1
+    function.body.remove(acknowledgment[0])
     origin_assignments = [
         statement
         for statement in function.body
@@ -899,8 +908,20 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
         "Maximum automatic continuations per blocked role step (default: 1).",
     )
     active_tree = ast.parse(active_source)
+    active_parser = copy.deepcopy(_top_level_function(active_tree, "build_parser"))
+    added_options = {"--acknowledge-post-merge", "--post-merge-rationale"}
+    added_calls = [
+        statement for statement in active_parser.body
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and any(isinstance(argument, ast.Constant) and argument.value in added_options
+                for argument in statement.value.args)
+    ]
+    assert len(added_calls) == 2
+    for statement in added_calls:
+        active_parser.body.remove(statement)
     assert ast.dump(
-        _top_level_function(active_tree, "build_parser"), include_attributes=False
+        active_parser, include_attributes=False
     ) == ast.dump(
         _top_level_function(pre_cut_tree, "build_parser"), include_attributes=False
     )

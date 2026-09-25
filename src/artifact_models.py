@@ -228,6 +228,25 @@ class RoleProfilePayload:
 
 
 
+_ARCHIVE_TOKEN = re.compile(r"\{(run_id|year|branch_slug)\}")
+_ARCHIVE_SEGMENT = re.compile(r"[A-Za-z0-9._{}-]+")
+
+
+def validate_archive_run_directory(value: str) -> str:
+    """Validate the persisted, unexpanded archive subdirectory pattern."""
+    if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
+        raise ArtifactValidationError("archive_run_directory must be a relative path pattern")
+    segments = value.split("/")
+    if "{run_id}" not in segments:
+        raise ArtifactValidationError("archive_run_directory needs a full {run_id} segment")
+    for segment in segments:
+        if segment in {"", ".", ".."} or not _ARCHIVE_SEGMENT.fullmatch(segment):
+            raise ArtifactValidationError("archive_run_directory has a noncanonical segment")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", _ARCHIVE_TOKEN.sub("x", segment)):
+            raise ArtifactValidationError("archive_run_directory has an unsupported placeholder")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class RunProfilePayload:
     implementer: RoleProfilePayload
@@ -236,6 +255,8 @@ class RunProfilePayload:
     reducer_version: str = STATE_PROJECTION_REDUCER_VERSION
     merge_completed_branch: bool = True
     base_branch: str | None = None
+    archive_run_directory: str | None = None
+    post_merge_hook_enabled: bool = True
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -259,6 +280,10 @@ class RunProfilePayload:
             or any(character.isspace() for character in self.base_branch)
         ):
             raise ArtifactValidationError("run profile base_branch is invalid")
+        if self.archive_run_directory is not None:
+            validate_archive_run_directory(self.archive_run_directory)
+        if not isinstance(self.post_merge_hook_enabled, bool):
+            raise ArtifactValidationError("run profile post_merge_hook_enabled must be boolean")
 
 
 _WORKFLOW_STEPS = {
@@ -1464,6 +1489,7 @@ class ProviderAttemptPayload:
 SIDE_EFFECT_CLASSES = frozenset({
     "git_commit",
     "git_merge",
+    "post_merge_hook",
     "provider_start",
     "file_write",
     "queue_move",
@@ -1543,6 +1569,12 @@ class SideEffectPayload:
                        for item in self.operation[2:5])):
                 raise ArtifactValidationError("merge side effect operation is invalid")
             _require_sha256(self.operation[5], "merge side effect message digest")
+        elif self.effect_class == "post_merge_hook":
+            if (len(self.operation) not in {3, 4} or self.operation[0] != "post_merge"
+                or re.fullmatch(r"[0-9a-f]{40}", self.operation[1]) is None):
+                raise ArtifactValidationError("post-merge side effect operation is invalid")
+            if len(self.operation) == 4 and self.operation[3] != "unavailable":
+                _require_sha256(self.operation[3], "post-merge hook content digest")
         elif self.effect_class == "provider_start":
             if (
                 len(self.operation) != 7
@@ -2300,6 +2332,10 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         and payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION):
         raw.pop("merge_completed_branch", None)
         raw.pop("base_branch", None)
+    if isinstance(payload, RunProfilePayload) and payload.archive_run_directory is None:
+        raw.pop("archive_run_directory", None)
+    if isinstance(payload, RunProfilePayload) and not payload.post_merge_hook_enabled:
+        raw.pop("post_merge_hook_enabled", None)
     if isinstance(payload, PlanPayload):
         raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
     if isinstance(payload, AgentResultPayload):
@@ -2578,6 +2614,8 @@ _PAYLOAD_READERS: dict[
             data["reducer_version"],
             data.get("merge_completed_branch", False),
             data.get("base_branch"),
+            data.get("archive_run_directory"),
+            data.get("post_merge_hook_enabled", False),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],

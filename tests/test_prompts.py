@@ -64,3 +64,18 @@ def test_claude_policy_announces_the_slice_commit_decision_duty() -> None:
     assert "slice_commit_decision_finding_ids" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "request-time part" in NATIVE_CLAUDE_SYSTEM_POLICY
     assert "opened and decided in that same response" in NATIVE_CLAUDE_SYSTEM_POLICY
+
+
+def test_claude_policy_requires_source_checks_for_risks_and_test_coverage() -> None:
+    policy = NATIVE_CLAUDE_SYSTEM_POLICY
+    for required in (
+        "For plan, Slice, and final full-branch reviews measured against SOURCE",
+        "inspect the files and diff actually present in the provided snapshot",
+        "If a residual risk is decidable from that source, verify it against the source",
+        "when a defect is confirmed, open a Finding instead of recording only a residual-risk note",
+        "Use 'not verifiable' only with a concrete reason why the actual provided snapshot cannot decide the claim",
+        "after checking its available files and diff",
+        "If you claim a test covers an acceptance criterion, identify the assertion that establishes coverage",
+        "connect it to the affected repository path; otherwise open a Finding",
+    ):
+        assert required in policy

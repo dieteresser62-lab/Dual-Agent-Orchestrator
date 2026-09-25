@@ -86,6 +86,8 @@ from git_service import (
 from workflow_completion import (
     complete_chain as complete_reviewed_chain,
     preflight_chain as preflight_reviewed_chain,
+    check_archive_directory,
+    acknowledge_unknown_post_merge,
 )
 from plan_handoff import (
     AcceptanceReviewLimitReached,
@@ -392,14 +394,14 @@ class ProductionWorkflowDriver:
             )
         )
 
-    def _completion_policy(self) -> tuple[bool, str | None]:
+    def _completion_policy(self) -> tuple[bool, str | None, str, bool]:
         base = self.config.base_branch
         if (self.root / ".git").exists():
             try:
                 base = resolve_base_branch(self.root, base)
             except GitTransactionError:
                 pass
-        return self.config.merge_completed_branch, base
+        return self.config.merge_completed_branch, base, self.config.archive_run_directory, True
 
     def _validation_boundary(self) -> WorkflowValidation:
         """Bind driver-owned resources to one validation operation explicitly."""
@@ -2549,6 +2551,18 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError("completion requires the authoritative record chain")
         return preflight_reviewed_chain(self.root, state, bridge)
 
+    def preflight_archive_directory(self, state: WorkflowState) -> None:
+        if (state.current_work_unit.kind is not WorkUnitKind.SLICE
+            or state.current_slice_id != 1):
+            return
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("archive preflight has no artifact bridge")
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        if replay.run_profile is None:
+            raise WorkflowExecutionError("archive preflight has no bound run profile")
+        check_archive_directory(self.root, replay.run_profile, state.run_id, state.branch)
+
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
         # B27 inventory: this remains the driver composition root.  It orders the
         # still driver-owned baseline binding and audit projection before choosing
@@ -2873,6 +2887,25 @@ def run_production_workflow(
     *,
     force_new: bool = False,
 ) -> WorkflowRunResult:
+    if getattr(args, "acknowledge_post_merge", None) is not None:
+        root = Path.cwd().resolve()
+        task = task_file.resolve()
+        resolutions: list[ResumeResolution] = []
+        resumed = load_resumable_workflow_state(
+            root / ".orchestrator" / "state.json",
+            repository_root=root,
+            allowed_roots=tuple(dict.fromkeys((root, task.parent))),
+            expected_task_file=task,
+            expected_task_digest=hashlib.sha256(task.read_text(encoding="utf-8").encode()).hexdigest(),
+            resolution_observer=resolutions.append,
+        )
+        if not isinstance(resumed, WorkflowState) or len(resolutions) != 1:
+            raise GitTransactionError("post-merge acknowledgment needs a resumable run")
+        bridge = ArtifactBridge(resolutions[0].validated_store)
+        acknowledge_unknown_post_merge(
+            root, resumed, bridge, task, args.acknowledge_post_merge,
+            args.post_merge_rationale,
+        )
     return workflow_production.run_production_workflow(
         task_file,
         args,

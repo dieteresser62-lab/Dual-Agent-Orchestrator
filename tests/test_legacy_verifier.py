@@ -45,6 +45,8 @@ def _legacy_run_profile() -> RunProfilePayload:
     object.__setattr__(payload, "reducer_version", legacy_verifier.LEGACY_REDUCER_VERSION)
     object.__setattr__(payload, "merge_completed_branch", False)
     object.__setattr__(payload, "base_branch", None)
+    object.__setattr__(payload, "archive_run_directory", None)
+    object.__setattr__(payload, "post_merge_hook_enabled", False)
     return payload
 
 

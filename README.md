@@ -26,7 +26,7 @@ Ein einzelner Agent kann in einem Durchgang erstaunlich viel erzeugen. Bei grö�
 - **Konvergenz statt Endlosschleife.** Jede weitere Reviewrunde muss nachweisbar Fortschritt bringen. Wenn nicht, endet das Paket ohne Commit.
 - **Fail-closed.** Bei Unklarheiten, Widersprüchen oder unbekanntem Zustand hält der Lauf an, statt zu raten.
 - **Nachvollziehbar und fortsetzbar.** Jeder Schritt landet in einer append-only Record-Kette. Nach einem Absturz oder Quota-Limit setzt der Lauf genau dort fort, ohne erledigte Schritte zu wiederholen. Daneben entsteht ein lesbares Audit-Dokument mit allen Reviews und Befunden.
-- **Nur lokal.** Der Orchestrator pusht und mergt nie. Das bleibt deine Entscheidung.
+- **Nur lokal.** Nach befundfreier Abnahme mergt der Orchestrator standardmäßig lokal in den Basisbranch. Er pusht nie; den Merge kann die Konfiguration abschalten.
 
 Der [Marktvergleich](docs/reference/market-comparison.md) stellt das neben fünfzehn Coding-Agenten und Plattformen. Kurz gesagt ist die Prüfinstanz inzwischen verbreitet. Selten ist dagegen die Kombination aus Freigabe und Testergebnis, die an denselben exakten Codestand gebunden sind, einer Testausführung außerhalb des Agenten und einer Wiederaufnahme ohne Wiederholung. Dafür verzichtet der Orchestrator bewusst auf Parallelität, Cloud, Pull Requests und eine Oberfläche.
 
@@ -123,7 +123,7 @@ Im normalen Betrieb genügt im Zielrepository eine informelle Datei wie `inbox/m
 Beschreibe hier in eigenen Worten, was verbessert oder untersucht werden soll.
 ```
 
-Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Implementierungs-Handoff, alle validierten und reviewten Slice-Commits sowie das branchweite Abschlussreview. Endet die Aufgabenkette ohne neuen Befund, folgen ein Archiv-Commit für neu angelegte Dateien in `docs/internal/` und standardmäßig ein lokaler Merge-Commit in den Basisbranch. Der Orchestrator pusht nie; `[workflow] merge_completed_branch = false` schaltet den Merge ab:
+Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Implementierungs-Handoff, alle validierten und reviewten Slice-Commits sowie das branchweite Abschlussreview. Endet die Aufgabenkette ohne neuen Befund, folgen ein Archiv-Commit für neu angelegte Dateien in `docs/internal/` und standardmäßig ein lokaler Merge-Commit ohne Fast-Forward in den Basisbranch. Neue Läufe archivieren unter `docs/internal/archive/{run_id}/`; `[workflow] archive_run_directory` kann diesen laufgebundenen Unterordner mit `{run_id}`, `{year}` und `{branch_slug}` festlegen. Der Zielordner darf noch nicht existieren und wird vor dem ersten Umsetzungsslice geprüft. Der Orchestrator pusht nie; `[workflow] merge_completed_branch = false` schaltet den Merge ab:
 
 ```bash
 run_task --watch
@@ -212,7 +212,7 @@ Die Markdownprojektion verdichtet Providerattempts pro Operation mit Inputzeiche
 
 Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Claude-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
-Ohne Folgeauftrag verschiebt der Orchestrator danach neu angelegte Dateien aus der Wurzel von `docs/internal/` nach `docs/internal/archive/` und committet ihre Umbenennungen separat.
+Ohne Folgeauftrag verschiebt der Orchestrator danach neu angelegte Dateien aus der Wurzel von `docs/internal/` in den für den Lauf gebundenen Unterordner von `docs/internal/archive/` und committet ihre Umbenennungen separat. Das relative Muster `archive_run_directory` hat als Vorgabe `{run_id}` und verlangt diesen Platzhalter als vollständiges Pfadsegment; zusätzlich sind `{year}` aus der Laufkennung und `{branch_slug}` aus dem Zielbranch zulässig. Es wird beim Laufstart im Run-Profil gebunden. Ein vorhandener Zielordner, ein Symlink oder ein ungültiges Muster stoppt frühzeitig. Bei alten Läufen ohne gebundenes Archivmuster bleibt das bisherige flache Archivziel erhalten.
 
 Beim automatischen Plan-/Implementierungs-Handoff commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-
@@ -303,7 +303,7 @@ Nachdem Claude den Slice-Fingerprint freigegeben hat, führt der Orchestrator fo
 4. einen lokalen Commit `Slice NN: <planned summary>` erstellen, wobei Hooks und Signierung für die mechanische Transaktion deaktiviert sind;
 5. Pfadliste und resultierenden Commit-Hash verifizieren.
 
-Der Orchestrator pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um. Diese Aktionen bleiben explizite Benutzervorgänge außerhalb des Workflows.
+Nach einem befundfreien Gesamtreview archiviert der Orchestrator neue interne Dokumente in einem eigenen Commit. Standardmäßig erstellt er anschließend einen lokalen Merge-Commit ohne Fast-Forward in den Basisbranch. Bei diesen Git-Transaktionen bleiben Hooks und Signierung deaktiviert. Erst nach dem bestätigten Merge-Ergebnis prüft er den wirksamen `post-merge`-Hook und führt einen zulässigen Hook mit Argument `0` aus; Fehler oder eine Überschreitung von 600 Sekunden erzeugen eine Warnung, und begrenzte Ausgaben werden im Ergebnisrecord festgehalten, ohne den Merge zurückzunehmen. Bei ungewissem Hook-Ausgang hält Resume an, bis der Operator den offenen Intent für den bestätigten Merge-Commit begründet quittiert. Der Zielbranch bleibt nach dem Merge lokal erhalten, während der Basisbranch ausgecheckt ist. Mit `merge_completed_branch = false` bleibt der Zielbranch ausgecheckt und der Hook wird ausgelassen. Der Orchestrator pusht und force-pusht nie und schreibt die Historie nicht um. Einzelheiten und der Quittierungsbefehl stehen in [Abschnitt 2.10 der Einrichtung](docs/reference/einrichtung.md).
 
 ## Watch-Modus
 
@@ -393,6 +393,8 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--target-branch <branch>` | Aufgabenmarker, eindeutige Textableitung oder deterministische Erzeugung | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
 | `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
 | `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
+| `--acknowledge-post-merge <commit>` | nicht gesetzt | Mit `--resume` und `--task-file` den ungewissen Ausgang eines `post-merge`-Hooks für den bestätigten Merge-Commit quittieren. |
+| `--post-merge-rationale <text>` | nicht gesetzt | Erforderliche Begründung für die Quittierung des ungewissen Hook-Ausgangs. |
 
 ### Validierung, Probelauf und Quota
 
@@ -524,6 +526,8 @@ command = ["npm", "test"]
 timeout_seconds = 1200
 
 [workflow]
+archive_run_directory = "{run_id}"
+merge_completed_branch = true
 manual_slice_gate = false
 plan_gate = false
 test_change_gate = false
@@ -618,8 +622,9 @@ python3 -m pytest tests/test_crash_harness.py -v
 Der erste Pytest-Aufruf entspricht der standardmäßigen Slice- und
 Korrekturvalidierung. Den vollständigen Crash-Harness führt der Betreiber nach
 der letzten relevanten Änderung auf dem exakten Branch-HEAD und vor dem
-branchweiten Finalreview separat aus; der Orchestrator erzwingt dieses
-Betreiber-Gate nicht.
+branchweiten Finalreview und einem Merge separat aus. Nach jeder Änderung von
+`HEAD` ist der vollständige Crashbeweis erneut nötig; der Orchestrator
+erzwingt dieses Betreiber-Gate nicht.
 
 ### Diagnosewerkzeuge
 

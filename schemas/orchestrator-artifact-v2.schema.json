@@ -123,7 +123,9 @@
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
         "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-class-round-exit-v1"},
         "merge_completed_branch": {"type": "boolean"},
-        "base_branch": {"type": ["string", "null"]}
+        "base_branch": {"type": ["string", "null"]},
+        "archive_run_directory": {"type": "string"},
+        "post_merge_hook_enabled": {"type": "boolean"}
       }
     },    "workflow_transition": {
       "type": "object", "additionalProperties": false,
@@ -701,7 +703,7 @@
       "required": ["effect_key", "effect_class", "work_unit_id", "operation", "phase", "result"],
       "properties": {
         "effect_key": {"$ref": "#/$defs/identifier"},
-        "effect_class": {"enum": ["git_commit", "git_merge", "provider_start", "file_write", "queue_move", "internal", "ledger"]},
+        "effect_class": {"enum": ["git_commit", "git_merge", "post_merge_hook", "provider_start", "file_write", "queue_move", "internal", "ledger"]},
         "work_unit_id": {"$ref": "#/$defs/identifier"},
         "operation": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000\\r\\n]+$"}},
         "phase": {"enum": ["intent", "result"]},

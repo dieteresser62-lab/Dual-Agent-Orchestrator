@@ -138,6 +138,8 @@ def _current_mapping() -> dict[str, str]:
 
 
 def _normalized_payload_fields(payload: object) -> object:
+    if isinstance(payload, artifact_models.RunProfilePayload):
+        return artifact_models.artifact_payload_document(payload)
     if isinstance(payload, artifact_models.AgentResultPayload):
         return artifact_models.artifact_payload_document(payload)
     if isinstance(payload, artifact_models.PlanPayload):

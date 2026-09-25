@@ -2,7 +2,7 @@
   "schema_version": "function-size-baseline-v1",
   "threshold_lines": 200,
   "functions": {
-    "src/cli.py::build_parser": 255,
+    "src/cli.py::build_parser": 264,
     "src/inbox_watcher.py::watch_inbox": 261,
     "src/native_review_contract.py::native_review_provider_response_schema": 299
   }

@@ -3,6 +3,7 @@
   "source_commit": "36fb8a8edb9d2c4bea861b3198c268240473f649",
   "source_blob": "366d01322ca79a3ba120f3ddb1d66f403f3c7c97",
   "namespace_base": {
+    "acknowledge_post_merge": null,
     "agent_live_stream": true,
     "agent_live_stream_channels": "stdout",
     "agent_live_stream_mode": "compact",
@@ -58,6 +59,7 @@
     "plan_gate_source": "repository-default",
     "plan_only": null,
     "poll_interval": 5.0,
+    "post_merge_rationale": null,
     "quiet": false,
     "quota_auto_resume": true,
     "quota_heartbeat_interval": null,
@@ -106,6 +108,7 @@
       "workflow": {
         "__type__": "WorkflowConfig",
         "merge_completed_branch": true,
+        "archive_run_directory": "{run_id}",
         "manual_slice_gate": false,
         "plan_gate": false,
         "test_change_gate": false,
@@ -244,7 +247,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 816,
+          "line": 835,
           "type": "SystemExit",
           "message": "2"
         }
@@ -270,7 +273,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 821,
+          "line": 840,
           "type": "SystemExit",
           "message": "2"
         }
@@ -296,7 +299,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 823,
+          "line": 842,
           "type": "SystemExit",
           "message": "2"
         }
@@ -322,7 +325,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 832,
+          "line": 851,
           "type": "ConfigError",
           "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"
         }
@@ -352,25 +355,25 @@
       "exception_events": [
         {
           "function": "quota_int",
-          "line": 860,
+          "line": 879,
           "type": "ValueError",
           "message": "invalid literal for int() with base 10: 'not-an-integer'"
         },
         {
           "function": "quota_int",
-          "line": 862,
+          "line": 881,
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 867,
+          "line": 886,
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 889,
+          "line": 908,
           "type": "SystemExit",
           "message": "2"
         }
@@ -396,13 +399,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 865,
+          "line": 884,
           "type": "ValueError",
           "message": "quota safety margin must be a non-negative integer"
         },
         {
           "function": "parse_args",
-          "line": 889,
+          "line": 908,
           "type": "SystemExit",
           "message": "2"
         }
@@ -428,13 +431,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 898,
+          "line": 917,
           "type": "ValueError",
           "message": "transient retry initial delay must be a positive integer"
         },
         {
           "function": "parse_args",
-          "line": 917,
+          "line": 936,
           "type": "SystemExit",
           "message": "2"
         }
@@ -461,7 +464,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 922,
+          "line": 941,
           "type": "SystemExit",
           "message": "2"
         }
@@ -487,7 +490,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 924,
+          "line": 943,
           "type": "SystemExit",
           "message": "2"
         }
@@ -514,7 +517,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 926,
+          "line": 945,
           "type": "SystemExit",
           "message": "2"
         }
@@ -539,13 +542,13 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 952,
+          "line": 980,
           "type": "AgentConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         },
         {
           "function": "parse_args",
-          "line": 954,
+          "line": 982,
           "type": "ConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         }
@@ -589,8 +592,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 67,
-        "namespace_sha256": "58f6ca7513daa504229b29d8ad05b58e30f6de134a81cec12919e47259681848",
+        "namespace_field_count": 69,
+        "namespace_sha256": "60b80cad6cf13174982305cd357c1908d39d877747e8bd514625cbce64d1ecbb",
         "return_ordinals": [
           1,
           1,
@@ -628,8 +631,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 67,
-        "namespace_sha256": "416cef86a654e24bb983b6f9faee4f5fea9fe9e2b6dc738e3cad52fd9b93861e",
+        "namespace_field_count": 69,
+        "namespace_sha256": "06ee37a171b24c28287c8dd4a4b3c3fb5fd1ad8bc20058b70b63535ada5e274d",
         "return_ordinals": [
           2,
           2,
@@ -658,8 +661,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 67,
-        "namespace_sha256": "cdea6646c7cf1735847d0a24d4c163d62b6dee6e3b8dcd0a942bac7d3f1eff02",
+        "namespace_field_count": 69,
+        "namespace_sha256": "5aca75220ea0612e4711f68c0b0d61c34c3207a2b45958489be4178ff40cdeba",
         "return_ordinals": [
           3,
           2,
@@ -695,8 +698,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 67,
-        "namespace_sha256": "53d795be7f99b4a1173c7fa56acc3adff03356b96c43101ec9bbb1860a3c2e73",
+        "namespace_field_count": 69,
+        "namespace_sha256": "47bffbdd77841b1feb5312196f88ad730285361466fb2b00c95f0d2369531097",
         "return_ordinals": [
           2,
           2,
