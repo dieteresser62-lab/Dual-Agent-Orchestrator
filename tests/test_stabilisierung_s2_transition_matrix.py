@@ -574,9 +574,9 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_production.py:_create_production_state': 0,
  'src/workflow_production.py:_recover_final_review_history': 2,
  'src/workflow_production.py:run_production_workflow': 4,
- 'src/workflow_production.py:_run_production_transition_loop': 23,
+ 'src/workflow_production.py:_run_production_transition_loop': 22,
  'src/workflow_baseline.py:matches_baseline_initialization_prefix': 18,
- 'src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline': 20,
+ 'src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline': 22,
  'src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context': 5,
  'src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt': 19,
  'src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect': 17,
@@ -594,7 +594,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy': 33,
  'src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract': 9,
  'src/orchestrator.py:ProductionWorkflowDriver.checkpoint': 9,
- 'src/workflow_audit.py:WorkflowAudit.project_audit': 15,
+ 'src/workflow_audit.py:WorkflowAudit.project_audit': 19,
  'src/workflow_audit.py:WorkflowAudit.finalize_audit': 9,
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context': 9,
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation': 17,
@@ -1273,6 +1273,7 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
         for function_name in (
             "run_production_workflow",
             "_run_production_transition_loop",
+            "_finish_final_review",
         )
     )
     commit = ast.dump(

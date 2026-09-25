@@ -56,6 +56,7 @@ EXPECTED_INTERNAL_IMPORTS = {
 }
 
 EXPECTED_DEPENDENCY_EDGES = {
+    "completion_policy",
     "active_state",
     "artifact_bridge",
     "artifact_fingerprint",
@@ -68,6 +69,7 @@ EXPECTED_DEPENDENCY_EDGES = {
 }
 
 EXPECTED_DRIVER_BINDINGS = {
+    "completion_policy": "self._completion_policy",
     "active_state": "lambda: self.active_state",
     "artifact_bridge": "lambda: self._artifact_bridge",
     "artifact_fingerprint": "self._artifact_fingerprint",
@@ -343,6 +345,8 @@ def test_incomplete_profile_prefix_preserves_persisted_code_version(
                 binding.claude_profile.effort,
             ),
             orchestrator_code_version=persisted_version,
+            merge_completed_branch=False,
+            base_branch="main",
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",

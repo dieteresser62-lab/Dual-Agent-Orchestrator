@@ -9,6 +9,7 @@
 - After orchestration, prompt, parser, watch, or state changes run the repository default validation tier: `python3 -m pytest tests/ -v -m "not crash_harness"`. Run the complete crash proof at the operator gate defined below.
 - Keep `AGENTS.md`, `CLAUDE.md`, and `CODEX.md` synchronized.
 - Never push, merge, force-push, rewrite history, or run destructive cleanup without explicit approval.
+- After a finding-free final review, the orchestrator archives newly added root `docs/internal/` files in a separate local commit and, when the run-bound `merge_completed_branch` policy is true, makes a local `--no-ff` merge into the bound base branch. Agents still never merge or push.
 
 ## State-v3 workflow
 

@@ -43,6 +43,8 @@ def _legacy_run_profile() -> RunProfilePayload:
     )
     object.__setattr__(payload, "orchestrator_code_version", "0" * 64)
     object.__setattr__(payload, "reducer_version", legacy_verifier.LEGACY_REDUCER_VERSION)
+    object.__setattr__(payload, "merge_completed_branch", False)
+    object.__setattr__(payload, "base_branch", None)
     return payload
 
 

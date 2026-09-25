@@ -25,6 +25,9 @@ from test_orchestrator_runtime import (
     test_resume_loop_dispatches_next_provider_attempt_in_same_invocation as _same_resume_proof,
     test_unknown_provider_gate_accepts_an_unchanged_repository as _unchanged_gate_proof,
 )
+from test_workflow_completion import (
+    test_each_completion_boundary_resumes_to_same_result as completion_boundary_proof,
+)
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     Fingerprint,
@@ -32,6 +35,7 @@ from artifact_models import (
     WorkflowPolicyPayload,
 )
 from artifact_replay import ArtifactReplayError
+from side_effects import SideEffectBoundaryPhase
 from crash_harness import (
     BOUNDARY_ORDER,
     HARNESS_SCHEMA_VERSION,
@@ -59,6 +63,15 @@ def test_provider_crash_after_started_before_response_has_all_resume_outcomes(
     _unknown_process_proof(tmp_path / "unknown", role)
     _same_resume_proof(tmp_path / "same_resume", role)
     _unchanged_gate_proof(tmp_path / "unchanged", role)
+
+
+@pytest.mark.parametrize("effect", ("git_commit", "git_merge"))
+@pytest.mark.parametrize("phase", tuple(SideEffectBoundaryPhase))
+def test_archive_and_merge_boundaries_converge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    effect: str, phase: SideEffectBoundaryPhase,
+) -> None:
+    completion_boundary_proof(tmp_path, monkeypatch, effect, phase)
 
 
 def _tracked_repository_snapshot(

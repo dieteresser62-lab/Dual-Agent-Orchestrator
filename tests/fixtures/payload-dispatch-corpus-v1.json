@@ -26,7 +26,9 @@
           "effort": "max"
         },
         "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
+        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
+        "merge_completed_branch": true,
+        "base_branch": "main"
       }
     },
     {

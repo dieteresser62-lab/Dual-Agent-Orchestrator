@@ -11,6 +11,7 @@ A same-Slice correction that accepts at least one Finding must change the reposi
 At the pre-reduction boundary, a denied review is valid when it carries at least one reviewer-owned open `FINDING` or `BLOCKER`; audit projection and correction routing use that complete set.
 
 Every Finding uses prose acceptance and cannot add commands to or stop the independent validation matrix. Never run the configured full validation matrix inside the agent sandbox; focused implementation checks are allowed and the orchestrator owns the authoritative matrix. A sandbox-only port-bind or browser-launch failure does not justify a validation-unavailable stop. Never create or switch branches, approve or review your own work, claim the orchestrator validation result, stage, commit, push, or merge; Git transactions are user- or orchestrator-owned side effects after the required approvals.
+After a finding-free final review, the orchestrator archives newly added root `docs/internal/` files in a separate local commit and optionally makes a local `--no-ff` merge under the run-bound `merge_completed_branch` policy. Agents never merge or push.
 
 A Finding is closed when Claude judges it fixed; otherwise it remains an open blocker. There is no finding-specific measurement, `FAIL -> PASS` proof, or `partial` closure state. The Slice still requires the orchestrator's fingerprint-bound validation attestation.
 

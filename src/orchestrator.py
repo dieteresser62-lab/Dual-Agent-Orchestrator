@@ -79,8 +79,13 @@ from gates import TestChangeEvidence, detect_test_changes
 from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
     inspect_repository,
+    resolve_base_branch,
     GitTransactionError,
     path_exists_at_commit,
+)
+from workflow_completion import (
+    complete_chain as complete_reviewed_chain,
+    preflight_chain as preflight_reviewed_chain,
 )
 from plan_handoff import (
     AcceptanceReviewLimitReached,
@@ -383,8 +388,18 @@ class ProductionWorkflowDriver:
                     self._reconcile_pending_workflow_event
                 ),
                 side_effect_executor=self._side_effect_executor,
+                completion_policy=self._completion_policy,
             )
         )
+
+    def _completion_policy(self) -> tuple[bool, str | None]:
+        base = self.config.base_branch
+        if (self.root / ".git").exists():
+            try:
+                base = resolve_base_branch(self.root, base)
+            except GitTransactionError:
+                pass
+        return self.config.merge_completed_branch, base
 
     def _validation_boundary(self) -> WorkflowValidation:
         """Bind driver-owned resources to one validation operation explicitly."""
@@ -2103,6 +2118,15 @@ class ProductionWorkflowDriver:
         )
         return target
 
+    def final_review_has_followup(self, state: WorkflowState) -> bool:
+        if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
+            raise WorkflowExecutionError("follow-up check requires the final review")
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("follow-up check requires the record chain")
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        return bool(reduce_findings(replay).open_set.findings)
+
 
     def _read_semantic_plan_artifact(self, candidate: Path) -> None:
         """Read and validate the plan operation protected by its two mitigations."""
@@ -2507,6 +2531,23 @@ class ProductionWorkflowDriver:
 
     def finalize_audit(self, state: WorkflowState) -> str | None:
         return self._audit_boundary().finalize_audit(state)
+
+    def complete_chain(self, state: WorkflowState) -> str:
+        self.assert_structured_decision_context()
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("completion requires the authoritative record chain")
+        return complete_reviewed_chain(
+            self.root, state, bridge, self._side_effect_executor(bridge),
+            self._side_effect_spec,
+        )
+
+    def preflight_chain(self, state: WorkflowState) -> bool:
+        self.assert_structured_decision_context()
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("completion requires the authoritative record chain")
+        return preflight_reviewed_chain(self.root, state, bridge)
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
         # B27 inventory: this remains the driver composition root.  It orders the

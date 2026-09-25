@@ -79,6 +79,7 @@ FINGERPRINT = "a" * 64
 FIRST_SLICE_START_COMMIT = "c" * 40
 LEDGER_ORDER = (
     "git_commit",
+    "git_merge",
     "provider_start",
     "file_write",
     "queue_move",

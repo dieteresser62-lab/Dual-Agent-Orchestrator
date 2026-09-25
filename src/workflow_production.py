@@ -75,6 +75,10 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
 
     def finalize_audit(self, state: WorkflowState) -> str | None: ...
 
+    def complete_chain(self, state: WorkflowState) -> str: ...
+
+    def preflight_chain(self, state: WorkflowState) -> bool: ...
+
     def assert_structured_decision_context(self) -> None: ...
 
     def persist_implementation_handoff(
@@ -82,6 +86,8 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
     ) -> None: ...
 
     def publish_followup_task(self, state: WorkflowState) -> Path | None: ...
+
+    def final_review_has_followup(self, state: WorkflowState) -> bool: ...
 
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
@@ -93,8 +99,11 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "_write_side_effect_file",
         "assert_structured_decision_context",
         "finalize_audit",
+        "complete_chain",
+        "preflight_chain",
         "persist_implementation_handoff",
         "publish_followup_task",
+        "final_review_has_followup",
     }
 )
 
@@ -553,6 +562,8 @@ def run_production_workflow(
     state = dependencies.recover_legacy_plan_only_post_gate(state)
     state = state.reopen_legacy_quota_resume_diff_gate()
     config = OrchestratorConfig(
+        merge_completed_branch=getattr(workflow_config, "merge_completed_branch", True),
+        base_branch=args.repo_config.repository.base_branch,
         dry_run=False,
         agent_output_mode=args.agent_output,
         agent_output_max_chars=args.agent_output_max_chars,
@@ -748,11 +759,7 @@ def _run_production_transition_loop(
             current = state.current_work_unit
 
         if current.kind is WorkUnitKind.FINAL_REVIEW:
-            audit_commit = driver.finalize_audit(state)
-            handoff = driver.publish_followup_task(state)
-            if handoff is not None:
-                logger.info("Follow-up work document ready: %s", handoff)
-            return WorkflowRunResult(state, history, audit_commit)
+            return _finish_final_review(driver, state, history)
 
         if current.kind is WorkUnitKind.PLAN:
             if state.execution_mode == TaskMode.PLAN_ONLY.value:
@@ -817,3 +824,20 @@ def _run_production_transition_loop(
         return WorkflowRunResult(state, history, state.current_slice.commit_ref)
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
+
+
+def _finish_final_review(
+    driver: ProductionWorkflowLoopDriver,
+    state: WorkflowState,
+    history: WorkflowHistory,
+) -> WorkflowRunResult:
+    if driver.final_review_has_followup(state):
+        audit_commit = driver.finalize_audit(state)
+        handoff = driver.publish_followup_task(state)
+        if handoff is None:
+            raise WorkflowExecutionError("final-review findings changed before follow-up publication")
+        logger.info("Follow-up work document ready: %s", handoff)
+        return WorkflowRunResult(state, history, audit_commit)
+    if not driver.preflight_chain(state):
+        driver.finalize_audit(state)
+    return WorkflowRunResult(state, history, driver.complete_chain(state))

@@ -106,6 +106,7 @@ def _append_baseline_identity_expectations(
     binding: ProtocolBinding,
     expect: Callable[..., None],
     code_version: str | None = None,
+    persisted_profile: RunProfilePayload | None = None,
 ) -> None:
     expected_identity = RunIdentityPayload(
         task_file=state.task_file,
@@ -123,6 +124,10 @@ def _append_baseline_identity_expectations(
             binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
         ),
         orchestrator_code_version=code_version or orchestrator_code_version(),
+        merge_completed_branch=(
+            persisted_profile.merge_completed_branch if persisted_profile else True
+        ),
+        base_branch=persisted_profile.base_branch if persisted_profile else None,
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -358,11 +363,16 @@ def matches_baseline_initialization_prefix(
         ),
         None,
     )
+    persisted_profile = next(
+        (record.payload for record in prefix if isinstance(record.payload, RunProfilePayload)),
+        None,
+    )
     _append_baseline_identity_expectations(
         state,
         binding,
         expect,
         code_version,
+        persisted_profile,
     )
     current = _append_baseline_transition_expectations(state, expect)
     _append_baseline_contract_expectations(
@@ -446,6 +456,7 @@ class WorkflowBaselineDependencies:
         [ArtifactReplayResult], ArtifactRecord
     ]
     side_effect_executor: Callable[[ArtifactBridge], SideEffectExecutor]
+    completion_policy: Callable[[], tuple[bool, str | None]] = lambda: (True, None)
 
 
 class WorkflowBaseline:
@@ -502,6 +513,12 @@ class WorkflowBaseline:
             round_number=None,
             domain_record=identity_record,
         )
+        completion_policy = (
+            (existing_replay.run_profile.merge_completed_branch,
+             existing_replay.run_profile.base_branch)
+            if existing_replay is not None and existing_replay.run_profile is not None
+            else self._dependencies.completion_policy()
+        )
         bridge.append(
             RunProfilePayload(
                 implementer=RoleProfilePayload(
@@ -511,6 +528,8 @@ class WorkflowBaseline:
                     binding.claude_profile.model, binding.claude_profile.effort
                 ),
                 orchestrator_code_version=_resume_code_version(existing_replay),
+                merge_completed_branch=completion_policy[0],
+                base_branch=completion_policy[1],
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",

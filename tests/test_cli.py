@@ -41,6 +41,13 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     assert rule.max_bytes == 16_000_000
     assert config.workflow.max_transport_failures == 3
     assert config.workflow.max_contract_rejections == 3
+    assert config.workflow.merge_completed_branch is True
+
+
+def test_merge_completion_setting_defaults_true_and_accepts_false(tmp_path: Path) -> None:
+    assert load_repo_config(tmp_path / "missing.toml").workflow.merge_completed_branch is True
+    path = _write_config(tmp_path, "[workflow]\nmerge_completed_branch = false\n")
+    assert load_repo_config(path).workflow.merge_completed_branch is False
 
 
 def test_repository_base_branch_is_optional_and_strict(tmp_path: Path) -> None:
@@ -853,6 +860,7 @@ max_contract_rejections = 8
         ("[workflow]\nplan_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\ntest_change_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nscope_extension_gate = \"yes\"\n", "must be a boolean"),
+        ("[workflow]\nmerge_completed_branch = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nmax_rounds_per_loop = 0\n", "must be a positive integer"),
         ("[workflow]\nmax_acceptance_reviews = 0\n", "must be a positive integer"),
         ("[workflow]\nmax_transport_failures = 0\n", "must be a positive integer"),

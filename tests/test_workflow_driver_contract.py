@@ -164,6 +164,7 @@ def test_production_loop_driver_inventory_is_protocol_or_explicitly_internal() -
         "_prepare_plan_implementation_handoff",
         "_start_first_slice",
         "_start_pending_slice",
+        "_finish_final_review",
     )
     loop_capabilities = frozenset().union(
         *(
