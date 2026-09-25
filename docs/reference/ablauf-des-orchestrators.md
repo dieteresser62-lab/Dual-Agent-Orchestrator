@@ -48,9 +48,12 @@ Sie müssen den Schnitt nicht vorgeben.
 ### Was herauskommt
 
 Ein Branch mit einem Commit je Arbeitspaket, jedes geprüft und getestet, dazu
-ein Prüfbericht. Nichts wird ohne Ihr Zutun ins entfernte Repository
-geschoben und nichts zusammengeführt — der Orchestrator committet
-ausschließlich lokal.
+ein Prüfbericht. Endet die Aufgabenkette ohne neuen Befund, verschiebt der
+Orchestrator ihre neu angelegten Dateien aus der Wurzel von `docs/internal/`
+nach `docs/internal/archive/` und erstellt dafür einen eigenen lokalen Commit.
+Standardmäßig führt er den Zielbranch danach lokal mit `--no-ff` in den
+gebundenen Basisbranch zusammen und checkt diesen aus. Ein Push erfolgt nie.
+`[workflow] merge_completed_branch = false` schaltet nur den Merge ab.
 
 Alle Dokumente eines Laufs, einschließlich Arbeitsplan, Prüfbericht und
 Folgeaufträgen, werden auf Deutsch verfasst. Schema-Schlüssel und Enumwerte,
@@ -69,8 +72,9 @@ der Agenten und kein Abnahmekriterium für fremde Texte.
 | **Claude** | lesen, beurteilen, Befunde eröffnen und schließen | Dateien ändern, Tests ausführen, committen |
 | **Orchestrator** | Aufträge vergeben, Tests ausführen, lokal committen, Buch führen | inhaltlich urteilen |
 
-Keine Rolle darf pushen, zusammenführen, die Historie umschreiben oder die
-eigene Arbeit abnehmen.
+Keine Agentenrolle darf pushen, zusammenführen, die Historie umschreiben oder
+die eigene Arbeit abnehmen. Den lokalen Abschlussmerge führt allein der
+Orchestrator nach einem befundfreien Gesamtreview aus.
 
 Claude arbeitet dabei in einer **schreibgeschützten Kopie** des Repositorys.
 Das ist keine Vertrauensfrage, sondern eine Bauweise: Wer nichts ändern kann,

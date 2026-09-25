@@ -1515,6 +1515,7 @@ def test_run_records_exist_before_first_workflow_dispatch(
         RoleProfilePayload("gpt-order", "max"),
         RoleProfilePayload("opus-order", "max"),
         orchestrator.orchestrator_code_version(),
+        base_branch="master",
     )
 
 

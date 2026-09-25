@@ -195,6 +195,18 @@ class WorkflowAudit:
         replay = resolution.replay_result
         if replay is None:
             raise WorkflowExecutionError("structured audit requires an accepted record replay")
+        if (
+            state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            and any(
+                effect.effect_class == "git_commit"
+                and effect.work_unit_id == str(state.current_work_unit_id)
+                and effect.operation[0] == "archive_commit"
+                for effect in getattr(replay, "side_effects", ())
+            )
+        ):
+            # The final audit was committed before archival. Its old path must
+            # not be regenerated when a completed merge resumes on the base.
+            return
         from artifact_store import ArtifactStore
         from audit_document_contract import PLAN_APPENDIX_HEADING
         from path_policy import resolve_repository_path

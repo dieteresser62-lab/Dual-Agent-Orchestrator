@@ -19,6 +19,38 @@ AUDIT_PATH = ROOT / "src/workflow_audit.py"
 GIT_COMMIT_PATH = ROOT / "src/workflow_git_commit.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
+
+def test_archived_audit_is_not_regenerated_when_merged_run_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workflow_audit
+
+    replay = SimpleNamespace(side_effects=(SimpleNamespace(
+        effect_class="git_commit", work_unit_id="3",
+        operation=("archive_commit",),
+    ),))
+    monkeypatch.setattr(
+        workflow_audit, "resolve_resume_state",
+        lambda *_args, **_kwargs: SimpleNamespace(replay_result=replay),
+    )
+    dependencies = WorkflowAuditDependencies(
+        root=lambda: tmp_path,
+        artifact_bridge=lambda: SimpleNamespace(store=SimpleNamespace()),
+        assert_structured_decision_context=lambda: None,
+        mark_completed_side_effect=lambda _key: None,
+        side_effect_executor=lambda _bridge: None,
+        side_effect_spec=lambda *_args, **_kwargs: None,
+        bound_task_control_paths=lambda *_args: (),
+    )
+    state = SimpleNamespace(
+        protocol_binding=SimpleNamespace(mode=ProtocolMode.STRUCTURED_V2),
+        run_id="completed-run", current_work_unit_id=3,
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.FINAL_REVIEW),
+        audit_report_path="docs/internal/audit.md",
+    )
+    WorkflowAudit(dependencies).project_audit(state, WorkflowHistory(3))
+    assert not (tmp_path / "docs/internal/audit.md").exists()
+
 EXPECTED_INTERNAL_IMPORTS = {
     "artifact_bridge",
     "audit_document_contract",

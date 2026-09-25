@@ -3,6 +3,7 @@
   "scenario_version": "target-run-chain-removal-v1",
   "effect_classes": [
     "git_commit",
+    "git_merge",
     "provider_start",
     "file_write",
     "queue_move",
@@ -11,6 +12,7 @@
   ],
   "boundary_matrix": {
     "git_commit": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
+    "git_merge": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
     "provider_start": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
     "file_write": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
     "queue_move": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],

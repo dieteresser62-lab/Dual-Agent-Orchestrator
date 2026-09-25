@@ -234,6 +234,8 @@ class RunProfilePayload:
     reviewer: RoleProfilePayload
     orchestrator_code_version: str = "0" * 64
     reducer_version: str = STATE_PROJECTION_REDUCER_VERSION
+    merge_completed_branch: bool = True
+    base_branch: str | None = None
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -250,6 +252,13 @@ class RunProfilePayload:
                 "run profile reducer_version is unsupported for resume; "
                 f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
             )
+        if not isinstance(self.merge_completed_branch, bool):
+            raise ArtifactValidationError("run profile merge_completed_branch must be boolean")
+        if self.base_branch is not None and (
+            not self.base_branch or self.base_branch.startswith("-")
+            or any(character.isspace() for character in self.base_branch)
+        ):
+            raise ArtifactValidationError("run profile base_branch is invalid")
 
 
 _WORKFLOW_STEPS = {
@@ -1453,6 +1462,7 @@ class ProviderAttemptPayload:
 
 SIDE_EFFECT_CLASSES = frozenset({
     "git_commit",
+    "git_merge",
     "provider_start",
     "file_write",
     "queue_move",
@@ -1518,13 +1528,20 @@ class SideEffectPayload:
         if self.effect_class == "git_commit":
             if (
                 len(self.operation) != 6
-                or self.operation[0] not in {"slice_commit", "audit_commit"}
+                or self.operation[0] not in {"slice_commit", "audit_commit", "archive_commit"}
                 or re.fullmatch(r"[0-9a-f]{40}", self.operation[2]) is None
                 or re.fullmatch(r"[0-9a-f]{40}", self.operation[3]) is None
             ):
                 raise ArtifactValidationError("Git side effect operation is invalid")
             _require_sha256(self.operation[4], "Git side effect fingerprint")
             _require_sha256(self.operation[5], "Git side effect message digest")
+        elif self.effect_class == "git_merge":
+            if (len(self.operation) != 7
+                or self.operation[0] != "merge_commit"
+                or any(re.fullmatch(r"[0-9a-f]{40}", item) is None
+                       for item in self.operation[2:5])):
+                raise ArtifactValidationError("merge side effect operation is invalid")
+            _require_sha256(self.operation[5], "merge side effect message digest")
         elif self.effect_class == "provider_start":
             if (
                 len(self.operation) != 7
@@ -2278,6 +2295,10 @@ ArtifactPayload: TypeAlias = (
 def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     """Serialize one payload while preserving its optional-field wire shape."""
     raw = asdict(payload)
+    if (isinstance(payload, RunProfilePayload)
+        and payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION):
+        raw.pop("merge_completed_branch", None)
+        raw.pop("base_branch", None)
     if isinstance(payload, PlanPayload):
         raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
     if isinstance(payload, AgentResultPayload):
@@ -2554,6 +2575,8 @@ _PAYLOAD_READERS: dict[
             RoleProfilePayload(**data["reviewer"]),
             data["orchestrator_code_version"],
             data["reducer_version"],
+            data.get("merge_completed_branch", False),
+            data.get("base_branch"),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],

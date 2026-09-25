@@ -71,6 +71,7 @@ max_chars = 4000000
 max_bytes = 16000000
 
 [workflow]
+merge_completed_branch = true
 manual_slice_gate = false
 plan_gate = false
 test_change_gate = false

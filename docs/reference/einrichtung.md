@@ -505,7 +505,12 @@ Ein späterer Start mit `run_task --watch` setzt fort.
 ### 2.10 Abschließen
 
 Der Orchestrator hat alles auf einem eigenen Branch committet, zum Beispiel
-`feature/einkaufsliste`. Zusammenführen ist Ihre Sache:
+`feature/einkaufsliste`. Nach einem befundfreien Gesamtreview archiviert er
+die neu angelegten Dokumente und committet die Umbenennungen. Standardmäßig
+führt er den Branch anschließend lokal mit `--no-ff` in den Basisbranch
+zusammen und checkt diesen aus. Er pusht nie. Bei
+`[workflow] merge_completed_branch = false` bleibt der Zielbranch ausgecheckt;
+zum manuellen Zusammenführen verwenden Sie:
 
 ```bash
 git switch main
@@ -650,8 +655,10 @@ Setze Abschnitt 3 aus docs/spezifikation.md um: Rezepte anlegen, bearbeiten
 und als Liste anzeigen. Speicherung und Suche folgen später.
 ```
 
-Nach jedem Zuwachs: Ergebnis ansehen, in den Hauptbranch zusammenführen, auf
-dem Hauptbranch bleiben (2.10) – dann die nächste Idee.
+Nach jedem Zuwachs: Ergebnis ansehen. Bei der Standardeinstellung liegt der
+lokale Merge bereits im Hauptbranch und dieser ist ausgecheckt (2.10). Bei
+abgeschaltetem Merge führen Sie den Zielbranch selbst zusammen – dann die
+nächste Idee.
 
 > [!NOTE]
 > **Warum nacheinander?** Der Orchestrator arbeitet ohnehin eine Aufgabe nach
@@ -714,7 +721,7 @@ Claude-Budget stehen bewusst nicht in der Projektdatei.
 | `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen `command` für bestimmte Pfadmuster. Alle Befehle sind Argumentlisten; für Unterordner und Shell-Semantik etwa `default_command = ["sh", "-c", "cd app && flutter test"]`. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
 | `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
 | `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
-| `[workflow]` | zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. `scope_extension_gate` steht nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
+| `[workflow]` | Zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. `merge_completed_branch` ist standardmäßig `true` und wird für den ganzen Lauf im Run-Profil gebunden; `false` lässt den Zielbranch nach dem Archiv-Commit ausgecheckt. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. Beide Schlüssel stehen nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
 | `[[provider_input_budget]]` | Obergrenzen für die Eingabegröße je Provider, Rolle und Operation |
 
 Ohne `default_command` sucht der Orchestrator selbst: zuerst `pyproject.toml`

@@ -46,6 +46,7 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class WorkflowConfig:
+    merge_completed_branch: bool = True
     manual_slice_gate: bool = False
     plan_gate: bool = False
     test_change_gate: bool = False
@@ -298,6 +299,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
         table,
         {
             "manual_slice_gate",
+            "merge_completed_branch",
             "plan_gate",
             "test_change_gate",
             "scope_extension_gate",
@@ -309,6 +311,9 @@ def _load_workflow(data: object) -> WorkflowConfig:
         "[workflow]",
     )
     manual_slice_gate = table.get("manual_slice_gate", False)
+    merge_completed_branch = table.get("merge_completed_branch", True)
+    if not isinstance(merge_completed_branch, bool):
+        raise ConfigError("workflow.merge_completed_branch must be a boolean")
     plan_gate = table.get("plan_gate", False)
     test_change_gate = table.get("test_change_gate", False)
     scope_extension_gate = table.get("scope_extension_gate", False)
@@ -321,6 +326,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
     if not isinstance(scope_extension_gate, bool):
         raise ConfigError("workflow.scope_extension_gate must be a boolean")
     return WorkflowConfig(
+        merge_completed_branch=merge_completed_branch,
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
         test_change_gate=test_change_gate,

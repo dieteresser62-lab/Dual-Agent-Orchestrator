@@ -500,6 +500,8 @@ def wait_until_quota_resume(
 
 @dataclass
 class OrchestratorConfig:
+    merge_completed_branch: bool = True
+    base_branch: str | None = None
     dry_run: bool = False
     agent_output_mode: str = "summary"
     agent_output_max_chars: int = 1800

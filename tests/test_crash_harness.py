@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import crash_harness
+from test_workflow_completion import (
+    test_each_completion_boundary_resumes_to_same_result as completion_boundary_proof,
+)
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     Fingerprint,
@@ -25,6 +28,7 @@ from artifact_models import (
     WorkflowPolicyPayload,
 )
 from artifact_replay import ArtifactReplayError
+from side_effects import SideEffectBoundaryPhase
 from crash_harness import (
     BOUNDARY_ORDER,
     HARNESS_SCHEMA_VERSION,
@@ -39,6 +43,15 @@ from crash_harness import (
 
 
 MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v1.json"
+
+
+@pytest.mark.parametrize("effect", ("git_commit", "git_merge"))
+@pytest.mark.parametrize("phase", tuple(SideEffectBoundaryPhase))
+def test_archive_and_merge_boundaries_converge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    effect: str, phase: SideEffectBoundaryPhase,
+) -> None:
+    completion_boundary_proof(tmp_path, monkeypatch, effect, phase)
 
 
 def _tracked_repository_snapshot(

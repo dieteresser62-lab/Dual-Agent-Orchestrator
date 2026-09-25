@@ -122,7 +122,7 @@ Im normalen Betrieb genügt im Zielrepository eine informelle Datei wie `inbox/m
 Beschreibe hier in eigenen Worten, was verbessert oder untersucht werden soll.
 ```
 
-Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Implementierungs-Handoff, alle validierten und reviewten Slice-Commits sowie das branchweite Abschlussreview:
+Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Implementierungs-Handoff, alle validierten und reviewten Slice-Commits sowie das branchweite Abschlussreview. Endet die Aufgabenkette ohne neuen Befund, folgen ein Archiv-Commit für neu angelegte Dateien in `docs/internal/` und standardmäßig ein lokaler Merge-Commit in den Basisbranch. Der Orchestrator pusht nie; `[workflow] merge_completed_branch = false` schaltet den Merge ab:
 
 ```bash
 run_task --watch
@@ -210,6 +210,8 @@ Implementierungsaufrufe transportieren nicht mehr den vollständigen Mehrslice-P
 Die Markdownprojektion verdichtet Providerattempts pro Operation mit Inputzeichen, UTF-8-Bytes, Laufzeit, Attemptanzahl, Retrystatus und – sofern tatsächlich persistiert – Input-/Outputtokens. Fehlende Usage bleibt ausdrücklich `unknown`; Zeichen- und Bytezahlen werden nicht als Tokenwerte ausgegeben. Die eingefrorene Vor-Cutover-Baseline dient ausschließlich als read-only Vergleich und wird im normalen Lauf weder importiert noch regeneriert.
 
 Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Claude-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
+
+Ohne Folgeauftrag verschiebt der Orchestrator danach neu angelegte Dateien aus der Wurzel von `docs/internal/` nach `docs/internal/archive/` und committet ihre Umbenennungen separat.
 
 Beim automatischen Plan-/Implementierungs-Handoff commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-

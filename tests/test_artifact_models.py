@@ -187,6 +187,8 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
         "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
+        "merge_completed_branch": True,
+        "base_branch": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
 
