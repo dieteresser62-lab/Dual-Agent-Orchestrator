@@ -654,12 +654,115 @@ def test_explicit_empty_test_commands_are_not_auto_detected(tmp_path: Path) -> N
 
     cli = parse_args(["--test-command", ""], cwd=tmp_path, environ={})
     environment = parse_args([], cwd=tmp_path, environ={"RUN_TASK_TEST_CMD": ""})
-    _write_config(tmp_path, '[validation]\ndefault_shell_command = ""\n')
+    _write_config(tmp_path, '[validation]\nrequired_artifacts = ["dist/**"]\n')
     repository = parse_args([], cwd=tmp_path, environ={})
 
     assert cli.test_command == ""
     assert environment.test_command == ""
     assert repository.test_command == ""
+
+
+@pytest.mark.parametrize(
+    ("declaration", "argv_key"),
+    (
+        ('default_shell_command = "cd app && flutter test"', "default_command"),
+        ('product_shell_command = "cd app && flutter test"', "product_command"),
+        (
+            '[[validation.rules]]\npatterns = ["app/**"]\nshell_command = "cd app && flutter test"',
+            "command",
+        ),
+    ),
+)
+@pytest.mark.parametrize("dry_run", (False, True))
+def test_shell_validation_keys_fail_before_workflow_in_start_and_dry_run(
+    declaration: str, argv_key: str, dry_run: bool, tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _write_config(tmp_path, f"[validation]\n{declaration}\n")
+    monkeypatch.chdir(tmp_path)
+    calls: list[str] = []
+
+    def workflow(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        calls.append("workflow")
+        return 0
+
+    result = main(
+        ["--dry-run"] if dry_run else [],
+        run_pipeline_fn=workflow,
+        watch_inbox_fn=workflow,
+        find_task_file_fn=lambda _path: tmp_path / "task.md",
+    )
+
+    assert result == 1
+    assert calls == []
+    assert (
+        f'{argv_key} = ["sh", "-c", "cd app && flutter test"]'
+        in capsys.readouterr().err
+    )
+    assert not (tmp_path / ".orchestrator").exists()
+
+
+@pytest.mark.parametrize("operator", ("&&", "|", ";"))
+@pytest.mark.parametrize("source", ("cli", "environment"))
+@pytest.mark.parametrize("dry_run", (False, True))
+def test_text_shell_operators_fail_before_workflow(
+    operator: str, source: str, dry_run: bool, tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    command = f"echo first {operator} echo second"
+    args = (["--dry-run"] if dry_run else []) + (
+        ["--test-command", command] if source == "cli" else []
+    )
+    if source == "environment":
+        monkeypatch.setenv("RUN_TASK_TEST_CMD", command)
+    calls: list[str] = []
+
+    def workflow(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        calls.append("workflow")
+        return 0
+
+    result = main(
+        args,
+        run_pipeline_fn=workflow,
+        watch_inbox_fn=workflow,
+        find_task_file_fn=lambda _path: tmp_path / "task.md",
+    )
+
+    assert result == 1
+    assert calls == []
+    error = capsys.readouterr().err
+    assert ("--test-command" if source == "cli" else "RUN_TASK_TEST_CMD") in error
+    assert 'default_command = ["sh", "-c", "cd app && flutter test"]' in error
+
+
+def test_simple_text_command_still_produces_argv(tmp_path: Path) -> None:
+    args = parse_args(
+        ["--test-command", 'python3 -c \'print("ok")\''],
+        cwd=tmp_path,
+        environ={},
+    )
+    assert args.test_command == 'python3 -c \'print("ok")\''
+
+
+def test_detected_shell_syntax_is_rejected_before_workflow(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(cli, "detect_test_command", lambda _root: "cd app && flutter test")
+    monkeypatch.chdir(tmp_path)
+    calls: list[str] = []
+
+    def workflow(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        calls.append("workflow")
+        return 0
+
+    result = main(
+        [],
+        run_pipeline_fn=workflow,
+        watch_inbox_fn=workflow,
+        find_task_file_fn=lambda _path: tmp_path / "task.md",
+    )
+    assert result == 1
+    assert calls == []
+    assert "automatic detection: text validation commands" in capsys.readouterr().err
 
 
 def test_load_repo_config_accepts_portable_policy_schema(tmp_path: Path) -> None:
@@ -760,7 +863,7 @@ max_contract_rejections = 8
         (
             '[validation]\ndefault_command = ["pytest"]\n'
             'default_shell_command = "pytest"\n',
-            "must declare only one",
+            "default_shell_command is unsupported in structured-v2",
         ),
     ],
 )

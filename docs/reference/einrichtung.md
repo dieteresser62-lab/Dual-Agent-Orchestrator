@@ -266,6 +266,17 @@ scope_extension_gate = false
 Passen Sie die Pfade an Ihr Projekt an. Was unter `[paths]` fehlt, zählt als
 Produktivcode – ein vergessenes Muster richtet also keinen Schaden an.
 
+Prüfbefehle sind Argumentlisten. Liegt die Anwendung in einem Unterordner oder
+braucht der Befehl Shell-Semantik, geben Sie die Shell ausdrücklich an:
+
+```toml
+[validation]
+default_command = ["sh", "-c", "cd app && flutter test"]
+```
+
+Dasselbe gilt für `product_command` und das `command` einer Regel. Die alten
+Shell-Schlüssel werden schon beim Start und beim Trockenlauf abgewiesen.
+
 **Mehr als ein Prüfbefehl.** Geprüft wird nur, was ein Befehl prüft. Laufen etwa
 Typprüfung oder Build nicht mit, rutschen Typfehler durch, oder ein
 Akzeptanzkriterium wie „der Build läuft“ lässt sich nicht belegen. Zusätzliche
@@ -425,14 +436,59 @@ Das Protokoll nennt am Ende einen Exitcode und einen Grund.
 |---:|---|---|
 | `0` | fertig | weiter mit 2.10 |
 | `2`, `3` | Kontingent erschöpft oder ein Agent ist ausgefallen | später einfach erneut `run_task --watch` starten – er setzt exakt an der Stelle fort |
-| `4` | eine Entscheidung wird gebraucht | Grund im Protokoll lesen, dann entscheiden (siehe unten) |
+| `4` | ein Gate hält den Lauf an | `gate=` und den Anfang von `detail=` in der Pausenzeile lesen; dann wie unten fortfahren |
 | `5` | endgültiges Urteil, etwa eine abgelehnte Prüfung | Grund im Protokoll lesen; dieser Lauf ist beendet |
 
-Eine Entscheidung erteilen Sie mit Begründung:
+Die Pausenzeile der Wache zeigt `gate=<Grund> detail=<Text>`; bei Stoppgründen
+steht der Grund am Anfang von `detail=`, oft vor ` | `. Die Zeile hat kein
+eigenes Feld für den Gate-Fingerprint. Diese Werte verlangen eine begründete
+Entscheidung über den im Zustand gebundenen Fingerprint:
+
+| `gate=` | Anfang von `detail=` |
+|---|---|
+| `test_change` | `test changes require explicit approval before review` |
+| `anchor_change` | `approved plan anchors changed and require plan review reset` |
+| `manual_slice` | `manual slice approval is required before commit` |
+| `plan_approval` | `PLAN-APPROVAL` |
+| `unexpected_file` | `UNEXPECTED-PATH` oder `HEAD-DRIFT` |
+| `quota_resume_diff` | `QUOTA-RESUME-DIFF` |
+| `stop_request` | `SCOPE-EXTENSION-REQUESTED` bei einem laufenden Slice mit angeforderten Pfaden |
+
+Für diese Fälle prüfen Sie Grund und Erläuterung und erteilen oder verweigern
+Sie die Entscheidung:
 
 ```bash
 run_task --watch --resume --approve-gate --gate-rationale "Pfade geprüft, passt"
+# Oder ablehnen:
+run_task --watch --resume --reject-gate --gate-rationale "Pfade nicht freigegeben"
 ```
+
+Bei `gate=quota_resume_diff` setzen Sie die unveränderte Aufgabendatei gezielt
+fort; im Watch-Modus wird `--task-file` ignoriert:
+
+```bash
+run_task --task-file <Aufgabendatei> --resume --approve-gate --gate-rationale "Änderungen geprüft, passt"
+```
+
+Zum Ablehnen verwenden Sie dort `--reject-gate` statt `--approve-gate`.
+
+Bei `gate=stop_request detail=OPERATOR-PREREQUISITE-MISSING | …` stellen Sie
+die genannte Voraussetzung bereit und setzen mit `run_task --watch --resume`
+fort. Das gilt auch für andere `stop_request`-Gründe wie `CONTRACT-UNCLEAR`,
+`BRANCH-MISMATCH`, `VALIDATION-UNAVAILABLE` oder `PLAN-CONTRACT-INVALID` sowie
+für `gate=unexpected_file detail=SLICE-HEAD-DRIFT | …`: Ursache beheben, dann
+`run_task --watch --resume`. Ein `SCOPE-EXTENSION-REQUESTED` während der
+Planung ist ebenfalls ein `stop_request` ohne Fingerprint. Bei einem
+irrtümlichen Freigabeversuch bleibt das Gate bestehen; die Fehlermeldung nennt
+`gate reason` und `stop reason` und empfiehlt `run_task --watch --resume` ohne
+`--approve-gate`.
+
+`gate=bootstrap_check` bei `status=awaiting_resume` nennt in `detail=` den
+Prüfgrund, etwa `FINAL-REVIEW-PREFLIGHT | …`; nach dessen Behebung geht es mit
+`run_task --watch --resume` weiter. `gate=quota` und `gate=instance_failure`
+zeigen in `detail=` zuerst `role=… step=…`; nach dem Warten beziehungsweise
+Beheben des Fehlers genügt derselbe Befehl. Bei diesen Gates ist keine Freigabe
+nötig, auch wenn intern ein Fingerprint gespeichert ist.
 
 Nach Exitcode `3` wegen dreier Abbrüche eines Agenten ist das
 Wiederholungsbudget des Arbeitspakets aufgebraucht. Jedes weitere Fortsetzen
@@ -655,7 +711,7 @@ Claude-Budget stehen bewusst nicht in der Projektdatei.
 | Abschnitt | Wirkung |
 |---|---|
 | `[paths]` | ordnet Pfade Produktivcode, Tests, Doku und Erzeugtem zu; unbekannte Pfade zählen als Produktivcode. Die Klassen steuern unter anderem, welche Scope-Erweiterungen automatisch genehmigt werden. |
-| `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen Befehle für bestimmte Pfadmuster. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
+| `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen `command` für bestimmte Pfadmuster. Alle Befehle sind Argumentlisten; für Unterordner und Shell-Semantik etwa `default_command = ["sh", "-c", "cd app && flutter test"]`. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
 | `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
 | `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
 | `[workflow]` | zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. `scope_extension_gate` steht nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
@@ -742,6 +798,8 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 | `Needed a single revision` | das Repository hat noch keinen Commit | 3.4 |
 | `automatic target-branch switch requires a clean non-ignored working tree` | eine unversionierte oder geänderte Datei liegt im Projekt | `git status --short` prüfen; Protokolle außerhalb des Projekts ablegen |
 | `validation request requires at least one command` | kein Testbefehl konfiguriert oder erkannt | `default_command` in `orchestrator.toml` setzen |
+| `shell_command is unsupported in structured-v2` oder `text validation commands cannot contain shell syntax` | Shell-Schlüssel oder Shell-Operatoren in einem Textbefehl | Den passenden Argv-Schlüssel in `orchestrator.toml` setzen: `default_command`, `product_command` oder `command` in `[[validation.rules]]`, jeweils als Liste wie `["sh", "-c", "cd app && flutter test"]` |
+| `current gate has no fingerprint` mit Gate-Grund und Stoppgrund | `--approve-gate` oder `--reject-gate` wurde für einen Stopp ohne Fingerprint benutzt; keine Freigabe erforderlich | Voraussetzung bereitstellen, dann `run_task --watch --resume` ohne `--approve-gate` |
 | `Unsupported codex CLI version` oder `Unsupported claude CLI version` | CLI zu alt oder aus einer anderen Hauptversion | CLI aktualisieren |
 | `model must be one of …` | ein Modell außerhalb der wählbaren Familien | einen der genannten Werte verwenden (4.3) |
 | `AGENT-PROFILE-DIFF` | ein begonnener Lauf wurde mit anderem Modell oder Effort fortgesetzt | ohne abweichende Angaben fortsetzen (4.3) |

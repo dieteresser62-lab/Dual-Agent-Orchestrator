@@ -249,9 +249,9 @@ def _load_validation_command(
     required: bool,
 ) -> ValidationCommand | None:
     present = tuple(key for key in (argv_key, shell_key) if key in table)
-    if len(present) > 1:
+    if shell_key in table:
         raise ConfigError(
-            f"{location} must declare only one of {argv_key} or {shell_key}"
+            f'{location}.{shell_key} is unsupported in structured-v2; use argv: {argv_key} = ["sh", "-c", "cd app && flutter test"]'
         )
     if not present:
         if required:
@@ -1014,6 +1014,29 @@ def _resolve_resume_state(
         args.completed_state_replaced = True
 
 
+def _validate_startup_test_command(
+    args: argparse.Namespace, argv: Sequence[str] | None
+) -> None:
+    """Reject text commands that would silently lose shell semantics."""
+    tokens = sys.argv[1:] if argv is None else argv
+    if any(token == "--test-command" or token.startswith("--test-command=") for token in tokens):
+        source = "--test-command"
+    elif "RUN_TASK_TEST_CMD" in os.environ:
+        source = "RUN_TASK_TEST_CMD"
+    elif args.repo_config.validation.default_command is not None:
+        return
+    else:
+        source = "automatic detection"
+    if not args.test_command:
+        return
+    from validation_matrix import text_command_argv
+
+    try:
+        text_command_argv(args.test_command)
+    except ValidationMatrixError as exc:
+        raise ConfigError(f"{source}: {exc}") from exc
+
+
 def run_cli(
     args: argparse.Namespace,
     *,
@@ -1149,6 +1172,7 @@ def main(
 ) -> int:
     try:
         args = parse_args(argv)
+        _validate_startup_test_command(args, argv)
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 1

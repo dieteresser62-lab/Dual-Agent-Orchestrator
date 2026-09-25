@@ -28,6 +28,28 @@ ARTIFACT_CHECK_COMMAND = "internal:artifact-delivery"
 FLAKE_PROBE_BUDGET_SECONDS = 30.0
 FLAKE_PROBE_MAX_RUNS = 5
 SHELL_META_CHARACTERS = frozenset(";&|<>`$(){}[]*?!#~")
+ARGV_COMMAND_EXAMPLE = 'default_command = ["sh", "-c", "cd app && flutter test"]'
+
+
+def text_command_argv(command: str) -> tuple[str, ...]:
+    """Parse a simple text command without silently treating shell syntax as argv."""
+    if any(character in command for character in ";&|<>`$\x00\r\n"):
+        raise ValidationMatrixError(
+            f"text validation commands cannot contain shell syntax; use argv: "
+            f"{ARGV_COMMAND_EXAMPLE}"
+        )
+    try:
+        argv = tuple(shlex.split(command, posix=True))
+    except ValueError as exc:
+        raise ValidationMatrixError(
+            f"invalid text validation command: {exc}; use argv: {ARGV_COMMAND_EXAMPLE}"
+        ) from exc
+    if not argv or "=" in argv[0] or argv[0] in {"cd", "export", "source", "."}:
+        raise ValidationMatrixError(
+            f"text validation command is not an executable argv; use argv: "
+            f"{ARGV_COMMAND_EXAMPLE}"
+        )
+    return argv
 
 
 def _simple_shell_argv(command: str) -> tuple[str, ...] | None:
