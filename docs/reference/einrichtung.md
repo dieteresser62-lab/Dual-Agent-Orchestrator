@@ -539,19 +539,32 @@ lokaler Branch bestehen; der Orchestrator pusht nie. Während Archiv-Commit und
 Merge sind Git-Hooks deaktiviert. **Nach dem bestätigten Merge** ermittelt der
 Orchestrator den wirksamen `post-merge`-Hook aus `core.hooksPath` oder, falls
 nicht gesetzt, aus dem Git-Hook-Verzeichnis. Relative `core.hooksPath`-Pfade
-beziehen sich auf das Repository-Arbeitsverzeichnis. Ein Hook muss eine
-reguläre ausführbare Datei ohne Symlink in einem Pfadsegment sein. Einen vom
-Zielbranch hinzugefügten oder gegenüber seiner Merge-Basis geänderten Hook im
-versionierten Arbeitsbaum lässt der Orchestrator mit Begründung aus; ein durch
-`core.hooksPath` übergangener Standard-Hook wird ebenfalls gemeldet.
+beziehen sich auf das Repository-Arbeitsverzeichnis. `core.hooksPath` übergeht
+den Standard-Hook; ein dadurch übergangener Hook wird gemeldet. Sie können
+einen wirksamen Hook im Git-Hook-Verzeichnis (bei einem normalen Repository
+`.git/hooks`), an einem externen, mit `core.hooksPath` konfigurierten Pfad
+oder im Repository-Arbeitsbaum ablegen. Ein Worktree-Hook außerhalb von `.git`
+muss bereits im Basis-`HEAD` getrackt sein und darf vom Zielbranch gegenüber
+seiner Merge-Basis weder hinzugefügt noch geändert worden sein. Ein vom
+Zielbranch hinzugefügter oder geänderter Hook wird mit
+`changed_by_target_branch` ausgelassen; ein vorhandener, sonst zulässiger,
+aber nicht im Basis-`HEAD` getrackter Hook mit `not_tracked_in_base`. Das gilt
+etwa für einen ignorierten, generierten Husky-v9-Hook unter
+`.husky/_/post-merge`.
 
-Ein zulässiger Hook wird mit Argument `0` und einer Grenze von 600 Sekunden
-ausgeführt. Ergebnis, Exitcode sowie stdout und stderr werden getrennt im
-Nachlauf-Record festgehalten; beide Ausgaben sind auf je 8192 Bytes begrenzt
-und eine Kürzung wird vermerkt. Ein Fehler oder Timeout erzeugt eine Warnung,
-ohne den gültigen Merge zurückzunehmen. Fehlt ein zulässiger Hook, wird das
-Auslassen protokolliert. Im Watch-Modus wird der Auftrag erst nach dem
-Nachlauf-Ergebnis nach `outbox/done/` verschoben.
+Unabhängig vom Ablageort muss der Hook eine reguläre, ausführbare Datei sein,
+deren Pfad kein Symlink-Segment enthält. Ein fehlender Hook erhält den
+Auslassungsgrund `missing`. Ist der Pfad nicht lesbar oder lässt sich der
+Hook-Inhalt nicht zuverlässig für den gebundenen Digest messen, lautet der
+Grund `digest_unreadable`; eine Änderung des Inhalts nach der Messung führt
+zu `content_changed`. Erst ein Hook, der diese Prüfungen besteht, wird mit
+Argument `0` und einer Grenze von 600 Sekunden ausgeführt. Ergebnis, Exitcode
+sowie stdout und stderr werden getrennt im Nachlauf-Record festgehalten;
+beide Ausgaben sind auf je 8192 Bytes begrenzt und eine Kürzung wird vermerkt.
+Ein Fehler oder Timeout erzeugt eine Warnung, ohne den gültigen Merge
+zurückzunehmen. Fehlt ein zulässiger Hook, wird das Auslassen protokolliert.
+Im Watch-Modus wird der Auftrag erst nach dem Nachlauf-Ergebnis nach
+`outbox/done/` verschoben.
 
 Wurde der Prozess nach dem Nachlauf-Intent unterbrochen, ist möglicherweise
 unklar, ob der Hook lief. Ein gewöhnliches Resume führt ihn deshalb nicht
