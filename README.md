@@ -1,12 +1,64 @@
 # Dual-Agent Task Orchestrator
 
-Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als Planer und Implementierer sowie Claude als unabhängigem Reviewer.
+**Codex baut, Claude prüft, und committet wird nur, was getestet und freigegeben ist.**
+
+Du beschreibst eine Aufgabe in einer Markdown-Datei. Der Orchestrator lässt sie von zwei Coding-Agenten verschiedener Hersteller in festen Rollen umsetzen: **Codex** plant und implementiert, **Claude** prüft ausschließlich lesend. Tests, Buchführung und Git-Commits übernimmt der Orchestrator selbst. Keiner der beiden Agenten kann seine eigene Arbeit freigeben.
 
 ## Überblick
 
-Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
+### Warum?
+
+Ein einzelner Agent kann in einem Durchgang erstaunlich viel erzeugen. Bei größeren Aufgaben tauchen aber immer dieselben Probleme auf: Er ändert Dateien, die er nicht anfassen sollte, passt Tests an, bis sie grün sind, meldet „fertig“, obwohl etwas fehlt, und niemand prüft das unabhängig. Der Orchestrator setzt dagegen auf **Gewaltenteilung und kleine, geprüfte Schritte**.
+
+### So läuft eine Aufgabe ab
+
+1. **Idee ablegen.** Eine formlose Markdown-Datei in `inbox/` genügt.
+2. **Planen.** Codex zerlegt die Aufgabe in kleine Arbeitspakete (*Slices*). Für jedes Paket ist genau festgelegt, welche Dateien es ändern darf. Claude prüft den Plan.
+3. **Umsetzen, Paket für Paket.** Codex implementiert. Der Orchestrator führt die Tests aus, Claude reviewt den Diff. Jeder Befund muss beantwortet werden, entweder behoben oder begründet abgelehnt. Erst wenn kein blockierender Befund offen ist, committet der Orchestrator das Paket lokal.
+4. **Abnahme.** Zum Schluss liest Claude den kompletten Branch. Findet sich Restarbeit, wird daraus automatisch eine neue Aufgabe.
 
 ![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/HEAD/workflow.puml)
+
+### Was ihn von anderen Ansätzen unterscheidet
+
+- **Getrennte Rollen.** Codex schreibt, darf aber weder freigeben noch committen. Claude arbeitet auf einer schreibgeschützten Kopie. Tests laufen nur im Orchestrator, sodass kein Agent ein Testergebnis behaupten kann.
+- **Harte Grenzen.** Ein Paket, das Dateien außerhalb seiner Liste ändert, wird nicht committet.
+- **Konvergenz statt Endlosschleife.** Jede weitere Reviewrunde muss nachweisbar Fortschritt bringen. Wenn nicht, endet das Paket ohne Commit.
+- **Fail-closed.** Bei Unklarheiten, Widersprüchen oder unbekanntem Zustand hält der Lauf an, statt zu raten.
+- **Nachvollziehbar und fortsetzbar.** Jeder Schritt landet in einer append-only Record-Kette. Nach einem Absturz oder Quota-Limit setzt der Lauf genau dort fort, ohne erledigte Schritte zu wiederholen. Daneben entsteht ein lesbares Audit-Dokument mit allen Reviews und Befunden.
+- **Nur lokal.** Der Orchestrator pusht und mergt nie. Das bleibt deine Entscheidung.
+
+Der [Marktvergleich](docs/reference/market-comparison.md) stellt das neben fünfzehn Coding-Agenten und Plattformen. Kurz gesagt ist die Prüfinstanz inzwischen verbreitet. Selten ist dagegen die Kombination aus Freigabe und Testergebnis, die an denselben exakten Codestand gebunden sind, einer Testausführung außerhalb des Agenten und einer Wiederaufnahme ohne Wiederholung. Dafür verzichtet der Orchestrator bewusst auf Parallelität, Cloud, Pull Requests und eine Oberfläche.
+
+### Hintergrund
+
+Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP-Praxis. Dort war die Steuerung verteilter Offshore-Entwicklungsteams Alltag, und dort habe ich gelernt, dass verteilte Arbeit gelingt, wenn sie nicht auf Vertrauen, sondern auf Struktur baut: klar abgegrenzte Aufträge, Vier-Augen-Prinzip, Tests außerhalb der Entwicklung und eine Abnahme vor jedem Transport. Coding-Agenten brauchen genau dasselbe. Ein Slice entspricht einem Transportauftrag, Claudes Review der Qualitätssicherung und der lokale Commit der Freigabe.
+
+### Stand und Grenzen
+
+- Ein-Personen-Projekt seit Februar 2026, Python ohne Laufzeitabhängigkeiten, gut 1.600 Tests. Seit August entsteht der Orchestrator zunehmend mit sich selbst.
+- Läuft unter Linux, macOS und WSL2. Natives Windows wird nicht unterstützt.
+- Setzt installierte und angemeldete `codex`- und `claude`-CLIs voraus.
+- Gründlichkeit kostet Zeit und Tokens: Ein Lauf dauert deutlich länger als ein One-Shot-Durchgang.
+- Die Dokumentation ist deutsch.
+
+### Ausprobieren
+
+Ein Probelauf ohne Agentenaufrufe und ohne Schreibzugriffe zeigt den kompletten Ablauf:
+
+```bash
+./run_task --dry-run --task-file example-task.md --quiet
+```
+
+Für den echten Einstieg: [Quickstart.md](Quickstart.md) oder die ausführliche [Einrichtung](docs/reference/einrichtung.md).
+
+---
+
+*Ab hier folgt die technische Referenz.*
+
+## Ablauf im Detail
+
+Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 Der normale Ablauf ist:
 
