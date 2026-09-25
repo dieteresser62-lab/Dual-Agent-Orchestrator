@@ -199,6 +199,7 @@ def test_implementation_task_sets_no_duty_on_the_slice_document() -> None:
 
     assert "Slice-MD dokumentiert" not in rendered
     assert "Auditansicht des Orchestrators und nicht Gegenstand des Reviews" in rendered
+    assert "Plane oder prüfe ihn" in rendered
 
 
 def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
@@ -220,6 +221,7 @@ def test_followup_task_is_an_ordinary_correlation_free_inbox_document() -> None:
     assert "source-run" not in rendered
     assert "ar1-" not in rendered
     assert "ACCEPTANCE_REVIEW_NUMBER: 2" in rendered
+    assert "Der vollständige Abnahmereview" in rendered
     assert acceptance_review_number(rendered) == 2
 
 

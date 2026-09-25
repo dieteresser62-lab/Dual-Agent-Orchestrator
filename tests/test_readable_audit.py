@@ -9,6 +9,7 @@ import pytest
 
 from artifact_models import (
     ArtifactRecord, BlobReference, CommandSpec, FindingSeverity,
+    FinalReviewCompletedPayload, FinalReviewFindingPayload,
     CorrectionWorkUnitPayload, FindingTransitionPayload, Fingerprint, FingerprintKind,
     GateTransitionPayload, PlanPayload, ProviderContentPayload, ScopeExtensionPathPayload,
     ScopeExtensionPayload,
@@ -134,7 +135,35 @@ def test_readable_documents_preserve_plan_and_slice_ownership() -> None:
     assert two.count("### C-02") == 1
     assert "### C-01" not in two
     assert overall.count("Befund nur in Slice 1") == 1
+    assert "| C-01 | Slice 1 | Befund | offen |" in overall
+    assert "Klasse: Befund · Stand: offen" in one
+    assert "Vorab-Risikoanalyse:" in one
+    assert "Vorab-Risikoanalyse:" in appendix
     assert len(render_overall(_facts(slices=4), task="Task", branch="feature/test")) <= 2.2 * len(overall)
+
+
+def test_final_review_uses_german_labels_for_new_findings_and_risk() -> None:
+    facts = _facts()
+    facts.final_review = FinalReviewCompletedPayload(
+        reviewer=Role.CLAUDE,
+        work_unit_id="1",
+        new_findings=(FinalReviewFindingPayload(
+            "C-03", FindingSeverity.FINDING, "Neue Abweichung.", "Prüfe den Pfad."
+        ),),
+        occurrences=(),
+        review_evidence=ReviewEvidencePayload("Geprüft.", "Risiko.", "Bruch."),
+        pre_mortem="Ein Fehler kann wiederkehren.",
+        validation_attestation_record_id="ar1-" + "e" * 64,
+        reviewed_head_commit="a" * 40,
+        transport_schema="native-claude-review-v2",
+        request_id="native-review-request-" + "1" * 64,
+        response_sha256="2" * 64,
+        scan_complete=True,
+    )
+    overall = render_overall(facts, task="Aufgabe", branch="feature/test")
+    assert "| C-03 | Abnahme | Befund | offen |" in overall
+    assert "Klasse: Befund · Stand: offen" in overall
+    assert "Vorab-Risikoanalyse:" in overall
 
 
 def test_agent_text_cannot_break_markers_or_headings() -> None:

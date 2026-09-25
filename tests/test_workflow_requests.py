@@ -35,6 +35,7 @@ from workflow import (
     WorkflowHistory,
 )
 import workflow_requests
+from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_CODEX_SYSTEM_POLICY
 from task_contract import TaskMode, parse_task_contract
 from validation_matrix import ValidationCommand, ValidationMatrix
 from workflow_state import (
@@ -48,8 +49,8 @@ from workflow_state import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "8cd45fe4687aaabe41ac838d0dd54862e56d7a31d17253cd640fbd54caa4f0a3"
+LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256 = (
+    "4a1562a7710909f2dbed84a0b54f7214c8cf127a0fd3189eeeb2e6f89e099e85"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
     "1b0dc0c9479a690055eea95445dd8e6813096020085be3c78d6cfac352085b26"
@@ -102,6 +103,18 @@ def _codex_bundle(
         request_kind=NativeCodexRequestKind.PLAN,
         execution_error=WorkflowExecutionError,
     )
+
+
+def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> None:
+    bundle = _codex_bundle()
+    policy = next(
+        item for item in bundle.document["evidence_manifest"]
+        if item["evidence_id"] == "native-policy"
+    )
+    assert policy["kind"] == "system_policy"
+    assert policy["content"] == NATIVE_CODEX_SYSTEM_POLICY
+    assert GERMAN_DOCUMENT_LANGUAGE_RULE in policy["content"]
+    assert policy["sha256"] == hashlib.sha256(policy["content"].encode()).hexdigest()
 
 
 def _review_bundle(
@@ -259,9 +272,9 @@ def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
         _review_bundle(context=context)
 
 
-def test_canonical_requests_match_the_cutover_bytes() -> None:
+def test_canonical_requests_match_the_current_bound_bytes() -> None:
     assert _canonical_digest(_codex_bundle().canonical_json) == (
-        PRE_CUT_CODEX_REQUEST_SHA256
+        LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256
     )
     assert _canonical_digest(_review_bundle().canonical_json) == (
         PRE_CUT_REVIEW_REQUEST_SHA256

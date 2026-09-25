@@ -35,6 +35,7 @@ from native_review_contract import (
     native_review_context_binding,
     parse_bound_native_contract_result,
     parse_native_contract_result,
+    parse_native_review_response,
     validate_native_review_document,
 )
 from native_review_request import (
@@ -391,6 +392,19 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
             else None
         ),
     }
+
+
+def test_english_reviewer_prose_still_passes_schema_and_contract() -> None:
+    context = _context()
+    document = _writer_response()
+    document["request_id"] = context.request_id
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_review_response(document, context)
+    assert result.evidence is not None
+    assert result.evidence.dimensions == "correctness, contracts, resume"
+    assert result.pre_mortem == "A future schema projection could omit a bound duty."
 
 
 def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> None:

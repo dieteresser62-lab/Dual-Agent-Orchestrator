@@ -52,6 +52,13 @@ ein Prüfbericht. Nichts wird ohne Ihr Zutun ins entfernte Repository
 geschoben und nichts zusammengeführt — der Orchestrator committet
 ausschließlich lokal.
 
+Alle Dokumente eines Laufs, einschließlich Arbeitsplan, Prüfbericht und
+Folgeaufträgen, werden auf Deutsch verfasst. Schema-Schlüssel und Enumwerte,
+Kennungen, Code, Pfade, Befehle, Commit-Betreffe nach Projektkonvention sowie
+wörtliche Zitate aus Quelltext, Ausgaben oder Fehlermeldungen bleiben in ihrer
+ursprünglichen Form. Die Sprache ist eine Schreibregel für die eigenen Texte
+der Agenten und kein Abnahmekriterium für fremde Texte.
+
 ---
 
 ## Die drei Beteiligten und ihre Befugnisse
