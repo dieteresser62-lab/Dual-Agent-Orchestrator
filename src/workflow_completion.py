@@ -8,9 +8,11 @@ import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 from typing import Callable
 
 from artifact_bridge import ArtifactBridge
@@ -31,6 +33,7 @@ ARCHIVE_SUBJECT = "docs: archive completed orchestrator work"
 ARCHIVE_RELATIVE = PurePosixPath("docs/internal") / "archive"
 HOOK_OUTPUT_LIMIT = 8192
 HOOK_TIMEOUT_SECONDS = 600
+HOOK_TERMINATION_GRACE_SECONDS = 0.5
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +55,21 @@ def _hook_path(root: Path) -> tuple[Path, Path | None]:
 def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
                  target_head: str | None) -> str | None:
     absolute = Path(os.path.abspath(hook))
+    try:
+        relative = absolute.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        relative = None
+    if (relative is not None and relative.split("/", 1)[0] != ".git"
+            and base_head is not None and target_head is not None):
+        def tree_entry(commit: str) -> bytes:
+            # The mode, object type and object ID all belong to the decision.
+            return _git(root, "ls-tree", "-z", commit, "--", relative).stdout
+
+        fork = _value(root, "merge-base", base_head, target_head)
+        base_entry = tree_entry(base_head)
+        target_entry = tree_entry(target_head)
+        if (target_entry and not base_entry) or tree_entry(fork) != target_entry:
+            return "changed_by_target_branch"
     for segment in (absolute, *absolute.parents):
         try:
             mode = segment.lstat().st_mode
@@ -64,20 +82,6 @@ def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
         return "not_regular"
     if not mode & 0o111:
         return "not_executable"
-    try:
-        relative = absolute.relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return None
-    if base_head is None or target_head is None:
-        return None
-    tracked = _git(root, "ls-tree", "-z", "--name-only", target_head,
-                   "--", relative).stdout
-    if tracked:
-        fork = _value(root, "merge-base", base_head, target_head)
-        changed = _git(root, "diff", "--name-only", "-z", "--diff-filter=AM",
-                       fork, target_head, "--", relative).stdout
-        if changed:
-            return "changed_by_target_branch"
     return None
 
 
@@ -85,7 +89,8 @@ def _hook_result(status: str, hook: Path, *, reason: str | None = None,
                  overridden: Path | None = None, exit_code: int | None = None,
                  stdout: bytes = b"", stderr: bytes = b"",
                  stdout_truncated: bool = False,
-                 stderr_truncated: bool = False) -> str:
+                 stderr_truncated: bool = False,
+                 termination_uncertain: bool = False) -> str:
     return json.dumps({
         "status": status, "hook": str(hook), "reason": reason,
         "overridden_standard_hook": str(overridden) if overridden else None,
@@ -94,19 +99,65 @@ def _hook_result(status: str, hook: Path, *, reason: str | None = None,
         "stderr": stderr.decode("utf-8", "replace"),
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated,
+        "termination_uncertain": termination_uncertain,
     }, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _hook_group_ended(group_id: int) -> bool:
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _wait_for_hook_group(process: subprocess.Popen[bytes], deadline: float) -> bool:
+    while True:
+        process.poll()
+        if _hook_group_ended(process.pid):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.02, remaining))
+
+
+def _terminate_hook_group(process: subprocess.Popen[bytes]) -> bool:
+    """Stop the hook's own session; return whether its end was confirmed."""
+    uncertain = False
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            uncertain = True
+        if _wait_for_hook_group(
+            process, time.monotonic() + HOOK_TERMINATION_GRACE_SECONDS
+        ):
+            break
+    else:
+        uncertain = True
+    try:
+        process.wait(timeout=HOOK_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        uncertain = True
+    return not uncertain
 
 
 def _run_hook(root: Path, hook: Path, overridden: Path | None) -> str:
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        termination_uncertain = False
         try:
-            completed = subprocess.run((str(hook), "0"), cwd=root, stdout=output,
-                                       stderr=errors, timeout=HOOK_TIMEOUT_SECONDS,
-                                       check=False)
-            status = "success" if completed.returncode == 0 else "failed"
-            exit_code = completed.returncode
+            process = subprocess.Popen((str(hook), "0"), cwd=root, stdout=output,
+                                       stderr=errors, start_new_session=True)
+            exit_code = process.wait(timeout=HOOK_TIMEOUT_SECONDS)
+            status = "success" if exit_code == 0 else "failed"
         except subprocess.TimeoutExpired:
             status, exit_code = "timeout", None
+            termination_uncertain = not _terminate_hook_group(process)
         except OSError as exc:
             status, exit_code = "failed", None
             errors.write(os.fsencode(str(exc)))
@@ -119,6 +170,7 @@ def _run_hook(root: Path, hook: Path, overridden: Path | None) -> str:
             stdout=stdout, stderr=stderr,
             stdout_truncated=output.read(1) != b"",
             stderr_truncated=errors.read(1) != b"",
+            termination_uncertain=termination_uncertain,
         )
 
 
@@ -156,8 +208,9 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
     )
     outcome = json.loads(str(result))
     if outcome["status"] in {"failed", "timeout"}:
-        logger.warning("post-merge hook %s: %s (exit=%s)", hook,
-                       outcome["status"], outcome["exit_code"])
+        logger.warning("post-merge hook %s: %s (exit=%s, termination_uncertain=%s)",
+                       hook, outcome["status"], outcome["exit_code"],
+                       outcome["termination_uncertain"])
     elif outcome["status"] == "skipped" and outcome["reason"] != "missing":
         logger.warning("post-merge hook %s skipped: %s", hook, outcome["reason"])
     if overridden is not None:

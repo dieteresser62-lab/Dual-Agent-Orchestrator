@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 from types import SimpleNamespace
 import subprocess
+import time
 
 import pytest
 
@@ -746,6 +748,58 @@ def test_hook_problem_preserves_merge_and_records_outcome(
         assert result["exit_code"] == 7
 
 
+def test_timed_out_hook_kills_descendant_and_is_not_repeated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "late-hook-marker"
+    started = tmp_path / "hook-descendant-started"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(
+        f"#!/bin/sh\n(sleep 0.45; touch '{marker}') &\n"
+        f"touch '{started}'\nwait\n"
+    )
+    hook.chmod(0o755)
+    monkeypatch.setattr(workflow_completion, "HOOK_TIMEOUT_SECONDS", 0.15)
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    result = _post_merge_result(run)
+    assert result["status"] == "timeout"
+    assert result["termination_uncertain"] is False
+    assert started.exists()
+    assert git(root, "rev-parse", "main") == merged
+    time.sleep(0.55)
+    assert not marker.exists()
+    run.run(monkeypatch)
+    assert not marker.exists()
+
+
+def test_timeout_reports_uncertain_termination_when_signal_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = repository(tmp_path)
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text("#!/bin/sh\nsleep 2\n")
+    hook.chmod(0o755)
+    monkeypatch.setattr(workflow_completion, "HOOK_TIMEOUT_SECONDS", 0.01)
+    real_killpg = workflow_completion.os.killpg
+
+    def fail_term(group: int, sig: int) -> None:
+        if sig == signal.SIGTERM:
+            raise PermissionError("simulated signal denial")
+        real_killpg(group, sig)
+
+    monkeypatch.setattr(workflow_completion.os, "killpg", fail_term)
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    result = _post_merge_result(run)
+    assert git(root, "rev-parse", "main") == merged
+    assert result["status"] == "timeout"
+    assert result["termination_uncertain"] is True
+    assert "termination_uncertain=True" in caplog.text
+
+
 def test_changed_tracked_hook_is_skipped_and_external_hook_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -773,6 +827,120 @@ def test_changed_tracked_hook_is_skipped_and_external_hook_runs(
     run2 = completion(root2)
     run2.run(monkeypatch)
     assert _post_merge_result(run2)["stdout"] == "external"
+
+
+def test_missing_hook_in_tracked_hook_directory_is_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = repository(tmp_path)
+    hook_directory = root / ".githooks"
+    hook_directory.mkdir()
+    (hook_directory / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+    git(root, "add", ".githooks/pre-push")
+    git(root, "commit", "-qm", "add neighboring hook")
+    git(root, "config", "core.hooksPath", ".githooks")
+
+    run = completion(root)
+    merged = run.run(monkeypatch)
+
+    assert git(root, "rev-parse", "main") == merged
+    assert _post_merge_result(run)["status"] == "skipped"
+    assert _post_merge_result(run)["reason"] == "missing"
+    assert "post-merge hook" not in caplog.text
+
+
+def _base_hook(root: Path, *, executable: bool, content: str) -> Path:
+    git(root, "switch", "main")
+    hook = root / ".githooks/post-merge"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(content)
+    hook.chmod(0o755 if executable else 0o644)
+    git(root, "add", ".githooks/post-merge")
+    git(root, "commit", "-qm", "base hook")
+    git(root, "switch", "feature/task")
+    git(root, "merge", "--no-ff", "-qm", "bring base hook into target", "main")
+    git(root, "config", "core.hooksPath", ".githooks")
+    return hook
+
+
+def test_target_type_change_from_base_symlink_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    git(root, "switch", "main")
+    hook = root / ".githooks/post-merge"
+    hook.parent.mkdir(exist_ok=True)
+    source = root / ".githooks/original"
+    source.write_text("#!/bin/sh\nexit 0\n")
+    source.chmod(0o755)
+    hook.symlink_to("original")
+    git(root, "add", ".githooks")
+    git(root, "commit", "-qm", "base symlink hook")
+    git(root, "switch", "feature/task")
+    git(root, "merge", "--no-ff", "-qm", "bring base hook into target", "main")
+    marker = tmp_path / "changed-hook-ran"
+    hook.unlink()
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook.chmod(0o755)
+    git(root, "add", ".githooks/post-merge")
+    git(root, "commit", "-qm", "replace hook type")
+    git(root, "config", "core.hooksPath", ".githooks")
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    assert not marker.exists()
+    assert _post_merge_result(run)["status"] == "skipped"
+    assert _post_merge_result(run)["reason"] == "changed_by_target_branch"
+    assert git(root, "rev-parse", "main") == merged
+
+
+@pytest.mark.parametrize("change", ("content", "mode"))
+def test_target_hook_entry_change_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "changed-hook-ran"
+    hook = _base_hook(root, executable=change == "content",
+                      content="#!/bin/sh\nexit 0\n")
+    if change == "mode":
+        hook.chmod(0o755)
+    else:
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    git(root, "add", ".githooks/post-merge")
+    git(root, "commit", "-qm", f"change hook {change}")
+    run = completion(root)
+    run.run(monkeypatch)
+    assert not marker.exists()
+    assert _post_merge_result(run)["reason"] == "changed_by_target_branch"
+
+
+def test_unchanged_tracked_hook_runs_and_untracked_base_hook_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "unchanged-hook-ran"
+    _base_hook(root, executable=True,
+               content=f"#!/bin/sh\ntouch '{marker}'\n")
+    run = completion(root)
+    run.run(monkeypatch)
+    assert marker.exists()
+    assert _post_merge_result(run)["status"] == "success"
+
+    other = tmp_path / "other"
+    other.mkdir()
+    root2 = repository(other)
+    marker2 = tmp_path / "new-hook-ran"
+    hook2 = root2 / ".githooks/post-merge"
+    hook2.parent.mkdir()
+    hook2.write_text(f"#!/bin/sh\ntouch '{marker2}'\n")
+    hook2.chmod(0o755)
+    git(root2, "add", ".githooks/post-merge")
+    git(root2, "commit", "-qm", "add target hook")
+    git(root2, "config", "core.hooksPath", ".githooks")
+    run2 = completion(root2)
+    run2.run(monkeypatch)
+    assert not marker2.exists()
+    assert _post_merge_result(run2)["reason"] == "changed_by_target_branch"
 
 
 def test_overridden_standard_hook_and_disabled_git_hook_path_are_reported(
