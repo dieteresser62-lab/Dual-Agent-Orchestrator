@@ -86,6 +86,7 @@ from git_service import (
 from workflow_completion import (
     complete_chain as complete_reviewed_chain,
     preflight_chain as preflight_reviewed_chain,
+    check_archive_directory,
 )
 from plan_handoff import (
     AcceptanceReviewLimitReached,
@@ -392,14 +393,14 @@ class ProductionWorkflowDriver:
             )
         )
 
-    def _completion_policy(self) -> tuple[bool, str | None]:
+    def _completion_policy(self) -> tuple[bool, str | None, str]:
         base = self.config.base_branch
         if (self.root / ".git").exists():
             try:
                 base = resolve_base_branch(self.root, base)
             except GitTransactionError:
                 pass
-        return self.config.merge_completed_branch, base
+        return self.config.merge_completed_branch, base, self.config.archive_run_directory
 
     def _validation_boundary(self) -> WorkflowValidation:
         """Bind driver-owned resources to one validation operation explicitly."""
@@ -2548,6 +2549,18 @@ class ProductionWorkflowDriver:
         if bridge is None:
             raise WorkflowExecutionError("completion requires the authoritative record chain")
         return preflight_reviewed_chain(self.root, state, bridge)
+
+    def preflight_archive_directory(self, state: WorkflowState) -> None:
+        if (state.current_work_unit.kind is not WorkUnitKind.SLICE
+            or state.current_slice_id != 1):
+            return
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("archive preflight has no artifact bridge")
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        if replay.run_profile is None:
+            raise WorkflowExecutionError("archive preflight has no bound run profile")
+        check_archive_directory(self.root, replay.run_profile, state.run_id, state.branch)
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
         # B27 inventory: this remains the driver composition root.  It orders the

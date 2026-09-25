@@ -79,6 +79,8 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
 
     def preflight_chain(self, state: WorkflowState) -> bool: ...
 
+    def preflight_archive_directory(self, state: WorkflowState) -> None: ...
+
     def assert_structured_decision_context(self) -> None: ...
 
     def persist_implementation_handoff(
@@ -101,6 +103,7 @@ PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
         "finalize_audit",
         "complete_chain",
         "preflight_chain",
+        "preflight_archive_directory",
         "persist_implementation_handoff",
         "publish_followup_task",
         "final_review_has_followup",
@@ -563,6 +566,7 @@ def run_production_workflow(
     state = state.reopen_legacy_quota_resume_diff_gate()
     config = OrchestratorConfig(
         merge_completed_branch=getattr(workflow_config, "merge_completed_branch", True),
+        archive_run_directory=getattr(workflow_config, "archive_run_directory", "{run_id}"),
         base_branch=args.repo_config.repository.base_branch,
         dry_run=False,
         agent_output_mode=args.agent_output,
@@ -650,6 +654,13 @@ def _run_production_transition_loop(
     driver: ProductionWorkflowLoopDriver,
     engine: WorkflowEngine,
 ) -> WorkflowRunResult:
+    # The production driver is checked before dispatch. Historical provider-free
+    # transition doubles have no archive filesystem to inspect.
+    archive_preflight = (
+        driver.preflight_archive_directory
+        if hasattr(driver, "preflight_archive_directory")
+        else lambda _state: None
+    )
 
     for _ in range(100):
         current = state.current_work_unit
@@ -749,6 +760,7 @@ def _run_production_transition_loop(
             driver.checkpoint(state, history)
             current = state.current_work_unit
         if current.status is WorkUnitStatus.IN_PROGRESS:
+            archive_preflight(state)
             result = engine.run_current_work_unit(
                 state, dependencies.context(args=args, assignment=assignment, state=state), history
             )

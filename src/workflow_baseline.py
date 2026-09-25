@@ -128,6 +128,9 @@ def _append_baseline_identity_expectations(
             persisted_profile.merge_completed_branch if persisted_profile else True
         ),
         base_branch=persisted_profile.base_branch if persisted_profile else None,
+        archive_run_directory=(
+            persisted_profile.archive_run_directory if persisted_profile else None
+        ),
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -456,7 +459,7 @@ class WorkflowBaselineDependencies:
         [ArtifactReplayResult], ArtifactRecord
     ]
     side_effect_executor: Callable[[ArtifactBridge], SideEffectExecutor]
-    completion_policy: Callable[[], tuple[bool, str | None]] = lambda: (True, None)
+    completion_policy: Callable[[], tuple[bool, str | None, str]] = lambda: (True, None, "{run_id}")
 
 
 class WorkflowBaseline:
@@ -515,7 +518,8 @@ class WorkflowBaseline:
         )
         completion_policy = (
             (existing_replay.run_profile.merge_completed_branch,
-             existing_replay.run_profile.base_branch)
+             existing_replay.run_profile.base_branch,
+             existing_replay.run_profile.archive_run_directory)
             if existing_replay is not None and existing_replay.run_profile is not None
             else self._dependencies.completion_policy()
         )
@@ -530,6 +534,7 @@ class WorkflowBaseline:
                 orchestrator_code_version=_resume_code_version(existing_replay),
                 merge_completed_branch=completion_policy[0],
                 base_branch=completion_policy[1],
+                archive_run_directory=completion_policy[2],
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",

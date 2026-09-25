@@ -71,7 +71,14 @@ def test_archive_and_merge_boundaries_converge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     effect: str, phase: SideEffectBoundaryPhase,
 ) -> None:
-    completion_boundary_proof(tmp_path, monkeypatch, effect, phase)
+    completion_boundary_proof(tmp_path, monkeypatch, effect, phase, None)
+
+
+@pytest.mark.parametrize("phase", tuple(SideEffectBoundaryPhase))
+def test_run_directory_archive_boundaries_converge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: SideEffectBoundaryPhase,
+) -> None:
+    completion_boundary_proof(tmp_path, monkeypatch, "git_commit", phase, "{run_id}")
 
 
 def _tracked_repository_snapshot(

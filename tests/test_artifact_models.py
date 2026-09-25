@@ -189,8 +189,28 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
         "merge_completed_branch": True,
         "base_branch": None,
+        "archive_run_directory": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
+
+
+def test_run_profile_archive_pattern_wire_compatibility() -> None:
+    legacy = RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+    )
+    legacy_document = _record(legacy).to_dict()
+    assert "archive_run_directory" not in legacy_document["payload"]
+    assert ArtifactRecord.from_dict(legacy_document).payload.archive_run_directory is None
+
+    current = replace(legacy, archive_run_directory="{year}-feature/{run_id}")
+    current_document = _record(current).to_dict()
+    assert current_document["payload"]["archive_run_directory"] == "{year}-feature/{run_id}"
+    assert ArtifactRecord.from_dict(current_document).payload == current
+
+    current_document["payload"]["archive_run_directory"] = "../{run_id}"
+    with pytest.raises(ArtifactValidationError):
+        ArtifactRecord.from_dict(current_document)
 
 
 def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import tempfile
 from typing import Callable
@@ -24,6 +25,38 @@ from workflow_state import WorkflowState
 
 ARCHIVE_SUBJECT = "docs: archive completed orchestrator work"
 ARCHIVE_RELATIVE = PurePosixPath("docs/internal") / "archive"
+
+
+def archive_relative_directory(profile: object, run_id: str, branch: str) -> PurePosixPath:
+    pattern = getattr(profile, "archive_run_directory", None)
+    if pattern is None:
+        return ARCHIVE_RELATIVE
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or run_id in {".", ".."}:
+        raise GitTransactionError(f"invalid run_id for archive directory: {run_id!r}")
+    year = re.search(r"(?<!\d)(20\d{2})(?:\d{4})?(?!\d)", run_id)
+    if "{year}" in pattern and year is None:
+        raise GitTransactionError(f"archive pattern needs a year in run_id {run_id!r}")
+    slug = re.sub(r"[^a-z0-9]+", "-", branch.lower()).strip("-")
+    if not slug:
+        raise GitTransactionError(f"invalid branch for archive directory: {branch!r}")
+    expanded = (pattern.replace("{run_id}", run_id)
+                .replace("{year}", year.group(1) if year else "")
+                .replace("{branch_slug}", slug))
+    return ARCHIVE_RELATIVE / PurePosixPath(expanded)
+
+
+def check_archive_directory(root: Path, profile: object, run_id: str,
+                            branch: str) -> PurePosixPath:
+    relative = archive_relative_directory(profile, run_id, branch)
+    # The legacy flat destination may already exist; only new run folders must be absent.
+    for index in range(1, len(relative.parts) + 1):
+        segment = root.joinpath(*relative.parts[:index])
+        if segment.is_symlink() or (segment.exists() and not segment.is_dir()):
+            raise GitTransactionError(f"archive destination conflict at {segment}")
+        if index == len(relative.parts) and getattr(profile, "archive_run_directory", None) is not None:
+            if segment.exists():
+                raise GitTransactionError(f"archive destination conflict at {segment}")
+    return relative
 
 
 def merge_subject(target: str, base: str) -> str:
@@ -89,17 +122,18 @@ def _archive_paths(root: Path, base: str, target_head: str) -> tuple[str, ...]:
     ))
 
 
-def _check_archive_names(root: Path, paths: tuple[str, ...]) -> None:
+def _check_archive_names(root: Path, paths: tuple[str, ...], archive_relative: PurePosixPath) -> None:
     for path in paths:
-        destination = root / ARCHIVE_RELATIVE / PurePosixPath(path).name
+        destination = root / archive_relative / PurePosixPath(path).name
         if destination.exists() or destination.is_symlink():
             raise GitTransactionError(
                 f"archive name conflict at {destination}; resolve it, then resume"
             )
 
 
-def _preview_archive_tree(root: Path, head: str, paths: tuple[str, ...]) -> str:
-    archive = root / ARCHIVE_RELATIVE
+def _preview_archive_tree(root: Path, head: str, paths: tuple[str, ...],
+                          archive_relative: PurePosixPath) -> str:
+    archive = root / archive_relative
     if archive.exists() and (archive.is_symlink() or not archive.is_dir()):
         raise GitTransactionError(
             "archive destination is not a directory; repair it, then resume the task"
@@ -127,7 +161,7 @@ def _preview_archive_tree(root: Path, head: str, paths: tuple[str, ...]) -> str:
                 raise GitTransactionError(f"archive source is not a regular Git file: {path}")
             _git(root, "update-index", "--force-remove", "--", path, env=env)
             _git(root, "update-index", "--add", "--cacheinfo",
-                 f"{mode},{object_id},{ARCHIVE_RELATIVE}/{source.name}", env=env)
+                 f"{mode},{object_id},{archive_relative}/{source.name}", env=env)
         return _value(root, "write-tree", env=env)
 
 
@@ -173,11 +207,13 @@ def preflight_chain(root: Path, state: WorkflowState, bridge: ArtifactBridge) ->
     profile = replay.run_profile
     if profile is None:
         raise GitTransactionError("completion has no bound run profile")
+    archive_relative = archive_relative_directory(profile, state.run_id, state.branch)
     if any(effect.effect_class == "git_commit"
            and effect.operation[0] == "archive_commit"
            and effect.work_unit_id == str(state.current_work_unit_id)
            for effect in replay.side_effects):
         return True
+    check_archive_directory(root, profile, state.run_id, state.branch)
     identity = inspect_repository(root)
     if identity.branch != state.branch:
         raise GitTransactionError(
@@ -191,7 +227,7 @@ def preflight_chain(root: Path, state: WorkflowState, bridge: ArtifactBridge) ->
             and not _git(root, "ls-tree", "--name-only", identity.head, "--",
                          state.audit_report_path).stdout):
             initial_paths = tuple(sorted(set((*initial_paths, state.audit_report_path))))
-    _check_archive_names(root, initial_paths)
+    _check_archive_names(root, initial_paths, archive_relative)
     _clean_except_audit(root, state.audit_report_path)
     target_head = identity.head
     if state.audit_report_path is not None:
@@ -211,7 +247,7 @@ def preflight_chain(root: Path, state: WorkflowState, bridge: ArtifactBridge) ->
                 "-m", "docs: finalize orchestrator audit",
             )
     paths = _archive_paths(root, profile.base_branch or "", target_head)
-    tree = _preview_archive_tree(root, target_head, paths)
+    tree = _preview_archive_tree(root, target_head, paths, archive_relative)
     if profile.merge_completed_branch:
         _preflight_merge(root, profile.base_branch or "", base_head, target_head, tree)
     return False
@@ -229,6 +265,7 @@ def complete_chain(
     profile = replay.run_profile
     if profile is None:
         raise GitTransactionError("completion has no bound run profile")
+    archive_relative = archive_relative_directory(profile, state.run_id, state.branch)
     target, base = state.branch, profile.base_branch
     prior_archive = next((effect for effect in reversed(replay.side_effects)
                           if effect.effect_class == "git_commit"
@@ -238,6 +275,7 @@ def complete_chain(
                         if effect.effect_class == "git_merge"
                         and effect.work_unit_id == str(state.current_work_unit_id)), None)
     if prior_archive is None:
+        check_archive_directory(root, profile, state.run_id, state.branch)
         identity = inspect_repository(root)
         if identity.branch != target:
             raise GitTransactionError(
@@ -245,9 +283,9 @@ def complete_chain(
             )
         base_head = _base_head(root, base or "")
         paths = _archive_paths(root, base or "", identity.head)
-        _check_archive_names(root, paths)
+        _check_archive_names(root, paths, archive_relative)
         _clean(root)
-        tree = _preview_archive_tree(root, identity.head, paths)
+        tree = _preview_archive_tree(root, identity.head, paths, archive_relative)
         if profile.merge_completed_branch:
             _preflight_merge(root, base or "", base_head, identity.head, tree)
         operation = (
@@ -280,19 +318,29 @@ def complete_chain(
         _clean(root)
         original_index = _value(root, "write-tree")
         moved: list[tuple[Path, Path]] = []
-        archive_dir = root / ARCHIVE_RELATIVE
-        created_archive_dir = bool(paths) and not archive_dir.exists()
+        archive_dir = root / archive_relative
+        created_dirs: list[Path] = []
         try:
             if paths:
-                archive_dir.mkdir(parents=True, exist_ok=True)
+                check_archive_directory(root, profile, state.run_id, state.branch)
+                for index in range(1, len(archive_relative.parts) + 1):
+                    directory = root.joinpath(*archive_relative.parts[:index])
+                    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+                        raise GitTransactionError(f"archive destination conflict at {directory}")
+                    if index == len(archive_relative.parts) and profile.archive_run_directory is not None:
+                        directory.mkdir()
+                        created_dirs.append(directory)
+                    elif not directory.exists():
+                        directory.mkdir()
+                        created_dirs.append(directory)
             for path in paths:
                 source = root / path
-                destination = root / ARCHIVE_RELATIVE / source.name
+                destination = archive_dir / source.name
                 if destination.exists() or destination.is_symlink():
                     raise GitTransactionError(f"archive name conflict at {destination}")
                 source.rename(destination)
                 moved.append((source, destination))
-                _git(root, "add", "-A", "--", path, f"{ARCHIVE_RELATIVE}/{source.name}")
+                _git(root, "add", "-A", "--", path, f"{archive_relative}/{source.name}")
             if _value(root, "write-tree") != operation[3]:
                 raise GitTransactionError("archive tree differs from the preflight tree")
             _git(root, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
@@ -302,8 +350,9 @@ def complete_chain(
                 for source, destination in reversed(moved):
                     destination.rename(source)
                 _git(root, "read-tree", original_index)
-                if created_archive_dir:
-                    archive_dir.rmdir()
+                for directory in reversed(created_dirs):
+                    if directory.is_dir():
+                        directory.rmdir()
             raise
         committed = inspect_repository(root).head
         return committed, committed

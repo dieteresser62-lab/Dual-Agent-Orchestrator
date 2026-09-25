@@ -50,6 +50,23 @@ def test_merge_completion_setting_defaults_true_and_accepts_false(tmp_path: Path
     assert load_repo_config(path).workflow.merge_completed_branch is False
 
 
+@pytest.mark.parametrize("pattern", (
+    "", "/{run_id}", "../{run_id}", "x//{run_id}",
+    "x/./{run_id}", "x/../{run_id}", "{run_id}.txt", "{foo}/{run_id}",
+    "{run_id}\\other", "{run_id}/", "{run_id}/a b",
+))
+def test_archive_pattern_rejects_unsafe_config(tmp_path: Path, pattern: str) -> None:
+    path = _write_config(tmp_path, f"[workflow]\narchive_run_directory = {json.dumps(pattern)}\n")
+    with pytest.raises(ConfigError, match="workflow.archive_run_directory"):
+        load_repo_config(path)
+
+
+def test_archive_pattern_defaults_and_accepts_documented_tokens(tmp_path: Path) -> None:
+    assert load_repo_config(tmp_path / "missing.toml").workflow.archive_run_directory == "{run_id}"
+    path = _write_config(tmp_path, '[workflow]\narchive_run_directory = "{year}-feature/{run_id}"\n')
+    assert load_repo_config(path).workflow.archive_run_directory == "{year}-feature/{run_id}"
+
+
 def test_repository_base_branch_is_optional_and_strict(tmp_path: Path) -> None:
     assert load_repo_config(tmp_path / "missing.toml").repository.base_branch is None
     path = _write_config(tmp_path, '[repository]\nbase_branch = "trunk"\n')

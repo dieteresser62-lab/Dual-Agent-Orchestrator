@@ -309,9 +309,11 @@ def test_exact_prefix_admitted_and_every_named_prior_fact_rejected(
     )
 
 
+@pytest.mark.parametrize("archive_pattern", (None, "{year}/{run_id}"))
 def test_incomplete_profile_prefix_preserves_persisted_code_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    archive_pattern: str | None,
 ) -> None:
     state = _state(tmp_path)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
@@ -347,6 +349,7 @@ def test_incomplete_profile_prefix_preserves_persisted_code_version(
             orchestrator_code_version=persisted_version,
             merge_completed_branch=False,
             base_branch="main",
+            archive_run_directory=archive_pattern,
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",

@@ -123,7 +123,8 @@
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
         "reducer_version": {"const": "structured-v2-schema-2-state-v3-target-class-round-exit-v1"},
         "merge_completed_branch": {"type": "boolean"},
-        "base_branch": {"type": ["string", "null"]}
+        "base_branch": {"type": ["string", "null"]},
+        "archive_run_directory": {"type": "string"}
       }
     },    "workflow_transition": {
       "type": "object", "additionalProperties": false,

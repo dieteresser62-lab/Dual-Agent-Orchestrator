@@ -10,10 +10,13 @@ import pytest
 
 from artifact_models import RoleProfilePayload, RunProfilePayload, stable_side_effect_key
 from git_service import GitTransactionError
+import orchestrator
+from orchestrator import ProductionWorkflowDriver
 from side_effects import SideEffectBoundaryPhase, SideEffectExecutor, SideEffectSpec
 import workflow_completion
-from workflow_production import _finish_final_review
+from workflow_production import _finish_final_review, _run_production_transition_loop
 from workflow import WorkflowHistory
+from workflow_state import WorkUnitKind, WorkUnitStatus
 
 
 def git(root: Path, *args: str) -> str:
@@ -95,14 +98,16 @@ class CompletionRun:
     root: Path
     bridge: MemoryBridge
     profile: RunProfilePayload
+    run_id: str = "run"
+    branch: str = "feature/task"
 
     def run(self, monkeypatch: pytest.MonkeyPatch,
             observer=None) -> str:  # type: ignore[no-untyped-def]
         monkeypatch.setattr(workflow_completion, "replay_artifacts", lambda *_: SimpleNamespace(
             run_profile=self.profile, side_effects=tuple(self.bridge.effects.values()),
         ))
-        state = SimpleNamespace(branch="feature/task", current_work_unit_id=3,
-                                run_id="run")
+        state = SimpleNamespace(branch=self.branch, current_work_unit_id=3,
+                                run_id=self.run_id)
         return workflow_completion.complete_chain(
             self.root, state, self.bridge, SideEffectExecutor(self.bridge, observer),
             lambda effect_class, operation, *, fingerprint: SideEffectSpec(
@@ -111,12 +116,179 @@ class CompletionRun:
         )
 
 
-def completion(root: Path, *, merge: bool = True) -> CompletionRun:
+def completion(root: Path, *, merge: bool = True,
+               archive_pattern: str | None = None,
+               run_id: str = "run", branch: str = "feature/task") -> CompletionRun:
     return CompletionRun(root, MemoryBridge(), RunProfilePayload(
         RoleProfilePayload("implementer", "high"),
         RoleProfilePayload("reviewer", "high"),
         merge_completed_branch=merge, base_branch="main",
-    ))
+        archive_run_directory=archive_pattern,
+    ), run_id, branch)
+
+
+@pytest.mark.parametrize("conflict", ("directory", "file", "symlink", "parent_file", "parent_symlink"))
+def test_new_archive_destination_conflicts_before_work(
+    tmp_path: Path, conflict: str,
+) -> None:
+    root = repository(tmp_path)
+    profile = completion(root, archive_pattern="{year}/{run_id}").profile
+    parent = root / workflow_completion.ARCHIVE_RELATIVE / "2026"
+    target = parent / "watch-20260925-abc"
+    if conflict.startswith("parent"):
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        if conflict == "parent_file":
+            parent.write_text("occupied")
+        else:
+            parent.symlink_to(root / "docs/internal")
+        expected = parent
+    else:
+        parent.mkdir(parents=True)
+        if conflict == "directory":
+            target.mkdir()
+        elif conflict == "file":
+            target.write_text("occupied")
+        else:
+            target.symlink_to(root / "docs/internal")
+        expected = target
+    with pytest.raises(GitTransactionError, match=str(expected)):
+        workflow_completion.check_archive_directory(
+            root, profile, "watch-20260925-abc", "feature/task"
+        )
+
+
+@pytest.mark.parametrize("kind", ("directory", "file", "symlink"))
+def test_first_slice_conflict_stops_before_implementer(
+    tmp_path: Path, kind: str,
+) -> None:
+    root = repository(tmp_path)
+    run = completion(root, archive_pattern="{run_id}", run_id="watch-20260925-abc")
+    destination = root / workflow_completion.ARCHIVE_RELATIVE / "watch-20260925-abc"
+    if kind == "directory":
+        destination.mkdir()
+    elif kind == "file":
+        destination.write_text("occupied")
+    else:
+        destination.symlink_to(root / "docs/internal")
+    state = SimpleNamespace(
+        current_work_unit=SimpleNamespace(
+            status=WorkUnitStatus.IN_PROGRESS, kind=WorkUnitKind.SLICE,
+        ),
+        current_slice_id=1,
+        current_slice=SimpleNamespace(scope_paths=("src/a.py",)),
+    )
+    calls: list[str] = []
+
+    class Driver:
+        def preflight_archive_directory(self, _state):  # type: ignore[no-untyped-def]
+            calls.append("archive")
+            workflow_completion.check_archive_directory(
+                root, run.profile, run.run_id, run.branch
+            )
+
+    class Engine:
+        def run_current_work_unit(self, *_args):  # type: ignore[no-untyped-def]
+            calls.append("implementer")
+            raise AssertionError("implementer started after archive conflict")
+
+    dependencies = SimpleNamespace(
+        recover_final_review_attestation=lambda _state, history, *_: history,
+    )
+    with pytest.raises(GitTransactionError, match=str(destination)):
+        _run_production_transition_loop(
+            root=root, task_file=root / "task.md", assignment="task",
+            args=SimpleNamespace(), dependencies=dependencies, state=state,
+            history=WorkflowHistory(1), effective_resume=False,
+            driver=Driver(), engine=Engine(),
+        )
+    assert calls == ["archive"]
+
+
+def test_driver_early_preflight_uses_bound_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    profile = completion(root, archive_pattern="{run_id}").profile
+    destination = root / workflow_completion.ARCHIVE_RELATIVE / "watch-20260925-bound"
+    destination.mkdir()
+    monkeypatch.setattr(
+        orchestrator, "replay_artifacts",
+        lambda *_: SimpleNamespace(run_profile=profile),
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver.root = root
+    driver._artifact_bridge = SimpleNamespace(
+        store=SimpleNamespace(current_chain=lambda: ()),
+    )
+    state = SimpleNamespace(
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.SLICE),
+        current_slice_id=1, run_id="watch-20260925-bound", branch="feature/task",
+    )
+    with pytest.raises(GitTransactionError, match=str(destination)):
+        driver.preflight_archive_directory(state)
+
+
+def test_two_runs_archive_same_name_in_distinct_bound_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    first = completion(root, archive_pattern="{year}-feature/{run_id}",
+                       run_id="watch-20260925-first")
+    first.run(monkeypatch)
+    first_target = root / workflow_completion.ARCHIVE_RELATIVE / "2026-feature/watch-20260925-first/plan.md"
+    assert first_target.read_text() == "plan\n"
+    git(root, "switch", "-qc", "feature/second")
+    (root / "docs/internal/plan.md").write_text("second run\n")
+    git(root, "add", "docs/internal/plan.md")
+    git(root, "commit", "-qm", "second plan")
+    second = completion(root, archive_pattern="{year}-feature/{run_id}",
+                        run_id="watch-20260925-second", branch="feature/second")
+    second.run(monkeypatch)
+    second_target = root / workflow_completion.ARCHIVE_RELATIVE / "2026-feature/watch-20260925-second/plan.md"
+    assert first_target.read_text() == "plan\n"
+    assert second_target.read_text() == "second run\n"
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_legacy_profile_still_uses_flat_archive(tmp_path: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    root = repository(tmp_path)
+    run = completion(root)
+    run.run(monkeypatch)
+    assert (root / workflow_completion.ARCHIVE_RELATIVE / "plan.md").read_text() == "plan\n"
+
+
+def test_archive_placeholders_expand_from_bound_identity(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    profile = completion(
+        root, archive_pattern="{year}-{branch_slug}/{run_id}",
+    ).profile
+    assert workflow_completion.check_archive_directory(
+        root, profile, "watch-20260925-abc", "feature/Sample_Task"
+    ) == workflow_completion.ARCHIVE_RELATIVE / "2026-feature-sample-task/watch-20260925-abc"
+    with pytest.raises(GitTransactionError, match="invalid run_id"):
+        workflow_completion.check_archive_directory(root, profile, "../escape", "feature/task")
+
+
+def test_nested_archive_failure_restores_files_and_new_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    run = completion(root, archive_pattern="{year}/{run_id}",
+                     run_id="watch-20260925-rollback")
+    before = completion_snapshot(root)
+    original_git = workflow_completion._git
+
+    def fail_commit(repo: Path, *args: str, **kwargs):  # type: ignore[no-untyped-def]
+        if args and "commit" in args and workflow_completion.ARCHIVE_SUBJECT in args:
+            raise GitTransactionError("injected commit failure")
+        return original_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(workflow_completion, "_git", fail_commit)
+    with pytest.raises(GitTransactionError, match="injected commit failure"):
+        run.run(monkeypatch)
+    assert completion_snapshot(root) == before
+    assert not (root / workflow_completion.ARCHIVE_RELATIVE / "2026").exists()
 
 
 def completion_snapshot(root: Path) -> tuple[bytes, bytes, bytes, bytes, tuple[tuple[str, bytes], ...]]:
@@ -453,12 +625,14 @@ def test_preflight_failure_leaves_branch_and_tree_unchanged(
     (effect, phase) for effect in ("git_commit", "git_merge")
     for phase in SideEffectBoundaryPhase
 ])
+@pytest.mark.parametrize("archive_pattern", (None, "{run_id}"))
 def test_each_completion_boundary_resumes_to_same_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     effect: str, phase: SideEffectBoundaryPhase,
+    archive_pattern: str | None,
 ) -> None:
     root = repository(tmp_path)
-    run = completion(root)
+    run = completion(root, archive_pattern=archive_pattern)
     interrupted = False
 
     def interrupt(boundary) -> None:  # type: ignore[no-untyped-def]
