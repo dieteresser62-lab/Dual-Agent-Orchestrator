@@ -208,7 +208,7 @@ class AuditFacts:
         status = _finding_stand(self.final_statuses.get(finding_id, latest.finding_status))
         if status == "offen" and any(item.action == "escalated" for item in events):
             status = "eskaliert"
-        return ("Blocker" if latest.severity.value == "BLOCKER" else "Finding", status)
+        return ("Blocker" if latest.severity.value == "BLOCKER" else "Befund", status)
 
     def round_history(self, slice_id: str) -> str:
         lines: list[str] = []
@@ -284,7 +284,7 @@ class AuditFacts:
             "Geprüft:\n" + _quote(evidence.dimensions),
             "Größtes Restrisiko:\n" + _quote(evidence.largest_residual_risk),
             "Bruchbedingung:\n" + _quote(evidence.break_condition),
-            "Pre-Mortem:\n" + _quote(review.pre_mortem or "Nicht angegeben."),
+            "Vorab-Risikoanalyse:\n" + _quote(review.pre_mortem or "Nicht angegeben."),
         ))
 
 
@@ -393,7 +393,7 @@ def render_overall(facts: AuditFacts, *, task: str, branch: str) -> str:
         finding_rows.append(f"| {fid} | {origin} | {kind} | {state} | {_title(opening.summary or opening.rationale)} |")
     if facts.final_review:
         for item in facts.final_review.new_findings:
-            finding_rows.append(f"| {item.finding_id} | Abnahme | {'Blocker' if item.severity.value == 'BLOCKER' else 'Finding'} | offen | {_cell(item.summary)} |")
+            finding_rows.append(f"| {item.finding_id} | Abnahme | {'Blocker' if item.severity.value == 'BLOCKER' else 'Befund'} | offen | {_cell(item.summary)} |")
     if len(finding_rows) == 2:
         finding_rows.append("| – | – | – | – | Keine. |")
     holds = []
@@ -419,8 +419,8 @@ def render_overall(facts: AuditFacts, *, task: str, branch: str) -> str:
         final = facts.final_review
         new = []
         for item in final.new_findings:
-            new.extend((f"### {item.finding_id} – {_cell(item.summary)}", "", f"Klasse: {'Blocker' if item.severity.value == 'BLOCKER' else 'Finding'} · Stand: offen", "", "Befund:", _quote(item.summary), "", "Akzeptanztest:", _quote(item.acceptance_test), ""))
-        acceptance = "\n".join(("Abnahmereview abgeschlossen.", "", "Geprüft:", _quote(final.review_evidence.dimensions), "", "Größtes Restrisiko:", _quote(final.review_evidence.largest_residual_risk), "", "Bruchbedingung:", _quote(final.review_evidence.break_condition), "", "Pre-Mortem:", _quote(final.pre_mortem), "", *new)).strip()
+            new.extend((f"### {item.finding_id} – {_cell(item.summary)}", "", f"Klasse: {'Blocker' if item.severity.value == 'BLOCKER' else 'Befund'} · Stand: offen", "", "Befund:", _quote(item.summary), "", "Akzeptanztest:", _quote(item.acceptance_test), ""))
+        acceptance = "\n".join(("Abnahmereview abgeschlossen.", "", "Geprüft:", _quote(final.review_evidence.dimensions), "", "Größtes Restrisiko:", _quote(final.review_evidence.largest_residual_risk), "", "Bruchbedingung:", _quote(final.review_evidence.break_condition), "", "Vorab-Risikoanalyse:", _quote(final.pre_mortem), "", *new)).strip()
     bodies = {"meta": f"Aufgabe: {task} · Zielbranch: `{branch}` · Lauf: `{facts.records[0].run_id}` · Stand: {stand}", "overview": "\n".join(overview), "findings": "\n".join(finding_rows), "holds": "\n".join(holds) if holds else "Keine.", "acceptance-review": acceptance}
     pieces = [f"# Gesamtaudit – {task}", ""]
     for key, heading in OVERALL_SECTIONS:

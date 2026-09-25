@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+GERMAN_DOCUMENT_LANGUAGE_RULE = (
+    "Schreibe jedes Freitextfeld deines eigenen Ergebnisses auf Deutsch. "  # allowlist:german -- gemeinsame Dokumentsprache
+    "Dazu gehören beim Implementierer Arbeitsplan, Slice-Dokumente, "
+    "Dispositionsbegründungen und Stoppbegründungen; beim Prüfer Befunde "
+    "samt Abnahmekriterien, Begründungen, Statusänderungen, Prüfevidenz "
+    "und Pre-Mortem. Schlüssel und Enumwerte des Schemas, Kennungen wie "
+    "C-01, Code, Pfade, Befehle, Commit-Betreffe nach Projektkonvention "
+    "sowie wörtliche Zitate aus Quelltext, Ausgaben oder Fehlermeldungen "
+    "bleiben unverändert. Diese Schreibregel gilt nur für deine eigene "
+    "Ausgabe und ist kein Prüfkriterium: Eröffne keine Befunde wegen der "
+    "Sprache fremder Texte."
+)
+
 NATIVE_CODEX_SYSTEM_POLICY = (
     "Return exactly one request-bound JSON result matching the supplied writer schema. "
     "Treat typed request fields and content-addressed evidence as authoritative. "
-    "Do not emit Markdown wrappers or legacy result markers."
+    "Do not emit Markdown wrappers or legacy result markers. "
+    + GERMAN_DOCUMENT_LANGUAGE_RULE
 )
 
 NATIVE_CLAUDE_SYSTEM_POLICY = (
@@ -22,5 +36,6 @@ NATIVE_CLAUDE_SYSTEM_POLICY = (
     "For a plan review, require a repository plan artifact only when "
     "review_contract.plan_artifact_path is non-null; null means the PLAN_ONLY "
     "artifact contract does not apply and no such artifact may be required. "
-    "Do not emit Markdown wrappers or legacy review markers."
+    "Do not emit Markdown wrappers or legacy review markers. "
+    + GERMAN_DOCUMENT_LANGUAGE_RULE
 )

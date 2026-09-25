@@ -429,7 +429,7 @@ def render_followup_task(
         sections.append("\n".join(lines))
     return (
         "# Arbeitsauftrag aus dem Abnahmereview\n\n"
-        "Der vollstaendige Abnahmereview hat die folgenden Befunde ergeben. "
+        "Der vollständige Abnahmereview hat die folgenden Befunde ergeben. "
         "Plane ihre Behebung wie bei jedem anderen Arbeitsauftrag von Grund auf.\n\n"
         f"Zielbranch: `{target_branch}`\n\n"
         f"ACCEPTANCE_REVIEW_NUMBER: {acceptance_review_number}\n\n"
@@ -463,7 +463,7 @@ def render_implementation_task(
         f"ACCEPTANCE_REVIEW_NUMBER: {acceptance_review_number}\n\n"
         "Der Arbeitsplan ist bereits von Claude geprüft und vom "
         "Orchestrator lokal commitgebunden freigegeben. Ein konfiguriertes manuelles "
-        "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder reviewe ihn "  # allowlist:german
+        "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder prüfe ihn "  # allowlist:german -- Folgeauftrag
         "nicht erneut. Verwende ihn als schreibgeschützte fachliche Quelle.\n\n"
         "Jeder Slice ändert ausschließlich seine persistierten Pfade. Das zugehörige "
         "Slice-MD ist eine Auditansicht des Orchestrators und nicht Gegenstand "  # allowlist:german

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from prompts import NATIVE_CLAUDE_SYSTEM_POLICY, NATIVE_CODEX_SYSTEM_POLICY
+from prompts import (
+    GERMAN_DOCUMENT_LANGUAGE_RULE,
+    NATIVE_CLAUDE_SYSTEM_POLICY,
+    NATIVE_CODEX_SYSTEM_POLICY,
+)
 
 
 def test_native_policies_require_schema_bound_json() -> None:
@@ -8,6 +12,31 @@ def test_native_policies_require_schema_bound_json() -> None:
         assert "JSON" in policy
         assert "schema" in policy
         assert "Markdown" in policy
+
+
+def test_both_roles_receive_the_same_complete_language_rule() -> None:
+    for policy in (NATIVE_CODEX_SYSTEM_POLICY, NATIVE_CLAUDE_SYSTEM_POLICY):
+        assert policy.count(GERMAN_DOCUMENT_LANGUAGE_RULE) == 1
+    for required in (
+        "jedes Freitextfeld",
+        "Arbeitsplan",
+        "Slice-Dokumente",
+        "Dispositionsbegründungen",
+        "Stoppbegründungen",
+        "Befunde",
+        "Abnahmekriterien",
+        "Statusänderungen",
+        "Prüfevidenz",
+        "Pre-Mortem",
+        "Schlüssel und Enumwerte",
+        "Kennungen wie C-01",
+        "Code, Pfade, Befehle",
+        "Commit-Betreffe",
+        "wörtliche Zitate",
+        "kein Prüfkriterium",
+        "Sprache fremder Texte",
+    ):
+        assert required in GERMAN_DOCUMENT_LANGUAGE_RULE
 
 
 def test_native_policies_do_not_define_result_marker_grammar() -> None:
