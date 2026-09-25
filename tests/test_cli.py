@@ -485,10 +485,24 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
 
     assert args.agent_settings["claude"].model == "opus"
     assert args.agent_settings["claude"].effort == "high"
-    assert args.agent_settings["claude"].timeout_seconds == 1800
+    assert args.agent_settings["claude"].timeout_seconds is None
+    assert args.agent_settings["codex"].timeout_seconds is None
     assert args.agent_settings["claude"].max_budget_usd is None
     assert args.agent_settings["codex"].model == "gpt-6-sol"
     assert args.agent_settings["codex"].effort == "high"
+
+
+def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
+    settings = parse_args(
+        ["--codex-timeout", "0", "--claude-timeout", "47"],
+        cwd=tmp_path,
+        environ={"RUN_TASK_CODEX_TIMEOUT": "17", "RUN_TASK_CLAUDE_TIMEOUT": "0"},
+    ).agent_settings
+    assert settings["codex"].timeout_seconds is None
+    assert settings["claude"].timeout_seconds == 47
+    assert parse_args(
+        [], cwd=tmp_path, environ={"RUN_TASK_CLAUDE_TIMEOUT": "0"}
+    ).agent_settings["claude"].timeout_seconds is None
 
 
 def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
@@ -617,7 +631,7 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("environment", "message"),
     [
-        ({"RUN_TASK_CLAUDE_TIMEOUT": "0"}, "claude timeout"),
+        ({"RUN_TASK_CLAUDE_TIMEOUT": "-1"}, "claude timeout"),
         ({"RUN_TASK_CLAUDE_EFFORT": "extreme"}, "claude effort"),
         ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "claude max budget"),
     ],
@@ -1069,7 +1083,7 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| `--agent-live-stream` / `--no-agent-live-stream` | an |" in readme
     assert "| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an |" in readme
     assert "| Claude | `--claude-binary`, `--claude-model`" in readme
-    assert "`claude`, `opus`, 1800s, `high`" in readme
+    assert "`claude`, `opus`, ohne \u005aeitlimit, `high`" in readme
     assert "nicht Modell und Effort" in readme
     assert "`gpt-6-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"

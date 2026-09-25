@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,7 @@ from agent_adapters import (
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
 )
-from agent_config import AgentSettings
+from agent_config import AgentSettings, default_agent_settings
 from agent_runtime import (
     AgentCompatibilityError,
     AgentInvocationError,
@@ -1305,6 +1307,30 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
     assert failure_kind == "output"
     assert usage is not None and usage.input_tokens == 7 and usage.output_tokens == 2
     assert not hasattr(usage, "raw")
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_provider_clock_past_old_limit_requires_explicit_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str,
+) -> None:
+    settings = default_agent_settings()[role]
+    command = [sys.executable, "-c", "print('completed')"]
+    config = OrchestratorConfig(
+        repo_root=tmp_path, agent_live_stream=True, agent_live_stream_mode="full"
+    )
+
+    def run_with_clock(limit: int | None):
+        ticks = iter((0.0, 1801.0))
+        monkeypatch.setattr(agent_runtime.time, "monotonic", lambda: next(ticks, 1801.0))
+        return agent_runtime._run_agent_process(
+            object(), command, None, config=config, env=os.environ.copy(),
+            execution_root=tmp_path, timeout_seconds=limit, agent_key=role,
+        )
+
+    assert "completed" in run_with_clock(settings.timeout_seconds).stdout
+    assert settings.timeout_seconds is None
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_with_clock(1800)
 
 
 

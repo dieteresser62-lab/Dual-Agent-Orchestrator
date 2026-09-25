@@ -38,6 +38,7 @@ Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP
 
 - Ein-Personen-Projekt seit Februar 2026, Python ohne Laufzeitabhängigkeiten, gut 1.600 Tests. Seit August entsteht der Orchestrator zunehmend mit sich selbst.
 - Läuft unter Linux, macOS und WSL2. Natives Windows wird nicht unterstützt.
+  Das automatische Fortsetzen nach einem Absturz braucht Linux oder WSL mit lesbarem `/proc`; auf anderen Systemen führt der Weg über ein Freigabe-Gate.
 - Setzt installierte und angemeldete `codex`- und `claude`-CLIs voraus.
 - Gründlichkeit kostet Zeit und Tokens: Ein Lauf dauert deutlich länger als ein One-Shot-Durchgang.
 - Die Dokumentation ist deutsch.
@@ -437,10 +438,12 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 | Rolle | CLI-Optionen | Standards |
 |---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, 1800s, `high` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, 1800s, `high` |
+| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
+| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
 
 `--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus.
+
+Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--codex-timeout` und `--claude-timeout` beziehungsweise `RUN_TASK_CODEX_TIMEOUT` und `RUN_TASK_CLAUDE_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
 
 Das Modell wählt man über seine Familie: für Codex `sol` (`gpt-6-sol`, Standard), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) oder `astra` (`gpt-6-astra`), für Claude `opus` (Standard), `sonnet` oder `fable`; die Claude-Aliase zeigen immer auf das neueste Modell. Andere Werte weist der Orchestrator vor dem ersten Aufruf ab. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
 

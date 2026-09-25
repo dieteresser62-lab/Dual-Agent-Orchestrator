@@ -18,6 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import crash_harness
+from test_orchestrator_runtime import (
+    test_crashed_provider_ended_resumes_with_next_attempt as _ended_process_proof,
+    test_crashed_provider_still_running_halts_with_pid as _running_process_proof,
+    test_crashed_provider_without_identity_requires_gate_and_approval as _unknown_process_proof,
+    test_resume_loop_dispatches_next_provider_attempt_in_same_invocation as _same_resume_proof,
+    test_unknown_provider_gate_accepts_an_unchanged_repository as _unchanged_gate_proof,
+)
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     Fingerprint,
@@ -39,6 +46,19 @@ from crash_harness import (
 
 
 MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v1.json"
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_provider_crash_after_started_before_response_has_all_resume_outcomes(
+    tmp_path: Path, role: str,
+) -> None:
+    for name in ("ended", "running", "unknown", "same_resume", "unchanged"):
+        (tmp_path / name).mkdir()
+    _ended_process_proof(tmp_path / "ended", role)
+    _running_process_proof(tmp_path / "running", role)
+    _unknown_process_proof(tmp_path / "unknown", role)
+    _same_resume_proof(tmp_path / "same_resume", role)
+    _unchanged_gate_proof(tmp_path / "unchanged", role)
 
 
 def _tracked_repository_snapshot(

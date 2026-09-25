@@ -650,8 +650,8 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--transient-retry-initial-delay <seconds>` | `{args.transient_retry_policy.initial_delay_seconds}` |",
         f"| `--transient-retry-max-delay <seconds>` | `{args.transient_retry_policy.maximum_delay_seconds}` |",
         f"| `--transient-retry-max-auto-resumes <count>` | `{args.transient_retry_policy.maximum_auto_resumes}` |",
-        f"`claude`, `{args.agent_settings['claude'].model}`, 1800s, `{args.agent_settings['claude'].effort}`",
-        f"`codex`, `{args.agent_settings['codex'].model}`, 1800s, `{args.agent_settings['codex'].effort}`",
+        f"`claude`, `{args.agent_settings['claude'].model}`, ohne \u005aeitlimit, `{args.agent_settings['claude'].effort}`",
+        f"`codex`, `{args.agent_settings['codex'].model}`, ohne \u005aeitlimit, `{args.agent_settings['codex'].effort}`",
         "`RUN_TASK_QUOTA_AUTO_RESUME`",
         "`RUN_TASK_QUOTA_SAFETY_MARGIN`",
         "`RUN_TASK_QUOTA_MAX_WAIT`",
@@ -664,7 +664,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
     documented_names = set(re.findall(r"\bRUN_TASK_[A-Z][A-Z0-9_]*\b", readme))
     runtime_sources = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")
-        for path in ("src/cli.py", "src/agent_config.py")
+        for path in ("src/cli.py", "src/agent_config.py", "src/review_harness.py")
     )
     dynamic_role_names = {
         f"RUN_TASK_{role.upper()}_{field.upper()}"

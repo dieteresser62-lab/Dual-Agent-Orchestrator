@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -190,6 +191,7 @@ from content_authority_support import (
     append_validation_authority,
 )
 from side_effects import SideEffectBoundaryPhase, SideEffectReconciliationError
+from provider_process import record_process_start
 from workflow_recovery import _require_provider_input_round
 
 
@@ -849,6 +851,249 @@ def _failed_codex_attempt_harness(
             )
 
     return repository, driver, state, raw_response_path, fail_attempt
+
+
+def _open_crashed_provider_attempt(
+    tmp_path: Path, role: str, *, preexisting_change: bool = False,
+) -> tuple[Path, ProductionWorkflowDriver, WorkflowState, object, object, tuple]:
+    branch = "feature/provider-recovery"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    state = init_workflow_state(
+        run_id=f"recover-{role}", task_file=str(task), branch=branch,
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1, task_digest=digest,
+        task_scope_patterns=("src/runtime.py",), target_branch=branch,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "2",
+            codex_result_transport="native-codex-v2",
+            claude_review_transport="native-claude-review-v2",
+        ),
+    )
+    step = WorkflowStep.CODEX_PLAN if role == "codex" else WorkflowStep.CLAUDE_PLAN_REVIEW
+    state = state.with_current_step(step)
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={role: SimpleNamespace(model="test", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    if preexisting_change:
+        (repository / "src").mkdir()
+        (repository / "src" / "preexisting.py").write_text("before\n", encoding="utf-8")
+    measured = measure_provider_input(
+        PreparedProviderInput(
+            command=("provider-double",), stdin_text="request",
+            components=(ProviderInputComponent("stdin_prompt", "request"),),
+        ),
+        provider=role, role=role, operation=step.value,
+        binding_fingerprint=digest, policy=default_provider_input_budget_policy(),
+    )
+    bootstrap = driver._persist_provider_bootstrap(measured)
+    started = driver._start_provider_attempt(
+        measured, bootstrap, operation_instance="request:1",
+        durable_response_path=repository / ".orchestrator" / "answer.json",
+    )
+    return repository, driver, state, measured, bootstrap, started
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_crashed_provider_ended_resumes_with_next_attempt(
+    tmp_path: Path, role: str,
+) -> None:
+    repository, driver, state, measured, bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, role)
+    )
+    process = subprocess.Popen(("sleep", "60"))
+    try:
+        record_process_start(started[2], started[1].effect_key, process.pid)
+    finally:
+        process.kill()
+        process.wait()
+    assert driver._reconcile_pending_side_effects(state) is True
+    retry = driver._start_provider_attempt(
+        measured, bootstrap, operation_instance="request:1",
+        durable_response_path=repository / ".orchestrator" / "answer.json",
+    )
+    assert retry[0].payload.attempt_number == 2
+    replay_artifacts(ArtifactStore(repository, state.run_id).load_chain(), state.run_id)
+    failures = [
+        item.payload for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, ProviderAttemptPayload)
+        and item.payload.phase == "failed"
+    ]
+    assert len(failures) == 1 and failures[0].failure_kind == "process"
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_resume_loop_dispatches_next_provider_attempt_in_same_invocation(
+    tmp_path: Path, role: str,
+) -> None:
+    repository, driver, state, measured, bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, role)
+    )
+    process = subprocess.Popen(("sleep", "60"))
+    try:
+        record_process_start(started[2], started[1].effect_key, process.pid)
+    finally:
+        process.kill()
+        process.wait()
+    history = WorkflowHistory(state.current_work_unit_id)
+    resumed_driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={role: SimpleNamespace(model="test", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    resumed_driver.checkpoint(resolve_resume_state(repository, state.run_id).state, history)
+    resumed = resumed_driver.active_state
+    assert resumed is not None
+    attempts: list[int] = []
+
+    class OneDispatch:
+        def run_current_work_unit(self, current, _context, current_history):
+            next_attempt = resumed_driver._start_provider_attempt(
+                measured, bootstrap, operation_instance="request:1",
+                durable_response_path=repository / ".orchestrator" / "answer.json",
+            )
+            attempts.append(next_attempt[0].payload.attempt_number)
+            return WorkflowRunResult(current, current_history)
+
+    result = workflow_production._run_production_transition_loop(
+        root=repository, task_file=repository / "task.md", assignment="task",
+        args=SimpleNamespace(),
+        dependencies=SimpleNamespace(
+            context=lambda **_kwargs: WorkflowContext("task", "plan", "slice"),
+            recover_final_review_attestation=lambda _state, prior, _replay, _read: prior,
+        ),
+        state=resumed, history=history, effective_resume=True,
+        driver=resumed_driver, engine=OneDispatch(),
+    )
+    assert result.state.current_step == resumed.current_step
+    assert attempts == [2]
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_crashed_provider_still_running_halts_with_pid(
+    tmp_path: Path, role: str,
+) -> None:
+    repository, driver, state, _measured, _bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, role)
+    )
+    process = subprocess.Popen(("sleep", "60"))
+    try:
+        record_process_start(started[2], started[1].effect_key, process.pid)
+        with pytest.raises(SideEffectReconciliationError, match=f"PID {process.pid} is still running"):
+            driver._reconcile_pending_side_effects(state)
+        attempts = [
+            item for item in ArtifactStore(repository, state.run_id).load_chain()
+            if isinstance(item.payload, ProviderAttemptPayload)
+        ]
+        assert len(attempts) == 1
+    finally:
+        process.kill()
+        process.wait()
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_crashed_provider_without_identity_requires_gate_and_approval(
+    tmp_path: Path, role: str,
+) -> None:
+    repository, driver, state, measured, bootstrap, _started = (
+        _open_crashed_provider_attempt(tmp_path, role, preexisting_change=True)
+    )
+    (repository / "src").mkdir(exist_ok=True)
+    (repository / "src" / "runtime.py").write_text("partial change\n", encoding="utf-8")
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    gated = driver.active_state
+    assert gated is not None
+    assert gated.current_work_unit.gate.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN
+    assert "src/runtime.py" in gated.current_work_unit.gate.paths
+    assert "src/preexisting.py" not in gated.current_work_unit.gate.paths
+    assert "--resume --approve-gate --gate-rationale" in gated.current_work_unit.gate.detail
+    driver.checkpoint(gated, WorkflowHistory(state.current_work_unit_id))
+    attempts = [
+        item for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, ProviderAttemptPayload)
+    ]
+    assert len(attempts) == 1
+    result = WorkflowEngine(driver).decide_current_gate(
+        gated, WorkflowHistory(state.current_work_unit_id),
+        approved=True, rationale="Process manually confirmed stopped",
+    )
+    assert result.state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    retry = driver._start_provider_attempt(
+        measured, bootstrap, operation_instance="request:1",
+        durable_response_path=repository / ".orchestrator" / "answer.json",
+    )
+    assert retry[0].payload.attempt_number == 2
+    replay_artifacts(ArtifactStore(repository, state.run_id).load_chain(), state.run_id)
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+@pytest.mark.parametrize("unreadable", ("boot_id", "stat"))
+def test_crash_after_unmeasurable_identity_requires_gate_without_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str, unreadable: str,
+) -> None:
+    repository, driver, state, _measured, _bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, role)
+    )
+    original_read = Path.read_text
+
+    def read_proc(path: Path, *args: object, **kwargs: object) -> str:
+        name = str(path)
+        if name == "/proc/sys/kernel/random/boot_id":
+            if unreadable == "boot_id":
+                raise FileNotFoundError("boot ID unavailable")
+            return "boot-1\n"
+        if name.startswith("/proc/") and name.endswith("/stat"):
+            raise PermissionError("process stat denied")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_proc)
+    record_process_start(started[2], started[1].effect_key, os.getpid())
+    identity = json.loads(started[2].with_suffix(started[2].suffix + ".process.json").read_text())
+    assert set(identity) == {"effect_key", "before"}
+
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    gated = driver.active_state
+    assert gated is not None
+    assert gated.current_work_unit.gate.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN
+    assert "PID" not in gated.current_work_unit.gate.detail
+    attempts = [
+        item for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, ProviderAttemptPayload)
+    ]
+    assert len(attempts) == 1 and attempts[0].payload.phase == "started"
+
+
+@pytest.mark.parametrize("role", ("codex", "claude"))
+def test_unknown_provider_gate_accepts_an_unchanged_repository(
+    tmp_path: Path, role: str,
+) -> None:
+    repository, driver, state, measured, bootstrap, _started = (
+        _open_crashed_provider_attempt(tmp_path, role)
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    gated = driver.active_state
+    assert gated is not None
+    assert gated.current_work_unit.gate.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN
+    assert gated.current_work_unit.gate.paths == ()
+    WorkflowEngine(driver).decide_current_gate(
+        gated, history, approved=True, rationale="Process confirmed stopped",
+    )
+    retry = driver._start_provider_attempt(
+        measured, bootstrap, operation_instance="request:1",
+        durable_response_path=repository / ".orchestrator" / "answer.json",
+    )
+    assert retry[0].payload.attempt_number == 2
 
 
 def test_codex_failure_logs_are_attempt_bound_and_leave_no_open_file_intent(

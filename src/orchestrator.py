@@ -10,6 +10,7 @@ import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path, PurePosixPath
+from provider_process import ProviderOutcomeUnknown
 from typing import Callable, Mapping, get_args, get_type_hints
 
 from agent_adapters import (
@@ -901,12 +902,33 @@ class ProductionWorkflowDriver:
         operation_instance: str | None = None,
         durable_response_path: Path,
     ) -> tuple[ArtifactRecord, SideEffectSpec, Path]:
-        return self._recovery_boundary()._start_provider_attempt(
+        started = self._recovery_boundary()._start_provider_attempt(
             measurement,
             bootstrap,
             operation_instance=operation_instance,
             durable_response_path=durable_response_path,
         )
+        state = self.active_state
+        try:
+            before: dict[str, object] | None = None
+            if state is not None:
+                try:
+                    start_commit = state.current_slice.start_commit or state.branch_base
+                    entries = self._provider_repository_snapshot(start_commit)
+                    before = {
+                        entry.path: entry.to_payload()
+                        for entry in entries.fingerprint_entries
+                    }
+                except Exception as exc:
+                    logger.warning("Provider attempt path baseline could not be measured: %s", exc)
+            if before is not None:
+                from provider_process import record_attempt_baseline
+
+                record_attempt_baseline(started[2], started[1].effect_key, before)
+        except Exception:
+            self._finish_provider_attempt(started, 0.0, "runtime", None)
+            raise
+        return started
 
     def _reconcile_provider_effect(
         self,
@@ -918,7 +940,7 @@ class ProductionWorkflowDriver:
             return Reconciliation(ReconciliationOutcome.UNKNOWN)
         attempt_number = int(spec.operation[5])
         matching_attempt_records = tuple(
-            record.payload
+            record
             for record in bridge.store.current_chain()
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.provider.value == spec.operation[0]
@@ -929,9 +951,9 @@ class ProductionWorkflowDriver:
             and record.payload.attempt_number == attempt_number
         )
         terminals = tuple(
-            payload
-            for payload in matching_attempt_records
-            if payload.phase in {"succeeded", "failed"}
+            record.payload
+            for record in matching_attempt_records
+            if record.payload.phase in {"succeeded", "failed"}
         )
         if len(terminals) == 1 and terminals[0].phase == "failed":
             return Reconciliation(
@@ -943,6 +965,26 @@ class ProductionWorkflowDriver:
         response = reconcile_provider_start(durable_response_path)
         if len(terminals) == 1 and terminals[0].phase == "succeeded":
             return response
+        if len(matching_attempt_records) == 1 and response.outcome is ReconciliationOutcome.UNKNOWN:
+            from provider_process import (
+                ProcessStatus, ProviderOutcomeUnknown, observe_process,
+            )
+
+            observation = observe_process(durable_response_path, spec.effect_key)
+            if observation.status is ProcessStatus.RUNNING:
+                raise SideEffectReconciliationError(
+                    f"provider process PID {observation.pid} is still running; "
+                    "no second attempt may start"
+                )
+            if observation.status is ProcessStatus.UNKNOWN:
+                raise ProviderOutcomeUnknown(spec.effect_key, durable_response_path)
+            bridge.finish_provider_attempt(
+                matching_attempt_records[0],
+                duration_seconds=0.0,
+                failure_kind="process",
+                usage=None,
+            )
+            return Reconciliation(ReconciliationOutcome.OCCURRED, "failed:process")
         if len(matching_attempt_records) == 1:
             return response
         return Reconciliation(ReconciliationOutcome.UNKNOWN)
@@ -981,6 +1023,77 @@ class ProductionWorkflowDriver:
             )
         self._side_effect_executor(bridge).complete(spec, result)
         self._mark_completed_side_effect(spec.effect_key)
+
+    @staticmethod
+    def _record_provider_process(started: object, pid: int) -> None:
+        if (
+            not isinstance(started, tuple) or len(started) != 3
+            or not isinstance(started[1], SideEffectSpec)
+            or not isinstance(started[2], Path)
+        ):
+            raise WorkflowExecutionError("provider process identity requires its durable start")
+        from provider_process import record_process_start
+
+        record_process_start(started[2], started[1].effect_key, pid)
+
+    def close_unknown_provider_attempt(self, effect_key: str) -> None:
+        """Apply an explicit gate approval to one still-open physical attempt."""
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            raise WorkflowExecutionError("provider gate has no active record chain")
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        pending = tuple(
+            item for item in replay.side_effects
+            if item.effect_class == "provider_start"
+            and item.effect_key == effect_key and item.result is None
+        )
+        if not pending:
+            return
+        if len(pending) != 1:
+            raise WorkflowExecutionError("provider gate has ambiguous open attempts")
+        item = pending[0]
+        response_path = self.root.joinpath(*PurePosixPath(item.operation[6]).parts)
+        from provider_process import ProcessStatus, observe_process
+
+        observed = observe_process(response_path, effect_key)
+        if observed.status is ProcessStatus.RUNNING:
+            raise WorkflowExecutionError(
+                f"provider process PID {observed.pid} is still running; "
+                "the gate cannot close its attempt"
+            )
+        if response_path.exists():
+            raise WorkflowExecutionError(
+                "provider response appeared while the outcome gate was pending"
+            )
+        started = tuple(
+            record for record in bridge.store.current_chain()
+            if isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.phase == "started"
+            and record.payload.work_unit_id == item.work_unit_id
+            and record.payload.provider.value == item.operation[0]
+            and record.payload.operation == item.operation[1]
+            and record.payload.input_digest == item.operation[2]
+            and record.payload.binding_fingerprint == item.operation[3]
+            and record.payload.attempt_number == int(item.operation[5])
+        )
+        if len(started) != 1:
+            raise WorkflowExecutionError("provider gate has no unique started attempt")
+        spec = SideEffectSpec(
+            item.effect_class, item.work_unit_id, item.operation,
+            started[0].fingerprint.sha256, started[0].fingerprint.kind,
+        )
+        self._finish_provider_attempt((started[0], spec, response_path), 0.0, "process", None)
+
+    def _provider_repository_snapshot(self, start_commit: str) -> RepositoryChanges:
+        return collect_repository_changes(
+            self.root,
+            start_commit,
+            excluded_paths=_bound_task_control_paths(self.root, self.active_state),
+        )
+
+    def provider_resume_fingerprint(self, start_commit: str) -> str:
+        return self._provider_repository_snapshot(start_commit).fingerprint
 
     @staticmethod
     def _bootstrap_fact(
@@ -1078,6 +1191,7 @@ class ProductionWorkflowDriver:
                             durable_response_path=raw_path,
                         ),
                         terminal=self._finish_provider_attempt,
+                        process_started=self._record_provider_process,
                         durable_response_path=lambda handle: handle[2],
                         failure_path=self._provider_attempt_failure_path,
                     )
@@ -1515,6 +1629,7 @@ class ProductionWorkflowDriver:
                             durable_response_path=raw_response_path,
                         ),
                         terminal=self._finish_provider_attempt,
+                        process_started=self._record_provider_process,
                         durable_response_path=lambda handle: handle[2],
                         failure_path=self._provider_attempt_failure_path,
                     )
@@ -2452,7 +2567,35 @@ class ProductionWorkflowDriver:
             self._bind_artifact_store(persisted)
             if new_request_identity:
                 self._persist_request_identity_prerequisites(persisted)
-            self._persist_structured_baseline(persisted)
+            try:
+                self._persist_structured_baseline(persisted)
+            except ProviderOutcomeUnknown as unknown:
+                start_commit = persisted.current_slice.start_commit or persisted.branch_base
+                changes = self._provider_repository_snapshot(start_commit)
+                from provider_process import changed_paths_since_start
+
+                current_paths = {
+                    entry.path: entry.to_payload()
+                    for entry in changes.fingerprint_entries
+                }
+                changed_paths = changed_paths_since_start(
+                    unknown.response_path, unknown.effect_key,
+                    current_paths, tuple(sorted(changes.review_paths)),
+                )
+                persisted = persisted.await_user_gate(
+                    reason=GateReason.PROVIDER_OUTCOME_UNKNOWN,
+                    detail=(
+                        f"PROVIDER-OUTCOME-UNKNOWN | effect={unknown.effect_key} | "
+                        "process end cannot be proven; review the changed paths, "
+                        "then run --task-file <unchanged-task> --resume "
+                        "--approve-gate --gate-rationale '<reviewed reason>'"
+                    ),
+                    fingerprint=changes.fingerprint,
+                    paths=changed_paths,
+                    resume_step=persisted.current_step,
+                )
+                self.active_state = persisted
+                self._persist_structured_baseline(persisted)
             self._project_audit(persisted, history)
         except WorkflowCompletionRejected:
             raise

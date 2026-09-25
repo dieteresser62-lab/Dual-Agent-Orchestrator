@@ -260,6 +260,14 @@ class GateSourceRow:
 # full-match grammars rather than an empty or generic "dynamic" identity.
 GATE_SOURCE_MAP = (
     GateSourceRow(
+        "PROVIDER-OUTCOME-UNKNOWN",
+        "provider_outcome_unknown",
+        "user",
+        "orchestrator.checkpoint",
+        ("orchestrator._reconcile_provider_effect",),
+        ("provider-outcome-unknown",),
+    ),
+    GateSourceRow(
         "HEAD-DRIFT",
         "unexpected_file",
         "user",
@@ -476,6 +484,7 @@ GATE_SOURCE_MAP = (
 # deliberately repeated rather than derived from GATE_SOURCE_MAP: changing a
 # mapping row without changing the exercised state transition must turn red.
 GATE_CASE_ORACLE = (
+    ("provider-outcome-unknown", "provider_outcome_unknown", "PROVIDER-OUTCOME-UNKNOWN", "user"),
     ("head-drift-user-gate", "unexpected_file", "HEAD-DRIFT", "user"),
     ("slice-boundary-policy-gate", "unexpected_file", "SLICE-HEAD-DRIFT", "policy"),
     ("scope-user-gate", "unexpected_file", "UNEXPECTED-PATH", "user"),
@@ -614,6 +623,7 @@ GATE_CALLS = {
 
 EXPECTED_GATE_CALL_SITES = Counter(
     {
+        ("orchestrator.py", "checkpoint", "await_user_gate"): 1,
         (
             "workflow_production.py",
             "_run_production_transition_loop",

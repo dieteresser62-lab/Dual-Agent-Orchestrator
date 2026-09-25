@@ -104,6 +104,7 @@ from workflow import (
     WorkflowHistory,
 )
 from workflow_state import (
+    GateReason,
     NATIVE_CLAUDE_REVIEW_TRANSPORT as NATIVE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT as NATIVE_IMPLEMENTER_TRANSPORT,
     WorkflowState,
@@ -818,6 +819,13 @@ class WorkflowRecovery:
                     f"pending Git effect {item.effect_key!r} cannot be reconciled"
                 )
             if item.effect_class == "provider_start":
+                gate = state.current_work_unit.gate
+                if (
+                    gate.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN
+                    and gate.detail is not None
+                    and f"effect={item.effect_key}" in gate.detail
+                ):
+                    continue
                 path = self._dependencies.root.joinpath(*PurePosixPath(item.operation[6]).parts)
                 outcome = self._dependencies.reconcile_external_attempt(
                     SideEffectSpec(

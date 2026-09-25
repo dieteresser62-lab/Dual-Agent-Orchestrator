@@ -654,6 +654,8 @@ class WorkflowDriver(Protocol):
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
+    def provider_resume_fingerprint(self, start_commit: str) -> str: ...
+
     def path_exists_at_commit(self, commit: str, path: str) -> bool: ...
 
     def detect_test_changes(
@@ -705,6 +707,8 @@ class WorkflowDriver(Protocol):
     def persist_gate_decision(
         self, work_unit_id: int, decision: GateDecisionRecord
     ) -> None: ...
+
+    def close_unknown_provider_attempt(self, effect_key: str) -> None: ...
 
     def persist_gate_transition(self, state: WorkflowState) -> None: ...
 
@@ -763,12 +767,14 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "carry_forward_native_findings",
         "checkpoint",
         "collect_changes",
+        "provider_resume_fingerprint",
         "commit_slice",
         "detect_test_changes",
         "evaluate_slice_finding_convergence",
         "invoke_codex",  # allowlist:provider -- canonical capability
         "invoke_reviewer",
         "persist_gate_decision",
+        "close_unknown_provider_attempt",
         "persist_gate_transition",
         "persist_invocation_failure",
         "write_invocation_failure_diagnostic",
@@ -1846,6 +1852,22 @@ class WorkflowEngine:
             and gate.detail is not None
             and gate.detail.startswith(f"{SCOPE_EXTENSION_REQUESTED_RULE_ID} |")
         )
+        unknown_provider_gate = gate.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN
+        provider_effect_key: str | None = None
+        if approved and unknown_provider_gate:
+            start_commit = self._change_start_commit(state)
+            if start_commit is None:
+                raise WorkflowExecutionError("provider outcome gate has no repository start commit")
+            current_fingerprint = self.driver.provider_resume_fingerprint(start_commit)
+            if current_fingerprint != gate.fingerprint:
+                raise WorkflowExecutionError(
+                    "provider outcome gate fingerprint or changed paths differ; "
+                    "review the current worktree before approval"
+                )
+            match = re.search(r"\beffect=(side-effect:provider_start:[0-9a-f]+)\b", gate.detail or "")
+            if match is None:
+                raise WorkflowExecutionError("provider outcome gate has no bound attempt")
+            provider_effect_key = match.group(1)
         source_request_id: str | None = None
         if approved and scope_extension_gate:
             if path_classes is None:
@@ -1872,6 +1894,8 @@ class WorkflowEngine:
                 updated.current_work_unit_id,
                 updated.current_work_unit.gate_decisions[-1],
             )
+        if approved and provider_effect_key is not None:
+            self.driver.close_unknown_provider_attempt(provider_effect_key)
         if approved and scope_extension_gate:
             additions = tuple(
                 sorted(set(gate.paths).difference(state.current_slice.scope_paths))

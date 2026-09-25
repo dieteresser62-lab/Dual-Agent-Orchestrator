@@ -101,6 +101,8 @@ bleibt Ihre Entscheidung.
 | ein ChatGPT-Konto mit Zugriff auf **GPT-6 Sol** | – | `codex login` |
 | ein Claude-Konto mit Zugriff auf **Opus** | – | `claude`, dann der Anmeldung folgen |
 
+Das automatische Fortsetzen nach einem Absturz braucht Linux oder WSL mit lesbarem `/proc`; auf anderen Systemen führt der Weg über ein Freigabe-Gate.
+
 Fehlt eine der beiden Kommandozeilen, installieren Sie sie nach der Anleitung
 des Herstellers, beispielsweise über Node.js:
 
@@ -707,6 +709,16 @@ fremden Branch gleichen Namens übernimmt der Orchestrator nie.
 Vorrang: Kommandozeile vor `RUN_TASK_*`-Umgebungsvariablen vor
 `orchestrator.toml` vor eingebautem Standard. Modell, Effort, Timeout und
 Claude-Budget stehen bewusst nicht in der Projektdatei.
+
+Die Prozesse von Implementierer und Prüfer haben ohne ausdrückliche Angabe kein
+Zeitlimit. `--codex-timeout` und `--claude-timeout` sowie die entsprechenden
+`RUN_TASK_*_TIMEOUT`-Variablen akzeptieren positive Sekundenwerte für ein hartes
+Limit; `0` bedeutet ausdrücklich kein Limit. Das Testlimit des separaten
+Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) und die Validierungszeitlimits sind
+davon unabhängig. Nach einem abgebrochenen Providerlauf setzt `--resume` einen
+sicher beendeten Prozess mit dem nächsten Versuch fort. Ist die Prozesslage
+unbekannt, nennt das fingerprintgebundene Gate die geänderten Pfade und den
+Freigabebefehl `--resume --approve-gate --gate-rationale "…"`.
 
 | Abschnitt | Wirkung |
 |---|---|

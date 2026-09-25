@@ -34,6 +34,7 @@ from inbox_watcher import (
 )
 from orchestrator import ProductionWorkflowDriver
 from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
+from provider_process import ProviderOutcomeUnknown
 from repo_changes import collect_repository_changes
 from side_effects import (
     encode_file_write_content,
@@ -488,7 +489,7 @@ def test_provider_start_guard_uses_the_attempt_specific_response_path(
     )
     base.parent.mkdir(parents=True, exist_ok=True)
     base.write_text("foreign base response", encoding="utf-8")
-    with pytest.raises(SideEffectReconciliationError, match="unknown physical outcome"):
+    with pytest.raises(ProviderOutcomeUnknown, match="provider outcome is unknown"):
         driver._start_provider_attempt(
             measurement,
             bootstrap,
