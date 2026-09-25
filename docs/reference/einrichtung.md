@@ -81,8 +81,9 @@ und er nimmt dort die Aufgaben aus einem Eingangsordner.
 
 Zwei KI-Agenten arbeiten darin: **Codex** plant und programmiert, **Claude**
 prüft. Der Orchestrator führt die Tests aus und legt die Ergebnisse als lokale
-Commits auf einem eigenen Branch ab. Er pusht nie und führt nie zusammen – das
-bleibt Ihre Entscheidung.
+Commits auf einem eigenen Branch ab. Nach befundfreier Abnahme führt er
+standardmäßig einen lokalen Merge in den Basisbranch aus. Er pusht nie; den
+Merge können Sie in der Konfiguration abschalten.
 
 ---
 
@@ -508,11 +509,70 @@ Ein späterer Start mit `run_task --watch` setzt fort.
 
 Der Orchestrator hat alles auf einem eigenen Branch committet, zum Beispiel
 `feature/einkaufsliste`. Nach einem befundfreien Gesamtreview archiviert er
-die neu angelegten Dokumente und committet die Umbenennungen. Standardmäßig
-führt er den Branch anschließend lokal mit `--no-ff` in den Basisbranch
-zusammen und checkt diesen aus. Er pusht nie. Bei
-`[workflow] merge_completed_branch = false` bleibt der Zielbranch ausgecheckt;
-zum manuellen Zusammenführen verwenden Sie:
+neu angelegte Dateien direkt unter `docs/internal/` und committet die
+Umbenennungen separat. Für neue Läufe ist das Ziel
+`docs/internal/archive/{run_id}/`. Über `[workflow] archive_run_directory`
+können Sie einen anderen Unterordner unter `docs/internal/archive/` vorgeben,
+etwa `{year}-feature/{run_id}`. Der vollständige `{run_id}` ist dabei ein
+eigenes Pfadsegment; `{year}` stammt aus der Laufkennung und `{branch_slug}`
+aus dem Zielbranchnamen. Das Muster wird beim Laufstart gebunden. Ein bereits
+vorhandener Zielordner oder ein ungültiger Pfad stoppt den Lauf vor dem ersten
+Umsetzungsslice. Alte Läufe ohne diesen Schlüssel behalten beim Fortsetzen das
+flache Archivziel `docs/internal/archive/`.
+
+Für die Endabnahme führt der Betreiber den vollständigen Crashbeweis auf dem
+endgültigen Zielbranch-`HEAD` nach der letzten relevanten Änderung und vor dem
+branchweiten Finalreview aus:
+
+```bash
+python3 -m pytest tests/test_crash_harness.py -v
+```
+
+Nach jeder weiteren Änderung von `HEAD` ist vor einem Merge ein neuer
+vollständiger Crashbeweis für diesen Stand nötig. Die standardmäßige
+Slice-Validierung übernimmt der Orchestrator; der eigenständige Crashbeweis
+bleibt eine Betreiberprüfung.
+
+Standardmäßig führt der Orchestrator den Zielbranch danach lokal mit `--no-ff`
+in den Basisbranch zusammen und checkt diesen aus. Der Zielbranch bleibt als
+lokaler Branch bestehen; der Orchestrator pusht nie. Während Archiv-Commit und
+Merge sind Git-Hooks deaktiviert. **Nach dem bestätigten Merge** ermittelt der
+Orchestrator den wirksamen `post-merge`-Hook aus `core.hooksPath` oder, falls
+nicht gesetzt, aus dem Git-Hook-Verzeichnis. Relative `core.hooksPath`-Pfade
+beziehen sich auf das Repository-Arbeitsverzeichnis. Ein Hook muss eine
+reguläre ausführbare Datei ohne Symlink in einem Pfadsegment sein. Einen vom
+Zielbranch hinzugefügten oder gegenüber seiner Merge-Basis geänderten Hook im
+versionierten Arbeitsbaum lässt der Orchestrator mit Begründung aus; ein durch
+`core.hooksPath` übergangener Standard-Hook wird ebenfalls gemeldet.
+
+Ein zulässiger Hook wird mit Argument `0` und einer Grenze von 600 Sekunden
+ausgeführt. Ergebnis, Exitcode sowie stdout und stderr werden getrennt im
+Nachlauf-Record festgehalten; beide Ausgaben sind auf je 8192 Bytes begrenzt
+und eine Kürzung wird vermerkt. Ein Fehler oder Timeout erzeugt eine Warnung,
+ohne den gültigen Merge zurückzunehmen. Fehlt ein zulässiger Hook, wird das
+Auslassen protokolliert. Im Watch-Modus wird der Auftrag erst nach dem
+Nachlauf-Ergebnis nach `outbox/done/` verschoben.
+
+Wurde der Prozess nach dem Nachlauf-Intent unterbrochen, ist möglicherweise
+unklar, ob der Hook lief. Ein gewöhnliches Resume führt ihn deshalb nicht
+erneut aus und hält mit einer Meldung zum ungewissen Ausgang an. Prüfen Sie
+den Zustand des Hooks und quittieren Sie dann **den offenen Intent für den
+angezeigten Merge-Commit** mit dem unveränderten Auftragsdokument:
+
+```bash
+run_task --task-file inbox/meine-idee.md --resume \
+  --acknowledge-post-merge <merge-commit> \
+  --post-merge-rationale "Hook-Zustand geprüft; weiterer Lauf freigegeben"
+```
+
+Die Quittierung wird als `acknowledged_unknown` protokolliert und setzt den
+Lauf ohne erneuten Hook-Aufruf fort; sie behauptet keinen Hook-Erfolg. Der
+Watch-Modus behandelt den offenen Intent als wiederaufnehmbaren Halt und
+verschiebt den Auftrag nicht wegen dieses Halts nach `outbox/failed/`.
+
+Bei `[workflow] merge_completed_branch = false` erfolgt nach dem Archiv-Commit
+kein Merge. Der Nachlauf wird als ausgelassen protokolliert und der Zielbranch
+bleibt ausgecheckt. Zum manuellen Zusammenführen verwenden Sie:
 
 ```bash
 git switch main
@@ -733,7 +793,7 @@ Freigabebefehl `--resume --approve-gate --gate-rationale "…"`.
 | `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen `command` für bestimmte Pfadmuster. Alle Befehle sind Argumentlisten; für Unterordner und Shell-Semantik etwa `default_command = ["sh", "-c", "cd app && flutter test"]`. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
 | `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
 | `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
-| `[workflow]` | Zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. `merge_completed_branch` ist standardmäßig `true` und wird für den ganzen Lauf im Run-Profil gebunden; `false` lässt den Zielbranch nach dem Archiv-Commit ausgecheckt. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. Beide Schlüssel stehen nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
+| `[workflow]` | Zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. `merge_completed_branch` ist standardmäßig `true` und wird für den ganzen Lauf im Run-Profil gebunden; `false` lässt den Zielbranch nach dem Archiv-Commit ausgecheckt. `archive_run_directory` ist standardmäßig `{run_id}` und wird ebenfalls beim Laufstart gebunden. Es bezeichnet einen relativen Unterordner von `docs/internal/archive/`, verlangt `{run_id}` als vollständiges Segment und erlaubt zusätzlich `{year}` und `{branch_slug}`. Ungültige Muster werden bei der Konfiguration abgewiesen; ein vorhandener Zielordner oder ein Symlink auf dem Zielpfad stoppt vor dem ersten Umsetzungsslice. Beide Abschluss-Schlüssel stehen nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
 | `[[provider_input_budget]]` | Obergrenzen für die Eingabegröße je Provider, Rolle und Operation |
 
 Ohne `default_command` sucht der Orchestrator selbst: zuerst `pyproject.toml`

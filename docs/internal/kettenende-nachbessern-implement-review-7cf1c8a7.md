@@ -11,8 +11,8 @@ Aufgabe: kettenende-nachbessern-implement · Zielbranch: `feature/fehler-paramet
 |---:|---|---|---|---:|---:|
 | 1 | Prüfer-Policy für entscheidbare Risiken und Testabdeckung | freigegeben | 9fee043b | 1 | 0 |
 | 2 | Laufgebundenes Archivmuster und frühe Zielprüfung | freigegeben | 36563118 | 1 | 0 |
-| 3 | Protokollierter post-merge-Nachlauf | freigegeben | – | 2 | 3 |
-| 4 | Anwenderdokumentation und Endabnahme | ausstehend | – | 0 | 0 |
+| 3 | Protokollierter post-merge-Nachlauf | freigegeben | f2d95a0e | 2 | 3 |
+| 4 | Anwenderdokumentation und Endabnahme | freigegeben | – | 2 | 1 |
 <!-- audit:overview:end -->
 
 ## Befunde
@@ -23,6 +23,7 @@ Aufgabe: kettenende-nachbessern-implement · Zielbranch: `feature/fehler-paramet
 | C-01 | Slice 3 | Befund | geschlossen | Der produktive Quittierungspfad ist ungetestet |
 | C-02 | Slice 3 | Befund | geschlossen | `acknowledge_unknown_post_merge` prüft `if _base_head(root, profile.base_branch or "") != commit and… |
 | C-03 | Slice 3 | Befund | geschlossen | Akzeptanzkriterium 4 verlangt einen Beleg, dass alte Run-Profile und Record-Ketten keinen neuen Nachlauf… |
+| C-04 | Slice 4 | Befund | geschlossen | Die fingerprintgebundene Attestation `validation-[Hash ausgelassen]` ist FAIL |
 <!-- audit:findings:end -->
 
 ## Halte und Entscheidungen
