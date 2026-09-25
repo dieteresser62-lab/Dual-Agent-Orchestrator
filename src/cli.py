@@ -650,6 +650,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rationale recorded for an explicit v3 gate decision.",
     )
     parser.add_argument(
+        "--acknowledge-post-merge",
+        metavar="MERGE_COMMIT",
+        help="With --resume and --task-file, acknowledge one uncertain post-merge hook outcome.",
+    )
+    parser.add_argument(
+        "--post-merge-rationale",
+        help="Reason recorded for an uncertain post-merge hook acknowledgment.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate agent responses and tests to validate workflow wiring.",
@@ -935,6 +944,15 @@ def parse_args(
     elif args.gate_rationale is not None:
         parser.error("--gate-rationale requires --approve-gate or --reject-gate")
     args.gate_decision = gate_decision
+    if args.acknowledge_post_merge is not None:
+        if args.resume is not True or not args.task_file_explicit:
+            parser.error("--acknowledge-post-merge requires --resume and --task-file")
+        if not (args.post_merge_rationale or "").strip():
+            parser.error("--acknowledge-post-merge requires --post-merge-rationale")
+        if gate_decision is not None:
+            parser.error("post-merge acknowledgment cannot be combined with a gate decision")
+    elif args.post_merge_rationale is not None:
+        parser.error("--post-merge-rationale requires --acknowledge-post-merge")
 
     if args.test_command is None:
         if "RUN_TASK_TEST_CMD" in env:

@@ -256,6 +256,7 @@ class RunProfilePayload:
     merge_completed_branch: bool = True
     base_branch: str | None = None
     archive_run_directory: str | None = None
+    post_merge_hook_enabled: bool = True
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -281,6 +282,8 @@ class RunProfilePayload:
             raise ArtifactValidationError("run profile base_branch is invalid")
         if self.archive_run_directory is not None:
             validate_archive_run_directory(self.archive_run_directory)
+        if not isinstance(self.post_merge_hook_enabled, bool):
+            raise ArtifactValidationError("run profile post_merge_hook_enabled must be boolean")
 
 
 _WORKFLOW_STEPS = {
@@ -1486,6 +1489,7 @@ class ProviderAttemptPayload:
 SIDE_EFFECT_CLASSES = frozenset({
     "git_commit",
     "git_merge",
+    "post_merge_hook",
     "provider_start",
     "file_write",
     "queue_move",
@@ -1565,6 +1569,10 @@ class SideEffectPayload:
                        for item in self.operation[2:5])):
                 raise ArtifactValidationError("merge side effect operation is invalid")
             _require_sha256(self.operation[5], "merge side effect message digest")
+        elif self.effect_class == "post_merge_hook":
+            if (len(self.operation) != 3 or self.operation[0] != "post_merge"
+                or re.fullmatch(r"[0-9a-f]{40}", self.operation[1]) is None):
+                raise ArtifactValidationError("post-merge side effect operation is invalid")
         elif self.effect_class == "provider_start":
             if (
                 len(self.operation) != 7
@@ -2324,6 +2332,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         raw.pop("base_branch", None)
     if isinstance(payload, RunProfilePayload) and payload.archive_run_directory is None:
         raw.pop("archive_run_directory", None)
+    if isinstance(payload, RunProfilePayload) and not payload.post_merge_hook_enabled:
+        raw.pop("post_merge_hook_enabled", None)
     if isinstance(payload, PlanPayload):
         raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
     if isinstance(payload, AgentResultPayload):
@@ -2603,6 +2613,7 @@ _PAYLOAD_READERS: dict[
             data.get("merge_completed_branch", False),
             data.get("base_branch"),
             data.get("archive_run_directory"),
+            data.get("post_merge_hook_enabled", False),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],

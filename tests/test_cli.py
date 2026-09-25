@@ -652,6 +652,29 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
     assert args.gate_rationale == "reviewed exact persisted evidence"
 
 
+@pytest.mark.parametrize("arguments", (
+    ["--acknowledge-post-merge", "a" * 40, "--post-merge-rationale", "reviewed"],
+    ["--resume", "--acknowledge-post-merge", "a" * 40,
+     "--post-merge-rationale", "reviewed"],
+    ["--resume", "--task-file", "task.md", "--acknowledge-post-merge", "a" * 40],
+    ["--resume", "--task-file", "task.md", "--post-merge-rationale", "reviewed"],
+))
+def test_post_merge_acknowledgment_requires_task_resume_commit_and_reason(
+    arguments: list[str], tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(arguments, cwd=tmp_path, environ={})
+
+
+def test_post_merge_acknowledgment_parses_exact_commit(tmp_path: Path) -> None:
+    args = parse_args([
+        "--resume", "--task-file", "task.md", "--acknowledge-post-merge", "a" * 40,
+        "--post-merge-rationale", "reviewed unknown outcome",
+    ], cwd=tmp_path, environ={})
+    assert args.acknowledge_post_merge == "a" * 40
+    assert args.post_merge_rationale == "reviewed unknown outcome"
+
+
 @pytest.mark.parametrize(
     ("environment", "message"),
     [

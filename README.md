@@ -393,6 +393,8 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--target-branch <branch>` | Aufgabenmarker, eindeutige Textableitung oder deterministische Erzeugung | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
 | `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
 | `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
+| `--acknowledge-post-merge <commit>` | nicht gesetzt | Mit `--resume` und `--task-file` den ungewissen Ausgang eines `post-merge`-Hooks für den bestätigten Merge-Commit quittieren. |
+| `--post-merge-rationale <text>` | nicht gesetzt | Erforderliche Begründung für die Quittierung des ungewissen Hook-Ausgangs. |
 
 ### Validierung, Probelauf und Quota
 

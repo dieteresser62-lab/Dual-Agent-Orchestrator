@@ -131,6 +131,9 @@ def _append_baseline_identity_expectations(
         archive_run_directory=(
             persisted_profile.archive_run_directory if persisted_profile else None
         ),
+        post_merge_hook_enabled=(
+            persisted_profile.post_merge_hook_enabled if persisted_profile else True
+        ),
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -459,7 +462,7 @@ class WorkflowBaselineDependencies:
         [ArtifactReplayResult], ArtifactRecord
     ]
     side_effect_executor: Callable[[ArtifactBridge], SideEffectExecutor]
-    completion_policy: Callable[[], tuple[bool, str | None, str]] = lambda: (True, None, "{run_id}")
+    completion_policy: Callable[[], tuple[bool, str | None, str, bool]] = lambda: (True, None, "{run_id}", True)
 
 
 class WorkflowBaseline:
@@ -519,7 +522,8 @@ class WorkflowBaseline:
         completion_policy = (
             (existing_replay.run_profile.merge_completed_branch,
              existing_replay.run_profile.base_branch,
-             existing_replay.run_profile.archive_run_directory)
+             existing_replay.run_profile.archive_run_directory,
+             existing_replay.run_profile.post_merge_hook_enabled)
             if existing_replay is not None and existing_replay.run_profile is not None
             else self._dependencies.completion_policy()
         )
@@ -535,6 +539,7 @@ class WorkflowBaseline:
                 merge_completed_branch=completion_policy[0],
                 base_branch=completion_policy[1],
                 archive_run_directory=completion_policy[2],
+                post_merge_hook_enabled=completion_policy[3],
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",

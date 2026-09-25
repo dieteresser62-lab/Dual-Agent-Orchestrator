@@ -10,6 +10,7 @@ import pytest
 from agent_runtime import AgentProcessError
 from conftest import assert_isolated_run_root
 from error_classification import ClassifiedFailure, FailureClass, classify_exception
+from side_effects import SideEffectReconciliationError
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -946,6 +947,36 @@ def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
     assert not (inbox / "first.md.attempts").exists()
     assert watch_identity_path(first).exists()
     assert list((outbox / "failed").glob("*")) == []
+
+
+def test_open_post_merge_intent_pauses_watch_without_retry_or_poison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "merge.md"
+    task.write_text("merge", encoding="utf-8")
+    calls = 0
+
+    def process(_task: Path, args: Namespace, _force_new: bool) -> int:
+        nonlocal calls
+        calls += 1
+        records = tmp_path / ".orchestrator/artifacts" / args.watch_run_id / "records"
+        records.mkdir(parents=True)
+        (records / "intent.json").write_text("{}", encoding="utf-8")
+        raise SideEffectReconciliationError("post_merge_hook has an unknown physical outcome")
+
+    assert watch_inbox(
+        inbox_dir=inbox, outbox_dir=outbox, poll_interval=0.01,
+        args=_args(), process_task=process, max_retries=1,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 4
+    assert calls == 1
+    assert task.exists()
+    assert not attempt_sidecar_path(task).exists()
+    assert list((outbox / "failed").glob("*.poison")) == []
 
 
 def test_terminal_input_rejection_is_archived_once_and_queue_continues(

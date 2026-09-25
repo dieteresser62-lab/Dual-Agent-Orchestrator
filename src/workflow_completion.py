@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import subprocess
 import tempfile
 from typing import Callable
 
 from artifact_bridge import ArtifactBridge
+from artifact_models import SideEffectPayload
 from artifact_replay import replay_artifacts
 from git_service import GitTransactionError, inspect_repository
 from side_effects import (
@@ -25,6 +29,187 @@ from workflow_state import WorkflowState
 
 ARCHIVE_SUBJECT = "docs: archive completed orchestrator work"
 ARCHIVE_RELATIVE = PurePosixPath("docs/internal") / "archive"
+HOOK_OUTPUT_LIMIT = 8192
+HOOK_TIMEOUT_SECONDS = 600
+logger = logging.getLogger(__name__)
+
+
+def _hook_path(root: Path) -> tuple[Path, Path | None]:
+    """Return Git's effective hook and an overridden standard hook, if any."""
+    common_dir = Path(os.fsdecode(_git(root, "rev-parse", "--git-common-dir").stdout).strip())
+    standard = common_dir / "hooks/post-merge"
+    if not standard.is_absolute():
+        standard = root / standard
+    configured = _git(root, "config", "--path", "--get", "core.hooksPath", codes=(0, 1))
+    if configured.returncode:
+        return standard, None
+    directory = Path(os.fsdecode(configured.stdout).strip())
+    if not directory.is_absolute():
+        directory = root / directory
+    return directory / "post-merge", standard
+
+
+def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
+                 target_head: str | None) -> str | None:
+    absolute = Path(os.path.abspath(hook))
+    for segment in (absolute, *absolute.parents):
+        try:
+            mode = segment.lstat().st_mode
+        except OSError:
+            return "missing"
+        if stat.S_ISLNK(mode):
+            return f"symlink:{segment}"
+    mode = absolute.stat().st_mode
+    if not stat.S_ISREG(mode):
+        return "not_regular"
+    if not mode & 0o111:
+        return "not_executable"
+    try:
+        relative = absolute.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+    if base_head is None or target_head is None:
+        return None
+    tracked = _git(root, "ls-tree", "-z", "--name-only", target_head,
+                   "--", relative).stdout
+    if tracked:
+        fork = _value(root, "merge-base", base_head, target_head)
+        changed = _git(root, "diff", "--name-only", "-z", "--diff-filter=AM",
+                       fork, target_head, "--", relative).stdout
+        if changed:
+            return "changed_by_target_branch"
+    return None
+
+
+def _hook_result(status: str, hook: Path, *, reason: str | None = None,
+                 overridden: Path | None = None, exit_code: int | None = None,
+                 stdout: bytes = b"", stderr: bytes = b"",
+                 stdout_truncated: bool = False,
+                 stderr_truncated: bool = False) -> str:
+    return json.dumps({
+        "status": status, "hook": str(hook), "reason": reason,
+        "overridden_standard_hook": str(overridden) if overridden else None,
+        "exit_code": exit_code,
+        "stdout": stdout.decode("utf-8", "replace"),
+        "stderr": stderr.decode("utf-8", "replace"),
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _run_hook(root: Path, hook: Path, overridden: Path | None) -> str:
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        try:
+            completed = subprocess.run((str(hook), "0"), cwd=root, stdout=output,
+                                       stderr=errors, timeout=HOOK_TIMEOUT_SECONDS,
+                                       check=False)
+            status = "success" if completed.returncode == 0 else "failed"
+            exit_code = completed.returncode
+        except subprocess.TimeoutExpired:
+            status, exit_code = "timeout", None
+        except OSError as exc:
+            status, exit_code = "failed", None
+            errors.write(os.fsencode(str(exc)))
+        output.seek(0)
+        errors.seek(0)
+        stdout = output.read(HOOK_OUTPUT_LIMIT)
+        stderr = errors.read(HOOK_OUTPUT_LIMIT)
+        return _hook_result(
+            status, hook, overridden=overridden, exit_code=exit_code,
+            stdout=stdout, stderr=stderr,
+            stdout_truncated=output.read(1) != b"",
+            stderr_truncated=errors.read(1) != b"",
+        )
+
+
+def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
+                       executor: SideEffectExecutor,
+                       make_spec: Callable[..., SideEffectSpec],
+                       commit: str, *, merge_enabled: bool,
+                       base_head: str | None = None,
+                       target_head: str | None = None) -> None:
+    previous = next((item for item in reversed(replay.side_effects)
+                     if item.effect_class == "post_merge_hook"
+                     and item.work_unit_id == str(state.current_work_unit_id)
+                     and item.operation[1] == commit), None)
+    hook, standard = _hook_path(root)
+    operation = previous.operation if previous else ("post_merge", commit, str(hook))
+    hook = Path(operation[2])
+    spec = make_spec("post_merge_hook", operation, fingerprint=_fingerprint(operation))
+    overridden = (standard if standard is not None
+                  and Path(os.path.abspath(standard)) != Path(os.path.abspath(hook))
+                  and standard.is_file() else None)
+
+    def perform() -> tuple[str, str]:
+        reason = _hook_reason(root, hook, base_head=base_head, target_head=target_head)
+        if not merge_enabled:
+            reason = "missing" if reason == "missing" else "merge_disabled"
+        if reason is not None:
+            result = _hook_result("skipped", hook, reason=reason, overridden=overridden)
+        else:
+            result = _run_hook(root, hook, overridden)
+        return result, result
+
+    result = executor.execute(
+        spec, reconcile=lambda: Reconciliation(ReconciliationOutcome.UNKNOWN),
+        perform=perform,
+    )
+    outcome = json.loads(str(result))
+    if outcome["status"] in {"failed", "timeout"}:
+        logger.warning("post-merge hook %s: %s (exit=%s)", hook,
+                       outcome["status"], outcome["exit_code"])
+    elif outcome["status"] == "skipped" and outcome["reason"] != "missing":
+        logger.warning("post-merge hook %s skipped: %s", hook, outcome["reason"])
+    if overridden is not None:
+        logger.warning("post-merge hook %s skipped: overridden by core.hooksPath", overridden)
+
+
+def acknowledge_unknown_post_merge(root: Path, state: WorkflowState,
+                                   bridge: ArtifactBridge, task_file: Path, commit: str,
+                                   rationale: str) -> None:
+    """Record an operator's acknowledgment of one exact unresolved hook intent."""
+    if not rationale.strip():
+        raise GitTransactionError("post-merge acknowledgment requires a rationale")
+    replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+    profile = replay.run_profile
+    if profile is None or not profile.post_merge_hook_enabled:
+        raise GitTransactionError("run has no post-merge policy")
+    if task_file.resolve() != Path(state.task_file).resolve():
+        raise GitTransactionError("task identity changed")
+    try:
+        task_digest = hashlib.sha256(task_file.read_text(encoding="utf-8").encode()).hexdigest()
+    except (OSError, UnicodeError) as exc:
+        raise GitTransactionError("task file is unreadable") from exc
+    if task_digest != state.task_digest:
+        raise GitTransactionError("task content changed since the run began")
+    if profile.merge_completed_branch and _base_head(root, profile.base_branch or "") != commit:
+        raise GitTransactionError("base branch moved after the acknowledged merge")
+    effects = [item for item in replay.side_effects
+               if item.effect_class == "post_merge_hook"
+               and item.operation[1] == commit
+               and item.work_unit_id == str(state.current_work_unit_id)]
+    if len(effects) != 1 or effects[0].result is not None:
+        raise GitTransactionError("no unique open post-merge intent for that commit")
+    prior = [item for item in replay.side_effects
+             if item.effect_class in {"git_merge", "git_commit"}
+             and item.result == commit
+             and item.work_unit_id == effects[0].work_unit_id]
+    if len(prior) != 1:
+        raise GitTransactionError("post-merge intent lacks a confirmed commit result")
+    intent = next(record for record in replay.records
+                  if record.record_id == effects[0].intent_record_id)
+    assert isinstance(intent.payload, SideEffectPayload)
+    result = json.dumps({
+        "status": "acknowledged_unknown", "hook": effects[0].operation[2],
+        "merge_commit": commit, "rationale": rationale.strip(),
+        "task_digest": state.task_digest,
+    }, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    bridge.record_side_effect_result(
+        effect_class="post_merge_hook", work_unit_id=effects[0].work_unit_id,
+        operation=effects[0].operation, result=result,
+        fingerprint_sha256=intent.fingerprint.sha256,
+        fingerprint_kind=intent.fingerprint.kind,
+    )
 
 
 def archive_relative_directory(profile: object, run_id: str, branch: str) -> PurePosixPath:
@@ -219,8 +404,9 @@ def preflight_chain(root: Path, state: WorkflowState, bridge: ArtifactBridge) ->
         raise GitTransactionError(
             f"expected target branch {state.branch!r}; switch to it, then resume"
         )
-    base_head = _base_head(root, profile.base_branch or "")
-    initial_paths = _archive_paths(root, profile.base_branch or "", identity.head)
+    base_ref = profile.base_branch or state.branch_base
+    base_head = _base_head(root, profile.base_branch or "") if profile.merge_completed_branch else None
+    initial_paths = _archive_paths(root, base_ref, identity.head)
     if state.audit_report_path is not None:
         audit = PurePosixPath(state.audit_report_path)
         if (audit.parent == PurePosixPath("docs/internal")
@@ -246,7 +432,7 @@ def preflight_chain(root: Path, state: WorkflowState, bridge: ArtifactBridge) ->
                 audit_tree, "-p", target_head,
                 "-m", "docs: finalize orchestrator audit",
             )
-    paths = _archive_paths(root, profile.base_branch or "", target_head)
+    paths = _archive_paths(root, base_ref, target_head)
     tree = _preview_archive_tree(root, target_head, paths, archive_relative)
     if profile.merge_completed_branch:
         _preflight_merge(root, profile.base_branch or "", base_head, target_head, tree)
@@ -267,6 +453,7 @@ def complete_chain(
         raise GitTransactionError("completion has no bound run profile")
     archive_relative = archive_relative_directory(profile, state.run_id, state.branch)
     target, base = state.branch, profile.base_branch
+    base_ref = base or state.branch_base
     prior_archive = next((effect for effect in reversed(replay.side_effects)
                           if effect.effect_class == "git_commit"
                           and effect.work_unit_id == str(state.current_work_unit_id)
@@ -281,8 +468,8 @@ def complete_chain(
             raise GitTransactionError(
                 f"expected target branch {target!r}; switch to it, then resume"
             )
-        base_head = _base_head(root, base or "")
-        paths = _archive_paths(root, base or "", identity.head)
+        base_head = _base_head(root, base or "") if profile.merge_completed_branch else None
+        paths = _archive_paths(root, base_ref, identity.head)
         _check_archive_names(root, paths, archive_relative)
         _clean(root)
         tree = _preview_archive_tree(root, identity.head, paths, archive_relative)
@@ -295,7 +482,7 @@ def complete_chain(
         )
     else:
         operation = prior_archive.operation
-        paths = _archive_paths(root, base or "", operation[2])
+        paths = _archive_paths(root, base_ref, operation[2])
     spec = make_spec("git_commit", operation, fingerprint=operation[4])
 
     def reconcile_archive() -> Reconciliation:
@@ -361,6 +548,9 @@ def complete_chain(
                                       perform=perform_archive)
     archive_head = str(archive_result)
     if not profile.merge_completed_branch:
+        if getattr(profile, "post_merge_hook_enabled", False):
+            _post_merge_effect(root, state, replay, executor, make_spec,
+                               archive_head, merge_enabled=False)
         return archive_head
 
     if prior_merge is None:
@@ -423,4 +613,9 @@ def complete_chain(
 
     merged_result = executor.execute(merge_spec, reconcile=reconcile_merge,
                                      perform=perform_merge)
+    if getattr(profile, "post_merge_hook_enabled", False):
+        _post_merge_effect(root, state, replay, executor, make_spec,
+                           str(merged_result), merge_enabled=True,
+                           base_head=merge_operation[2],
+                           target_head=merge_operation[3])
     return str(merged_result)

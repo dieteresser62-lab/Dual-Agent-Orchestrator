@@ -87,6 +87,7 @@ from workflow_completion import (
     complete_chain as complete_reviewed_chain,
     preflight_chain as preflight_reviewed_chain,
     check_archive_directory,
+    acknowledge_unknown_post_merge,
 )
 from plan_handoff import (
     AcceptanceReviewLimitReached,
@@ -393,14 +394,14 @@ class ProductionWorkflowDriver:
             )
         )
 
-    def _completion_policy(self) -> tuple[bool, str | None, str]:
+    def _completion_policy(self) -> tuple[bool, str | None, str, bool]:
         base = self.config.base_branch
         if (self.root / ".git").exists():
             try:
                 base = resolve_base_branch(self.root, base)
             except GitTransactionError:
                 pass
-        return self.config.merge_completed_branch, base, self.config.archive_run_directory
+        return self.config.merge_completed_branch, base, self.config.archive_run_directory, True
 
     def _validation_boundary(self) -> WorkflowValidation:
         """Bind driver-owned resources to one validation operation explicitly."""
@@ -2886,6 +2887,25 @@ def run_production_workflow(
     *,
     force_new: bool = False,
 ) -> WorkflowRunResult:
+    if getattr(args, "acknowledge_post_merge", None) is not None:
+        root = Path.cwd().resolve()
+        task = task_file.resolve()
+        resolutions: list[ResumeResolution] = []
+        resumed = load_resumable_workflow_state(
+            root / ".orchestrator" / "state.json",
+            repository_root=root,
+            allowed_roots=tuple(dict.fromkeys((root, task.parent))),
+            expected_task_file=task,
+            expected_task_digest=hashlib.sha256(task.read_text(encoding="utf-8").encode()).hexdigest(),
+            resolution_observer=resolutions.append,
+        )
+        if not isinstance(resumed, WorkflowState) or len(resolutions) != 1:
+            raise GitTransactionError("post-merge acknowledgment needs a resumable run")
+        bridge = ArtifactBridge(resolutions[0].validated_store)
+        acknowledge_unknown_post_merge(
+            root, resumed, bridge, task, args.acknowledge_post_merge,
+            args.post_merge_rationale,
+        )
     return workflow_production.run_production_workflow(
         task_file,
         args,

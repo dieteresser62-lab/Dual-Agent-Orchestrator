@@ -190,6 +190,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "merge_completed_branch": True,
         "base_branch": None,
         "archive_run_directory": None,
+        "post_merge_hook_enabled": True,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
 
@@ -211,6 +212,19 @@ def test_run_profile_archive_pattern_wire_compatibility() -> None:
     current_document["payload"]["archive_run_directory"] = "../{run_id}"
     with pytest.raises(ArtifactValidationError):
         ArtifactRecord.from_dict(current_document)
+
+
+def test_pre_hook_run_profile_keeps_its_original_wire_shape() -> None:
+    profile = RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+        post_merge_hook_enabled=False,
+    )
+    document = _record(profile).to_dict()
+    assert "post_merge_hook_enabled" not in document["payload"]
+    recovered = ArtifactRecord.from_dict(document)
+    assert recovered.payload == profile
+    assert recovered.to_dict() == document
 
 
 def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:

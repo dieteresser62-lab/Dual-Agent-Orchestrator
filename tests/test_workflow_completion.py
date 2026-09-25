@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,15 +10,29 @@ import subprocess
 
 import pytest
 
-from artifact_models import RoleProfilePayload, RunProfilePayload, stable_side_effect_key
+from artifact_models import (
+    RecordType, RoleProfilePayload, RunProfilePayload, _payload_from_dict,
+    artifact_payload_document, stable_side_effect_key,
+)
+from artifact_models import SideEffectPayload
+from artifact_store import ArtifactStore
+from artifact_replay import replay_artifacts
 from git_service import GitTransactionError
+from inbox_watcher import WatchTaskIdentity, save_watch_identity
 import orchestrator
 from orchestrator import ProductionWorkflowDriver
 from side_effects import SideEffectBoundaryPhase, SideEffectExecutor, SideEffectSpec
+from side_effects import SideEffectReconciliationError
 import workflow_completion
 from workflow_production import _finish_final_review, _run_production_transition_loop
 from workflow import WorkflowHistory
 from workflow_state import WorkUnitKind, WorkUnitStatus
+from test_orchestrator_runtime import (
+    _args as production_args, _native_final_review_output,
+    _native_implementation_output, _native_plan_output,
+    _native_review_approval, _repository as production_repository,
+    _write_task as write_production_task,
+)
 
 
 def git(root: Path, *args: str) -> str:
@@ -648,3 +664,404 @@ def test_each_completion_boundary_resumes_to_same_result(
     assert git(root, "branch", "--show-current") == "main"
     assert git(root, "rev-parse", "HEAD") == result
     assert len(git(root, "show", "-s", "--format=%P", "HEAD").split()) == 2
+
+
+def _post_merge_result(run: CompletionRun) -> dict[str, object]:
+    effects = [item for item in run.bridge.effects.values()
+               if item.effect_class == "post_merge_hook"]
+    assert len(effects) == 1
+    return json.loads(effects[0].result)
+
+
+def test_standard_post_merge_hook_runs_once_after_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "invocations.txt"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{marker}'\nprintf 'ready\\n'\nprintf 'notice\\n' >&2\n")
+    hook.chmod(0o755)
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    assert marker.read_text() == "0\n"
+    assert git(root, "rev-parse", "HEAD") == merged
+    assert _post_merge_result(run)["status"] == "success"
+    assert _post_merge_result(run)["stdout"] == "ready\n"
+    assert _post_merge_result(run)["stderr"] == "notice\n"
+    run.run(monkeypatch)
+    assert marker.read_text() == "0\n"
+
+
+@pytest.mark.parametrize("merge", (True, False))
+def test_legacy_profile_completion_does_not_start_post_merge_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, merge: bool,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "legacy-hook-ran"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root, merge=merge)
+    legacy_document = artifact_payload_document(
+        RunProfilePayload(
+            run.profile.implementer, run.profile.reviewer,
+            merge_completed_branch=merge, base_branch="main",
+            post_merge_hook_enabled=False,
+        )
+    )
+    assert "post_merge_hook_enabled" not in legacy_document
+    run.profile = _payload_from_dict(RecordType.RUN_PROFILE, legacy_document)
+
+    commit = run.run(monkeypatch)
+
+    assert not marker.exists()
+    assert git(root, "rev-parse", "main" if merge else "feature/task") == commit
+    assert not any(item.effect_class == "post_merge_hook"
+                   for item in run.bridge.effects.values())
+
+
+@pytest.mark.parametrize("kind", ("failed", "timeout", "not_executable", "symlink"))
+def test_hook_problem_preserves_merge_and_records_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    root = repository(tmp_path)
+    hook = root / ".git/hooks/post-merge"
+    if kind == "symlink":
+        destination = tmp_path / "real-hook"
+        destination.write_text("#!/bin/sh\nexit 0\n")
+        destination.chmod(0o755)
+        hook.symlink_to(destination)
+    else:
+        hook.write_text("#!/bin/sh\nsleep 1\n" if kind == "timeout" else
+                        "#!/bin/sh\nprintf error >&2\nexit 7\n")
+        hook.chmod(0o644 if kind == "not_executable" else 0o755)
+    if kind == "timeout":
+        monkeypatch.setattr(workflow_completion, "HOOK_TIMEOUT_SECONDS", 0.01)
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    assert git(root, "rev-parse", "main") == merged
+    result = _post_merge_result(run)
+    assert result["status"] == ("skipped" if kind in {"not_executable", "symlink"} else kind)
+    if kind == "failed":
+        assert result["exit_code"] == 7
+
+
+def test_changed_tracked_hook_is_skipped_and_external_hook_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    tracked = root / ".githooks/post-merge"
+    tracked.parent.mkdir()
+    tracked.write_text("#!/bin/sh\nexit 8\n")
+    tracked.chmod(0o755)
+    git(root, "add", ".githooks/post-merge")
+    git(root, "commit", "-qm", "add hook")
+    git(root, "config", "core.hooksPath", ".githooks")
+    run = completion(root)
+    run.run(monkeypatch)
+    assert _post_merge_result(run)["reason"] == "changed_by_target_branch"
+
+    external_parent = tmp_path / "external"
+    external_parent.mkdir()
+    root2 = repository(external_parent)
+    external_hook_dir = tmp_path / "hooks"
+    external_hook_dir.mkdir()
+    external_hook = external_hook_dir / "post-merge"
+    external_hook.write_text("#!/bin/sh\nprintf external\n")
+    external_hook.chmod(0o755)
+    git(root2, "config", "core.hooksPath", str(external_hook_dir))
+    run2 = completion(root2)
+    run2.run(monkeypatch)
+    assert _post_merge_result(run2)["stdout"] == "external"
+
+
+def test_overridden_standard_hook_and_disabled_git_hook_path_are_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    standard = root / ".git/hooks/post-merge"
+    marker = tmp_path / "standard-ran"
+    standard.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    standard.chmod(0o755)
+    git(root, "config", "core.hooksPath", "/dev/null")
+    run = completion(root)
+    run.run(monkeypatch)
+    assert not marker.exists()
+    result = _post_merge_result(run)
+    assert result["status"] == "skipped"
+    assert result["overridden_standard_hook"] == str(standard)
+
+
+def test_symlink_in_configured_hook_directory_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    real = tmp_path / "real-hooks"
+    real.mkdir()
+    marker = tmp_path / "external-ran"
+    hook = real / "post-merge"
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook.chmod(0o755)
+    alias = tmp_path / "linked-hooks"
+    alias.symlink_to(real, target_is_directory=True)
+    git(root, "config", "core.hooksPath", str(alias))
+    run = completion(root)
+    run.run(monkeypatch)
+    assert not marker.exists()
+    assert str(_post_merge_result(run)["reason"]).startswith("symlink:")
+
+
+def test_hook_output_is_bounded_and_merge_disabled_reports_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text("#!/bin/sh\nhead -c 9000 /dev/zero | tr '\\0' x\n")
+    hook.chmod(0o755)
+    run = completion(root)
+    run.run(monkeypatch)
+    result = _post_merge_result(run)
+    assert len(result["stdout"]) == workflow_completion.HOOK_OUTPUT_LIMIT
+    assert result["stdout_truncated"] is True
+
+    disabled_parent = tmp_path / "disabled"
+    disabled_parent.mkdir()
+    root2 = repository(disabled_parent)
+    marker = tmp_path / "disabled-hook-ran"
+    hook2 = root2 / ".git/hooks/post-merge"
+    hook2.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook2.chmod(0o755)
+    run2 = completion(root2, merge=False)
+    run2.run(monkeypatch)
+    assert not marker.exists()
+    assert _post_merge_result(run2)["reason"] == "merge_disabled"
+
+
+@pytest.mark.parametrize("phase", tuple(SideEffectBoundaryPhase))
+def test_post_merge_crash_windows_never_repeat_an_open_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    phase: SideEffectBoundaryPhase,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+    interrupted = False
+
+    def interrupt(boundary) -> None:  # type: ignore[no-untyped-def]
+        nonlocal interrupted
+        if (not interrupted and boundary.effect_class == "post_merge_hook"
+            and boundary.phase == phase):
+            interrupted = True
+            raise RuntimeError("injected post-merge crash")
+
+    with pytest.raises(RuntimeError, match="injected post-merge crash"):
+        run.run(monkeypatch, interrupt)
+    assert interrupted
+    if phase is SideEffectBoundaryPhase.BEFORE_INTENT:
+        run.run(monkeypatch)
+        assert marker.read_text() == "x"
+    elif phase is SideEffectBoundaryPhase.AFTER_RESULT:
+        run.run(monkeypatch)
+        assert marker.read_text() == "x"
+    else:
+        with pytest.raises(SideEffectReconciliationError, match="unknown physical outcome"):
+            run.run(monkeypatch)
+        expected = "x" if phase in {
+            SideEffectBoundaryPhase.AFTER_EFFECT,
+            SideEffectBoundaryPhase.BEFORE_RESULT,
+        } else ""
+        assert (marker.read_text() if marker.exists() else "") == expected
+
+
+def test_unknown_post_merge_can_be_acknowledged_once_without_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+
+    def interrupt(boundary) -> None:  # type: ignore[no-untyped-def]
+        if (boundary.effect_class == "post_merge_hook"
+            and boundary.phase is SideEffectBoundaryPhase.AFTER_EFFECT):
+            raise RuntimeError("injected post-merge crash")
+
+    with pytest.raises(RuntimeError, match="injected post-merge crash"):
+        run.run(monkeypatch, interrupt)
+    commit = git(root, "rev-parse", "main")
+    task = tmp_path / "task.md"
+    task.write_text("unchanged task\n")
+    import hashlib
+    digest = hashlib.sha256(task.read_text().encode()).hexdigest()
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    effect.intent_record_id = "intent"
+    payload = SideEffectPayload(stable_side_effect_key(
+        "post_merge_hook", "3", effect.operation), "post_merge_hook", "3",
+        effect.operation, "intent", None)
+    record = SimpleNamespace(record_id="intent", payload=payload,
+                             fingerprint=SimpleNamespace(sha256="0" * 64,
+                                                         kind="implementation"))
+    monkeypatch.setattr(workflow_completion, "replay_artifacts", lambda *_: SimpleNamespace(
+        run_profile=run.profile, side_effects=tuple(run.bridge.effects.values()),
+        records=(record,),
+    ))
+    state = SimpleNamespace(run_id="run", current_work_unit_id=3,
+                            task_file=str(task), task_digest=digest)
+    task.write_text("changed\n")
+    with pytest.raises(GitTransactionError, match="task content changed"):
+        workflow_completion.acknowledge_unknown_post_merge(
+            root, state, run.bridge, task, commit, "reviewed")
+    task.write_text("unchanged task\n")
+    workflow_completion.acknowledge_unknown_post_merge(
+        root, state, run.bridge, task, commit, "reviewed")
+    assert json.loads(effect.result)["status"] == "acknowledged_unknown"
+    with pytest.raises(GitTransactionError, match="no unique open"):
+        workflow_completion.acknowledge_unknown_post_merge(
+            root, state, run.bridge, task, commit, "reviewed")
+    run.run(monkeypatch)
+    assert marker.read_text() == "x"
+
+
+@pytest.mark.parametrize("merge", (True, False))
+def test_production_acknowledgment_resumes_real_open_hook_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, merge: bool,
+) -> None:
+    branch = "feature/post-merge-acknowledgment"
+    root = production_repository(tmp_path, branch)
+    (root / ".git/info/exclude").write_text("inbox/\noutbox/\n")
+    inbox = root / "inbox"
+    inbox.mkdir()
+    task = inbox / "task.md"
+    write_production_task(task, branch, "src/one.py")
+    audit_path = f"docs/internal/task-review-{hashlib.sha256(task.read_bytes()).hexdigest()[:8]}.md"
+    run_id = "watch-post-merge-acknowledgment"
+    save_watch_identity(task, WatchTaskIdentity(
+        run_id, hashlib.sha256(task.read_bytes()).hexdigest(),
+        True, "structured-v2", 2,
+    ))
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    if not merge:
+        monkeypatch.setattr(
+            ProductionWorkflowDriver, "_completion_policy",
+            lambda _driver: (False, None, "{run_id}", True),
+        )
+
+    def args_for_run():  # type: ignore[no-untyped-def]
+        args = production_args(root, task)
+        args.watch_run_id = run_id
+        if not merge:
+            args.repo_config = replace(
+                args.repo_config,
+                workflow=replace(args.repo_config.workflow,
+                                 merge_completed_branch=False),
+            )
+        return args
+
+    def codex(_driver, invocation):  # type: ignore[no-untyped-def]
+        target = root / "src/one.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if invocation.step.value == "codex_plan":
+            target.write_text("value = 0\n")
+            return _native_plan_output(invocation, summary="add value",
+                                       scope_paths=(audit_path, "src/one.py"))
+        target.write_text("value = 1\n")
+        return _native_implementation_output(invocation)
+
+    def review(driver, invocation):  # type: ignore[no-untyped-def]
+        if invocation.step.value == "claude_final_review":
+            return _native_final_review_output(driver, invocation, finding_id=None)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
+    monkeypatch.chdir(root)
+    real_hook = workflow_completion._run_hook
+    real_reason = workflow_completion._hook_reason
+
+    def run_then_interrupt(*args):  # type: ignore[no-untyped-def]
+        real_hook(*args)
+        raise RuntimeError("hook result interrupted")
+
+    if merge:
+        monkeypatch.setattr(workflow_completion, "_run_hook", run_then_interrupt)
+    else:
+        def interrupt_before_skip(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("hook result interrupted")
+        monkeypatch.setattr(workflow_completion, "_hook_reason", interrupt_before_skip)
+    with pytest.raises(RuntimeError, match="hook result interrupted"):
+        orchestrator.run_production_workflow(task, args_for_run())
+    assert (marker.read_text() if marker.exists() else "") == ("x" if merge else "")
+    commit = git(root, "rev-parse", "master" if merge else branch)
+    store = ArtifactStore(root, run_id)
+    before = replay_artifacts(store.load_chain(), run_id)
+    open_hooks = [item for item in before.side_effects
+                  if item.effect_class == "post_merge_hook" and item.result is None]
+    assert len(open_hooks) == 1
+    assert open_hooks[0].operation[1] == commit
+    assert before.run_profile.base_branch == ("master" if merge else None)
+
+    args = args_for_run()
+    args.resume = True
+    args.acknowledge_post_merge = commit
+    args.post_merge_rationale = "Hook-Ausgang manuell geprüft"
+    changed_task = task.read_text()
+    task.write_text("changed task\n")
+    record_count = len(store.load_chain())
+    with pytest.raises(Exception, match="task.*digest|task.*identity|task.*differ"):
+        orchestrator.run_production_workflow(task, args)
+    assert len(store.load_chain()) == record_count
+    task.write_text(changed_task)
+    args.acknowledge_post_merge = "0" * 40
+    with pytest.raises(GitTransactionError,
+                       match="base branch moved" if merge else "no unique open"):
+        orchestrator.run_production_workflow(task, args)
+    assert len(store.load_chain()) == record_count
+
+    monkeypatch.setattr(workflow_completion, "_run_hook", real_hook)
+    monkeypatch.setattr(workflow_completion, "_hook_reason", real_reason)
+    args.acknowledge_post_merge = commit
+    resumed = orchestrator.run_production_workflow(task, args)
+    assert resumed.workflow_completed
+    assert (marker.read_text() if marker.exists() else "") == ("x" if merge else "")
+    results = [item for item in replay_artifacts(store.load_chain(), run_id).side_effects
+               if item.effect_class == "post_merge_hook"]
+    assert len(results) == 1
+    persisted_results = [record for record in store.load_chain()
+                         if isinstance(record.payload, SideEffectPayload)
+                         and record.payload.effect_class == "post_merge_hook"
+                         and record.payload.phase == "result"]
+    assert len(persisted_results) == 1
+    intent = next(record for record in store.load_chain()
+                  if record.record_id == open_hooks[0].intent_record_id)
+    assert persisted_results[0].payload.effect_key == intent.payload.effect_key
+    assert persisted_results[0].logical_id == intent.logical_id
+    assert json.loads(results[0].result) == {
+        "status": "acknowledged_unknown", "hook": str(hook),
+        "merge_commit": commit, "rationale": "Hook-Ausgang manuell geprüft",
+        "task_digest": hashlib.sha256(task.read_bytes()).hexdigest(),
+    }
+    record_count = len(store.load_chain())
+    args.acknowledge_post_merge = None
+    again = orchestrator.run_production_workflow(task, args)
+    assert again.workflow_completed
+    assert (marker.read_text() if marker.exists() else "") == ("x" if merge else "")
+    assert len(store.load_chain()) == record_count
+
+    args.resume_explicit = True
+    args.task_file_explicit = True
+    args.inbox_dir = inbox
+    args.outbox_dir = root / "outbox"
+    assert orchestrator.run_pipeline(task, args) == 0
+    assert not task.exists()
+    done = list((root / "outbox/done").glob("*.md"))
+    assert len(done) == 1
+    assert done[0].read_text() == changed_task
