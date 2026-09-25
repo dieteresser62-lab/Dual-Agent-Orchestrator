@@ -83,6 +83,7 @@ def repository(tmp_path: Path, *, conflict: bool = False,
 class MemoryBridge:
     def __init__(self) -> None:
         self.effects: dict[str, SimpleNamespace] = {}
+        self.record_count = 0
         self.store = self
 
     def current_chain(self) -> tuple[()]:
@@ -93,6 +94,8 @@ class MemoryBridge:
                                   **_: object) -> tuple[None, bool]:
         key = stable_side_effect_key(effect_class, work_unit_id, operation)
         created = key not in self.effects
+        if created:
+            self.record_count += 1
         self.effects.setdefault(key, SimpleNamespace(
             effect_class=effect_class, work_unit_id=work_unit_id,
             operation=operation, result=None,
@@ -109,6 +112,7 @@ class MemoryBridge:
                                   **_: object) -> None:
         key = stable_side_effect_key(effect_class, work_unit_id, operation)
         self.effects[key].result = result
+        self.record_count += 1
 
 
 @dataclass
@@ -748,6 +752,126 @@ def test_hook_changed_after_intent_is_skipped(
     assert _post_merge_result(run)["reason"] == "content_changed"
 
 
+@pytest.mark.parametrize("merge", (True, False))
+@pytest.mark.parametrize("failure", ("lstat", "open"))
+@pytest.mark.parametrize("transient", (True, False))
+def test_initial_hook_digest_denial_records_terminal_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, merge: bool, failure: str,
+    transient: bool,
+) -> None:
+    root = repository(tmp_path)
+    base_head = git(root, "rev-parse", "main")
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    real_lstat, real_open = Path.lstat, workflow_completion.os.open
+    denied = True
+
+    def deny_lstat(path: Path, *args: object, **kwargs: object):
+        nonlocal denied
+        if denied and path == hook:
+            if transient:
+                denied = False
+            raise PermissionError("denied hook lstat")
+        return real_lstat(path, *args, **kwargs)
+
+    def deny_open(path: object, *args: object, **kwargs: object):
+        nonlocal denied
+        if denied and path == hook:
+            if transient:
+                denied = False
+            raise PermissionError("denied hook open")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", deny_lstat if failure == "lstat" else real_lstat)
+    monkeypatch.setattr(workflow_completion.os, "open",
+                        deny_open if failure == "open" else real_open)
+    run = completion(root, merge=merge)
+    completed = run.run(monkeypatch)
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    assert effect.operation == ("post_merge", completed, str(hook), "unavailable")
+    assert json.loads(effect.result)["status"] == "skipped"
+    assert json.loads(effect.result)["reason"] == "digest_unreadable"
+    assert "digest_unreadable" in caplog.text
+    assert not marker.exists()
+    assert git(root, "rev-parse", "main") == (completed if merge else base_head)
+    record_count = run.bridge.record_count
+    denied = False
+    assert run.run(monkeypatch) == completed
+    assert run.bridge.record_count == record_count
+    assert len([item for item in run.bridge.effects.values()
+                if item.effect_class == "post_merge_hook"]) == 1
+    assert not marker.exists()
+
+
+def test_hook_digest_denial_after_intent_records_terminal_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    real_open = workflow_completion.os.open
+    denied = False
+
+    def deny_open(path: object, *args: object, **kwargs: object):
+        if denied and path == hook:
+            raise PermissionError("denied hook open")
+        return real_open(path, *args, **kwargs)
+
+    def deny_after_intent(boundary) -> None:  # type: ignore[no-untyped-def]
+        nonlocal denied
+        if (boundary.effect_class == "post_merge_hook"
+                and boundary.phase is SideEffectBoundaryPhase.AFTER_INTENT):
+            denied = True
+
+    monkeypatch.setattr(workflow_completion.os, "open", deny_open)
+    run = completion(root)
+    run.run(monkeypatch, deny_after_intent)
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    assert len([item for item in run.bridge.effects.values()
+                if item.effect_class == "post_merge_hook"]) == 1
+    assert stable_side_effect_key("post_merge_hook", "3", effect.operation) in run.bridge.effects
+    assert effect.operation[3] == hashlib.sha256(hook.read_bytes()).hexdigest()
+    assert json.loads(effect.result)["status"] == "skipped"
+    assert json.loads(effect.result)["reason"] == "digest_unreadable"
+    assert not marker.exists()
+
+
+def test_duplicate_hook_effects_stop_before_any_hook_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    original = next(item for item in run.bridge.effects.values()
+                    if item.effect_class == "post_merge_hook")
+    alternate = ("post_merge", merged, str(hook), "unavailable")
+    run.bridge.effects[stable_side_effect_key("post_merge_hook", "3", alternate)] = (
+        SimpleNamespace(effect_class="post_merge_hook", work_unit_id="3",
+                        operation=alternate, result=None))
+    before = dict(run.bridge.effects)
+    record_count = run.bridge.record_count
+    monkeypatch.setattr(workflow_completion, "_hook_path",
+                        lambda *_: pytest.fail("hook path resolved after duplicate effects"))
+    with pytest.raises(GitTransactionError, match="contradictory post-merge hook effects"):
+        run.run(monkeypatch)
+    assert run.bridge.effects == before
+    assert run.bridge.record_count == record_count
+    assert original.result is not None
+    assert marker.read_text() == "x"
+    assert git(root, "rev-parse", "main") == merged
+
+
 def test_changed_open_hook_intent_stops_before_new_intent_or_hook(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1034,6 +1158,27 @@ def test_unchanged_tracked_hook_runs_and_untracked_base_hook_is_skipped(
     run2.run(monkeypatch)
     assert not marker2.exists()
     assert _post_merge_result(run2)["reason"] == "changed_by_target_branch"
+
+
+def test_ignored_untracked_worktree_hook_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "untracked-hook-ran"
+    hook = root / ".githooks/post-merge"
+    hook.parent.mkdir()
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook.chmod(0o755)
+    git(root, "config", "core.hooksPath", ".githooks")
+    git(root, "config", "--local", "core.excludesFile", "/dev/null")
+    (root / ".git/info/exclude").write_text(".githooks/post-merge\n")
+    assert git(root, "check-ignore", ".githooks/post-merge") == ".githooks/post-merge"
+    run = completion(root)
+    merged = run.run(monkeypatch)
+    assert not marker.exists()
+    assert _post_merge_result(run)["status"] == "skipped"
+    assert _post_merge_result(run)["reason"] == "not_tracked_in_base"
+    assert git(root, "rev-parse", "main") == merged
 
 
 def test_overridden_standard_hook_and_disabled_git_hook_path_are_reported(

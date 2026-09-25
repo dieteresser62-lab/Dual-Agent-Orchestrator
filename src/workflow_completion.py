@@ -59,6 +59,7 @@ def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
         relative = absolute.relative_to(root.resolve()).as_posix()
     except ValueError:
         relative = None
+    untracked_in_base = False
     if (relative is not None and relative.split("/", 1)[0] != ".git"
             and base_head is not None and target_head is not None):
         def tree_entry(commit: str) -> bytes:
@@ -70,18 +71,26 @@ def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
         target_entry = tree_entry(target_head)
         if (target_entry and not base_entry) or tree_entry(fork) != target_entry:
             return "changed_by_target_branch"
+        untracked_in_base = not base_entry
     for segment in (absolute, *absolute.parents):
         try:
             mode = segment.lstat().st_mode
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
             return "missing"
+        except OSError:
+            return "digest_unreadable"
         if stat.S_ISLNK(mode):
             return f"symlink:{segment}"
-    mode = absolute.stat().st_mode
+    try:
+        mode = absolute.stat().st_mode
+    except OSError:
+        return "digest_unreadable"
     if not stat.S_ISREG(mode):
         return "not_regular"
     if not mode & 0o111:
         return "not_executable"
+    if untracked_in_base:
+        return "not_tracked_in_base"
     return None
 
 
@@ -91,8 +100,8 @@ def _hook_content_digest(hook: Path) -> str:
         entry = hook.lstat()
     except (FileNotFoundError, NotADirectoryError):
         return "unavailable"
-    except OSError as exc:
-        raise GitTransactionError(f"cannot inspect post-merge hook {hook}") from exc
+    except OSError:
+        return "unavailable"
     if not stat.S_ISREG(entry.st_mode):
         return "unavailable"
     try:
@@ -100,8 +109,8 @@ def _hook_content_digest(hook: Path) -> str:
         descriptor = os.open(hook, flags)
     except (FileNotFoundError, NotADirectoryError):
         return "unavailable"
-    except OSError as exc:
-        raise GitTransactionError(f"cannot read post-merge hook {hook}") from exc
+    except OSError:
+        return "unavailable"
     try:
         opened = os.fstat(descriptor)
         if (not stat.S_ISREG(opened.st_mode)
@@ -111,8 +120,8 @@ def _hook_content_digest(hook: Path) -> str:
         while chunk := os.read(descriptor, 1024 * 1024):
             digest.update(chunk)
         return digest.hexdigest()
-    except OSError as exc:
-        raise GitTransactionError(f"cannot read post-merge hook {hook}") from exc
+    except OSError:
+        return "unavailable"
     finally:
         os.close(descriptor)
 
@@ -212,10 +221,16 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
                        commit: str, *, merge_enabled: bool,
                        base_head: str | None = None,
                        target_head: str | None = None) -> None:
-    previous = next((item for item in reversed(replay.side_effects)
-                     if item.effect_class == "post_merge_hook"
-                     and item.work_unit_id == str(state.current_work_unit_id)
-                     and item.operation[1] == commit), None)
+    matches = [item for item in replay.side_effects
+               if item.effect_class == "post_merge_hook"
+               and item.work_unit_id == str(state.current_work_unit_id)
+               and item.operation[1] == commit]
+    if len(matches) > 1:
+        raise GitTransactionError(
+            "contradictory post-merge hook effects for work unit "
+            f"{state.current_work_unit_id} and commit {commit}"
+        )
+    previous = matches[0] if matches else None
     hook, standard = _hook_path(root)
     operation = (previous.operation if previous else
                  ("post_merge", commit, os.path.abspath(hook),
@@ -228,10 +243,14 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
 
     def perform() -> tuple[str, str]:
         reason = _hook_reason(root, hook, base_head=base_head, target_head=target_head)
-        if not merge_enabled:
-            reason = "missing" if reason == "missing" else "merge_disabled"
-        if reason is None and len(operation) == 4 and _hook_content_digest(hook) != operation[3]:
-            reason = "content_changed"
+        if reason is None and len(operation) == 4:
+            current_digest = _hook_content_digest(hook)
+            if "unavailable" in (operation[3], current_digest):
+                reason = "digest_unreadable"
+            elif current_digest != operation[3]:
+                reason = "content_changed"
+        if not merge_enabled and reason not in {"missing", "digest_unreadable"}:
+            reason = "merge_disabled"
         if reason is not None:
             result = _hook_result("skipped", hook, reason=reason, overridden=overridden)
         else:
