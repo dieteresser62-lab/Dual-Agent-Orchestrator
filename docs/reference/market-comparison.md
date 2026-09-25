@@ -128,7 +128,7 @@ Die Merkmale, auf die der Orchestrator bewusst verzichtet:
 
 Eine Aufgabe ist eine Markdown-Datei in normaler Sprache, abgelegt im Eingangsordner. Codex (GPT-6 Sol) schreibt daraus einen Arbeitsplan mit überschaubaren Arbeitspaketen, Claude (Opus 5.5) prüft ihn, bis kein Befund mehr offen ist. Danach setzt Codex Paket für Paket um; jedes Paket darf nur die Pfade ändern, die der Plan ihm zuweist. Der Orchestrator führt die Testsuite des Zielrepositorys selbst aus, bindet das Ergebnis an einen SHA-256-Fingerabdruck des Diffs und legt beides Claude vor, das in einer schreibgeschützten Kopie prüft. Commit gibt es nur, wenn für genau diesen Stand kein Blocker offen ist. Am Ende liest Claude den gesamten Branch; was dabei auffällt, wird als neue Aufgabe in den Eingang gelegt.
 
-Jede Tatsache landet in einer Aufzeichnungskette, die nur angehängt wird. Jeder Commit und jeder Provideraufruf ist darin vorher angekündigt und nachher bestätigt, sodass ein Lauf nach Absturz, Neustart oder Kontingentende exakt an der Stelle fortsetzt, ohne einen abgeschlossenen Schritt zu wiederholen. Fünfzehn Absturzszenarien belegen das. Nichts verlässt den Rechner: kein Push, kein Pull Request, kein Merge.
+Jede Tatsache landet in einer Aufzeichnungskette, die nur angehängt wird. Jeder Commit und jeder Provideraufruf ist darin vorher angekündigt und nachher bestätigt, sodass ein Lauf nach Absturz, Neustart oder Kontingentende exakt an der Stelle fortsetzt, ohne einen abgeschlossenen Schritt zu wiederholen. Neunundzwanzig Absturzszenarien belegen das. Nichts verlässt den Rechner: kein Push, kein Pull Request. Zusammengeführt wird nur lokal, nach einem befundfreien Gesamtreview und abschaltbar.
 
 **Aus dem Betrieb.** Ein Referenzlauf vom 22. September machte aus einer Beschreibung in normalem Deutsch vier Aufgaben und zwölf Commits in 2 Stunden 2 Minuten – ohne menschliches Zutun nach der ersten Datei. Über drei vollständige Läufe mit 109 Providerversuchen scheiterte jeder vierte an etwas Sachfremdem: 16 % Transportabbrüche der Agenten-CLIs, 8 % formal ungültige Antworten. Die Budgets fangen das ab, kosten aber Laufzeit.
 
@@ -307,7 +307,7 @@ Quellen: [CLI](https://docs.coderabbit.ai/cli) · [Claude-Code-Integration](http
 | Tests laufen im Orchestrator, nicht im Agenten; Testergebnis und Freigabe gelten nur für den exakt geprüften Stand | Cloud-Betrieb: Er läuft nur auf dem eigenen Rechner |
 | Jedes Paket darf nur seine zugewiesenen Pfade ändern; mehr nur auf Anmeldung mit Freigabe | Oberfläche: Terminal und Markdown, keine IDE, keine Kommandozentrale |
 | Absturzsicher: Wiederaufnahme ohne doppelten Commit oder Provideraufruf | Integration: keine Issues, Pull Requests oder CI-Anbindung |
-| Nichts verlässt den Rechner ohne den Menschen – kein Push, kein Pull Request, kein Merge | Auswahl: genau zwei Hersteller in festen Rollen, Modelle an ein geprüftes Fähigkeitsregister gebunden |
+| Nichts verlässt den Rechner – kein Push, kein Pull Request; zusammengeführt wird nur lokal und abschaltbar | Auswahl: genau zwei Hersteller in festen Rollen, Modelle an ein geprüftes Fähigkeitsregister gebunden |
 | Formlose Eingabe: aus einer Beschreibung werden Plan, Umsetzung, Abnahme und Folgeaufgaben | Betriebskosten: jeder vierte Providerversuch scheitert an etwas Sachfremdem |
 
 ## 9. Wann etwas anderes besser passt

@@ -130,7 +130,10 @@ und ohne Rücknahme.
 - Unbekannte Pfade, Branchabweichungen, Fingerprintdrift und unvollständige
   Attestierungen halten vor Commit an.
 - Secrets gehören weder in Aufgaben noch Records oder Auditdokumente.
-- Push, Merge, Release und Deployment bleiben außerhalb des Workflows.
+- Push, Release und Deployment bleiben außerhalb des Workflows. Nach einem
+  befundfreien Gesamtreview archiviert der Orchestrator die Laufdokumente in
+  einem eigenen Commit und führt den Zielbranch standardmäßig lokal mit
+  `--no-ff` in den Basisbranch zusammen (`merge_completed_branch`, abschaltbar).
 
 ## 8. Persistierung, Fortsetzung und Idempotenz
 
