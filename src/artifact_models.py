@@ -1570,9 +1570,11 @@ class SideEffectPayload:
                 raise ArtifactValidationError("merge side effect operation is invalid")
             _require_sha256(self.operation[5], "merge side effect message digest")
         elif self.effect_class == "post_merge_hook":
-            if (len(self.operation) != 3 or self.operation[0] != "post_merge"
+            if (len(self.operation) not in {3, 4} or self.operation[0] != "post_merge"
                 or re.fullmatch(r"[0-9a-f]{40}", self.operation[1]) is None):
                 raise ArtifactValidationError("post-merge side effect operation is invalid")
+            if len(self.operation) == 4 and self.operation[3] != "unavailable":
+                _require_sha256(self.operation[3], "post-merge hook content digest")
         elif self.effect_class == "provider_start":
             if (
                 len(self.operation) != 7

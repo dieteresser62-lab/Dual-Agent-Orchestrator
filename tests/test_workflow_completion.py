@@ -690,8 +690,92 @@ def test_standard_post_merge_hook_runs_once_after_merge(
     assert _post_merge_result(run)["status"] == "success"
     assert _post_merge_result(run)["stdout"] == "ready\n"
     assert _post_merge_result(run)["stderr"] == "notice\n"
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    assert effect.operation == ("post_merge", merged, str(hook),
+                                hashlib.sha256(hook.read_bytes()).hexdigest())
     run.run(monkeypatch)
     assert marker.read_text() == "0\n"
+
+
+@pytest.mark.parametrize("legacy", (False, True))
+def test_completed_hook_pair_survives_content_change_without_new_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+    commit = run.run(monkeypatch)
+    effect_key, effect = next((key, item) for key, item in run.bridge.effects.items()
+                              if item.effect_class == "post_merge_hook")
+    if legacy:
+        del run.bridge.effects[effect_key]
+        effect.operation = effect.operation[:3]
+        effect_key = stable_side_effect_key("post_merge_hook", "3", effect.operation)
+        run.bridge.effects[effect_key] = effect
+    original_operation = effect.operation
+    hook.write_text(f"#!/bin/sh\nprintf y >> '{marker}'\n")
+    monkeypatch.setattr(workflow_completion, "_run_hook",
+                        lambda *_: pytest.fail("completed hook ran twice"))
+    assert run.run(monkeypatch) == commit
+    assert marker.read_text() == "x"
+    assert run.bridge.effects[effect_key] is effect
+    assert effect.operation == original_operation
+    assert len([item for item in run.bridge.effects.values()
+                if item.effect_class == "post_merge_hook"]) == 1
+
+
+def test_hook_changed_after_intent_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+
+    def change_after_intent(boundary) -> None:  # type: ignore[no-untyped-def]
+        if (boundary.effect_class == "post_merge_hook"
+                and boundary.phase is SideEffectBoundaryPhase.AFTER_INTENT):
+            hook.write_text(f"#!/bin/sh\nprintf y >> '{marker}'\n")
+
+    run.run(monkeypatch, change_after_intent)
+    assert not marker.exists()
+    assert _post_merge_result(run)["reason"] == "content_changed"
+
+
+def test_changed_open_hook_intent_stops_before_new_intent_or_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = repository(tmp_path)
+    marker = tmp_path / "hook-count"
+    hook = root / ".git/hooks/post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf x >> '{marker}'\n")
+    hook.chmod(0o755)
+    run = completion(root)
+
+    def interrupt(boundary) -> None:  # type: ignore[no-untyped-def]
+        if (boundary.effect_class == "post_merge_hook"
+                and boundary.phase is SideEffectBoundaryPhase.AFTER_INTENT):
+            raise RuntimeError("open hook intent")
+
+    with pytest.raises(RuntimeError, match="open hook intent"):
+        run.run(monkeypatch, interrupt)
+    key, effect = next((key, item) for key, item in run.bridge.effects.items()
+                       if item.effect_class == "post_merge_hook")
+    assert len(effect.operation) == 4
+    hook.write_text(f"#!/bin/sh\nprintf y >> '{marker}'\n")
+    with pytest.raises(SideEffectReconciliationError, match="unknown physical outcome"):
+        run.run(monkeypatch)
+    assert not marker.exists()
+    assert effect.result is None
+    assert run.bridge.effects[key] is effect
+    assert len([item for item in run.bridge.effects.values()
+                if item.effect_class == "post_merge_hook"]) == 1
 
 
 @pytest.mark.parametrize("merge", (True, False))
@@ -744,6 +828,12 @@ def test_hook_problem_preserves_merge_and_records_outcome(
     assert git(root, "rev-parse", "main") == merged
     result = _post_merge_result(run)
     assert result["status"] == ("skipped" if kind in {"not_executable", "symlink"} else kind)
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    assert effect.operation[3] == (
+        "unavailable" if kind == "symlink"
+        else hashlib.sha256(hook.read_bytes()).hexdigest()
+    )
     if kind == "failed":
         assert result["exit_code"] == 7
 
@@ -847,6 +937,9 @@ def test_missing_hook_in_tracked_hook_directory_is_silent(
     assert git(root, "rev-parse", "main") == merged
     assert _post_merge_result(run)["status"] == "skipped"
     assert _post_merge_result(run)["reason"] == "missing"
+    effect = next(item for item in run.bridge.effects.values()
+                  if item.effect_class == "post_merge_hook")
+    assert effect.operation[3] == "unavailable"
     assert "post-merge hook" not in caplog.text
 
 
@@ -1044,8 +1137,10 @@ def test_post_merge_crash_windows_never_repeat_an_open_intent(
         assert (marker.read_text() if marker.exists() else "") == expected
 
 
+@pytest.mark.parametrize("legacy", (False, True))
 def test_unknown_post_merge_can_be_acknowledged_once_without_rerun(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, legacy: bool,
 ) -> None:
     root = repository(tmp_path)
     marker = tmp_path / "hook-count"
@@ -1066,8 +1161,14 @@ def test_unknown_post_merge_can_be_acknowledged_once_without_rerun(
     task.write_text("unchanged task\n")
     import hashlib
     digest = hashlib.sha256(task.read_text().encode()).hexdigest()
-    effect = next(item for item in run.bridge.effects.values()
-                  if item.effect_class == "post_merge_hook")
+    key, effect = next((key, item) for key, item in run.bridge.effects.items()
+                       if item.effect_class == "post_merge_hook")
+    if legacy:
+        del run.bridge.effects[key]
+        effect.operation = effect.operation[:3]
+        key = stable_side_effect_key("post_merge_hook", "3", effect.operation)
+        run.bridge.effects[key] = effect
+    original_operation = effect.operation
     effect.intent_record_id = "intent"
     payload = SideEffectPayload(stable_side_effect_key(
         "post_merge_hook", "3", effect.operation), "post_merge_hook", "3",
@@ -1089,9 +1190,20 @@ def test_unknown_post_merge_can_be_acknowledged_once_without_rerun(
     workflow_completion.acknowledge_unknown_post_merge(
         root, state, run.bridge, task, commit, "reviewed")
     assert json.loads(effect.result)["status"] == "acknowledged_unknown"
+    assert effect.operation == original_operation
     with pytest.raises(GitTransactionError, match="no unique open"):
         workflow_completion.acknowledge_unknown_post_merge(
             root, state, run.bridge, task, commit, "reviewed")
+    run.run(monkeypatch)
+    assert marker.read_text() == "x"
+    assert effect.operation == original_operation
+    assert run.bridge.effects[key] is effect
+    assert len([item for item in run.bridge.effects.values()
+                if item.effect_class == "post_merge_hook"]) == 1
+    assert "acknowledged_unknown" in caplog.text
+    assert str(hook) in caplog.text
+    assert commit in caplog.text
+    assert "uncertain" in caplog.text
     run.run(monkeypatch)
     assert marker.read_text() == "x"
 

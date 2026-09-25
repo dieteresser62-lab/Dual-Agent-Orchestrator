@@ -85,6 +85,38 @@ def _hook_reason(root: Path, hook: Path, *, base_head: str | None,
     return None
 
 
+def _hook_content_digest(hook: Path) -> str:
+    """Hash the raw bytes of a regular hook without following its final symlink."""
+    try:
+        entry = hook.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return "unavailable"
+    except OSError as exc:
+        raise GitTransactionError(f"cannot inspect post-merge hook {hook}") from exc
+    if not stat.S_ISREG(entry.st_mode):
+        return "unavailable"
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(hook, flags)
+    except (FileNotFoundError, NotADirectoryError):
+        return "unavailable"
+    except OSError as exc:
+        raise GitTransactionError(f"cannot read post-merge hook {hook}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode)
+                or (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino)):
+            return "unavailable"
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        raise GitTransactionError(f"cannot read post-merge hook {hook}") from exc
+    finally:
+        os.close(descriptor)
+
+
 def _hook_result(status: str, hook: Path, *, reason: str | None = None,
                  overridden: Path | None = None, exit_code: int | None = None,
                  stdout: bytes = b"", stderr: bytes = b"",
@@ -185,7 +217,9 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
                      and item.work_unit_id == str(state.current_work_unit_id)
                      and item.operation[1] == commit), None)
     hook, standard = _hook_path(root)
-    operation = previous.operation if previous else ("post_merge", commit, str(hook))
+    operation = (previous.operation if previous else
+                 ("post_merge", commit, os.path.abspath(hook),
+                  _hook_content_digest(hook)))
     hook = Path(operation[2])
     spec = make_spec("post_merge_hook", operation, fingerprint=_fingerprint(operation))
     overridden = (standard if standard is not None
@@ -196,6 +230,8 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
         reason = _hook_reason(root, hook, base_head=base_head, target_head=target_head)
         if not merge_enabled:
             reason = "missing" if reason == "missing" else "merge_disabled"
+        if reason is None and len(operation) == 4 and _hook_content_digest(hook) != operation[3]:
+            reason = "content_changed"
         if reason is not None:
             result = _hook_result("skipped", hook, reason=reason, overridden=overridden)
         else:
@@ -207,6 +243,12 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
         perform=perform,
     )
     outcome = json.loads(str(result))
+    if outcome["status"] == "acknowledged_unknown":
+        logger.warning(
+            "post-merge hook %s for merge %s: status=acknowledged_unknown; "
+            "physical outcome remains uncertain and was only acknowledged",
+            hook, commit,
+        )
     if outcome["status"] in {"failed", "timeout"}:
         logger.warning("post-merge hook %s: %s (exit=%s, termination_uncertain=%s)",
                        hook, outcome["status"], outcome["exit_code"],

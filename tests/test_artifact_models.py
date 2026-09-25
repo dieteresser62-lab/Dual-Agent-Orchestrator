@@ -36,6 +36,8 @@ from artifact_models import (
     ScopeExtensionPathPayload,
     ScopeExtensionPayload,
     SliceSpec,
+    SideEffectPayload,
+    stable_side_effect_key,
     TaskPayload,
     TransientRetryPayload,
     ValidationAttestationPayload,
@@ -81,6 +83,29 @@ PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
 TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES = technical_text_evidence(
     "technical diagnostic"
 )
+
+
+@pytest.mark.parametrize("hook_digest", (DIGEST, "unavailable"))
+def test_post_merge_side_effect_accepts_bound_hook_digest(hook_digest: str) -> None:
+    operation = ("post_merge", "b" * 40, "/tmp/post-merge", hook_digest)
+    key = stable_side_effect_key("post_merge_hook", "3", operation)
+    assert SideEffectPayload(key, "post_merge_hook", "3", operation,
+                             "intent", None).operation == operation
+    assert SideEffectPayload(key, "post_merge_hook", "3", operation,
+                             "result", "done").effect_key == key
+
+
+def test_post_merge_side_effect_rejects_invalid_digest_and_accepts_legacy() -> None:
+    legacy = ("post_merge", "b" * 40, "/tmp/post-merge")
+    key = stable_side_effect_key("post_merge_hook", "3", legacy)
+    assert SideEffectPayload(key, "post_merge_hook", "3", legacy,
+                             "intent", None).operation == legacy
+    assert SideEffectPayload(key, "post_merge_hook", "3", legacy,
+                             "result", "done").operation == legacy
+    invalid = (*legacy, "A" * 64)
+    with pytest.raises(ArtifactValidationError, match="digest"):
+        SideEffectPayload(stable_side_effect_key("post_merge_hook", "3", invalid),
+                          "post_merge_hook", "3", invalid, "intent", None)
 
 
 @pytest.mark.parametrize(
