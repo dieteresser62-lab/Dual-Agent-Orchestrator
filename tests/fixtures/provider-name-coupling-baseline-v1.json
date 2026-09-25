@@ -1,49 +1,165 @@
 {
   "schema_version": "provider-name-coupling-baseline-v1",
   "counts": {
-    "orchestrator.toml": {"codex": 18, "claude": 9},
-    "schemas/native-agent-codex-request-v2.schema.json": {"codex": 8, "claude": 1},
-    "schemas/native-agent-codex-result-v2.schema.json": {"codex": 8},
-    "schemas/native-agent-review-request-v2.schema.json": {"claude": 6},
-    "schemas/native-agent-review-result-v2.schema.json": {"claude": 3},
-    "schemas/native-provider-schema-capabilities-v1.json": {"codex": 8, "claude": 6},
-    "schemas/native-provider-schema-exceptions-v1.json": {"codex": 27, "claude": 20},
-    "schemas/orchestrator-artifact-v2.schema.json": {"codex": 12, "claude": 12},
-    "src/agent_adapters.py": {"codex": 53, "claude": 29},
-    "src/agent_config.py": {"codex": 7, "claude": 22},
-    "src/agent_runtime.py": {"codex": 49, "claude": 17},
-    "src/artifact_bridge.py": {"codex": 2},
-    "src/artifact_models.py": {"codex": 14, "claude": 10},
-    "src/artifact_projection.py": {"codex": 10, "claude": 10},
-    "src/artifact_resume.py": {"codex": 6, "claude": 10},
-    "src/audit_trail.py": {"codex": 11, "claude": 27},
-    "src/cli.py": {"codex": 2, "claude": 2},
-    "src/contracts.py": {"codex": 13, "claude": 7},
-    "src/dry_run_scenarios.py": {"codex": 36, "claude": 4},
-    "src/final_review_preflight.py": {"codex": 8, "claude": 2},
-    "src/git_service.py": {"codex": 4, "claude": 3},
-    "src/native_codex_contract.py": {"codex": 140},
-    "src/native_codex_request.py": {"codex": 132},
-    "src/native_provider_schema.py": {"codex": 10, "claude": 9},
-    "src/native_review_contract.py": {"claude": 8},
-    "src/native_review_request.py": {"claude": 14},
-    "src/orchestrator.py": {"codex": 51, "claude": 11},
-    "src/plan_handoff.py": {"claude": 1},
-    "src/prompts.py": {"codex": 1, "claude": 1},
-    "src/provider_input_budget.py": {"codex": 7, "claude": 5},
-    "src/state_io.py": {"codex": 1, "claude": 2},
-    "src/task_contract.py": {"codex": 2},
-    "src/workflow.py": {"codex": 95, "claude": 68},
-    "src/workflow_audit_projection.py": {"codex": 4, "claude": 2},
-    "src/workflow_baseline.py": {"codex": 2, "claude": 2},
-    "src/workflow_dry_run.py": {"codex": 16, "claude": 10},
-    "src/workflow_git_commit.py": {"claude": 2},
-    "src/workflow_persistence.py": {"codex": 8, "claude": 6},
-    "src/workflow_production.py": {"codex": 5, "claude": 3},
-    "src/workflow_recovery.py": {"codex": 21, "claude": 18},
-    "src/workflow_requests.py": {"codex": 35, "claude": 1},
-    "src/workflow_run_setup.py": {"codex": 9, "claude": 7},
-    "src/workflow_state.py": {"codex": 91, "claude": 40},
-    "src/workflow_validation.py": {"codex": 1}
+    "orchestrator.toml": {
+      "codex": 18,
+      "claude": 9
+    },
+    "schemas/native-agent-codex-request-v2.schema.json": {
+      "codex": 8,
+      "claude": 1
+    },
+    "schemas/native-agent-codex-result-v2.schema.json": {
+      "codex": 8
+    },
+    "schemas/native-agent-review-request-v2.schema.json": {
+      "claude": 6
+    },
+    "schemas/native-agent-review-result-v2.schema.json": {
+      "claude": 3
+    },
+    "schemas/native-provider-schema-capabilities-v1.json": {
+      "codex": 8,
+      "claude": 6
+    },
+    "schemas/native-provider-schema-exceptions-v1.json": {
+      "codex": 27,
+      "claude": 20
+    },
+    "schemas/orchestrator-artifact-v2.schema.json": {
+      "codex": 12,
+      "claude": 12
+    },
+    "src/agent_adapters.py": {
+      "codex": 53,
+      "claude": 29
+    },
+    "src/agent_config.py": {
+      "codex": 7,
+      "claude": 22
+    },
+    "src/agent_runtime.py": {
+      "codex": 49,
+      "claude": 17
+    },
+    "src/artifact_bridge.py": {
+      "codex": 2
+    },
+    "src/artifact_models.py": {
+      "codex": 14,
+      "claude": 10
+    },
+    "src/artifact_resume.py": {
+      "codex": 6,
+      "claude": 10
+    },
+    "src/audit_trail.py": {
+      "codex": 11,
+      "claude": 27
+    },
+    "src/cli.py": {
+      "codex": 2,
+      "claude": 2
+    },
+    "src/contracts.py": {
+      "codex": 13,
+      "claude": 7
+    },
+    "src/dry_run_scenarios.py": {
+      "codex": 36,
+      "claude": 4
+    },
+    "src/final_review_preflight.py": {
+      "codex": 8,
+      "claude": 2
+    },
+    "src/git_service.py": {
+      "codex": 4,
+      "claude": 3
+    },
+    "src/native_codex_contract.py": {
+      "codex": 140
+    },
+    "src/native_codex_request.py": {
+      "codex": 132
+    },
+    "src/native_provider_schema.py": {
+      "codex": 10,
+      "claude": 9
+    },
+    "src/native_review_contract.py": {
+      "claude": 8
+    },
+    "src/native_review_request.py": {
+      "claude": 14
+    },
+    "src/orchestrator.py": {
+      "codex": 51,
+      "claude": 11
+    },
+    "src/plan_handoff.py": {
+      "claude": 1
+    },
+    "src/prompts.py": {
+      "codex": 1,
+      "claude": 1
+    },
+    "src/provider_input_budget.py": {
+      "codex": 7,
+      "claude": 5
+    },
+    "src/state_io.py": {
+      "codex": 1,
+      "claude": 2
+    },
+    "src/task_contract.py": {
+      "codex": 2
+    },
+    "src/workflow.py": {
+      "codex": 95,
+      "claude": 68
+    },
+    "src/workflow_audit_projection.py": {
+      "codex": 4,
+      "claude": 2
+    },
+    "src/workflow_baseline.py": {
+      "codex": 2,
+      "claude": 2
+    },
+    "src/workflow_dry_run.py": {
+      "codex": 16,
+      "claude": 10
+    },
+    "src/workflow_git_commit.py": {
+      "claude": 2
+    },
+    "src/workflow_persistence.py": {
+      "codex": 8,
+      "claude": 6
+    },
+    "src/workflow_production.py": {
+      "codex": 5,
+      "claude": 3
+    },
+    "src/workflow_recovery.py": {
+      "codex": 21,
+      "claude": 18
+    },
+    "src/workflow_requests.py": {
+      "codex": 35,
+      "claude": 1
+    },
+    "src/workflow_run_setup.py": {
+      "codex": 9,
+      "claude": 7
+    },
+    "src/workflow_state.py": {
+      "codex": 91,
+      "claude": 40
+    },
+    "src/workflow_validation.py": {
+      "codex": 1
+    }
   }
 }

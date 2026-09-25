@@ -59,7 +59,7 @@ from artifact_models import (
 )
 from artifact_replay import ArtifactReplayError, replay_artifacts
 from artifact_store import ArtifactStore
-from artifact_projection import ArtifactAuditProjection
+from readable_audit import AuditFacts, render_overall
 from content_authority import ValidationCapture, validation_output_digest
 from content_authority_support import (
     append_provider_decision_authority,
@@ -1342,14 +1342,14 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
         isinstance(record.payload, ProviderAttemptPayload)
         for record in ArtifactStore(repository, halted.run_id).load_chain()
     )
-    audit = ArtifactAuditProjection(
-        ArtifactStore(repository, halted.run_id).load_chain()
-    ).render_sections()["validation-attestation"]
-    assert "Verletzung `chars,bytes`" in audit
-    assert "Überhang `6/6`" in audit
-    assert "local_input_largest_component `stdin_prompt`" in audit
-    assert "local_input_component_count `1`" in audit
-    assert "Komponenten `stdin_prompt=9/9`" in audit
+    store = ArtifactStore(repository, halted.run_id)
+    audit = render_overall(
+        AuditFacts(replay_artifacts(store.load_chain(), halted.run_id),
+                   read_blob=store.read_blob, read_plan=lambda _commit, _path: ""),
+        task="task", branch="feature/test",
+    )
+    assert "local_input_chars" not in audit
+    assert "stdin_prompt" not in audit
     assert "oversized" not in audit
 
     measurements = tuple(

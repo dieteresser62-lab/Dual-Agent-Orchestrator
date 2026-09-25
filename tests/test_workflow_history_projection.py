@@ -89,7 +89,6 @@ from workflow_state import (
 from workflow_audit_projection import (
     _attach_record_events,
     _hydrate_record_history,
-    _overall_audit_entries,
 )
 
 
@@ -1816,32 +1815,11 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
     )
     projected_state = project_workflow_state(replay).state
     assert isinstance(projected_state, WorkflowState)
-    mirror_state = replace(
-        projected_state,
-        runtime_history={"archive": [], "current": mirror_history.to_dict()},
-    )
-
-    entries = _overall_audit_entries(
-        mirror_state, replay, bridge.store.read_blob
-    )
-    final_entry = next(
-        item for item in entries if item.projection.review_work_unit_id == "5"
-    )
-    assert entries[0].label == "Arbeitseinheit 01 – Planung"
-    assert final_entry.label == "Arbeitseinheit 05 – Slice 03"
-    assert any(" – Slice " in item.label for item in entries)
-    assert all("Work Unit" not in item.label for item in entries)
-    assert final_entry.projection.events == (
-        ValidationAuditEvent(1, 3, attestation),
-        ReviewAuditEvent(
-            2,
-            3,
-            1,
-            review_contract.result,
-            (),
-            is_final_review=False,
-        ),
-    )
+    from readable_audit import AuditFacts
+    facts = AuditFacts(replay, read_blob=bridge.store.read_blob, read_plan=lambda _commit, _path: "")
+    assert facts.round_validations("5", 1)
+    assert facts.round_reviews("5", 1)
+    assert "grün" in facts.validation_detail("3")
 
 
 def test_each_domain_event_crash_tail_is_bounded_and_reconstructable(

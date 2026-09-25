@@ -292,8 +292,10 @@ def test_context_matches_every_workflow_context_field(
         "- Every emitted SLICE_PLAN path and every workspace change must remain within "
         "the declared task scope: src/core.py"
         "\n- The orchestrator owns the consolidated audit report and managed audit "
-        "blocks below docs/internal. Do not edit managed audit blocks. A Slice report "
-        "may be updated only after the orchestrator creates it at implementation start."
+        "blocks below docs/internal. Do not edit managed audit blocks. Once the "
+        "orchestrator creates the Slice report, fill its two author sections: "
+        "'Umsetzung' and 'Abweichungen vom Plan' (write 'Keine.' when there is "
+        "no deviation)."
     )
     expected = WorkflowContext(
         assignment=expected_assignment,

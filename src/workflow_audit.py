@@ -15,21 +15,7 @@ from typing import Callable, Protocol
 
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
-from artifact_replay import ArtifactReplayResult, replay_artifacts
-from audit_trail import (
-    AuditProjection,
-    AuthorizedTestChanges,
-    OverallAuditEntry,
-    prepare_managed_overall_document,
-    prepare_managed_slice_document,
-    prepare_managed_work_plan_document,
-    project_managed_slice_audit,
-    project_overall_audit,
-    project_structured_slice_audit,
-    project_structured_work_plan_audit,
-    project_work_plan_audit,
-    validate_managed_work_plan_document,
-)
+from artifact_replay import replay_artifacts
 from git_service import (
     commit_managed_audit_report,
     inspect_commit_tree,
@@ -42,9 +28,8 @@ from side_effects import (
     SideEffectSpec,
     reconcile_git_commit,
 )
-from task_contract import TaskMode
 from workflow import WorkflowExecutionError, WorkflowHistory
-from workflow_state import ProtocolMode, WorkflowState, WorkUnitKind, WorkUnitRecord
+from workflow_state import ProtocolMode, WorkflowState, WorkUnitKind
 
 
 logger = logging.getLogger(__name__)
@@ -78,34 +63,6 @@ class BoundTaskControlPaths(Protocol):
     ) -> tuple[str, ...]: ...
 
 
-class OverallAuditEntries(Protocol):
-    def __call__(
-        self,
-        state: WorkflowState,
-        structured_replay: ArtifactReplayResult | None,
-        blob_reader: object | None,
-    ) -> tuple[OverallAuditEntry, ...]: ...
-
-
-class AuthorizedTestApproval(Protocol):
-    def __call__(
-        self,
-        unit: WorkUnitRecord,
-        structured_replay: ArtifactReplayResult | None,
-    ) -> AuthorizedTestChanges | None: ...
-
-
-class AuditProjectionFactory(Protocol):
-    def __call__(
-        self,
-        state: WorkflowState,
-        unit: WorkUnitRecord,
-        history: WorkflowHistory,
-        approval: AuthorizedTestChanges | None = None,
-        structured_replay: ArtifactReplayResult | None = None,
-    ) -> AuditProjection: ...
-
-
 @dataclass(frozen=True)
 class WorkflowAuditDependencies:
     """Driver-owned edges used by audit projection and finalization."""
@@ -117,9 +74,6 @@ class WorkflowAuditDependencies:
     side_effect_executor: SideEffectExecutorFactory
     side_effect_spec: SideEffectSpecFactory
     bound_task_control_paths: BoundTaskControlPaths
-    overall_audit_entries: OverallAuditEntries
-    authorized_test_approval: AuthorizedTestApproval
-    audit_projection: AuditProjectionFactory
 
 
 class WorkflowAudit:
@@ -227,179 +181,106 @@ class WorkflowAudit:
         return str(result)
 
     def project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
-        """Write only managed audit blocks when the persisted plan names a target."""
-        unit = state.current_work_unit
-        structured_replay = None
-        if (
-            state.protocol_binding is not None
-            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
-        ):
-            try:
-                bridge = self._dependencies.artifact_bridge()
-                structured_replay = resolve_resume_state(
-                    self._dependencies.root(),
-                    state,
-                    validated_store=(None if bridge is None else bridge.store),
-                ).replay_result
-            except (ArtifactResumeError, ValueError) as exc:
-                raise WorkflowExecutionError(
-                    f"structured audit dual-write mismatch: {exc}"
-                ) from exc
-        if state.audit_report_path is not None:
-            task = Path(state.task_file)
-            try:
-                task_label = task.resolve().relative_to(
-                    self._dependencies.root()
-                ).as_posix()
-            except ValueError:
-                task_label = task.name
-            document = prepare_managed_overall_document(
-                repository_root=self._dependencies.root(),
-                audit_path=state.audit_report_path,
-                task_name=task.stem,
-                task_file=task_label,
-                run_id=state.run_id,
-                branch=state.branch,
-                task_scope=state.task_scope_patterns,
-            )
-            bridge = self._dependencies.artifact_bridge()
-            entries = self._dependencies.overall_audit_entries(
-                state,
-                structured_replay,
-                None if bridge is None else bridge.store.read_blob,
-            )
-            if entries:
-                project_overall_audit(document, entries)
-                if structured_replay is not None:
-                    project_structured_work_plan_audit(document, structured_replay)
-        if unit.kind is WorkUnitKind.FINAL_REVIEW:
+        """Project human documents from the accepted record chain."""
+        if state.protocol_binding is None or state.protocol_binding.mode is not ProtocolMode.STRUCTURED_V2:
             return
-        # The Slice audit is part of the authorized Slice commit.  Commit and
-        # subsequent workflow-binding records are projected into the overall
-        # audit only; rewriting the already committed Slice document would leave
-        # a foreign dirty path for the final audit transaction.
+        bridge = self._dependencies.artifact_bridge()
+        try:
+            resolution = resolve_resume_state(
+                self._dependencies.root(), state,
+                validated_store=None if bridge is None else bridge.store,
+            )
+        except (ArtifactResumeError, ValueError) as exc:
+            raise WorkflowExecutionError(f"structured audit replay failed: {exc}") from exc
+        replay = resolution.replay_result
+        if replay is None:
+            raise WorkflowExecutionError("structured audit requires an accepted record replay")
+        from artifact_store import ArtifactStore
+        from audit_document_contract import PLAN_APPENDIX_HEADING
+        from path_policy import resolve_repository_path
+        from readable_audit import (
+            AuditFacts, authored_slice_sections, read_approved_plan,
+            render_overall, render_plan_appendix, render_slice,
+        )
+        from semantic_markdown import parse_semantic_markdown
+        from state_io import atomic_write_file
+
+        root = self._dependencies.root()
+        store = bridge.store if bridge is not None else ArtifactStore(root, state.run_id)
+        facts = AuditFacts(
+            replay, read_blob=store.read_blob,
+            read_plan=lambda commit, path: read_approved_plan(root, commit, path),
+        )
+
+        def audit_target(path: str | Path) -> Path:
+            lexical = Path(str(path).replace("\\", "/"))
+            if not lexical.is_absolute():
+                lexical = root / lexical
+            if any(part.is_symlink() for part in (lexical, *lexical.parents)):
+                raise WorkflowExecutionError("audit target must not be a symlink")
+            return resolve_repository_path(path, root)
+
+        def write(path: str | Path, markdown: str) -> None:
+            target = audit_target(path)
+            if target.exists() and not target.is_file():
+                raise WorkflowExecutionError("audit target must be a regular file")
+            parse_semantic_markdown(markdown, path=str(target), require_managed=True)
+            if not target.exists() or target.read_text(encoding="utf-8") != markdown:
+                atomic_write_file(target, markdown)
+
+        if state.audit_report_path is not None:
+            write(
+                state.audit_report_path,
+                render_overall(
+                    facts, task=Path(state.task_file).stem, branch=state.branch,
+                ),
+            )
+        if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+            return
         if state.current_slice.commit_ref is not None:
             return
-        approval = self._dependencies.authorized_test_approval(
-            unit, structured_replay
-        )
-        projection = self._dependencies.audit_projection(
-            state,
-            unit,
-            history,
-            approval,
-            structured_replay,
-        )
-        if (
-            state.execution_mode == TaskMode.PLAN_ONLY.value
-            and state.work_plan_path is not None
-        ):
-            # Once the reviewed plan has been committed it is immutable input to
-            # the generated IMPLEMENT handoff.  Later commit/binding records stay
-            # in the consolidated record projection and must not dirty the plan.
-            if state.current_slice.commit_ref is not None:
+        if state.current_work_unit.kind is WorkUnitKind.PLAN:
+            if state.work_plan_path is None:
                 return
             try:
-                document = prepare_managed_work_plan_document(
-                    repository_root=self._dependencies.root(),
-                    work_plan_path=state.work_plan_path,
-                )
-            except ValueError as exc:
-                logger.debug("Work-plan audit target is not ready: %s", exc)
-            else:
-                if history.events:
-                    project_work_plan_audit(document, projection)
-                    if structured_replay is not None:
-                        project_structured_work_plan_audit(
-                            document, structured_replay
-                        )
-                return
-        if unit.kind is WorkUnitKind.PLAN:
-            if state.work_plan_path is not None:
-                try:
-                    document = prepare_managed_work_plan_document(
-                        repository_root=self._dependencies.root(),
-                        work_plan_path=state.work_plan_path,
-                    )
-                except ValueError as exc:
-                    logger.debug("Work-plan audit target is not ready: %s", exc)
-                else:
-                    if history.events:
-                        project_work_plan_audit(document, projection)
-                        if structured_replay is not None:
-                            project_structured_work_plan_audit(
-                                document, structured_replay
-                            )
+                lexical_plan = root / state.work_plan_path
+                if lexical_plan.is_symlink():
                     return
-            if not history.events:
+                plan_path = audit_target(state.work_plan_path)
+                if not plan_path.is_file():
+                    return
+                plan_text = plan_path.read_text(encoding="utf-8")
+                parse_semantic_markdown(plan_text, path=str(plan_path))
+            except (OSError, UnicodeError, ValueError):
+                logger.debug("Work-plan audit target is not yet safe to project")
                 return
-            candidates = [Path(state.task_file)]
-            if state.work_plan_path is not None:
-                candidates.append(self._dependencies.root() / state.work_plan_path)
-            candidates.extend(
-                self._dependencies.root() / path
-                for planned in state.planned_slices
-                for path in planned.scope_paths
-                if path.startswith("docs/internal/")
-                and path.endswith("work-plan.md")
-            )
-            for candidate in candidates:
-                try:
-                    document = validate_managed_work_plan_document(
-                        repository_root=self._dependencies.root(),
-                        work_plan_path=candidate,
-                    )
-                except ValueError:
-                    continue
-                project_work_plan_audit(document, projection)
-                if structured_replay is not None:
-                    project_structured_work_plan_audit(document, structured_replay)
-                return
-            logger.debug(
-                "No prepared work-plan audit target is present in the Slice plan."
-            )
+            heading = f"\n## {PLAN_APPENDIX_HEADING}\n"
+            authored = plan_text.split(heading, 1)[0].rstrip("\n")
+            write(state.work_plan_path, authored + "\n\n" + render_plan_appendix(facts))
             return
         planned = next(
-            (
-                item
-                for item in state.planned_slices
-                if item.slice_id == state.current_slice_id
-            ),
+            (item for item in state.planned_slices if item.slice_id == state.current_slice_id),
             None,
         )
-        scope_paths = (
-            planned.scope_paths
-            if planned is not None
-            else state.current_slice.scope_paths
-        )
-        summary = planned.summary if planned is not None else "Abschlusskorrektur"
-        candidates = tuple(
-            path
-            for path in scope_paths
+        scope = planned.scope_paths if planned is not None else state.current_slice.scope_paths
+        candidates = [
+            path for path in scope
             if path.startswith("docs/internal/")
             and f"-{state.current_slice_id:02d}-" in Path(path).name
-            and Path(path).suffix == ".md"
-        )
-        for path in candidates:
-            try:
-                document = prepare_managed_slice_document(
-                    repository_root=self._dependencies.root(),
-                    work_plan_path=state.audit_report_path
-                    or state.work_plan_path
-                    or "docs/internal/orchestrator-modernization-work-plan.md",
-                    slice_id=state.current_slice_id,
-                    slice_path=path,
-                    title=summary,
-                    scope_paths=scope_paths,
-                    branch=state.branch,
-                )
-            except ValueError:
-                continue
-            project_managed_slice_audit(document, projection)
-            if structured_replay is not None:
-                project_structured_slice_audit(document, structured_replay)
+            and path.endswith(".md")
+        ]
+        if len(candidates) != 1:
+            logger.debug("No unique Slice audit target is present for Slice %s", state.current_slice_id)
             return
-        logger.debug(
-            "No prepared Slice audit target is present for Slice %s.",
-            state.current_slice_id,
+        target = audit_target(candidates[0])
+        implementation, deviations = (
+            authored_slice_sections(target.read_text(encoding="utf-8"))
+            if target.is_file() else ("Noch nicht dokumentiert.", "Keine.")
+        )
+        write(
+            candidates[0],
+            render_slice(
+                facts, state.current_slice_id,
+                implementation=implementation, deviations=deviations,
+            ),
         )

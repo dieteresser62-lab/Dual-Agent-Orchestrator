@@ -25,7 +25,6 @@ from agent_runtime import (
 from artifact_bridge import ArtifactBridgeError
 from artifact_resume import ArtifactResumeError
 from artifact_models import ArtifactValidationError
-from artifact_projection import ArtifactProjectionError
 from artifact_replay import ArtifactReplayError
 from artifact_store import (
     ArtifactConflictError,
@@ -61,6 +60,7 @@ from plan_handoff import AcceptanceReviewLimitReached, PlanHandoffError
 from provider_input_budget import ProviderInputBudgetError, ProviderInputBudgetExceeded
 from provider_input_efficiency import ProviderInputEfficiencyError
 from repo_changes import NotGitRepositoryError, RepositoryChangeError
+from readable_audit import ReadableAuditError
 from review_packets import ReviewPacketError
 from schema_validation import SchemaDefinitionError, SchemaMismatch
 from semantic_markdown import SemanticMarkdownError
@@ -144,11 +144,11 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     ArtifactValidationError: _entry(_HALT, "ARTIFACT-VALIDATION"),
     ArtifactResumeError: _entry(_HALT, "ARTIFACT-RESUME"),
     ArtifactReplayError: _entry(_HALT, "ARTIFACT-REPLAY"),
-    ArtifactProjectionError: _entry(_HALT, "ARTIFACT-PROJECTION"),
     ArtifactStoreError: _entry(_HALT, "ARTIFACT-STORE"),
     ArtifactConflictError: _entry(_HALT, "ARTIFACT-CONFLICT"),
     ArtifactCorruptionError: _entry(_HALT, "ARTIFACT-CORRUPTION"),
     AuditTrailError: _entry(_HALT, "AUDIT-TRAIL"),
+    ReadableAuditError: _entry(_HALT, "READABLE-AUDIT"),
     ConfigError: _entry(_HALT, "CLI-CONFIG"),
     DryRunScenarioError: _entry(_REJECT, "DRY-RUN-SCENARIO"),
     ScriptedInterruption: _entry(_HALT, "SCRIPTED-INTERRUPTION"),
@@ -201,12 +201,12 @@ _HALT_DIAGNOSTIC_CODES = frozenset(
         "ARTIFACT-BRIDGE",
         "ARTIFACT-CONFLICT",
         "ARTIFACT-CORRUPTION",
-        "ARTIFACT-PROJECTION",
         "ARTIFACT-REPLAY",
         "ARTIFACT-RESUME",
         "ARTIFACT-STORE",
         "ARTIFACT-VALIDATION",
         "AUDIT-TRAIL",
+        "READABLE-AUDIT",
         "CLI-CONFIG",
         "FINAL-REVIEW-PREFLIGHT-DENIED",
         "GIT-TRANSACTION",

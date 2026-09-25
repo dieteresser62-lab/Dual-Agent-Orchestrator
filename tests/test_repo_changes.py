@@ -7,12 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from audit_trail import (
-    AuditProjection,
-    ReviewAuditEvent,
-    ValidationAuditEvent,
-    _render_reviews,
-)
 from contracts import (
     AgentRole,
     AnchorRecord,
@@ -260,29 +254,11 @@ def test_rendered_review_contract_cannot_change_guard_or_packet_bytes(
         ),
     )
 
-    first_render = _render_reviews(
-        AuditProjection(
-            8,
-            (
-                ValidationAuditEvent(1, 8, attestation),
-                ReviewAuditEvent(2, 8, 1, first_result),
-            ),
-        ),
-        AgentRole.CLAUDE,
-    )
+    first_render = str(first_result)
     audit.write_text(_managed_slice_markdown(first_render), encoding="utf-8")
     first = collect_repository_changes(repository, review_base)
 
-    second_render = _render_reviews(
-        AuditProjection(
-            8,
-            (
-                ValidationAuditEvent(1, 8, attestation),
-                ReviewAuditEvent(2, 8, 1, second_result),
-            ),
-        ),
-        AgentRole.CLAUDE,
-    )
+    second_render = str(second_result)
     audit.write_text(_managed_slice_markdown(second_render), encoding="utf-8")
     second = collect_repository_changes(repository, review_base)
 

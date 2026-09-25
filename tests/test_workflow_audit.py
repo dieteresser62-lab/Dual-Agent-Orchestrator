@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
-from audit_trail import AuditProjection, OverallAuditEntry
+import pytest
+
 from orchestrator import ProductionWorkflowDriver
-from workflow import WorkflowHistory
 from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
-from workflow_audit_projection import (
-    _audit_projection,
-    _authorized_test_approval,
-    _overall_audit_entries,
-)
+from workflow import WorkflowExecutionError, WorkflowHistory
+from workflow_state import ProtocolMode, WorkUnitKind
 from workflow_state import init_workflow_state
 
 
@@ -24,13 +21,17 @@ DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
     "artifact_bridge",
+    "audit_document_contract",
     "artifact_resume",
     "artifact_replay",
-    "audit_trail",
+    "artifact_store",
     "git_service",
     "repo_changes",
+    "readable_audit",
+    "path_policy",
+    "semantic_markdown",
     "side_effects",
-    "task_contract",
+    "state_io",
     "workflow",
     "workflow_state",
 }
@@ -38,11 +39,8 @@ EXPECTED_INTERNAL_IMPORTS = {
 EXPECTED_DEPENDENCY_EDGES = {
     "artifact_bridge",
     "assert_structured_decision_context",
-    "audit_projection",
-    "authorized_test_approval",
     "bound_task_control_paths",
     "mark_completed_side_effect",
-    "overall_audit_entries",
     "root",
     "side_effect_executor",
     "side_effect_spec",
@@ -58,9 +56,6 @@ EXPECTED_DRIVER_BINDINGS = {
     "side_effect_executor": "self._side_effect_executor",
     "side_effect_spec": "self._side_effect_spec",
     "bound_task_control_paths": "_bound_task_control_paths",
-    "overall_audit_entries": "_overall_audit_entries",
-    "authorized_test_approval": "_authorized_test_approval",
-    "audit_projection": "_audit_projection",
 }
 
 
@@ -105,32 +100,6 @@ def _internal_imports(path: Path) -> set[str]:
     return result
 
 
-def _unexpected_dependency(*_args: object, **_kwargs: object) -> Any:
-    raise AssertionError("an unavailable audit dependency was invoked")
-
-
-def _dependencies(root: Path) -> WorkflowAuditDependencies:
-    return WorkflowAuditDependencies(
-        root=lambda: root,
-        artifact_bridge=lambda: None,
-        assert_structured_decision_context=_unexpected_dependency,
-        mark_completed_side_effect=_unexpected_dependency,
-        side_effect_executor=_unexpected_dependency,
-        side_effect_spec=_unexpected_dependency,
-        bound_task_control_paths=lambda _root, _state: (),
-        overall_audit_entries=lambda _state, _replay, _reader: (
-            OverallAuditEntry(
-                label="Arbeitseinheit 01 - Audit",
-                summary="Identische Projektion pruefen",
-                scope_paths=("src/orchestrator.py",),
-                projection=AuditProjection(slice_id=1),
-            ),
-        ),
-        authorized_test_approval=lambda _unit, _replay: None,
-        audit_projection=lambda *_args, **_kwargs: cast(AuditProjection, object()),
-    )
-
-
 def test_audit_module_has_complete_inventory_and_one_way_layering() -> None:
     assert _internal_imports(AUDIT_PATH) == EXPECTED_INTERNAL_IMPORTS
     assert "orchestrator" not in _internal_imports(AUDIT_PATH)
@@ -157,12 +126,12 @@ def test_audit_module_has_complete_inventory_and_one_way_layering() -> None:
         assert "workflow_audit" not in _internal_imports(ROOT / "src" / lower_layer)
 
 
-def test_omitted_audit_projection_edge_turns_inventory_red() -> None:
+def test_omitted_record_source_edge_turns_inventory_red() -> None:
     source = AUDIT_PATH.read_text(encoding="utf-8")
-    marker = "self._dependencies.overall_audit_entries"
+    marker = "self._dependencies.artifact_bridge"
     assert marker in source
-    mutated = source.replace(marker, "omitted_overall_audit_entries")
-    assert "overall_audit_entries" not in _dependency_edges(mutated)
+    mutated = source.replace(marker, "omitted_artifact_bridge")
+    assert "artifact_bridge" not in _dependency_edges(mutated)
     assert _dependency_edges(mutated) != EXPECTED_DEPENDENCY_EDGES
 
 
@@ -238,39 +207,111 @@ def test_finalize_without_audit_preserves_the_driver_early_return() -> None:
     assert partial_driver.finalize_audit(state) is None
 
 
-def test_audit_projection_is_byte_identical_for_identical_inputs(
-    tmp_path: Path,
+def test_audit_projection_is_byte_identical_for_identical_inputs() -> None:
+    from readable_audit import render_overall
+    from test_readable_audit import _facts
+
+    facts = _facts()
+    assert render_overall(facts, task="Task", branch="feature/test") == render_overall(
+        facts, task="Task", branch="feature/test"
+    )
+
+
+@pytest.mark.parametrize("kind", ("overall", "slice", "plan"))
+def test_audit_projection_rejects_lexical_symlink_without_touching_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str,
 ) -> None:
-    task = tmp_path / "inbox" / "audit.md"
-    task.parent.mkdir(parents=True)
-    task.write_text("audit task", encoding="utf-8")
-    state = init_workflow_state(
-        run_id="workflow-audit-module",
-        task_file=str(task),
-        branch="feature/backlog-followups",
-        branch_base="b" * 40,
-        first_slice_start_commit="b" * 40,
-        slice_count=1,
-        task_digest="a" * 64,
-        task_scope_patterns=("src/orchestrator.py",),
-        audit_report_path="docs/internal/audit-review-12345678.md",
-        target_branch="feature/backlog-followups",
-        timestamp="2026-09-02T00:00:00+00:00",
-    )
-    audit = WorkflowAudit(
-        replace(
-            _dependencies(tmp_path),
-            overall_audit_entries=_overall_audit_entries,
-            authorized_test_approval=_authorized_test_approval,
-            audit_projection=_audit_projection,
-        )
-    )
-    history = WorkflowHistory(state.current_work_unit_id)
-    target = tmp_path / cast(str, state.audit_report_path)
+    import readable_audit
+    import workflow_audit
+    from test_readable_audit import _facts
 
-    audit.project_audit(state, history)
-    first = target.read_bytes()
-    assert "Arbeitseinheit 01 – Planung".encode("utf-8") in first
-    audit.project_audit(state, history)
+    root = tmp_path
+    code = root / "src/app.py"
+    code.parent.mkdir()
+    code.write_bytes(b"original source bytes\n")
+    relative = {
+        "overall": "docs/internal/overall.md",
+        "slice": "docs/internal/slice-test-01-test.md",
+        "plan": "docs/internal/plan.md",
+    }[kind]
+    link = root / relative
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(code)
+    facts = _facts(plan_only=kind == "plan")
+    monkeypatch.setattr(readable_audit, "AuditFacts", lambda *_args, **_kwargs: facts)
+    monkeypatch.setattr(workflow_audit, "resolve_resume_state", lambda *_args, **_kwargs: SimpleNamespace(replay_result=facts.replay))
+    dependencies = WorkflowAuditDependencies(
+        root=lambda: root,
+        artifact_bridge=lambda: SimpleNamespace(store=SimpleNamespace(read_blob=lambda _ref: b"")),
+        assert_structured_decision_context=lambda: None,
+        mark_completed_side_effect=lambda _key: None,
+        side_effect_executor=lambda _bridge: None,
+        side_effect_spec=lambda *_args, **_kwargs: None,
+        bound_task_control_paths=lambda *_args: (),
+    )
+    state = SimpleNamespace(
+        protocol_binding=SimpleNamespace(mode=ProtocolMode.STRUCTURED_V2),
+        run_id="readable-test-run", audit_report_path=relative if kind == "overall" else None,
+        task_file="task.md", branch="feature/test",
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.PLAN if kind == "plan" else WorkUnitKind.SLICE),
+        current_slice=SimpleNamespace(commit_ref=None, scope_paths=(relative,)),
+        current_slice_id=1, work_plan_path=relative if kind == "plan" else None,
+        planned_slices=(),
+    )
+    if kind == "plan":
+        # The plan-contract gate diagnoses this target after the projection skips it.
+        WorkflowAudit(dependencies).project_audit(state, WorkflowHistory(1))
+    else:
+        with pytest.raises(WorkflowExecutionError, match="symlink"):
+            WorkflowAudit(dependencies).project_audit(state, WorkflowHistory(1))
+    assert link.is_symlink()
+    assert code.read_bytes() == b"original source bytes\n"
 
-    assert target.read_bytes() == first
+
+def test_audit_projection_rejects_symlink_parent_without_touching_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import readable_audit
+    import workflow_audit
+    from test_readable_audit import _facts
+
+    destination = tmp_path / "audit-destination"
+    destination.mkdir()
+    target = destination / "overall.md"
+    original = b"original audit bytes\n"
+    target.write_bytes(original)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    link = docs / "internal"
+    link.symlink_to(destination, target_is_directory=True)
+    relative = "docs/internal/overall.md"
+    assert not (tmp_path / relative).is_symlink()
+
+    facts = _facts()
+    monkeypatch.setattr(readable_audit, "AuditFacts", lambda *_args, **_kwargs: facts)
+    monkeypatch.setattr(
+        workflow_audit, "resolve_resume_state",
+        lambda *_args, **_kwargs: SimpleNamespace(replay_result=facts.replay),
+    )
+    dependencies = WorkflowAuditDependencies(
+        root=lambda: tmp_path,
+        artifact_bridge=lambda: SimpleNamespace(store=SimpleNamespace(read_blob=lambda _ref: b"")),
+        assert_structured_decision_context=lambda: None,
+        mark_completed_side_effect=lambda _key: None,
+        side_effect_executor=lambda _bridge: None,
+        side_effect_spec=lambda *_args, **_kwargs: None,
+        bound_task_control_paths=lambda *_args: (),
+    )
+    state = SimpleNamespace(
+        protocol_binding=SimpleNamespace(mode=ProtocolMode.STRUCTURED_V2),
+        run_id="readable-test-run", audit_report_path=relative,
+        task_file="task.md", branch="feature/test",
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.FINAL_REVIEW),
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="symlink"):
+        WorkflowAudit(dependencies).project_audit(state, WorkflowHistory(1))
+
+    assert link.is_symlink()
+    assert sorted(path.name for path in destination.iterdir()) == ["overall.md"]
+    assert target.read_bytes() == original

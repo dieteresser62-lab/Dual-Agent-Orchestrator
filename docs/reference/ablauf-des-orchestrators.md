@@ -434,6 +434,15 @@ Für Leser, die dem System auf die Finger sehen wollen.
 docs/internal/<...>-review.md                  ← Lesefassung für Menschen
 ```
 
+Die Lesefassung enthält je Slice Ziel und Akzeptanzkriterien aus dem
+freigegebenen Plan, Umsetzung, Befunde, Validierung und Abschlussprüfung. Das
+Gesamtaudit zeigt eine knappe Übersicht mit Commits, Befunden, Halten und
+Abnahmereview; der Arbeitsplan enthält den Anhang zur Planprüfung. Record-IDs,
+Fingerprints und Providerdiagnostik stehen in der Recordkette statt in diesen
+Dokumenten. Der providerfreie Aufruf `python3 scripts/render_readable_audit.py
+--repository <repo> --run-id <lauf> --output <ziel>` rendert sie in ein
+separates Verzeichnis.
+
 Nur der erste Pfad zählt. Alles andere ist ableitbar und darf jederzeit
 verworfen und neu gebaut werden. `state.json` dient allein dazu, die
 Lauf-Kennung zu finden.

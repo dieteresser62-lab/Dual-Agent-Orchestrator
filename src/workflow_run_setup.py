@@ -135,8 +135,10 @@ def _context(
         )
         effective_assignment += (
             "\n- The orchestrator owns the consolidated audit report and managed audit "
-            "blocks below docs/internal. Do not edit managed audit blocks. A Slice report "
-            "may be updated only after the orchestrator creates it at implementation start."
+            "blocks below docs/internal. Do not edit managed audit blocks. Once the "
+            "orchestrator creates the Slice report, fill its two author sections: "
+            "'Umsetzung' and 'Abweichungen vom Plan' (write 'Keine.' when there is "
+            "no deviation)."
         )
     effective_assignment += _plan_only_step_boundary(state)
     planned_scope = set(planned.scope_paths) if planned is not None else set()

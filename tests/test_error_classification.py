@@ -285,7 +285,7 @@ def _record_authority_resume_failure() -> BaseException:
     return ArtifactResumeError("record/native finding authority is incomplete")
 
 
-def test_central_inventory_classifies_all_49_project_error_types_exactly_once() -> None:
+def test_central_inventory_classifies_all_project_error_types_exactly_once() -> None:
     declared: dict[str, tuple[str, tuple[str, ...]]] = {}
     for path in (ROOT / "src").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
