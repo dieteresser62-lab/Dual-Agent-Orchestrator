@@ -100,6 +100,7 @@ class GateReason(str, Enum):
     INSTANCE_FAILURE = "instance_failure"
     BOOTSTRAP_CHECK = "bootstrap_check"
     QUOTA_RESUME_DIFF = "quota_resume_diff"
+    PROVIDER_OUTCOME_UNKNOWN = "provider_outcome_unknown"
 
 
 class AgentFailureKind(str, Enum):
@@ -722,6 +723,7 @@ class GateRecord:
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
             GateReason.QUOTA_RESUME_DIFF,
+            GateReason.PROVIDER_OUTCOME_UNKNOWN,
         }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)
@@ -745,6 +747,10 @@ class GateRecord:
                 raise WorkflowStateValidationError(
                     "quota-resume-diff gate requires fingerprint and resume step"
                 )
+        if self.reason is GateReason.PROVIDER_OUTCOME_UNKNOWN and self.fingerprint is None:
+            raise WorkflowStateValidationError(
+                "provider outcome gate requires a repository fingerprint"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -804,6 +810,7 @@ class GateDecisionRecord:
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
             GateReason.QUOTA_RESUME_DIFF,
+            GateReason.PROVIDER_OUTCOME_UNKNOWN,
         }:
             raise WorkflowStateValidationError(
                 "a fingerprint-bound decision requires a user-gate reason"
@@ -844,6 +851,7 @@ class GateDecisionRecord:
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
             GateReason.QUOTA_RESUME_DIFF,
+            GateReason.PROVIDER_OUTCOME_UNKNOWN,
         }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)

@@ -344,6 +344,7 @@ def test_central_inventory_classifies_all_project_error_types_exactly_once() -> 
         f"{ProviderRequestRoundRequired.__module__}.ProviderRequestRoundRequired",
         f"{ScriptedInterruption.__module__}.ScriptedInterruption",
         "plan_handoff.AcceptanceReviewLimitReached",
+        "provider_process.ProviderOutcomeUnknown",
     }
     assert set(ERROR_CLASSIFICATIONS.values())
     assert all(

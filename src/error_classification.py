@@ -59,6 +59,7 @@ from path_policy import PathPolicyError
 from plan_handoff import AcceptanceReviewLimitReached, PlanHandoffError
 from provider_input_budget import ProviderInputBudgetError, ProviderInputBudgetExceeded
 from provider_input_efficiency import ProviderInputEfficiencyError
+from provider_process import ProviderOutcomeUnknown
 from repo_changes import NotGitRepositoryError, RepositoryChangeError
 from readable_audit import ReadableAuditError
 from review_packets import ReviewPacketError
@@ -173,6 +174,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     SchemaMismatch: _entry(_HALT, "SCHEMA-MISMATCH"),
     SemanticMarkdownError: _entry(_HALT, "SEMANTIC-MARKDOWN"),
     SideEffectReconciliationError: _entry(_HALT, "SIDE-EFFECT-RECONCILIATION"),
+    ProviderOutcomeUnknown: _entry(_HALT, "SIDE-EFFECT-RECONCILIATION"),
     StateSchemaError: _entry(_HALT, "STATE-SCHEMA"),
     UnknownStateVersionError: _entry(_HALT, "UNKNOWN-STATE-VERSION"),
     ActiveV2StateError: _entry(_HALT, "ACTIVE-V2-STATE"),

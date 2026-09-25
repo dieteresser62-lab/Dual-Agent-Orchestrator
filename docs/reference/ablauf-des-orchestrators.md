@@ -63,6 +63,16 @@ der Agenten und kein Abnahmekriterium für fremde Texte.
 
 ## Die drei Beteiligten und ihre Befugnisse
 
+Providerprozesse laufen ohne voreingestelltes Zeitlimit; ein ausdrücklich
+gesetztes Rollenlimit beendet sie nach der angegebenen Sekundenzahl. Bei einer
+Wiederaufnahme nach einem Absturz prüft der Orchestrator die Boot-ID sowie PID
+und Prozessstartzeit des offenen Versuchs. Ist dessen Ende sicher, schließt er
+den Versuch als Prozessfehler ab und beginnt im selben `--resume` den nächsten.
+Läuft er noch, nennt der Halt die PID. Ohne beweiskräftige Prozessdaten hält
+ein Gate den Fingerprint und die geänderten Pfade fest. Die Freigabe mit
+`--resume --approve-gate --gate-rationale "…"` bestätigt, dass der Betreiber
+den offenen Versuch als beendet behandelt.
+
 | | darf | darf nicht |
 |---|---|---|
 | **Codex** | planen, Dateien ändern, Tests schreiben, Befunde beantworten | die eigene Arbeit freigeben, committen |

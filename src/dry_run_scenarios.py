@@ -1351,6 +1351,12 @@ class ScriptedWorkflowDriver:
             ("gate-decision", (work_unit_id, decision))
         )
 
+    def close_unknown_provider_attempt(self, effect_key: str) -> None:
+        raise DryRunScenarioError(f"unexpected provider outcome gate: {effect_key}")
+
+    def provider_resume_fingerprint(self, start_commit: str) -> str:
+        return self.collect_changes(start_commit).fingerprint
+
     def persist_gate_transition(self, state: WorkflowState) -> None:
         self.structured_events.append(("gate-transition", state))
 

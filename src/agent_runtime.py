@@ -686,6 +686,7 @@ class ProviderAttemptLifecycle:
     durable_response_path: Callable[[object], Path] | None = None
     failure_path: Callable[[Path], Path] | None = None
     monotonic_fn: Callable[[], float] = time.monotonic
+    process_started: Callable[[object, int], None] | None = None
 
 
 @dataclass
@@ -703,6 +704,10 @@ class _ProviderAttemptInvocation:
         if self.handle is None or self.lifecycle.durable_response_path is None:
             return fallback
         return self.lifecycle.durable_response_path(self.handle)
+
+    def process_started(self, pid: int) -> None:
+        if self.handle is not None and self.lifecycle.process_started is not None:
+            self.lifecycle.process_started(self.handle, pid)
 
     def failure_path(self, fallback: Path) -> Path:
         response_path = self.response_path(fallback)
@@ -1145,8 +1150,9 @@ def _run_agent_process(
     config: OrchestratorConfig,
     env: dict[str, str],
     execution_root: Path,
-    timeout_seconds: int,
+    timeout_seconds: int | None,
     agent_key: str,
+    process_started: Callable[[int], None] | None = None,
 ) -> StreamResult | subprocess.CompletedProcess[str]:
     """Start one provider process and retain ownership through its cleanup boundary."""
     if config.agent_live_stream:
@@ -1161,6 +1167,13 @@ def _run_agent_process(
             cwd=execution_root,
             bufsize=1,
         )
+        if process_started is not None:
+            try:
+                process_started(process.pid)
+            except Exception:
+                process.kill()
+                process.wait(timeout=5)
+                raise
         assert process.stdin is not None
         assert process.stdout is not None
         assert process.stderr is not None
@@ -1212,7 +1225,7 @@ def _run_agent_process(
         heartbeat_interval_seconds = 30.0
         last_heartbeat = start
         while len(completed_channels) < 2:
-            if time.monotonic() - start > timeout_seconds:
+            if timeout_seconds is not None and time.monotonic() - start > timeout_seconds:
                 process.kill()
                 raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
             now = time.monotonic()
@@ -1252,6 +1265,25 @@ def _run_agent_process(
             "".join(stdout_chunks),
             "".join(stderr_chunks),
         )
+    elif process_started is not None:
+        process = subprocess.Popen(
+            command_parts, stdin=subprocess.PIPE if stdin_text is not None else None,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env, cwd=execution_root,
+        )
+        try:
+            process_started(process.pid)
+        except Exception:
+            process.kill()
+            process.wait(timeout=5)
+            raise
+        try:
+            stdout, stderr = process.communicate(input=stdin_text, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
     else:
         result = subprocess.run(
             command_parts,
@@ -1394,6 +1426,10 @@ def run_agent(
             execution_root=execution_root,
             timeout_seconds=timeout_seconds,
             agent_key=agent_key,
+            process_started=(
+                attempt_invocation.process_started
+                if attempt_invocation is not None else None
+            ),
         )
 
         stdout = (result.stdout or "").strip()

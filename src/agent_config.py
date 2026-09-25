@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_TIMEOUT_SECONDS: int | None = None
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
@@ -18,7 +18,7 @@ class AgentSettings:
     name: str
     binary: str
     model: str
-    timeout_seconds: int
+    timeout_seconds: int | None
     effort: str
     max_budget_usd: float | None = None
 
@@ -60,8 +60,8 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     )
     parser.add_argument(
         f"--{role}-timeout",
-        type=int,
-        help=f"Hard {label} process timeout in seconds (default: RUN_TASK_{role.upper()}_TIMEOUT or 1800).",
+        help=(f"Hard {label} process timeout in seconds; 0 disables it "
+              f"(default: RUN_TASK_{role.upper()}_TIMEOUT or no limit)."),
     )
     parser.add_argument(
         f"--{role}-effort",
@@ -98,6 +98,12 @@ def _positive_int(value: object, location: str) -> int:
     if parsed <= 0:
         raise AgentConfigError(f"{location} must be a positive integer")
     return parsed
+
+
+def _process_timeout(value: object, location: str) -> int | None:
+    if value is None or str(value).strip().lower() in {"0", "none"}:
+        return None
+    return _positive_int(value, location)
 
 
 def _positive_float(value: object, location: str) -> float:
@@ -159,7 +165,7 @@ def resolve_agent_settings(
                 f"{role} model",
             ),
         )
-        timeout_seconds = _positive_int(
+        timeout_seconds = _process_timeout(
             _resolve(args, environ, role, "timeout", DEFAULT_TIMEOUT_SECONDS),
             f"{role} timeout",
         )

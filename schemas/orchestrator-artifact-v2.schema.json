@@ -363,7 +363,7 @@
       "properties": {
         "work_unit_id": {"$ref": "#/$defs/identifier"},
         "gate_status": {"enum": ["clear", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume"]},
-        "reason": {"enum": ["none", "iteration_limit", "test_change", "stop_request", "unexpected_file", "anchor_change", "manual_slice", "plan_approval", "quota", "instance_failure", "bootstrap_check", "quota_resume_diff"]},
+        "reason": {"enum": ["none", "iteration_limit", "test_change", "stop_request", "unexpected_file", "anchor_change", "manual_slice", "plan_approval", "quota", "instance_failure", "bootstrap_check", "quota_resume_diff", "provider_outcome_unknown"]},
         "detail": {"type": ["string", "null"], "minLength": 1},
         "fingerprint": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
         "paths": {"$ref": "#/$defs/paths"},

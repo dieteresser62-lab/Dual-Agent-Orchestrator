@@ -15,7 +15,7 @@
         "name": "claude",
         "binary": "claude",
         "model": "opus",
-        "timeout_seconds": 1800,
+        "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null
       },
@@ -24,7 +24,7 @@
         "name": "codex",
         "binary": "codex",
         "model": "gpt-6-sol",
-        "timeout_seconds": 1800,
+        "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null
       }
@@ -589,7 +589,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "9501e7858feba33588169fdbbf9f4197c8e280d6bc37d726219505b11506ead4",
+        "namespace_sha256": "c00ed6a5fb9a5bfa33c393e60a911a76e870d4f9d6014e31ad0ee6199d68446d",
         "return_ordinals": [
           1,
           1,
@@ -628,7 +628,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "dd999cac80a138c3070ce5e1d1e664314ca74101e6e607d40c0097599acedad9",
+        "namespace_sha256": "6cc9290094a4f50881e6c10907f8286598655af42019d7a6d6dddab6cc2749e3",
         "return_ordinals": [
           2,
           2,
@@ -658,7 +658,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "2adb99d604ef14b1519b3428e2594a609dffc31fbd4d088c412d05eef2b7699a",
+        "namespace_sha256": "6e2f6ca5cfabd689dd7d7677192fc23999911afb9ce51323cdfd9c1da700008f",
         "return_ordinals": [
           3,
           2,
@@ -695,7 +695,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 67,
-        "namespace_sha256": "6398347c22ae88f4763a998ccdf550ea73fff528d54f3ebe952dcdb20f317c4c",
+        "namespace_sha256": "e3568b5ae15c9325ac4215871466e818eaab4ad26994876587f34a9f490d2638",
         "return_ordinals": [
           2,
           2,

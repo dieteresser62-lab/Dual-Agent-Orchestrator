@@ -293,6 +293,7 @@ _GATE_REASONS = {
     "instance_failure",
     "bootstrap_check",
     "quota_resume_diff",
+    "provider_outcome_unknown",
 }
 
 
