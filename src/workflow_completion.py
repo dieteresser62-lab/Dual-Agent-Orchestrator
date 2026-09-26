@@ -258,7 +258,10 @@ def _post_merge_effect(root: Path, state: WorkflowState, replay: object,
         return result, result
 
     result = executor.execute(
-        spec, reconcile=lambda: Reconciliation(ReconciliationOutcome.UNKNOWN),
+        spec, reconcile=lambda: Reconciliation(
+            ReconciliationOutcome.UNKNOWN if merge_enabled
+            else ReconciliationOutcome.NOT_OCCURRED
+        ),
         perform=perform,
     )
     outcome = json.loads(str(result))
@@ -321,6 +324,66 @@ def acknowledge_unknown_post_merge(root: Path, state: WorkflowState,
     bridge.record_side_effect_result(
         effect_class="post_merge_hook", work_unit_id=effects[0].work_unit_id,
         operation=effects[0].operation, result=result,
+        fingerprint_sha256=intent.fingerprint.sha256,
+        fingerprint_kind=intent.fingerprint.kind,
+    )
+
+
+def reconcile_disabled_post_merge_intent(
+    root: Path | None, state: WorkflowState, bridge: ArtifactBridge | None,
+) -> None:
+    """Finish a confirmed logical skip before generic resume scans open intents.
+
+    No hook process can have started while the run-bound merge policy was false.
+    The archive commit and exact intent still have to be present in the chain.
+    """
+    if bridge is None or root is None:
+        return
+    chain = bridge.store.current_chain()
+    if not chain:
+        return
+    replay = replay_artifacts(chain, state.run_id)
+    profile = replay.run_profile
+    if profile is None or profile.merge_completed_branch or not profile.post_merge_hook_enabled:
+        return
+    pending = [item for item in replay.side_effects
+               if item.effect_class == "post_merge_hook" and item.result is None]
+    if not pending:
+        return
+    if len(pending) != 1:
+        raise GitTransactionError("multiple open post-merge skip intents")
+    item = pending[0]
+    commit = item.operation[1]
+    archive_results = [effect for effect in replay.side_effects
+                       if effect.effect_class == "git_commit"
+                       and effect.work_unit_id == item.work_unit_id
+                       and effect.result == commit]
+    identity = inspect_repository(root)
+    if (len(archive_results) != 1 or identity.head != commit
+            or identity.branch != state.branch):
+        raise GitTransactionError("post-merge skip lacks its confirmed archive commit")
+    hook = Path(item.operation[2])
+    reason = _hook_reason(root, hook, base_head=None, target_head=None)
+    if reason is None and len(item.operation) == 4:
+        digest = _hook_content_digest(hook)
+        if "unavailable" in (item.operation[3], digest):
+            reason = "digest_unreadable"
+        elif digest != item.operation[3]:
+            reason = "content_changed"
+    if reason not in {"missing", "digest_unreadable"}:
+        reason = "merge_disabled"
+    effective_hook, standard = _hook_path(root)
+    if Path(os.path.abspath(effective_hook)) != hook:
+        raise GitTransactionError("post-merge hook path changed during skip resume")
+    overridden = (standard if standard is not None
+                  and Path(os.path.abspath(standard)) != hook
+                  and standard.is_file() else None)
+    intent = next(record for record in replay.records
+                  if record.record_id == item.intent_record_id)
+    bridge.record_side_effect_result(
+        effect_class="post_merge_hook", work_unit_id=item.work_unit_id,
+        operation=item.operation,
+        result=_hook_result("skipped", hook, reason=reason, overridden=overridden),
         fingerprint_sha256=intent.fingerprint.sha256,
         fingerprint_kind=intent.fingerprint.kind,
     )

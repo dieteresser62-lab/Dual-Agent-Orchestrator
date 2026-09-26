@@ -73,7 +73,7 @@ from workflow_state import (
 
 
 HARNESS_SCHEMA_VERSION = "provider-free-crash-harness-v1"
-RESULT_SCHEMA_VERSION = "provider-free-crash-harness-result-v1"
+RESULT_SCHEMA_VERSION = "provider-free-crash-harness-result-v2"
 FIXED_TIME = "2026-09-01T00:00:00+00:00"
 FINGERPRINT = "a" * 64
 FIRST_SLICE_START_COMMIT = "c" * 40
@@ -85,6 +85,7 @@ LEDGER_ORDER = (
     "queue_move",
     "internal",
     "ledger",
+    "post_merge_hook",
 )
 BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
 RUNTIME_BOUNDARY_EFFECTS = {
@@ -97,7 +98,19 @@ RUNTIME_BOUNDARY_EFFECTS = {
     "final_review_provider": "provider_start",
     "final_review_validation": "internal",
     "followup_task": "file_write",
+    "post_merge_with_merge": "post_merge_hook",
+    "post_merge_without_merge": "post_merge_hook",
+    "post_merge_after_process_start": "post_merge_hook",
+    "post_merge_after_process_end": "post_merge_hook",
 }
+
+HOOK_RUNTIME_BOUNDARIES = frozenset({
+    "post_merge_with_merge", "post_merge_without_merge",
+    "post_merge_after_process_start", "post_merge_after_process_end",
+})
+HOOK_PROCESS_BOUNDARIES = frozenset({
+    "post_merge_after_process_start", "post_merge_after_process_end",
+})
 
 
 class CrashHarnessError(RuntimeError):
@@ -431,6 +444,11 @@ class CrashHarnessManifest:
             raise CrashHarnessError(
                 "manifest runtime boundaries differ from the target run topology"
             )
+        if any(
+            manifest.boundary_matrix[name] != BOUNDARY_ORDER
+            for name in ("post_merge_hook",)
+        ):
+            raise CrashHarnessError("post-merge hook boundary inventory is incomplete")
         if manifest.journeys != (
             "plan-implement-final-review",
             "multi-slice-correction-observation-resume",
@@ -1027,19 +1045,393 @@ def _run_crash_case(
     }
 
 
+def _run_post_merge_case(
+    root: Path, runtime_boundary: str, phase: str,
+) -> Mapping[str, object]:
+    """Crash a real completion run and resume from its durable record chain."""
+
+    # These fixture builders create a small real Git repository and native,
+    # provider-free answers. They are included in the measured source set.
+    tests_root = Path(__file__).resolve().parents[1] / "tests"
+    if str(tests_root) not in sys.path:
+        sys.path.insert(0, str(tests_root))
+    from test_orchestrator_runtime import (  # noqa: PLC0415
+        _args, _native_final_review_output, _native_implementation_output,
+        _native_plan_output, _native_review_approval, _repository, _write_task,
+    )
+    from inbox_watcher import WatchTaskIdentity, save_watch_identity
+    from artifact_models import SideEffectPayload
+    import orchestrator
+    import workflow_completion
+    from git_service import GitTransactionError
+
+    merge = runtime_boundary != "post_merge_without_merge"
+    label = f"{runtime_boundary}-{phase}"
+    case_parent = root / label
+    case_parent.mkdir(parents=True, exist_ok=False)
+    branch = "feature/post-merge-crash-proof"
+    repository = _repository(case_parent, branch)
+    (repository / ".git/info/exclude").write_text("inbox/\noutbox/\n", encoding="utf-8")
+    task = repository / "inbox/task.md"
+    task.parent.mkdir()
+    _write_task(task, branch, "src/one.py")
+    task_bytes = task.read_bytes()
+    task_digest = hashlib.sha256(task_bytes).hexdigest()
+    audit_path = f"docs/internal/task-review-{task_digest[:8]}.md"
+    run_id = "watch-post-merge-crash-proof"
+    save_watch_identity(task, WatchTaskIdentity(
+        run_id, task_digest, True, "structured-v2", 2,
+    ))
+    hook = repository / ".git/hooks/post-merge"
+    counter = case_parent / "hook-count"
+    started = case_parent / "hook-started"
+    release = case_parent / "hook-release"
+    ended = case_parent / "hook-ended"
+    hook_pid = case_parent / "hook-pid"
+    if phase != "after_process_start":
+        release.write_text("go", encoding="ascii")
+    hook.write_text(
+        "#!/bin/sh\n"
+        f"printf x >> '{counter}'\n"
+        f"touch '{started}'\n"
+        f"while [ ! -e '{release}' ]; do sleep 0.02; done\n"
+        f"touch '{ended}'\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    def args_for_run():
+        args = _args(repository, task)
+        args.watch_run_id = run_id
+        if not merge:
+            from dataclasses import replace as dc_replace
+            args.repo_config = dc_replace(
+                args.repo_config,
+                workflow=dc_replace(
+                    args.repo_config.workflow, merge_completed_branch=False,
+                ),
+            )
+        return args
+
+    failure_file = case_parent / "worker-error"
+    child = os.fork()
+    if child == 0:
+        try:
+            os.chdir(repository)
+            original_init = ProductionWorkflowDriver.__init__
+
+            def injected_init(driver, *args, **kwargs):
+                original_init(driver, *args, **kwargs)
+
+                def crash_at_boundary(boundary):
+                    if (runtime_boundary not in HOOK_PROCESS_BOUNDARIES
+                        and boundary.effect_class == "post_merge_hook"
+                        and boundary.phase.value == phase):
+                        os._exit(77)
+
+                driver._side_effect_boundary_observer = crash_at_boundary
+
+            ProductionWorkflowDriver.__init__ = injected_init
+
+            def codex(_driver, invocation):  # allowlist:provider -- scripted implementer
+                target = repository / "src/one.py"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if invocation.step.value == "codex_plan":  # allowlist:provider -- persisted step
+                    target.write_text("value = 0\n", encoding="utf-8")
+                    return _native_plan_output(
+                        invocation, summary="add value",
+                        scope_paths=(audit_path, "src/one.py"),
+                    )
+                target.write_text("value = 1\n", encoding="utf-8")
+                return _native_implementation_output(invocation)
+
+            def review(driver, invocation):
+                if invocation.step.value == "claude_final_review":  # allowlist:provider -- persisted step
+                    return _native_final_review_output(
+                        driver, invocation, finding_id=None,
+                    )
+                return _native_review_approval(invocation)
+
+            ProductionWorkflowDriver.invoke_codex = codex  # allowlist:provider -- scripted adapter
+            ProductionWorkflowDriver.invoke_reviewer = review
+            if phase == "after_process_start":
+                real_popen = workflow_completion.subprocess.Popen
+
+                def started_popen(*args, **kwargs):
+                    process = real_popen(*args, **kwargs)
+                    if args and tuple(args[0]) == (str(hook), "0"):
+                        hook_pid.write_text(str(process.pid), encoding="ascii")
+                        import time
+                        for _ in range(500):
+                            if started.exists():
+                                os._exit(77)
+                            time.sleep(0.01)
+                        raise CrashHarnessError("hook process did not signal start")
+                    return process
+
+                workflow_completion.subprocess.Popen = started_popen
+            elif phase == "after_process_end":
+                real_run_hook = workflow_completion._run_hook
+
+                def finished_hook(*args, **kwargs):
+                    real_run_hook(*args, **kwargs)
+                    if not ended.exists():
+                        raise CrashHarnessError("hook process did not signal end")
+                    os._exit(77)
+
+                workflow_completion._run_hook = finished_hook
+            orchestrator.run_production_workflow(task, args_for_run())
+            failure_file.write_text("worker completed without declared crash", encoding="utf-8")
+        except BaseException as exc:
+            failure_file.write_text(repr(exc), encoding="utf-8")
+        os._exit(2)
+
+    _, worker_status = os.waitpid(child, 0)
+    if os.waitstatus_to_exitcode(worker_status) != 77:
+        detail = failure_file.read_text(encoding="utf-8") if failure_file.exists() else "no diagnostic"
+        raise CrashHarnessError(f"hook worker missed {label}: {detail}")
+    if phase == "after_process_start":
+        if not started.exists():
+            raise CrashHarnessError("hook start boundary lacks physical signal")
+        release.write_text("go", encoding="ascii")
+        import time
+        for _ in range(500):
+            if ended.exists():
+                break
+            time.sleep(0.01)
+        else:
+            raise CrashHarnessError("orphan hook did not finish after release")
+        pid = int(hook_pid.read_text(encoding="ascii"))
+        for _ in range(500):
+            process_status = Path(f"/proc/{pid}/stat")
+            try:
+                status = process_status.read_text().split()[2]
+            except FileNotFoundError:
+                break
+            if status == "Z":
+                break
+            time.sleep(0.01)
+        else:
+            raise CrashHarnessError("orphan hook remained running after release")
+
+    store = ArtifactStore(repository, run_id)
+    before = replay_artifacts(store.load_chain(), run_id)
+    open_hooks = [effect for effect in before.side_effects
+                  if effect.effect_class == "post_merge_hook" and effect.result is None]
+    known_hooks = [effect for effect in before.side_effects
+                   if effect.effect_class == "post_merge_hook" and effect.result is not None]
+    if len(open_hooks) + len(known_hooks) != (0 if phase == "before_intent" else 1):
+        raise CrashHarnessError("hook crash produced an unexpected intent set")
+    if phase != "before_intent" and not open_hooks and phase != "after_result":
+        raise CrashHarnessError("hook result appeared before its declared boundary")
+    commit = subprocess.run(
+        ("git", "rev-parse", "master" if merge else branch),
+        cwd=repository, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if any(effect.operation[1] != commit for effect in (*open_hooks, *known_hooks)):
+        raise CrashHarnessError("hook intent is not bound to the confirmed commit")
+    if task.read_bytes() != task_bytes:
+        raise CrashHarnessError("task changed before hook resume")
+    if (repository / "outbox/done").exists():
+        raise CrashHarnessError("watch queue moved before hook result")
+
+    previous_cwd = Path.cwd()
+    os.chdir(repository)
+    ordinary_rejected = False
+    acknowledgment = False
+    production_resume_attempts = 0
+    production_resume_successes = 0
+    original_run_production_workflow = orchestrator.run_production_workflow
+
+    def counted_production_resume(*args, **kwargs):
+        nonlocal production_resume_attempts, production_resume_successes
+        production_resume_attempts += 1
+        result = original_run_production_workflow(*args, **kwargs)
+        if result.workflow_completed:
+            production_resume_successes += 1
+        return result
+
+    orchestrator.run_production_workflow = counted_production_resume
+    try:
+        args = args_for_run()
+        args.resume = True
+        try:
+            first = orchestrator.run_production_workflow(task, args)
+            if not first.workflow_completed:
+                raise CrashHarnessError("ordinary hook resume did not finish")
+        except Exception as exc:
+            cause = exc
+            while cause is not None and not isinstance(
+                cause, SideEffectReconciliationError
+            ):
+                cause = cause.__cause__
+            if cause is None:
+                raise
+            ordinary_rejected = True
+        expected_rejection = merge and phase not in {"before_intent", "after_result"}
+        if ordinary_rejected != expected_rejection:
+            raise CrashHarnessError("ordinary resume disagreed with hook uncertainty")
+        if ordinary_rejected:
+            if not merge:
+                raise CrashHarnessError("logical merge-disabled skip was treated as uncertain")
+            pre_ack = replay_artifacts(store.load_chain(), run_id)
+            if any(effect.effect_class == "post_merge_hook" and effect.result is not None
+                   for effect in pre_ack.side_effects):
+                raise CrashHarnessError("uncertain hook outcome gained a terminal result")
+            if (repository / "outbox/done").exists():
+                raise CrashHarnessError("watch queue moved before hook acknowledgment")
+            record_count = len(store.load_chain())
+            args.acknowledge_post_merge = "0" * 40
+            args.post_merge_rationale = "Physischer Ausgang geprüft"
+            try:
+                orchestrator.run_production_workflow(task, args)
+            except GitTransactionError:
+                pass
+            else:
+                raise CrashHarnessError("foreign commit acknowledged an open hook")
+            if len(store.load_chain()) != record_count:
+                raise CrashHarnessError("foreign commit wrote an acknowledgment")
+            task.write_text("changed task\n", encoding="utf-8")
+            try:
+                orchestrator.run_production_workflow(task, args)
+            except Exception as exc:
+                if not any(word in str(exc).lower() for word in (
+                    "digest", "identity", "differ", "changed",
+                )):
+                    raise CrashHarnessError("changed task failed for an unrelated reason") from exc
+            else:
+                raise CrashHarnessError("changed task acknowledged an open hook")
+            if len(store.load_chain()) != record_count:
+                raise CrashHarnessError("changed task wrote an acknowledgment")
+            task.write_bytes(task_bytes)
+            args.acknowledge_post_merge = commit
+            resumed = orchestrator.run_production_workflow(task, args)
+            acknowledgment = True
+            if not resumed.workflow_completed:
+                raise CrashHarnessError("acknowledged hook resume did not finish")
+        args.acknowledge_post_merge = None
+        again = orchestrator.run_production_workflow(task, args)
+        if not again.workflow_completed:
+            raise CrashHarnessError("completed hook run did not resume idempotently")
+        args.resume_explicit = True
+        args.task_file_explicit = True
+        args.inbox_dir = repository / "inbox"
+        args.outbox_dir = repository / "outbox"
+        if orchestrator.run_pipeline(task, args) != 0:
+            raise CrashHarnessError("watch queue did not finalize")
+    finally:
+        orchestrator.run_production_workflow = original_run_production_workflow
+        os.chdir(previous_cwd)
+
+    chain = store.load_chain()
+    replay = replay_artifacts(chain, run_id)
+    hooks = [effect for effect in replay.side_effects
+             if effect.effect_class == "post_merge_hook"]
+    results = [record for record in chain
+               if isinstance(record.payload, SideEffectPayload)
+               and record.payload.effect_class == "post_merge_hook"
+               and record.payload.phase == "result"]
+    if len(hooks) != 1 or len(results) != 1 or hooks[0].result is None:
+        raise CrashHarnessError("hook completion lacks one durable result")
+    if results[0].payload.effect_key != hooks[0].effect_key:
+        raise CrashHarnessError("hook result belongs to a foreign intent")
+    outcome = json.loads(hooks[0].result)
+    expected_status = (
+        "skipped" if not merge else
+        "acknowledged_unknown" if ordinary_rejected else "success"
+    )
+    if outcome["status"] != expected_status:
+        raise CrashHarnessError("hook result has the wrong terminal status")
+    if not merge and outcome.get("reason") != "merge_disabled":
+        raise CrashHarnessError("merge-disabled hook has no skip record")
+    expected_calls = (0 if not merge or phase in {"after_intent", "before_effect"}
+                      else 1)
+    calls = counter.read_text(encoding="ascii") if counter.exists() else ""
+    if calls != "x" * expected_calls:
+        raise CrashHarnessError("physical hook invocation count differs from boundary")
+    if merge and calls == "" and not acknowledgment:
+        raise CrashHarnessError("hook finished without a call or acknowledgment")
+    queue_done = list((repository / "outbox/done").glob("*.md"))
+    if len(queue_done) != 1 or queue_done[0].read_bytes() != task_bytes or task.exists():
+        raise CrashHarnessError("watch queue moved before terminal hook result")
+    head = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repository,
+                          check=True, capture_output=True, text=True).stdout.strip()
+    branch_head = subprocess.run(
+        ("git", "rev-parse", "master" if merge else branch), cwd=repository,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    if head != commit or branch_head != commit:
+        raise CrashHarnessError("confirmed completion commit was lost on resume")
+    result_index = chain.index(results[0])
+    queue_result_indices = [
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "queue_move"
+        and record.payload.phase == "result"
+    ]
+    queue_done_after_result = (
+        len(queue_done) == 1 and len(queue_result_indices) == 1
+        and result_index < queue_result_indices[0]
+    )
+    completed_intent_after_resume = (
+        len(hooks) == 1 and hooks[0].result is not None
+        and results[0].payload.effect_key == hooks[0].effect_key
+    )
+    if not queue_done_after_result or not completed_intent_after_resume:
+        raise CrashHarnessError("hook result, intent, and queue move are not ordered")
+    evidence = {
+        "runtime_boundary": runtime_boundary,
+        "effect_class": "post_merge_hook", "phase": phase,
+        "requested_crashes": 1, "observed_crashes": 1,
+        "physical_execution_count": len(calls),
+        "process_started_observed": started.exists(),
+        "process_ended_observed": ended.exists(),
+        "result_completion_count": len(results),
+        "ordinary_resume_rejected": ordinary_rejected,
+        "acknowledgment_recorded": (
+            acknowledgment and outcome["status"] == "acknowledged_unknown"
+        ),
+        "terminal_status": outcome["status"],
+        "skip_reason": outcome.get("reason"),
+        "commit_binding_verified": hooks[0].operation[1] == commit,
+        "branch_head_verified": head == commit and branch_head == commit,
+        "queue_done_after_result": queue_done_after_result,
+        "open_intent_after_crash": len(open_hooks) == 1,
+        "completed_intent_after_resume": completed_intent_after_resume,
+        "production_resume_entry": "orchestrator.run_production_workflow",
+        "production_resume_attempts": production_resume_attempts,
+        "production_resume_successes": production_resume_successes,
+        "production_boundary_entry": "workflow_completion._post_merge_effect",
+        "resume_attempts": production_resume_attempts,
+        "record_count": len(chain),
+        "end_state": "converged",
+    }
+    return {**evidence, "hook_evidence_sha256": hashlib.sha256(
+        canonical_json(evidence)
+    ).hexdigest()}
+
+
 def run_crash_matrix(root: Path, manifest: CrashHarnessManifest) -> tuple[Mapping[str, object], ...]:
     """Run every manifest-derived boundary plus a repeated worst-window crash."""
 
     matrix = [
-        _run_crash_case(
-            root,
-            runtime_boundary,
-            effect_class,
-            SideEffectBoundaryPhase(phase),
-        )
+        (_run_post_merge_case(root, runtime_boundary, phase)
+         if runtime_boundary in HOOK_RUNTIME_BOUNDARIES
+         else _run_crash_case(
+             root, runtime_boundary, effect_class,
+             SideEffectBoundaryPhase(phase),
+         ))
         for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        if runtime_boundary not in HOOK_PROCESS_BOUNDARIES
         for phase in manifest.boundary_matrix[effect_class]
     ]
+    matrix.extend(
+        _run_post_merge_case(root, boundary, phase)
+        for boundary, phase in (
+            ("post_merge_after_process_start", "after_process_start"),
+            ("post_merge_after_process_end", "after_process_end"),
+        )
+    )
     matrix.extend(
         _run_crash_case(
             root,
@@ -1049,16 +1441,26 @@ def run_crash_matrix(root: Path, manifest: CrashHarnessManifest) -> tuple[Mappin
             requested_crashes=2,
         )
         for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        if runtime_boundary not in HOOK_RUNTIME_BOUNDARIES
         if "after_effect" in manifest.boundary_matrix[effect_class]
     )
     expected_single_cases = {
         (runtime_boundary, effect_class, phase, 1)
         for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        if runtime_boundary not in HOOK_PROCESS_BOUNDARIES
         for phase in manifest.boundary_matrix[effect_class]
     }
+    expected_single_cases.update({
+        (boundary, "post_merge_hook", phase, 1)
+        for boundary, phase in (
+            ("post_merge_after_process_start", "after_process_start"),
+            ("post_merge_after_process_end", "after_process_end"),
+        )
+    })
     expected_repeated_cases = {
         (runtime_boundary, effect_class, "after_effect", 2)
         for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+        if runtime_boundary not in HOOK_RUNTIME_BOUNDARIES
         if "after_effect" in manifest.boundary_matrix[effect_class]
     }
     observed_cases = {
@@ -1079,6 +1481,8 @@ def run_crash_matrix(root: Path, manifest: CrashHarnessManifest) -> tuple[Mappin
     canonical_by_boundary: dict[str, set[tuple[str, str]]] = {}
     for row in matrix:
         if row["end_state"] != "converged":
+            continue
+        if row["runtime_boundary"] in HOOK_RUNTIME_BOUNDARIES:
             continue
         canonical_by_boundary.setdefault(
             str(row["runtime_boundary"]), set()
@@ -1220,6 +1624,7 @@ def _tracked_implementation_sources(
             ":(glob)schemas/**/*.json",
             ":(glob)src/**/*.py",
             "scripts/crash_harness.py",
+            "tests/test_orchestrator_runtime.py",
             manifest_relative,
         ),
         cwd=root,
@@ -1568,7 +1973,7 @@ def run_provider_free_harness(
     real_provider_starts = 0
     real_provider_process_starts = 0
     original_run_agent = agent_runtime.run_agent
-    original_popen = agent_runtime.subprocess.Popen
+    original_provider_process = agent_runtime._run_agent_process
     original_read_plan = readable_audit.read_approved_plan
 
     def forbidden_provider_start(*args: object, **kwargs: object) -> str:
@@ -1590,7 +1995,7 @@ def run_provider_free_harness(
         )[0]
 
     agent_runtime.run_agent = forbidden_provider_start
-    agent_runtime.subprocess.Popen = forbidden_provider_process
+    agent_runtime._run_agent_process = forbidden_provider_process
     readable_audit.read_approved_plan = scripted_approved_plan
     try:
         matrix = run_crash_matrix(work_root / "matrix", manifest)
@@ -1600,7 +2005,7 @@ def run_provider_free_harness(
         retries = prove_typed_failure_continuations()
     finally:
         agent_runtime.run_agent = original_run_agent
-        agent_runtime.subprocess.Popen = original_popen
+        agent_runtime._run_agent_process = original_provider_process
         readable_audit.read_approved_plan = original_read_plan
     if real_provider_starts != 0 or real_provider_process_starts != 0:
         raise CrashHarnessError("provider-free harness crossed the real provider boundary")
@@ -1612,6 +2017,7 @@ def run_provider_free_harness(
             and row["requested_crashes"] == 1
         )
         for runtime_boundary in manifest.runtime_boundaries
+        if runtime_boundary not in HOOK_RUNTIME_BOUNDARIES
     }
     semantic_heads = {
         runtime_boundary: next(
@@ -1621,11 +2027,16 @@ def run_provider_free_harness(
             and row["requested_crashes"] == 1
         )
         for runtime_boundary in manifest.runtime_boundaries
+        if runtime_boundary not in HOOK_RUNTIME_BOUNDARIES
     }
     boundary_evidence = {
         runtime_boundary: {
             "ledger_class": effect_class,
-            "tested_phases": list(manifest.boundary_matrix[effect_class]),
+            "tested_phases": (
+                ["after_process_start"] if runtime_boundary == "post_merge_after_process_start"
+                else ["after_process_end"] if runtime_boundary == "post_merge_after_process_end"
+                else list(manifest.boundary_matrix[effect_class])
+            ),
             "all_injected_crashes_observed": all(
                 row["observed_crashes"] == row["requested_crashes"]
                 for row in matrix
@@ -1710,6 +2121,10 @@ def run_provider_free_harness(
             if row["effect_class"] == "queue_move"
         ),
         "crash_matrix": matrix,
+        "post_merge_hook_evidence": [
+            row for row in matrix
+            if row["runtime_boundary"] in HOOK_RUNTIME_BOUNDARIES
+        ],
         "workflow_boundary_evidence": boundary_evidence,
         "record_ahead_evidence": {
             runtime_boundary: {
@@ -1729,6 +2144,7 @@ def run_provider_free_harness(
                 ),
             }
             for runtime_boundary, effect_class in manifest.runtime_boundaries.items()
+            if runtime_boundary not in HOOK_RUNTIME_BOUNDARIES
             if "after_effect" in manifest.boundary_matrix[effect_class]
         },
         "semantic_binding": semantic,

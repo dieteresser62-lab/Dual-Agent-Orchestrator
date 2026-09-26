@@ -1434,6 +1434,24 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
     assert open_hooks[0].operation[1] == commit
     assert before.run_profile.base_branch == ("master" if merge else None)
 
+    if not merge:
+        monkeypatch.setattr(workflow_completion, "_hook_reason", real_reason)
+        args = args_for_run()
+        args.resume = True
+        resumed = orchestrator.run_production_workflow(task, args)
+        assert resumed.workflow_completed
+        assert not marker.exists()
+        replay = replay_artifacts(store.load_chain(), run_id)
+        skipped = [item for item in replay.side_effects
+                   if item.effect_class == "post_merge_hook"]
+        assert len(skipped) == 1
+        assert json.loads(skipped[0].result)["reason"] == "merge_disabled"
+        assert len([record for record in store.load_chain()
+                    if isinstance(record.payload, SideEffectPayload)
+                    and record.payload.effect_class == "post_merge_hook"
+                    and record.payload.phase == "result"]) == 1
+        return
+
     args = args_for_run()
     args.resume = True
     args.acknowledge_post_merge = commit
