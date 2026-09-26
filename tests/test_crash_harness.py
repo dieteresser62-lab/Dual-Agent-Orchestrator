@@ -33,6 +33,7 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     WorkflowPolicyPayload,
+    canonical_json,
 )
 from artifact_replay import ArtifactReplayError
 from side_effects import SideEffectBoundaryPhase
@@ -49,7 +50,7 @@ from crash_harness import (
 )
 
 
-MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v1.json"
+MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v2.json"
 
 
 @pytest.mark.parametrize("role", ("codex", "claude"))
@@ -286,7 +287,7 @@ def test_implementation_sources_include_untracked_and_exclude_ignored_or_unmatch
 def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> None:
     manifest = CrashHarnessManifest.load(MANIFEST)
 
-    assert manifest.scenario_version == "target-run-chain-removal-v1"
+    assert manifest.scenario_version == "post-merge-hook-boundaries-v2"
     assert manifest.effect_classes == LEDGER_ORDER
     assert set(manifest.effect_classes) == set(SIDE_EFFECT_CLASSES)
     assert manifest.boundary_matrix == {
@@ -323,6 +324,23 @@ def test_manifest_fails_closed_when_one_ledger_edge_is_missing(tmp_path: Path) -
         CrashHarnessManifest.load(path)
 
 
+@pytest.mark.parametrize("missing", ("class", "phase", "process_boundary"))
+def test_manifest_fails_closed_when_hook_edge_is_missing(
+    tmp_path: Path, missing: str,
+) -> None:
+    document = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if missing == "class":
+        document["effect_classes"].remove("post_merge_hook")
+    elif missing == "phase":
+        document["boundary_matrix"]["post_merge_hook"].remove("before_effect")
+    else:
+        del document["runtime_boundaries"]["post_merge_after_process_start"]
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(CrashHarnessError):
+        CrashHarnessManifest.load(path)
+
+
 def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     tmp_path: Path,
 ) -> None:
@@ -335,7 +353,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     result = json.loads(payload)
 
     assert result["schema_version"] == RESULT_SCHEMA_VERSION
-    assert result["scenario_version"] == "target-run-chain-removal-v1"
+    assert result["scenario_version"] == "post-merge-hook-boundaries-v2"
     assert result["repository_commit"] == "f" * 40
     assert result["mode"] == "provider-free"
     assert result["baseline_resolution"] == {
@@ -366,10 +384,10 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert len(singles) == sum(
         len(CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class])
         for effect_class in CrashHarnessManifest.load(MANIFEST).runtime_boundaries.values()
-    )
-    assert len(singles) == 48
+    ) - 10
+    assert len(singles) == 62
     assert len(repeated) == 6
-    assert len(matrix) == 54
+    assert len(matrix) == 68
     assert {
         (row["runtime_boundary"], row["effect_class"], row["phase"])
         for row in singles
@@ -378,7 +396,11 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         for runtime_boundary, effect_class in CrashHarnessManifest.load(
             MANIFEST
         ).runtime_boundaries.items()
-        for phase in CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class]
+        for phase in (
+            ("after_process_start",) if runtime_boundary == "post_merge_after_process_start"
+            else ("after_process_end",) if runtime_boundary == "post_merge_after_process_end"
+            else CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class]
+        )
     }
     converged = [row for row in matrix if row["end_state"] == "converged"]
     stopped = [row for row in matrix if row["end_state"] == "stop_condition"]
@@ -386,7 +408,11 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert stopped == []
     assert all(
         row["physical_execution_count"]
-        == (0 if row["effect_class"] in {"internal", "ledger"} else 1)
+        == (0 if row["effect_class"] in {"internal", "ledger"}
+            or row["runtime_boundary"] == "post_merge_without_merge"
+            or row["effect_class"] == "post_merge_hook"
+            and row["phase"] in {"after_intent", "before_effect"}
+            else 1)
         for row in converged
     )
     assert all(row["result_completion_count"] == 1 for row in converged)
@@ -401,6 +427,36 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert all(row.get("stop_condition_id") is None for row in matrix)
     assert all(row.get("stop_scope") is None for row in matrix)
     assert all(row["observed_crashes"] == row["requested_crashes"] for row in matrix)
+    hook_rows = result["post_merge_hook_evidence"]
+    assert len(hook_rows) == 14
+    for row in hook_rows:
+        assert not {"record_head", "chain_semantic_sha256",
+                    "side_effect_projection_sha256"} & row.keys()
+        measured = {key: value for key, value in row.items()
+                    if key != "hook_evidence_sha256"}
+        assert row["hook_evidence_sha256"] == hashlib.sha256(
+            canonical_json(measured)
+        ).hexdigest()
+        # run_pipeline performs one further production resume before queue finalization.
+        expected_attempts = 6 if row["ordinary_resume_rejected"] else 3
+        assert row["production_resume_attempts"] == expected_attempts
+        assert row["resume_attempts"] == expected_attempts
+        assert row["production_resume_successes"] == 3
+    assert all(row["commit_binding_verified"] and row["branch_head_verified"]
+               and row["queue_done_after_result"] and row["completed_intent_after_resume"]
+               for row in hook_rows)
+    assert all(row["terminal_status"] == "skipped"
+               and row["skip_reason"] == "merge_disabled"
+               and row["physical_execution_count"] == 0
+               and not row["ordinary_resume_rejected"]
+               for row in hook_rows
+               if row["runtime_boundary"] == "post_merge_without_merge")
+    assert all(row["terminal_status"] == "acknowledged_unknown"
+               and row["ordinary_resume_rejected"]
+               and row["acknowledgment_recorded"]
+               for row in hook_rows
+               if row["runtime_boundary"] != "post_merge_without_merge"
+               and row["phase"] not in {"before_intent", "after_result"})
     assert all(row["phase"] == "after_effect" for row in repeated)
     assert result["semantic_binding"]["rejected"] is True
     assert result["semantic_binding"]["projection_call_count"] == 0
@@ -409,7 +465,9 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert result["unknown_reconciliation"]["outcome"] == "unknown"
     assert result["unknown_reconciliation"]["rejected"] is True
     assert result["unknown_reconciliation"]["physical_execution_count"] == 0
-    assert set(result["record_semantic_heads"]) == set(RUNTIME_BOUNDARY_EFFECTS)
+    non_hook_boundaries = set(RUNTIME_BOUNDARY_EFFECTS) - crash_harness.HOOK_RUNTIME_BOUNDARIES
+    assert set(result["record_heads"]) == non_hook_boundaries
+    assert set(result["record_semantic_heads"]) == non_hook_boundaries
     assert all(
         item["all_injected_crashes_observed"]
         for item in result["workflow_boundary_evidence"].values()
@@ -428,7 +486,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
             "result_completion_count": 1,
         }
         for runtime_boundary, effect_class in RUNTIME_BOUNDARY_EFFECTS.items()
-        if effect_class not in {"internal", "ledger"}
+        if effect_class not in {"internal", "ledger", "post_merge_hook"}
     }
     retries = result["retry_continuations"]
     assert [item["failure_kind"] for item in retries] == [
@@ -651,7 +709,8 @@ def test_harness_result_is_byte_stable_and_self_bound(tmp_path: Path) -> None:
                     for path in (repository / "src").rglob("*.py")
                 ),
                 "scripts/crash_harness.py",
-                "tests/fixtures/crash_harness/manifest-v1.json",
+                "tests/fixtures/crash_harness/manifest-v2.json",
+                "tests/test_orchestrator_runtime.py",
             )
         )
     )

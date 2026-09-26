@@ -88,6 +88,7 @@ from workflow_completion import (
     preflight_chain as preflight_reviewed_chain,
     check_archive_directory,
     acknowledge_unknown_post_merge,
+    reconcile_disabled_post_merge_intent,
 )
 from plan_handoff import (
     AcceptanceReviewLimitReached,
@@ -2620,6 +2621,10 @@ class ProductionWorkflowDriver:
         )
         try:
             self._bind_artifact_store(persisted)
+            reconcile_disabled_post_merge_intent(
+                getattr(self, "root", None), persisted,
+                getattr(self, "_artifact_bridge", None),
+            )
             if new_request_identity:
                 self._persist_request_identity_prerequisites(persisted)
             try:
