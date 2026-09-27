@@ -14,7 +14,7 @@ from typing import Callable, Iterable, Mapping, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     QuotaWaitPolicy,
@@ -61,8 +61,8 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     FindingClass,
@@ -527,7 +527,7 @@ class CodexInvocation:
     step: WorkflowStep
     round_number: int
     prompt: str
-    native_request: workflow_requests.NativeCodexRequestBundle | None = None
+    native_request: workflow_requests.NativeImplementerRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
     request_sequence: int | None = None
 
@@ -643,14 +643,14 @@ class WorkflowDriver(Protocol):
 
     def invoke_codex(
         self, invocation: CodexInvocation
-    ) -> str | NativeAgentCodexOutput: ...
+    ) -> str | NativeAgentImplementerOutput: ...
 
-    def recover_pending_native_codex(  # allowlist:provider -- canonical capability
+    def recover_pending_native_implementer(  # allowlist:provider -- canonical capability
         self,
         invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        contract: CodexStepContract,  # allowlist:provider -- typed boundary
+        contract: ImplementerStepContract,  # allowlist:provider -- typed boundary
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None: ...  # allowlist:provider -- typed boundary
+    ) -> NativeAgentImplementerOutput | None: ...  # allowlist:provider -- typed boundary
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
@@ -736,9 +736,9 @@ class WorkflowDriver(Protocol):
         fingerprint: str,
     ) -> str: ...
 
-    def persist_native_codex_contract(  # allowlist:provider -- canonical capability
+    def persist_native_implementer_contract(  # allowlist:provider -- canonical capability
         self,
-        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        output: NativeAgentImplementerOutput,  # allowlist:provider -- typed boundary
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
@@ -780,12 +780,12 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "write_invocation_failure_diagnostic",
         "persist_scope_extension",
         "scope_extension_source_request_id",
-        "persist_native_codex_contract",  # allowlist:provider -- canonical capability
+        "persist_native_implementer_contract",  # allowlist:provider -- canonical capability
         "persist_native_review_contract",
         "persist_review_packet",
         "persist_validation_attestation",
         "persist_validation_request",
-        "recover_pending_native_codex",  # allowlist:provider -- canonical capability
+        "recover_pending_native_implementer",  # allowlist:provider -- canonical capability
         "recover_pending_native_reviewer",
         "recover_pending_native_reviewer_before_policy",
         "recover_pending_validation_attestation",
@@ -2002,9 +2002,9 @@ class WorkflowEngine:
         history: WorkflowHistory,
     ) -> tuple[
         bool,
-        CodexStepContract,  # allowlist:provider -- typed boundary
+        ImplementerStepContract,  # allowlist:provider -- typed boundary
         CodexInvocation,  # allowlist:provider -- typed boundary
-        NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+        NativeAgentImplementerOutput | None,  # allowlist:provider -- typed boundary
         WorkflowHistory,
     ]:
         unit, context = (
@@ -2016,7 +2016,7 @@ class WorkflowEngine:
             WorkflowStep.CODEX_PLAN_REVISION,
         )
         readiness = ReadinessMarker.PLAN if is_plan else ReadinessMarker.IMPLEMENTATION
-        contract = CodexStepContract(
+        contract = ImplementerStepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             readiness_marker=readiness,
             slice_id=f"{unit.slice_id:02d}",
@@ -2034,17 +2034,17 @@ class WorkflowEngine:
             enforce_expected_test_files=not context.dynamic_test_scope,
         )
         request_kind = (
-            workflow_requests.NativeCodexRequestKind.PLAN
+            workflow_requests.NativeImplementerRequestKind.PLAN
             if is_plan
-            else workflow_requests.NativeCodexRequestKind.CORRECTION
+            else workflow_requests.NativeImplementerRequestKind.CORRECTION
             if state.current_step is WorkflowStep.CODEX_CORRECTION
-            else workflow_requests.NativeCodexRequestKind.IMPLEMENTATION
+            else workflow_requests.NativeImplementerRequestKind.IMPLEMENTATION
         )
         is_correction_request = (
-            request_kind is workflow_requests.NativeCodexRequestKind.CORRECTION
+            request_kind is workflow_requests.NativeImplementerRequestKind.CORRECTION
         )
         history = self._bind_correction_request_history(state, history)
-        additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
+        additional_authorized_paths = self._fingerprint_bound_implementer_scope_paths(
             state
         )
         current_slice_diff: str | None = None
@@ -2064,7 +2064,7 @@ class WorkflowEngine:
             # asking the driver to reconstruct the same delta a second time
             # would add another mutable input surface.
             current_slice_diff = correction_changes.full_diff
-        native_request = workflow_requests.native_codex_request(
+        native_request = workflow_requests.native_implementer_request(
             state=state,
             context=context,
             history=history,
@@ -2086,7 +2086,7 @@ class WorkflowEngine:
             previous_findings=history.findings,
         )
         recovered = (
-            self.driver.recover_pending_native_codex(  # allowlist:provider
+            self.driver.recover_pending_native_implementer(  # allowlist:provider
                 invocation, contract, history
             )
             if native_request is not None
@@ -2098,7 +2098,7 @@ class WorkflowEngine:
             )
             if authoritative_history.findings != history.findings:
                 history = authoritative_history
-                native_request = workflow_requests.native_codex_request(
+                native_request = workflow_requests.native_implementer_request(
                     state=state,
                     context=context,
                     history=history,
@@ -2209,16 +2209,16 @@ class WorkflowEngine:
         history: WorkflowHistory,
         is_plan: bool,
         invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+        output: NativeAgentImplementerOutput | None,  # allowlist:provider -- typed boundary
     ) -> tuple[WorkflowState, WorkflowHistory]:
         if output is None:
             return state, history
-        if not isinstance(output, NativeAgentCodexOutput):
+        if not isinstance(output, NativeAgentImplementerOutput):
             raise WorkflowContractError("Codex returned a non-native result")
         result = output.result
         output_text = output.canonical_json
         self._persist_structured(
-            self.driver.persist_native_codex_contract,  # allowlist:provider
+            self.driver.persist_native_implementer_contract,  # allowlist:provider
             output,
             invocation.request_sequence,
             history.findings,
@@ -2321,7 +2321,7 @@ class WorkflowEngine:
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         stop_request = output.result.stop_request
         assert stop_request is not None
@@ -2378,7 +2378,7 @@ class WorkflowEngine:
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         stop_request: StopRequest,
         scope_approval: ApprovedScopeExtension,
     ) -> tuple[WorkflowState, WorkflowHistory]:
@@ -2462,7 +2462,7 @@ class WorkflowEngine:
         state: WorkflowState,
         history: WorkflowHistory,
         invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        output: NativeAgentImplementerOutput,  # allowlist:provider -- typed boundary
     ) -> WorkflowHistory:
         """Merge fresh or recovered output without mixing its ledger cuts."""
 
@@ -3331,11 +3331,11 @@ class WorkflowEngine:
         context: WorkflowContext,
         role: AgentRole,
         invoke: Callable[
-            [], str | NativeAgentCodexOutput | NativeAgentReviewOutput
+            [], str | NativeAgentImplementerOutput | NativeAgentReviewOutput
         ],
     ) -> tuple[
         WorkflowState,
-        str | NativeAgentCodexOutput | NativeAgentReviewOutput | None,
+        str | NativeAgentImplementerOutput | NativeAgentReviewOutput | None,
     ]:
         """Invoke one fixed role, persisting every failure before any optional wait."""
         while True:
@@ -4265,7 +4265,7 @@ class WorkflowEngine:
             f"REVIEW DIFF\n{review_diff}{final_dimensions}"
         )
 
-    def _fingerprint_bound_codex_scope_paths(
+    def _fingerprint_bound_implementer_scope_paths(
         self, state: WorkflowState
     ) -> tuple[str, ...]:
         """Expose only the latest exact resume-gate path approval to Codex."""

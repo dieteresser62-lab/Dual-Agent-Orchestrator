@@ -1,4 +1,4 @@
-"""Closed native Codex JSON results with parity to ``CodexStepContract``."""
+"""Closed native Codex JSON results with parity to ``ImplementerStepContract``."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from typing import Any, Mapping, TypeAlias
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_specs
 from contracts import (
     AgentRole,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     FindingClass,
     FindingRecord,
     FindingResponseDecision,
@@ -60,7 +60,7 @@ SCHEMA_PATH = (
 REQUEST_ID_PREFIX = "native-codex-request-"
 
 
-class NativeCodexErrorCode(StrEnum):
+class NativeImplementerErrorCode(StrEnum):
     SCHEMA_INVALID = "schema-invalid"
     CONTEXT_INVALID = "context-invalid"
     REQUEST_MISMATCH = "request-mismatch"
@@ -73,7 +73,6 @@ class NativeCodexErrorCode(StrEnum):
     DORMANT_FINDING_DECISION_FIELD = "dormant-finding-decision-field"
 
 
-NativeImplementerErrorCode = NativeCodexErrorCode  # allowlist:provider -- local role alias
 
 
 _IMPLEMENTER_DIAGNOSTIC_BY_CODE = {
@@ -109,7 +108,7 @@ class NativeImplementerRejectionSource(StrEnum):
     MODEL_RESPONSE = "model-response"
 
 
-NATIVE_CODEX_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = frozenset(  # allowlist:provider -- public contract vocabulary
+NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = frozenset(  # allowlist:provider -- public contract vocabulary
     code
     for code in NativeImplementerErrorCode
     if code is not NativeImplementerErrorCode.CONTEXT_INVALID
@@ -120,38 +119,38 @@ NATIVE_CODEX_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = froze
 # rejection.  This one-per-code map is the fail-closed fallback and, more
 # importantly, makes a newly retryable code without repository-owned guidance
 # fail at import time.
-_NATIVE_CODEX_RETRY_GUIDANCE: dict[  # allowlist:provider -- public contract vocabulary
+_NATIVE_IMPLEMENTER_RETRY_GUIDANCE: dict[  # allowlist:provider -- public contract vocabulary
     NativeImplementerErrorCode, OrchestratorDiagnostic
 ] = {
     code: _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code]
-    for code in NATIVE_CODEX_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+    for code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
 }
 
-assert set(_NATIVE_CODEX_RETRY_GUIDANCE) == set(NATIVE_CODEX_RESPONSE_RETRY_CODES)  # allowlist:provider -- completeness invariant
+assert set(_NATIVE_IMPLEMENTER_RETRY_GUIDANCE) == set(NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES)  # allowlist:provider -- completeness invariant
 assert all(
     diagnostic.value.startswith(f"{code.value}: ")
-    for code, diagnostic in _NATIVE_CODEX_RETRY_GUIDANCE.items()  # allowlist:provider -- completeness invariant
+    for code, diagnostic in _NATIVE_IMPLEMENTER_RETRY_GUIDANCE.items()  # allowlist:provider -- completeness invariant
 )
 
 
-def is_retryable_native_codex_response_error(error: BaseException) -> bool:  # allowlist:provider -- public contract API
+def is_retryable_native_implementer_response_error(error: BaseException) -> bool:  # allowlist:provider -- public contract API
     """Return whether another model response can satisfy the same implementer task."""
 
     return (
-        isinstance(error, NativeCodexContractError)  # allowlist:provider -- public contract type
-        and error.code in NATIVE_CODEX_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+        isinstance(error, NativeImplementerContractError)  # allowlist:provider -- public contract type
+        and error.code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
         and error.source is NativeImplementerRejectionSource.MODEL_RESPONSE
     )
 
 
-def native_codex_retry_guidance(  # allowlist:provider -- public contract API
+def native_implementer_retry_guidance(  # allowlist:provider -- public contract API
     code: NativeImplementerErrorCode,
     diagnostic: OrchestratorDiagnostic | None = None,
 ) -> str:
     """Return closed, provider-free corrective guidance for one rejection."""
 
     try:
-        fallback = _NATIVE_CODEX_RETRY_GUIDANCE[code]  # allowlist:provider -- complete map
+        fallback = _NATIVE_IMPLEMENTER_RETRY_GUIDANCE[code]  # allowlist:provider -- complete map
     except KeyError as exc:
         raise ValueError(
             f"native implementer rejection {code.value} is not retryable"
@@ -164,12 +163,12 @@ def native_codex_retry_guidance(  # allowlist:provider -- public contract API
         ) from exc
 
 
-class NativeCodexContractError(ValueError):
+class NativeImplementerContractError(ValueError):
     """A stable machine-readable native Codex contract failure."""
 
     def __init__(
         self,
-        code: NativeCodexErrorCode,
+        code: NativeImplementerErrorCode,
         detail: str,
         *,
         orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
@@ -202,33 +201,33 @@ class NativeCodexContractError(ValueError):
 
 def find_native_implementer_contract_error(
     error: BaseException,
-) -> NativeCodexContractError | None:  # allowlist:provider -- public contract type
+) -> NativeImplementerContractError | None:  # allowlist:provider -- public contract type
     """Find a native implementer rejection through explicit cause edges."""
 
     seen: set[int] = set()
     current: BaseException | None = error
     while current is not None and id(current) not in seen:
-        if isinstance(current, NativeCodexContractError):  # allowlist:provider -- public contract type
+        if isinstance(current, NativeImplementerContractError):  # allowlist:provider -- public contract type
             return current
         seen.add(id(current))
         current = current.__cause__
     return None
 
 
-class NativeCodexRequestKind(StrEnum):
+class NativeImplementerRequestKind(StrEnum):
     PLAN = "plan"
     IMPLEMENTATION = "implementation"
     CORRECTION = "correction"
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexContext:
+class NativeImplementerContext:
     run_id: str
     work_unit_id: str
     operation: str
     current_fingerprint: str
-    request_kind: NativeCodexRequestKind
-    contract: CodexStepContract
+    request_kind: NativeImplementerRequestKind
+    contract: ImplementerStepContract
     known_stop_rule_ids: frozenset[str] = field(
         default_factory=lambda: frozenset(rule.id for rule in BUILTIN_STOP_RULES)
     )
@@ -242,15 +241,15 @@ class NativeCodexContext:
             ("work_unit_id", self.work_unit_id),
             ("operation", self.operation),
         ):
-            _require_text(value, label, 300, NativeCodexErrorCode.CONTEXT_INVALID)
+            _require_text(value, label, 300, NativeImplementerErrorCode.CONTEXT_INVALID)
         _require_sha256(
             self.current_fingerprint,
             "current_fingerprint",
-            NativeCodexErrorCode.CONTEXT_INVALID,
+            NativeImplementerErrorCode.CONTEXT_INVALID,
         )
-        if not isinstance(self.request_kind, NativeCodexRequestKind):
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
+        if not isinstance(self.request_kind, NativeImplementerRequestKind):
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 "request_kind is invalid",
             )
         stop_rule_ids_valid = (
@@ -262,57 +261,57 @@ class NativeCodexContext:
                 for rule_id in self.known_stop_rule_ids
             )
         )
-        if not isinstance(self.contract, CodexStepContract) or not stop_rule_ids_valid:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
-                "native Codex context requires CodexStepContract and a non-empty "
+        if not isinstance(self.contract, ImplementerStepContract) or not stop_rule_ids_valid:
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
+                "native Codex context requires CodexStepContract and a non-empty "  # allowlist:provider -- schema-bound diagnostic
                 "frozenset of known stop rule ids",
             )
         if not isinstance(self.build_output_declared, bool) or not isinstance(
             self.running_product_declared, bool
         ):
-            raise NativeCodexContractError(  # allowlist:provider -- context boundary
-                NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+            raise NativeImplementerContractError(  # allowlist:provider -- context boundary
+                NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
                 "native implementer measurement-stage declarations must be booleans",
             )
         finding_ids = tuple(item.finding_id for item in self.previous_findings)
         if finding_ids != sorted_finding_ids(finding_ids):
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 "previous findings must be sorted and unique",
             )
         expected_readiness = {
-            NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
-            NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
-            NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
+            NativeImplementerRequestKind.PLAN: ReadinessMarker.PLAN,
+            NativeImplementerRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
+            NativeImplementerRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
         }[self.request_kind]
         if self.contract.readiness_marker is not expected_readiness:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 f"{self.request_kind.value} requires {expected_readiness.value}",
             )
 
 
 @dataclass(frozen=True, slots=True)
-class BoundNativeCodexContext:
-    context: NativeCodexContext
+class BoundNativeImplementerContext:
+    context: NativeImplementerContext
     request_id: str
     request_digest: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, NativeCodexContext):
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
-                "bound native Codex context requires NativeCodexContext",
+        if not isinstance(self.context, NativeImplementerContext):
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
+                "bound native Codex context requires NativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
             )
         _require_sha256(
             self.request_digest,
             "request_digest",
-            NativeCodexErrorCode.CONTEXT_INVALID,
+            NativeImplementerErrorCode.CONTEXT_INVALID,
         )
         if self.request_id != REQUEST_ID_PREFIX + self.request_digest:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.CONTEXT_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 "bound request_id must contain request_digest",
             )
 
@@ -335,32 +334,32 @@ class NativePlanResult:
 @dataclass(frozen=True, slots=True)
 class NativeWorkResult:
     request_id: str
-    result_kind: NativeCodexRequestKind
+    result_kind: NativeImplementerRequestKind
     ready: bool
     test_files: tuple[str, ...]
     dispositions: tuple[NativeFindingDisposition, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexStopResult:
+class NativeImplementerStopResult:
     request_id: str
     rule_id: str
     rationale: str
     remediation_paths: tuple[str, ...]
 
 
-NativeCodexResponse: TypeAlias = (
+NativeImplementerResponse: TypeAlias = (
     NativePlanResult
     | NativeWorkResult
-    | NativeCodexStopResult
+    | NativeImplementerStopResult
 )
 
 
-def load_native_codex_schema() -> dict[str, Any]:
+def load_native_implementer_schema() -> dict[str, Any]:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     if not isinstance(schema, dict):
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.SCHEMA_INVALID,
             "bundled native Codex schema must be an object",
             source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         )
@@ -368,16 +367,16 @@ def load_native_codex_schema() -> dict[str, Any]:
     try:
         check_schema(schema, location="<native-codex-result-schema>")
     except SchemaDefinitionError as exc:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.SCHEMA_INVALID,
             str(exc),
             source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         ) from exc
     return schema
 
 
-def native_codex_provider_response_schema(
-    context: NativeCodexContext,
+def native_implementer_provider_response_schema(
+    context: NativeImplementerContext,
 ) -> dict[str, Any]:
     """Project the immutable reader schema into one request-specific writer.
 
@@ -390,14 +389,14 @@ def native_codex_provider_response_schema(
     projection places that union below one required ``result`` property.  The
     adapter unwraps the envelope before applying the unchanged local contract.
     """
-    if not isinstance(context, NativeCodexContext):
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.CONTEXT_INVALID,
-            "provider schema projection requires NativeCodexContext",
+    if not isinstance(context, NativeImplementerContext):
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.CONTEXT_INVALID,
+            "provider schema projection requires NativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
         )
     provider = "codex"
     schema = defensive_provider_projection(
-        load_native_codex_schema(),
+        load_native_implementer_schema(),
         provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
@@ -457,11 +456,11 @@ def native_codex_provider_response_schema(
 
     contract = context.contract
     expected_result = {
-        NativeCodexRequestKind.PLAN: "plan_result",
-        NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
-        NativeCodexRequestKind.CORRECTION: "correction_result",
+        NativeImplementerRequestKind.PLAN: "plan_result",
+        NativeImplementerRequestKind.IMPLEMENTATION: "implementation_result",
+        NativeImplementerRequestKind.CORRECTION: "correction_result",
     }[context.request_kind]
-    if context.request_kind is NativeCodexRequestKind.PLAN and not contract.require_slice_plan:
+    if context.request_kind is NativeImplementerRequestKind.PLAN and not contract.require_slice_plan:
         result_refs = [{"$ref": "#/$defs/stop_result"}]
     else:
         result_refs = [
@@ -470,8 +469,8 @@ def native_codex_provider_response_schema(
         ]
 
     if context.request_kind in {
-        NativeCodexRequestKind.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION,
     }:
         work_result = schema["$defs"][expected_result]
         test_files = work_result["properties"]["test_files"]
@@ -543,29 +542,29 @@ def _bind_required_empty_array(schema: dict[str, Any]) -> None:
     bind_provider_required_empty_array(schema, provider=OPENAI_PROVIDER)
 
 
-def validate_native_codex_document(document: Mapping[str, Any]) -> None:
+def validate_native_implementer_document(document: Mapping[str, Any]) -> None:
     try:
-        validate_schema_document(document, load_native_codex_schema())
+        validate_schema_document(document, load_native_implementer_schema())
     except SchemaMismatch as exc:
         location = ".".join(str(part) for part in exc.path) or "<response>"
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.SCHEMA_INVALID,
             f"schema validation failed at {location}: {exc.message}",
         ) from None
 
 
-def parse_native_codex_response(
-    document: Mapping[str, Any], bound_context: BoundNativeCodexContext
-) -> NativeCodexResponse:
-    if not isinstance(bound_context, BoundNativeCodexContext):
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.CONTEXT_INVALID,
-            "native parsing requires BoundNativeCodexContext",
+def parse_native_implementer_response(
+    document: Mapping[str, Any], bound_context: BoundNativeImplementerContext
+) -> NativeImplementerResponse:
+    if not isinstance(bound_context, BoundNativeImplementerContext):
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.CONTEXT_INVALID,
+            "native parsing requires BoundNativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
         )
-    validate_native_codex_document(document)
+    validate_native_implementer_document(document)
     if document["request_id"] != bound_context.request_id:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.REQUEST_MISMATCH,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.REQUEST_MISMATCH,
             "response request_id does not match bound request",
         )
     result_type = document["result_type"]
@@ -574,31 +573,31 @@ def parse_native_codex_response(
         _require_sorted_paths(
             remediation_paths,
             "remediation_paths",
-            NativeCodexErrorCode.STOP_CONTENT_INVALID,
+            NativeImplementerErrorCode.STOP_CONTENT_INVALID,
             allow_empty=True,
         )
-        return NativeCodexStopResult(
+        return NativeImplementerStopResult(
             request_id=document["request_id"],
             rule_id=document["rule_id"],
             rationale=document["rationale"],
             remediation_paths=remediation_paths,
         )
     expected_type = {
-        NativeCodexRequestKind.PLAN: "plan_result",
-        NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
-        NativeCodexRequestKind.CORRECTION: "correction_result",
+        NativeImplementerRequestKind.PLAN: "plan_result",
+        NativeImplementerRequestKind.IMPLEMENTATION: "implementation_result",
+        NativeImplementerRequestKind.CORRECTION: "correction_result",
     }[bound_context.context.request_kind]
     if result_type != expected_type:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.RESULT_KIND_MISMATCH,
             f"{bound_context.context.request_kind.value} request requires {expected_type}",
         )
     if result_type == "plan_result":
         for item in document["slice_plan"]:
             diagnostic = planned_slice_path_diagnostic(tuple(item["scope_paths"]))
             if diagnostic is not None:
-                raise NativeCodexContractError(  # allowlist:provider -- contract boundary
-                    NativeCodexErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+                raise NativeImplementerContractError(  # allowlist:provider -- contract boundary
+                    NativeImplementerErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
                     diagnostic.detail,
                     orchestrator_diagnostic=diagnostic,
                 )
@@ -615,13 +614,13 @@ def parse_native_codex_response(
                 for item in document["slice_plan"]
             )
         except ValueError as exc:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.SLICE_PLAN_INVALID,
                 str(exc),
             ) from exc
         if tuple(item.slice_id for item in slices) != tuple(range(1, len(slices) + 1)):
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.SLICE_PLAN_INVALID,
                 "slice plan ids must be contiguous and 1-based",
             )
         return NativePlanResult(
@@ -638,37 +637,37 @@ def parse_native_codex_response(
         _require_sorted_paths(
             test_files,
             "test_files",
-            NativeCodexErrorCode.TEST_FILES_INVALID,
+            NativeImplementerErrorCode.TEST_FILES_INVALID,
             allow_empty=True,
         )
         return NativeWorkResult(
             request_id=document["request_id"],
             result_kind=(
-                NativeCodexRequestKind.IMPLEMENTATION
+                NativeImplementerRequestKind.IMPLEMENTATION
                 if result_type == "implementation_result"
-                else NativeCodexRequestKind.CORRECTION
+                else NativeImplementerRequestKind.CORRECTION
             ),
             ready=document["ready"],
             test_files=test_files,
             dispositions=dispositions,
         )
-    raise NativeCodexContractError(
-        NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+    raise NativeImplementerContractError(
+        NativeImplementerErrorCode.RESULT_KIND_MISMATCH,
         f"unsupported Codex result type {result_type!r}",
     )
 
 
-def native_codex_response_to_contract_result(
-    response: NativeCodexResponse, bound_context: BoundNativeCodexContext
-) -> CodexContractResult:
+def native_implementer_response_to_contract_result(
+    response: NativeImplementerResponse, bound_context: BoundNativeImplementerContext
+) -> ImplementerContractResult:
     if response.request_id != bound_context.request_id:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.REQUEST_MISMATCH,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.REQUEST_MISMATCH,
             "parsed response does not match bound request",
         )
     context = bound_context.context
     prior = context.previous_findings
-    if isinstance(response, NativeCodexStopResult):
+    if isinstance(response, NativeImplementerStopResult):
         try:
             validate_builtin_stop_content(
                 response.rule_id,
@@ -681,10 +680,10 @@ def native_codex_response_to_contract_result(
                 response.remediation_paths,
             )
         except ValueError as exc:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.STOP_CONTENT_INVALID, str(exc)
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.STOP_CONTENT_INVALID, str(exc)
             ) from exc
-        return CodexContractResult(
+        return ImplementerContractResult(
             ready=None,
             stopped=True,
             stop_request=stop,
@@ -706,8 +705,8 @@ def native_codex_response_to_contract_result(
         slice_plan = response.slice_plan
         self_check = None
         if not contract.require_slice_plan or not slice_plan:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.SLICE_PLAN_INVALID,
                 "plan result requires a slice plan contract",
             )
     elif isinstance(response, NativeWorkResult):
@@ -717,8 +716,8 @@ def native_codex_response_to_contract_result(
         self_check = None
         _validate_test_files(response.ready, test_files, contract)
     else:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.RESULT_KIND_MISMATCH,
             "unsupported Codex response variant",
         )
     findings = _apply_dispositions(
@@ -727,7 +726,7 @@ def native_codex_response_to_contract_result(
         work_unit_id=context.work_unit_id,
         round_number=context.contract.round_number,
     )
-    return CodexContractResult(
+    return ImplementerContractResult(
         ready=response.ready,
         stopped=False,
         stop_request=None,
@@ -739,17 +738,17 @@ def native_codex_response_to_contract_result(
     )
 
 
-def parse_bound_native_codex_contract_result(
-    document: Mapping[str, Any], bound_context: BoundNativeCodexContext
-) -> CodexContractResult:
-    return native_codex_response_to_contract_result(
-        parse_native_codex_response(document, bound_context), bound_context
+def parse_bound_native_implementer_contract_result(
+    document: Mapping[str, Any], bound_context: BoundNativeImplementerContext
+) -> ImplementerContractResult:
+    return native_implementer_response_to_contract_result(
+        parse_native_implementer_response(document, bound_context), bound_context
     )
 
 
 def validate_native_correction_fingerprint(  # allowlist:provider -- native correction boundary
-    result: CodexContractResult,  # allowlist:provider -- parsed result type
-    context: NativeCodexContext,  # allowlist:provider -- bound request type
+    result: ImplementerContractResult,  # allowlist:provider -- parsed result type
+    context: NativeImplementerContext,  # allowlist:provider -- bound request type
     resulting_fingerprint: str,
 ) -> None:
     """Reject an accepted correction that changed no repository fingerprint.
@@ -758,27 +757,27 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
     Attribution of individual Findings to diff hunks remains reviewer-owned.
     """
 
-    if not isinstance(result, CodexContractResult) or not isinstance(  # allowlist:provider -- parsed result type
-        context, NativeCodexContext  # allowlist:provider -- bound request type
+    if not isinstance(result, ImplementerContractResult) or not isinstance(  # allowlist:provider -- parsed result type
+        context, NativeImplementerContext  # allowlist:provider -- bound request type
     ):
-        raise NativeCodexContractError(  # allowlist:provider -- typed rejection
-            NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+        raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
+            NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
             "correction fingerprint validation requires typed result and context",
         )
     _require_sha256(
         resulting_fingerprint,
         "resulting_fingerprint",
-        NativeCodexErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+        NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
     )
-    if context.request_kind is not NativeCodexRequestKind.CORRECTION:  # allowlist:provider -- request kind
+    if context.request_kind is not NativeImplementerRequestKind.CORRECTION:  # allowlist:provider -- request kind
         return
     try:
         response_delta = project_finding_response_delta(
             context.previous_findings, result.findings
         )
     except ValueError as exc:
-        raise NativeCodexContractError(  # allowlist:provider -- typed rejection
-            NativeCodexErrorCode.FINDING_REFERENCE_INVALID,  # allowlist:provider -- error vocabulary
+        raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
+            NativeImplementerErrorCode.FINDING_REFERENCE_INVALID,  # allowlist:provider -- error vocabulary
             str(exc),
         ) from exc
     accepted_without_change = tuple(
@@ -795,8 +794,8 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
     accepted_ids = sorted_finding_ids(
         item.finding.finding_id for item in accepted_without_change
     )
-    raise NativeCodexContractError(  # allowlist:provider -- typed rejection
-        NativeCodexErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
+    raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
+        NativeImplementerErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
         "correction result accepted finding IDs "
         f"{', '.join(accepted_ids)} but made no fingerprint-changing repository "
         "change; accepting a finding requires a change; resolve the accepted "
@@ -841,8 +840,8 @@ def _accepted_correction_without_change(
     )
 
 
-def canonical_native_codex_json(document: Mapping[str, Any]) -> str:
-    validate_native_codex_document(document)
+def canonical_native_implementer_json(document: Mapping[str, Any]) -> str:
+    validate_native_implementer_document(document)
     return json.dumps(
         document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -861,8 +860,8 @@ def _parse_dispositions(
     )
     ids = tuple(item.finding_id for item in dispositions)
     if ids != sorted_finding_ids(ids):
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.FINDING_REFERENCE_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.FINDING_REFERENCE_INVALID,
             "finding dispositions must be sorted and unique",
         )
     return dispositions
@@ -915,30 +914,30 @@ def _apply_dispositions(
             ),
         )
     except ValueError as exc:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.FINDING_REFERENCE_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.FINDING_REFERENCE_INVALID,
             f"{exc} (context: work-unit={work_unit_id} round={round_number})",
         ) from exc
 
 
 def _validate_test_files(
-    ready: bool, test_files: tuple[str, ...], contract: CodexStepContract
+    ready: bool, test_files: tuple[str, ...], contract: ImplementerStepContract
 ) -> None:
     if not contract.require_test_files_record:
         if test_files:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.TEST_FILES_INVALID,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.TEST_FILES_INVALID,
                 "unexpected test_files for this step",
             )
         return
     if contract.enforce_expected_test_files and test_files != contract.expected_test_files:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.TEST_FILES_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.TEST_FILES_INVALID,
             "test_files do not match the step contract",
         )
     if ready and test_files and not contract.test_changes_approved:
-        raise NativeCodexContractError(
-            NativeCodexErrorCode.TEST_FILES_INVALID,
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.TEST_FILES_INVALID,
             "ready result with test changes requires prior approval",
         )
 
@@ -947,7 +946,7 @@ def _require_text(
     value: object,
     label: str,
     maximum: int,
-    code: NativeCodexErrorCode,
+    code: NativeImplementerErrorCode,
 ) -> None:
     if (
         not isinstance(value, str)
@@ -955,31 +954,31 @@ def _require_text(
         or "\x00" in value
         or len(value) > maximum
     ):
-        raise NativeCodexContractError(
+        raise NativeImplementerContractError(
             code, f"{label} must be non-blank, NUL-free, and at most {maximum} characters"
         )
 
 
 def _require_sha256(
-    value: object, label: str, code: NativeCodexErrorCode
+    value: object, label: str, code: NativeImplementerErrorCode
 ) -> None:
     if (
         not isinstance(value, str)
         or len(value) != 64
         or any(character not in "0123456789abcdef" for character in value)
     ):
-        raise NativeCodexContractError(code, f"{label} must be lowercase SHA-256")
+        raise NativeImplementerContractError(code, f"{label} must be lowercase SHA-256")
 
 
 def _require_sorted_paths(
     values: tuple[str, ...],
     label: str,
-    code: NativeCodexErrorCode,
+    code: NativeImplementerErrorCode,
     *,
     allow_empty: bool,
 ) -> None:
     if values != tuple(sorted(set(values))) or (not allow_empty and not values):
-        raise NativeCodexContractError(
+        raise NativeImplementerContractError(
             code, f"{label} must be sorted and unique" + ("" if allow_empty else " and non-empty")
         )
     for raw_path in values:
@@ -992,6 +991,6 @@ def _require_sorted_paths(
             or raw_path != path.as_posix()
             or path.parts[0] == ".orchestrator"
         ):
-            raise NativeCodexContractError(
+            raise NativeImplementerContractError(
                 code, f"{label} contains an unsafe repository path"
             )

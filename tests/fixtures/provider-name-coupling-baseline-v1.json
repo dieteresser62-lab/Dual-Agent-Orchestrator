@@ -77,10 +77,10 @@
       "codex": 4,
       "claude": 3
     },
-    "src/native_codex_contract.py": {
+    "src/native_implementer_contract.py": {
       "codex": 140
     },
-    "src/native_codex_request.py": {
+    "src/native_implementer_request.py": {
       "codex": 132
     },
     "src/native_provider_schema.py": {

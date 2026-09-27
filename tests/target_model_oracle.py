@@ -67,7 +67,7 @@ from finding_reducer import (
     project_reviewer_persistence_transitions,
     reduce_finding_records,
 )
-from native_codex_contract import NativeFindingDisposition, _apply_dispositions  # allowlist:provider -- exercised production contract
+from native_implementer_contract import NativeFindingDisposition, _apply_dispositions  # allowlist:provider -- exercised production contract
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
@@ -1542,7 +1542,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             complete_dispositions_enforced,
             contract_detail,
             record_detail,
-            ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
         )
     )
 
@@ -1578,7 +1578,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             "Finding response records reject the blocker rejection"
             if not blocker_rejection_accepted
             else "Finding response records accept the blocker rejection",
-            ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
         )
     )
 

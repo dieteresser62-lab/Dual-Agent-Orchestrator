@@ -40,9 +40,9 @@ from agent_runtime import (
     run_agent,
     run_native_review_agent,
     run_native_review_agent_checked,
-    run_native_codex_agent,
-    run_native_codex_agent_checked,
-    NativeAgentCodexOutput,
+    run_native_implementer_agent,
+    run_native_implementer_agent_checked,
+    NativeAgentImplementerOutput,
     run_tests_snapshot,
     run_validation_matrix,
     verify_agent_capabilities,
@@ -82,18 +82,18 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestSpec,
-    build_native_codex_request,
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
-from contracts import CodexStepContract, ReadinessMarker
+from contracts import ImplementerStepContract, ReadinessMarker
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
-def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
-    contract = CodexStepContract(
+def _runtime_native_implementer_bundle():  # type: ignore[no-untyped-def]
+    contract = ImplementerStepContract(
         name="native-plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -101,23 +101,23 @@ def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="run-native-codex-runtime",
         work_unit_id="work-unit-1",
         operation="codex_plan",
         current_fingerprint="a" * 64,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
     )
-    return build_native_codex_request(
-        NativeCodexRequestSpec(
+    return build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native",
             base_commit="b" * 40,
             authorized_paths=("docs/internal/plan.md",),
             assignment="Create the plan.",
             work_context="Context.",
-            evidence=(NativeCodexEvidenceInput("e01_plan", "plan", "body"),),
+            evidence=(NativeImplementerEvidenceInput("e01_plan", "plan", "body"),),
         )
     )
 
@@ -220,10 +220,10 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
     assert adapter.capability_verified is True
 
 
-def test_run_native_codex_agent_parses_bound_result_without_text_contract(
+def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
@@ -234,7 +234,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
             {
                 "slice_id": 1,
                 "summary": "Implement native Codex.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The native Codex contract is implemented.",
                     "measured_against": "SOURCE",
@@ -247,7 +247,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     )
     captured: dict[str, object] = {}
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -269,8 +269,8 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
         return canonical
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    output = run_native_codex_agent(
-        FakeNativeCodex(),  # type: ignore[arg-type]
+    output = run_native_implementer_agent(
+        FakeNativeImplementer(),  # type: ignore[arg-type]
         bundle,
         config=OrchestratorConfig(),
         shorten=lambda value, _maximum: value or "",
@@ -285,10 +285,10 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     assert isinstance(captured["prepared_provider_input"], PreparedProviderInput)
 
 
-def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
+def test_native_implementer_exposes_schema_valid_bytes_before_domain_rejection(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
@@ -311,7 +311,7 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -331,8 +331,8 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
     persisted: list[str] = []
     with pytest.raises(AgentOutputError) as raised:
-        run_native_codex_agent(
-            FakeNativeCodex(),  # type: ignore[arg-type]
+        run_native_implementer_agent(
+            FakeNativeImplementer(),  # type: ignore[arg-type]
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
@@ -349,10 +349,10 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     assert persisted == [canonical]
 
 
-def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
+def test_native_implementer_writer_invalid_bytes_never_reach_validated_callback(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
@@ -362,7 +362,7 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
             {
                 "slice_id": 1,
                 "summary": "Reader-valid but writer-incomplete result.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
             }
         ],
     }
@@ -370,7 +370,7 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -389,8 +389,8 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
     monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
     persisted: list[str] = []
     with pytest.raises(AgentOutputError) as raised:
-        run_native_codex_agent(
-            FakeNativeCodex(),  # type: ignore[arg-type]
+        run_native_implementer_agent(
+            FakeNativeImplementer(),  # type: ignore[arg-type]
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
@@ -402,10 +402,10 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
     assert persisted == []
 
 
-def test_native_codex_runtime_forwards_canary_execution_root(
+def test_native_implementer_runtime_forwards_canary_execution_root(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     repository_root = tmp_path / "repository"
     execution_root = tmp_path / "isolated" / "work"
     evidence_root = tmp_path / "isolated" / "evidence"
@@ -427,7 +427,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
             {
                 "slice_id": 1,
                 "summary": "Exercise the isolated runtime.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The isolated runtime is exercised.",
                     "measured_against": "SOURCE",
@@ -437,7 +437,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
     }
     captured: dict[str, object] = {}
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -459,8 +459,8 @@ def test_native_codex_runtime_forwards_canary_execution_root(
         return json.dumps(response)
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    run_native_codex_agent(
-        FakeNativeCodex(),  # type: ignore[arg-type]
+    run_native_implementer_agent(
+        FakeNativeImplementer(),  # type: ignore[arg-type]
         bundle,
         config=OrchestratorConfig(repo_root=repository_root),
         shorten=lambda value, _maximum: value or "",
@@ -473,11 +473,11 @@ def test_native_codex_runtime_forwards_canary_execution_root(
     assert captured["execution_root_override"] == execution_root.resolve()
 
 
-def test_native_codex_checked_writes_raw_before_accepted_callback(
+def test_native_implementer_checked_writes_raw_before_accepted_callback(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
-    result = parse_bound_native_codex_contract_result_for_test(bundle)
+    bundle = _runtime_native_implementer_bundle()
+    result = parse_bound_native_implementer_contract_result_for_test(bundle)
     canonical = json.dumps(
         {
             "schema_version": "native-agent-codex-result-v2",
@@ -488,7 +488,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                 {
                     "slice_id": 1,
                     "summary": "Implement it.",
-                    "scope_paths": ["src/native_codex_contract.py"],
+                    "scope_paths": ["src/native_implementer_contract.py"],
                     "acceptance_criteria": [{
                         "text": "The native contract is implemented.",
                         "measured_against": "SOURCE",
@@ -501,7 +501,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         sort_keys=True,
         separators=(",", ":"),
     )
-    output = NativeAgentCodexOutput(
+    output = NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
@@ -513,7 +513,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         kwargs["validated_response_callback"](canonical)
         return output
 
-    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    monkeypatch.setattr(agent_runtime, "run_native_implementer_agent", fake_native_run)
     monkeypatch.setattr(agent_runtime, "print_agent_output", lambda *args, **kwargs: None)
 
     class Adapter:
@@ -526,11 +526,11 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         events.append("write")
         path.write_text(content, encoding="utf-8")
 
-    def accept(_output: NativeAgentCodexOutput) -> None:
+    def accept(_output: NativeAgentImplementerOutput) -> None:
         assert raw_path.read_text(encoding="utf-8") == canonical
         events.append("accept")
 
-    returned = run_native_codex_agent_checked(
+    returned = run_native_implementer_agent_checked(
         adapter=Adapter(),  # type: ignore[arg-type]
         bundle=bundle,
         raw_response_path=raw_path,
@@ -547,12 +547,12 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
     assert events == ["write", "accept"]
 
 
-def test_native_codex_checked_write_failure_prevents_callback(
+def test_native_implementer_checked_write_failure_prevents_callback(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
-    result = parse_bound_native_codex_contract_result_for_test(bundle)
-    output = NativeAgentCodexOutput(
+    bundle = _runtime_native_implementer_bundle()
+    result = parse_bound_native_implementer_contract_result_for_test(bundle)
+    output = NativeAgentImplementerOutput(
         result=result,
         canonical_json="{}",
         request_id=bundle.bound_context.request_id,
@@ -562,7 +562,7 @@ def test_native_codex_checked_write_failure_prevents_callback(
         kwargs["validated_response_callback"]("{}")
         return output
 
-    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    monkeypatch.setattr(agent_runtime, "run_native_implementer_agent", fake_native_run)
     accepted: list[bool] = []
 
     class Adapter:
@@ -570,7 +570,7 @@ def test_native_codex_checked_write_failure_prevents_callback(
         metadata: dict[str, object] = {}
 
     with pytest.raises(AgentInvocationError):
-        run_native_codex_agent_checked(
+        run_native_implementer_agent_checked(
             adapter=Adapter(),  # type: ignore[arg-type]
             bundle=bundle,
             raw_response_path=tmp_path / "raw.json",
@@ -586,7 +586,7 @@ def test_native_codex_checked_write_failure_prevents_callback(
     assert accepted == []
 
 
-def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
+def parse_bound_native_implementer_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
     document = {
         "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
@@ -596,7 +596,7 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
             {
                 "slice_id": 1,
                 "summary": "Implement it.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The native contract is implemented.",
                     "measured_against": "SOURCE",
@@ -605,9 +605,9 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
         ],
         "finding_dispositions": [],
     }
-    from native_codex_contract import parse_bound_native_codex_contract_result
+    from native_implementer_contract import parse_bound_native_implementer_contract_result
 
-    return parse_bound_native_codex_contract_result(document, bundle.bound_context)
+    return parse_bound_native_implementer_contract_result(document, bundle.bound_context)
 
 
 def test_orchestrator_config_has_no_agent_substitution_state() -> None:

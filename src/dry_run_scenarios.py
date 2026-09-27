@@ -11,7 +11,7 @@ from typing import Callable, Mapping
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     QuotaWaitPolicy,
     TransientRetryPolicy,
@@ -21,7 +21,7 @@ from artifact_models import InvocationFailurePayload
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import (
     AgentRole,
-    CodexStepContract,  # allowlist:provider -- typed boundary
+    ImplementerStepContract,  # allowlist:provider -- typed boundary
     FindingRecord,
     PlannedSlice,
     StepContract,
@@ -52,11 +52,11 @@ from workflow import (
     WorkflowHistory,
     WorkflowRunResult,
 )
-from native_codex_contract import (
-    canonical_native_codex_json,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result,
 )
-from native_codex_request import validate_native_codex_provider_response
+from native_implementer_request import validate_native_implementer_provider_response
 from native_review_contract import (
     canonical_native_review_json,
     parse_bound_native_contract_result,
@@ -1004,9 +1004,9 @@ class ScriptedWorkflowDriver:
         _ = state
         return self.durable_findings or findings
 
-    def persist_native_codex_contract(
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
@@ -1090,7 +1090,7 @@ class ScriptedWorkflowDriver:
         assert event.output is not None
         return event.output
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
         self.codex_invocations.append(invocation)
         self.agent_invocations.append(invocation)
         document = self._consume_agent(
@@ -1104,10 +1104,10 @@ class ScriptedWorkflowDriver:
         document = dict(document)
         if document.get("request_id") == "$BOUND_REQUEST_ID":
             document["request_id"] = invocation.native_request.bound_context.request_id
-        validate_native_codex_provider_response(document, invocation.native_request)
-        canonical = canonical_native_codex_json(document)
-        return NativeAgentCodexOutput(
-            result=parse_bound_native_codex_contract_result(
+        validate_native_implementer_provider_response(document, invocation.native_request)
+        canonical = canonical_native_implementer_json(document)
+        return NativeAgentImplementerOutput(
+            result=parse_bound_native_implementer_contract_result(
                 document, invocation.native_request.bound_context
             ),
             canonical_json=canonical,
@@ -1116,12 +1116,12 @@ class ScriptedWorkflowDriver:
             context=invocation.native_request.bound_context.context,
         )
 
-    def recover_pending_native_codex(  # allowlist:provider -- canonical capability
+    def recover_pending_native_implementer(  # allowlist:provider -- canonical capability
         self,
         invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        contract: CodexStepContract,  # allowlist:provider -- typed boundary
+        contract: ImplementerStepContract,  # allowlist:provider -- typed boundary
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None:  # allowlist:provider -- typed boundary
+    ) -> NativeAgentImplementerOutput | None:  # allowlist:provider -- typed boundary
         self.structured_events.append(
             ("recover-native-codex", (invocation, contract, history))  # allowlist:provider
         )
@@ -2057,7 +2057,7 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
     )
 
 
-def _s5_codex_result(  # allowlist:provider -- scripted native result factory
+def _s5_implementer_result(  # allowlist:provider -- scripted native result factory
     result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
 ) -> dict[str, object]:
     return {
@@ -2161,7 +2161,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         agent_events=(
             ScriptedAgentEvent(
                 AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                _s5_codex_result("implementation_result", test_files=[]),  # allowlist:provider
+                _s5_implementer_result("implementation_result", test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
@@ -2173,7 +2173,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                output=_s5_codex_result(  # allowlist:provider
+                output=_s5_implementer_result(  # allowlist:provider
                     "implementation_result", test_files=[]
                 ),
             ),
@@ -2183,7 +2183,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
-                _s5_codex_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),  # allowlist:provider
+                _s5_implementer_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider

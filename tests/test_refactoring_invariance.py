@@ -12,13 +12,13 @@ from typing import Callable, Mapping
 import pytest
 
 import orchestrator
-from agent_runtime import NativeAgentCodexOutput, NativeAgentReviewOutput
+from agent_runtime import NativeAgentImplementerOutput, NativeAgentReviewOutput
 from artifact_models import RecordType
 from artifact_store import ArtifactStore
 from cli import parse_args
-from native_codex_contract import (
-    canonical_native_codex_json,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result,
 )
 from native_review_contract import (
     canonical_native_review_json,
@@ -308,7 +308,7 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
+def _native_plan_output(invocation: CodexInvocation) -> NativeAgentImplementerOutput:
     bundle = invocation.native_request
     assert bundle is not None
     document = {
@@ -331,9 +331,9 @@ def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
             }
         ],
     }
-    canonical = canonical_native_codex_json(document)
-    return NativeAgentCodexOutput(
-        result=parse_bound_native_codex_contract_result(
+    canonical = canonical_native_implementer_json(document)
+    return NativeAgentImplementerOutput(
+        result=parse_bound_native_implementer_contract_result(
             document, bundle.bound_context
         ),
         canonical_json=canonical,
@@ -419,7 +419,7 @@ def provider_free_record_types(
 
     def codex(
         _driver: ProductionWorkflowDriver, invocation: CodexInvocation
-    ) -> NativeAgentCodexOutput:
+    ) -> NativeAgentImplementerOutput:
         plan = repository / "docs/internal/work-plan.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text(

@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
 
 from agent_runtime import (
-    NativeAgentCodexOutput as NativeAgentImplementerOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     RecoveredFindingComparison,
@@ -49,7 +49,7 @@ from artifact_replay import (
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract as ImplementerStepContract,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     StepContract,
@@ -63,13 +63,13 @@ from finding_reducer import (
 )
 from gates import matches_path_patterns
 from git_service import inspect_commit_tree, inspect_repository
-from native_codex_contract import (
-    canonical_native_codex_json as canonical_native_implementer_json,
-    parse_bound_native_codex_contract_result as parse_bound_native_implementer_result,
+from native_implementer_contract import (
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result as parse_bound_native_implementer_result,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle as NativeImplementerRequestBundle,
-    validate_native_codex_provider_response as validate_native_implementer_response,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
+    validate_native_implementer_provider_response as validate_native_implementer_response,
 )
 from native_review_contract import (
     BoundNativeReviewContext,

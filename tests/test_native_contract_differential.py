@@ -15,7 +15,7 @@ import pytest
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -26,12 +26,18 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
-from native_codex_contract import (
-    BoundNativeCodexContext,
-    NativeCodexContext,
-    NativeCodexRequestKind,
-    native_codex_provider_response_schema,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    BoundNativeImplementerContext,
+    NativeImplementerContext,
+    NativeImplementerRequestKind,
+    canonical_native_implementer_json,
+    native_implementer_provider_response_schema,
+    parse_bound_native_implementer_contract_result,
+)
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
 from native_provider_schema import defensive_provider_projection, registered_exceptions
 from native_review_contract import (
@@ -77,6 +83,45 @@ _EXPECTED_PROJECTION_COMPENSATIONS = {
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def test_implementer_request_and_response_bytes_match_pre_rename_baseline() -> None:
+    # Digests were measured from the same inputs at f6bb5cc, before the API rename.
+    spec = NativeImplementerRequestSpec(
+        context=_codex_bound(NativeImplementerRequestKind.PLAN).context,
+        target_branch="feature/differential",
+        base_commit="b" * 40,
+        authorized_paths=("docs/internal/plan.md",),
+        assignment="Differential request.",
+        work_context="Byte contract.",
+        evidence=(
+            NativeImplementerEvidenceInput(
+                "e01", "work_plan", "Plan content.", "docs/internal/plan.md"
+            ),
+        ),
+    )
+    bundle = build_native_implementer_request(spec)
+    assert hashlib.sha256(bundle.canonical_json.encode()).hexdigest() == (
+        "6adf7dd5b487653a47abaa8f7e246ff900d36a7208af9c0f910aaadff1372479"
+    )
+    assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
+        "60971f697d26147b616139c96e27ca07a35c63064c27a2cff8d3342d25e64e07"
+    )
+    response_digests = {
+        NativeImplementerRequestKind.PLAN: (
+            "7aa1491f39cf2531015ab92a891a64747679e9d97bf4ab54676c0b774c7ff6e5"
+        ),
+        NativeImplementerRequestKind.IMPLEMENTATION: (
+            "0139824fc7660574ca3e781a7383808624dbf8876f4ab8707e093853da0a3075"
+        ),
+        NativeImplementerRequestKind.CORRECTION: (
+            "9f790d0a54d10e5dbbe3bbb9b89edfed381603f0899232d884a8dc393a17788b"
+        ),
+    }
+    for kind, expected in response_digests.items():
+        bound = _codex_bound(kind)
+        canonical = canonical_native_implementer_json(_codex_response(bound))
+        assert hashlib.sha256(canonical.encode()).hexdigest() == expected
 
 
 def _projection_losses(
@@ -190,54 +235,54 @@ def _finding(
     )
 
 
-def _codex_bound(kind: NativeCodexRequestKind) -> BoundNativeCodexContext:
+def _codex_bound(kind: NativeImplementerRequestKind) -> BoundNativeImplementerContext:
     readiness = {
-        NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
-        NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.PLAN: ReadinessMarker.PLAN,
+        NativeImplementerRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
     }[kind]
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="differential-codex",
         work_unit_id=f"work-{kind.value}",
         operation=f"codex_{kind.value}",
         current_fingerprint=FINGERPRINT,
         request_kind=kind,
-        contract=CodexStepContract(
+        contract=ImplementerStepContract(
             name=f"differential-{kind.value}",
             readiness_marker=readiness,
             slice_id="01",
             round_number=1,
             require_test_files_record=kind in {
-                NativeCodexRequestKind.IMPLEMENTATION,
-                NativeCodexRequestKind.CORRECTION,
+                NativeImplementerRequestKind.IMPLEMENTATION,
+                NativeImplementerRequestKind.CORRECTION,
             },
             expected_test_files=(
                 ("tests/test_native_contract_differential.py",)
                 if kind
                 in {
-                    NativeCodexRequestKind.IMPLEMENTATION,
-                    NativeCodexRequestKind.CORRECTION,
+                    NativeImplementerRequestKind.IMPLEMENTATION,
+                    NativeImplementerRequestKind.CORRECTION,
                 }
                 else ()
             ),
             test_changes_approved=True,
-            require_slice_plan=kind is NativeCodexRequestKind.PLAN,
+            require_slice_plan=kind is NativeImplementerRequestKind.PLAN,
             plan_artifact_path=(
                 "docs/internal/plan.md"
-                if kind is NativeCodexRequestKind.PLAN
+                if kind is NativeImplementerRequestKind.PLAN
                 else None
             ),
         ),
         previous_findings=(
-            (_finding(),) if kind is NativeCodexRequestKind.CORRECTION else ()
+            (_finding(),) if kind is NativeImplementerRequestKind.CORRECTION else ()
         ),
     )
-    return BoundNativeCodexContext(
+    return BoundNativeImplementerContext(
         context, "native-codex-request-" + "b" * 64, "b" * 64
     )
 
 
-def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
+def _codex_response(bound: BoundNativeImplementerContext) -> dict[str, object]:
     kind = bound.context.request_kind
     common: dict[str, object] = {
         "schema_version": "native-agent-codex-result-v2",
@@ -251,11 +296,11 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
                     "rationale": "The focused regression closes the defect.",
                 }
             ]
-            if kind is NativeCodexRequestKind.CORRECTION
+            if kind is NativeImplementerRequestKind.CORRECTION
             else []
         ),
     }
-    if kind is NativeCodexRequestKind.PLAN:
+    if kind is NativeImplementerRequestKind.PLAN:
         return {
             **common,
             "result_type": "plan_result",
@@ -272,8 +317,8 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
             ],
         }
     if kind in {
-        NativeCodexRequestKind.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION,
     }:
         return {
             **common,
@@ -387,12 +432,12 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
 
 def test_all_writer_forms_accept_their_local_domain_result() -> None:
     actual: list[dict[str, str]] = []
-    for kind in NativeCodexRequestKind:
+    for kind in NativeImplementerRequestKind:
         bound = _codex_bound(kind)
         response = _codex_response(bound)
-        writer = native_codex_provider_response_schema(bound.context)
+        writer = native_implementer_provider_response_schema(bound.context)
         validate_schema_document({"result": response}, writer)
-        parse_bound_native_codex_contract_result(response, bound)
+        parse_bound_native_implementer_contract_result(response, bound)
         actual.append(
             {
                 "provider": "codex",

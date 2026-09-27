@@ -45,10 +45,10 @@ from error_classification import (
     enforce_record_start_boundary,
 )
 from final_review_preflight import FinalReviewPreflightDenied
-from native_codex_contract import (
-    NATIVE_CODEX_RESPONSE_RETRY_CODES,
-    NativeCodexContractError,
-    NativeCodexErrorCode,
+from native_implementer_contract import (
+    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
     NativeImplementerRejectionSource,
 )
 from native_review_contract import (
@@ -173,7 +173,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         ),
     )
     return _capture(
-        lambda: driver.recover_pending_native_codex(
+        lambda: driver.recover_pending_native_implementer(
             invocation, None, WorkflowHistory(state.current_work_unit_id)
         )
     )
@@ -427,13 +427,13 @@ def test_local_review_schema_failure_is_not_retried_as_model_output() -> None:
     assert classified.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
 
 
-@pytest.mark.parametrize("code", tuple(NativeCodexErrorCode))
-def test_native_codex_rejections_distinguish_context_from_model_response(
-    code: NativeCodexErrorCode,
+@pytest.mark.parametrize("code", tuple(NativeImplementerErrorCode))
+def test_native_implementer_rejections_distinguish_context_from_model_response(
+    code: NativeImplementerErrorCode,
 ) -> None:
-    classified = classify_exception(NativeCodexContractError(code, "rejected"))
+    classified = classify_exception(NativeImplementerContractError(code, "rejected"))
 
-    if code is NativeCodexErrorCode.CONTEXT_INVALID:
+    if code is NativeImplementerErrorCode.CONTEXT_INVALID:
         assert classified.failure_class is FailureClass.RESUMABLE_HALT
         assert classified.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
     else:
@@ -443,8 +443,8 @@ def test_native_codex_rejections_distinguish_context_from_model_response(
 
 def test_local_codex_schema_failure_is_not_retried_as_model_output() -> None:
     classified = classify_exception(
-        NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID,
+        NativeImplementerContractError(
+            NativeImplementerErrorCode.SCHEMA_INVALID,
             "bundled schema is invalid",
             source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         )
@@ -461,7 +461,7 @@ def test_retry_rejection_code_wire_inventories_match_the_contract_enum() -> None
     assert artifact_models._NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
 
     implementer_expected = {
-        code.value for code in NATIVE_CODEX_RESPONSE_RETRY_CODES
+        code.value for code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES
     }
     assert (
         workflow_state.NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES

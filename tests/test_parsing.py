@@ -4,14 +4,14 @@ import json
 
 import pytest
 
-from native_codex_contract import NativeCodexContractError, validate_native_codex_document
+from native_implementer_contract import NativeImplementerContractError, validate_native_implementer_document
 from native_review_contract import NativeReviewContractError, validate_native_review_document
 
 
 @pytest.mark.parametrize(
     "validator,error",
     (
-        (validate_native_codex_document, NativeCodexContractError),
+        (validate_native_implementer_document, NativeImplementerContractError),
         (validate_native_review_document, NativeReviewContractError),
     ),
 )

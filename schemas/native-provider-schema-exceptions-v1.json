@@ -59,7 +59,7 @@
       "local_invariant": "Every open finding is disposed exactly once in canonical order.",
       "missing_schema_feature": "positional_tuple",
       "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const; minItems/maxItems plus an ID enum close membership and cardinality only.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_leaves_only_registered_disposition_order_exception"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_leaves_only_registered_disposition_order_exception"
     },
     {
       "exception_id": "codex-nonblank-safe-text",
@@ -69,7 +69,7 @@
       "local_invariant": "Human rationale and self-check fields are non-blank and NUL-free.",
       "missing_schema_feature": "regex_lookaround",
       "provider_evidence": "Codex Structured Outputs rejects the safe-text positive lookahead; local domain validation remains authoritative.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally"
     },
     {
       "exception_id": "codex-request-id-binding",
@@ -79,7 +79,7 @@
       "local_invariant": "The response request_id equals the request identifier whose digest includes the response-schema digest.",
       "missing_schema_feature": "cyclic_request_id_const",
       "provider_evidence": "Embedding the final request_id as a schema const would change the response-schema digest that is itself part of the request_id preimage; the format remains schema-bound and exact equality remains local.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally"
     },
     {
       "exception_id": "codex-safe-path-lookaround",
@@ -89,7 +89,7 @@
       "local_invariant": "Repository paths are relative, traversal-free, canonical POSIX paths outside .orchestrator.",
       "missing_schema_feature": "regex_lookaround_and_unique_items",
       "provider_evidence": "Codex Structured Outputs rejects regex lookaround and uniqueItems; the writer projection removes only those unsupported keywords.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_safe_path_validation_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_safe_path_validation_fail_closed_locally"
     },
     {
       "exception_id": "codex-slice-plan-path-order",
@@ -99,7 +99,7 @@
       "local_invariant": "Planned Slice identifiers are contiguous and one-based, and every Slice carries repository paths in sorted canonical order.",
       "missing_schema_feature": "positional_tuple_constraints_and_array_lexicographic_order",
       "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const. A Slice-3 live Canary consequently produced writer-valid Slice ID 03 for a one-Slice plan; the provider subset can neither bind generated array positions to contiguous identifiers nor compare adjacent generated path values lexicographically.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_slice_path_order_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_slice_path_order_fail_closed_locally"
     },
     {
       "exception_id": "codex-stop-remediation-path-order",
@@ -109,7 +109,7 @@
       "local_invariant": "Stop remediation paths are sorted in canonical repository order.",
       "missing_schema_feature": "array_lexicographic_order",
       "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const, so JSON Schema cannot compare adjacent generated path values lexicographically.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_stop_path_order_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_stop_path_order_fail_closed_locally"
     },
     {
       "exception_id": "codex-test-file-path-order",
@@ -119,7 +119,7 @@
       "local_invariant": "Reported test files are sorted in canonical repository order for fixed and dynamic test scopes.",
       "missing_schema_feature": "array_lexicographic_order",
       "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const, so JSON Schema can close membership and cardinality but cannot compare adjacent generated path values lexicographically.",
-      "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_test_file_order_fail_closed_locally"
+      "regression_test": "tests/test_native_implementer_contract.py::test_writer_schema_keeps_test_file_order_fail_closed_locally"
     },
     {
       "exception_id": "review-finding-signature-uniqueness",

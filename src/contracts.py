@@ -650,7 +650,7 @@ def planned_slice_path_diagnostic(
 
 
 @dataclass(frozen=True)
-class CodexStepContract:
+class ImplementerStepContract:
     name: str
     readiness_marker: ReadinessMarker
     slice_id: str
@@ -711,7 +711,7 @@ class CodexStepContract:
 
 
 @dataclass(frozen=True)
-class CodexContractResult:
+class ImplementerContractResult:
     ready: bool | None
     stopped: bool
     stop_request: StopRequest | None

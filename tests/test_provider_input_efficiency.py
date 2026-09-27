@@ -8,18 +8,18 @@ import pytest
 
 from contracts import (
     AgentRole,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     ReadinessMarker,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestSpec,
-    build_native_codex_request,
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
 from provider_input_efficiency import (
     build_correction_execution_package,
@@ -226,26 +226,26 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
     )
     fingerprint = hashlib.sha256(f"fingerprint:{operation}".encode()).hexdigest()
     request_kind = (
-        NativeCodexRequestKind.IMPLEMENTATION
+        NativeImplementerRequestKind.IMPLEMENTATION
         if operation == "codex_implementation"
-        else NativeCodexRequestKind.CORRECTION
+        else NativeImplementerRequestKind.CORRECTION
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="baseline-native-only-cutover",
         work_unit_id="3" if operation == "codex_implementation" else "4",
         operation=operation,
         current_fingerprint=fingerprint,
         request_kind=request_kind,
-        contract=CodexStepContract(
+        contract=ImplementerStepContract(
             name=f"baseline-{operation}",
             readiness_marker=ReadinessMarker.IMPLEMENTATION,
             slice_id="01",
-            round_number=2 if request_kind is NativeCodexRequestKind.CORRECTION else 1,
+            round_number=2 if request_kind is NativeImplementerRequestKind.CORRECTION else 1,
             require_test_files_record=True,
         ),
-        previous_findings=(finding,) if request_kind is NativeCodexRequestKind.CORRECTION else (),
+        previous_findings=(finding,) if request_kind is NativeImplementerRequestKind.CORRECTION else (),
     )
-    if request_kind is NativeCodexRequestKind.IMPLEMENTATION:
+    if request_kind is NativeImplementerRequestKind.IMPLEMENTATION:
         package = build_slice_execution_package(
             plan_text=_three_slice_plan(),
             source_plan_path="docs/internal/plan.md",
@@ -253,7 +253,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             authorized_paths=("src/target.py", "tests/test_target.py"),
         )
         assignment = "Implement only the bound Slice execution package."
-        evidence = NativeCodexEvidenceInput(
+        evidence = NativeImplementerEvidenceInput(
             "slice-execution-package",
             "slice_execution_package",
             package.canonical_json,
@@ -267,13 +267,13 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             current_delta="diff --git a/src/target.py b/src/target.py\n+fixed\n",
         )
         assignment = "Correct only the affected findings and current delta."
-        evidence = NativeCodexEvidenceInput(
+        evidence = NativeImplementerEvidenceInput(
             "correction-execution-package",
             "correction_execution_package",
             package.canonical_json,
         )
-    bundle = build_native_codex_request(
-        NativeCodexRequestSpec(
+    bundle = build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native-only-transport-and-efficiency",
             base_commit="bdb955d4ca56ca292dd8bcbd4d1e776a2acb7a1b",
@@ -283,7 +283,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             evidence=tuple(
                 sorted(
                     (
-                        NativeCodexEvidenceInput(
+                        NativeImplementerEvidenceInput(
                             "native-policy",
                             "system_policy",
                             NATIVE_CODEX_SYSTEM_POLICY,

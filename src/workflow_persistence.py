@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from agent_runtime import (
-    NativeAgentCodexOutput as NativeAgentImplementerOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
 )

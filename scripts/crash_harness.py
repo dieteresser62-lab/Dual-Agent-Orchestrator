@@ -209,11 +209,11 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
     def carry_forward_native_findings(self, state, findings):  # type: ignore[no-untyped-def]
         return self._record_driver.carry_forward_native_findings(state, findings)
 
-    def recover_pending_native_codex(self, invocation, contract, history):  # type: ignore[no-untyped-def]  # allowlist:provider
-        recovered = self._record_driver.recover_pending_native_codex(  # allowlist:provider
+    def recover_pending_native_implementer(self, invocation, contract, history):  # type: ignore[no-untyped-def]  # allowlist:provider
+        recovered = self._record_driver.recover_pending_native_implementer(  # allowlist:provider
             invocation, contract, history
         )
-        return recovered or super().recover_pending_native_codex(  # allowlist:provider
+        return recovered or super().recover_pending_native_implementer(  # allowlist:provider
             invocation, contract, history
         )
 
@@ -245,7 +245,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             fingerprint, expected_commands, attestation_id
         )
 
-    def persist_native_codex_contract(self, output, request_sequence, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
+    def persist_native_implementer_contract(self, output, request_sequence, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
         state = self._record_driver.active_state
         if state is None:
             raise CrashHarnessError("scripted implementer result has no active record state")
@@ -255,13 +255,13 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             if item.work_unit_id == state.current_work_unit_id
             and item.request_sequence == state.current_work_unit.request_sequence
         )
-        self._record_driver.persist_native_codex_contract(  # allowlist:provider
+        self._record_driver.persist_native_implementer_contract(  # allowlist:provider
             output,
             request_sequence,
             previous_findings,
             recovery_fingerprint=fingerprint,
         )
-        super().persist_native_codex_contract(  # allowlist:provider
+        super().persist_native_implementer_contract(  # allowlist:provider
             output, request_sequence, previous_findings
         )
 

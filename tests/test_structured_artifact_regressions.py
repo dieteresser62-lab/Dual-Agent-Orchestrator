@@ -16,7 +16,7 @@ from agent_adapters import AgentOutputError
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     classify_agent_failure,
 )
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
@@ -67,7 +67,7 @@ from content_authority_support import (
 )
 from contracts import (
     AgentRole,
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingClass,
     FindingOrigin,

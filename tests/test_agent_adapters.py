@@ -19,14 +19,14 @@ from agent_config import AgentSettings
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     ReadinessMarker,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import NativeCodexEvidenceInput, NativeCodexRequestSpec, build_native_codex_request
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import NativeImplementerEvidenceInput, NativeImplementerRequestSpec, build_native_implementer_request
 from native_review_contract import NativeReviewContext
 from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
@@ -48,7 +48,7 @@ def _settings(role: str) -> AgentSettings:
 
 
 def _codex_bundle(*, assignment: str = "Create the plan."):
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name="plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -56,23 +56,23 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="run-native",
         work_unit_id="1",
         operation="codex_plan",
         current_fingerprint="a" * 64,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
     )
-    return build_native_codex_request(
-        NativeCodexRequestSpec(
+    return build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native",
             base_commit="b" * 40,
             authorized_paths=("docs/internal/plan.md",),
             assignment=assignment,
             work_context="Use the typed request.",
-            evidence=(NativeCodexEvidenceInput("policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY),),
+            evidence=(NativeImplementerEvidenceInput("policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY),),
         )
     )
 
@@ -128,7 +128,7 @@ def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
     codex.bind_reviewer_workspace(tmp_path, tmp_path / "snapshot")
 
 
-def test_native_codex_prepares_schema_request_and_assets(tmp_path: Path) -> None:
+def test_native_implementer_prepares_schema_request_and_assets(tmp_path: Path) -> None:
     adapter = NativeCodexAdapter(_settings("codex"))
     bundle = _codex_bundle()
     repository = tmp_path / "repository"
@@ -153,7 +153,7 @@ def test_native_codex_prepares_schema_request_and_assets(tmp_path: Path) -> None
     adapter.cleanup()
 
 
-def test_native_codex_transports_assignment_without_inlining_root_roles(
+def test_native_implementer_transports_assignment_without_inlining_root_roles(
     tmp_path: Path,
 ) -> None:
     assignment = "S6-TRANSPORT-SENTINEL: create the declared work-plan artifact."
@@ -188,7 +188,7 @@ def test_native_codex_transports_assignment_without_inlining_root_roles(
     adapter.cleanup()
 
 
-def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
+def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
     adapter = NativeCodexAdapter(_settings("codex"))
     bundle = _codex_bundle()
     repository = tmp_path / "repository"

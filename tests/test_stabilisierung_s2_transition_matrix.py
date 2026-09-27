@@ -378,7 +378,7 @@ COMPARISON_TARGETS = (
         "_persist_native_agent_request_bundle",
     ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_immutable_file"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_codex_raw_response"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_implementer_raw_response"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_materialize_review_packet"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_canonical_native_agent_result"),
     ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_implementer"),
@@ -586,7 +586,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings': 4,
  'src/workflow_persistence.py:WorkflowPersistence._persist_native_agent_request_bundle': 4,
  'src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file': 3,
- 'src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response': 0,
+ 'src/orchestrator.py:ProductionWorkflowDriver._write_native_implementer_raw_response': 0,
  'src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet': 3,
  'src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result': 4,
  'src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer': 39,
@@ -1304,7 +1304,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "
         "inventarisierte\nVergleichsausdrücke"
     ) in document
-    assert "`persist_native_codex_contract()` 11" not in document
+    assert "`persist_native_implementer_contract()` 11" not in document
 
 
 def test_recovery_and_preflight_predicate_bodies_are_frozen() -> None:

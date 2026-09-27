@@ -22,12 +22,12 @@ from native_review_request import (
     NativeReviewRequestBundle,
     PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
 )
-from native_codex_contract import (
-    NativeCodexContractError,
-    canonical_native_codex_json,
+from native_implementer_contract import (
+    NativeImplementerContractError,
+    canonical_native_implementer_json,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
 )
 from native_provider_schema import (
     NativeProviderSchemaError,
@@ -449,16 +449,16 @@ class NativeCodexAdapter(_BaseAdapter):
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         _ = prompt
         raise RuntimeError(
-            "native Codex requests require a bound NativeCodexRequestBundle"
+            "native Codex requests require a bound NativeImplementerRequestBundle"
         )
 
     def prepare_native_provider_input(
         self,
-        bundle: NativeCodexRequestBundle,
+        bundle: NativeImplementerRequestBundle,
         execution_boundary: NativeCodexExecutionBoundary | None = None,
     ) -> PreparedProviderInput:
-        if not isinstance(bundle, NativeCodexRequestBundle):
-            raise TypeError("native Codex adapter requires NativeCodexRequestBundle")
+        if not isinstance(bundle, NativeImplementerRequestBundle):
+            raise TypeError("native Codex adapter requires NativeImplementerRequestBundle")
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(
             PROJECT_ROOT
         )
@@ -550,8 +550,8 @@ class NativeCodexAdapter(_BaseAdapter):
         if document.get("request_id") != self._native_request_id:
             raise AgentOutputError("native Codex response request_id differs from request")
         try:
-            return canonical_native_codex_json(document)
-        except NativeCodexContractError as exc:
+            return canonical_native_implementer_json(document)
+        except NativeImplementerContractError as exc:
             raise AgentOutputError(
                 "native Codex response violates the local result schema",
                 provider_data=document,

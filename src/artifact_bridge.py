@@ -55,7 +55,7 @@ from artifact_models import (
 from artifact_store import ArtifactStore
 from contracts import (
     AgentRole,
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingRecord,
     FindingResponseDecision,
@@ -190,7 +190,7 @@ def plan_payload(
 
 
 def agent_result_payload(
-    result: CodexContractResult,
+    result: ImplementerContractResult,
     *,
     role: AgentRole,
     work_unit_id: int | str,

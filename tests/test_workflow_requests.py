@@ -11,7 +11,7 @@ import pytest
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -25,7 +25,7 @@ from contracts import (
 )
 from artifact_models import technical_text_evidence
 from gates import StopRule
-from native_codex_contract import NativeCodexRequestKind
+from native_implementer_contract import NativeImplementerRequestKind
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     EvidenceKind,
@@ -74,7 +74,7 @@ def _context() -> WorkflowContext:
 
 def _codex_bundle(
     *, context: WorkflowContext | None = None
-) -> workflow_requests.NativeCodexRequestBundle:
+) -> workflow_requests.NativeImplementerRequestBundle:
     state = init_workflow_state(
         run_id="b31-request-builder",
         task_file="/repo/inbox/backlog/00-b31.md",
@@ -87,7 +87,7 @@ def _codex_bundle(
         target_branch="feature/backlog-followups",
         timestamp="2026-09-02T10:00:00+00:00",
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name="b31-plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -95,12 +95,12 @@ def _codex_bundle(
         require_slice_plan=True,
         plan_artifact_path="docs/internal/b31-plan.md",
     )
-    return workflow_requests.native_codex_request(
+    return workflow_requests.native_implementer_request(
         state=state,
         context=_context() if context is None else context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         execution_error=WorkflowExecutionError,
     )
 
@@ -203,7 +203,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
         "_review_request_finding_inputs",
-        "native_codex_request",
+        "native_implementer_request",
         "native_review_request",
     }
     assert not any(isinstance(node, ast.ClassDef) for node in tree.body)
@@ -234,7 +234,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "workflow_requests"
     ]
-    codex_calls = [node for node in calls if node.func.attr == "native_codex_request"]
+    codex_calls = [node for node in calls if node.func.attr == "native_implementer_request"]
     review_calls = [node for node in calls if node.func.attr == "native_review_request"]
     assert len(codex_calls) == 2
     assert len(review_calls) == 1
@@ -405,7 +405,7 @@ def test_canary_33_codex_plan_schema_uses_the_runtime_validation_declarations() 
     )
 
     def measurement_stages(
-        bundle: workflow_requests.NativeCodexRequestBundle,
+        bundle: workflow_requests.NativeImplementerRequestBundle,
     ) -> list[str]:
         return bundle.provider_response_schema["$defs"]["planned_slice"][
             "properties"

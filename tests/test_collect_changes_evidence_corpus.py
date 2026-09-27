@@ -476,7 +476,7 @@ def _run_scenario(
         raise AssertionError("B62 must not start a real provider")
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(module, "run_native_codex_agent_checked", forbidden_provider)
+        patch.setattr(module, "run_native_implementer_agent_checked", forbidden_provider)
         patch.setattr(module, "run_native_review_agent_checked", forbidden_provider)
 
         if spec.scenario_id in {

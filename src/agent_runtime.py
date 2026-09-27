@@ -33,25 +33,25 @@ from agent_adapters import (
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
 from contracts import (
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingRecord,
     ValidationAttestation,
 )
-from native_codex_contract import (
-    NativeCodexContext,
-    NativeCodexContractError,
-    NativeCodexErrorCode,
+from native_implementer_contract import (
+    NativeImplementerContext,
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
     find_native_implementer_contract_error,
-    is_retryable_native_codex_response_error as is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
-    parse_bound_native_codex_contract_result,
-    validate_native_codex_document,
+    is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
+    parse_bound_native_implementer_contract_result,
+    validate_native_implementer_document,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle,
-    NativeCodexRequestError,
-    NativeCodexRequestErrorCode as NativeImplementerRequestErrorCode,  # allowlist:provider -- typed implementer boundary
-    validate_native_codex_provider_response,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
+    NativeImplementerRequestError,
+    NativeImplementerRequestErrorCode,  # allowlist:provider -- typed implementer boundary
+    validate_native_implementer_provider_response,
 )
 from native_review_contract import (
     NativeReviewContext,
@@ -107,9 +107,6 @@ from rejected_response_shape import (
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
 logger = logging.getLogger(__name__)
-NativeImplementerErrorCode = NativeCodexErrorCode  # allowlist:provider -- local role alias
-NativeImplementerContractError = NativeCodexContractError  # allowlist:provider -- local role alias
-NativeImplementerRequestError = NativeCodexRequestError  # allowlist:provider -- local role alias
 REVIEW_SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {
         ".git",
@@ -1884,23 +1881,23 @@ def run_native_review_agent_checked(
 
 
 @dataclass(frozen=True, slots=True)
-class NativeAgentCodexOutput:
+class NativeAgentImplementerOutput:
     """One schema-, request-, and domain-bound native Codex result."""
 
-    result: CodexContractResult
+    result: ImplementerContractResult
     canonical_json: str
     request_id: str
     response_sha256: str
-    context: NativeCodexContext | None = field(default=None, compare=False)
+    context: NativeImplementerContext | None = field(default=None, compare=False)
     recovered_finding_comparison: RecoveredFindingComparison | None = field(
         default=None,
         compare=False,
     )
 
 
-def run_native_codex_agent(
+def run_native_implementer_agent(
     adapter: AgentAdapter,
-    bundle: NativeCodexRequestBundle,
+    bundle: NativeImplementerRequestBundle,
     *,
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
@@ -1910,7 +1907,7 @@ def run_native_codex_agent(
     attempt_invocation: _ProviderAttemptInvocation | None = None,
     validated_response_callback: Callable[[str], None] | None = None,
     execution_boundary: NativeCodexExecutionBoundary | None = None,
-) -> NativeAgentCodexOutput:
+) -> NativeAgentImplementerOutput:
     """Run native Codex without marker parsing, flag extraction, or repair."""
     prepare = getattr(adapter, "prepare_native_provider_input", None)
     if not callable(prepare):
@@ -1936,16 +1933,16 @@ def run_native_codex_agent(
         document = json.loads(canonical)
         if not isinstance(document, dict):
             raise AgentOutputError("native Codex result must be a JSON object")
-        validate_native_codex_document(document)
-        validate_native_codex_provider_response(document, bundle)
+        validate_native_implementer_document(document)
+        validate_native_implementer_provider_response(document, bundle)
         if document.get("request_id") != bundle.bound_context.request_id:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.REQUEST_MISMATCH,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.REQUEST_MISMATCH,
                 "response request_id does not match bound request",
             )
         if validated_response_callback is not None:
             validated_response_callback(canonical)
-        result = parse_bound_native_codex_contract_result(
+        result = parse_bound_native_implementer_contract_result(
             document, bundle.bound_context
         )
     except json.JSONDecodeError as exc:
@@ -1976,7 +1973,7 @@ def run_native_codex_agent(
             provider_data=document,
             technical_text=f"{exc.code.value}: {exc.detail}",
         ) from exc
-    return NativeAgentCodexOutput(
+    return NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
@@ -1985,10 +1982,10 @@ def run_native_codex_agent(
     )
 
 
-def run_native_codex_agent_checked(
+def run_native_implementer_agent_checked(
     *,
     adapter: AgentAdapter,
-    bundle: NativeCodexRequestBundle,
+    bundle: NativeImplementerRequestBundle,
     raw_response_path: Path,
     config: OrchestratorConfig,
     write_file: Callable[[Path, str], None],
@@ -1997,9 +1994,9 @@ def run_native_codex_agent_checked(
     binding_fingerprint: str,
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None,
     provider_attempt_lifecycle: ProviderAttemptLifecycle | None,
-    accepted_output_callback: Callable[[NativeAgentCodexOutput], None] | None = None,
+    accepted_output_callback: Callable[[NativeAgentImplementerOutput], None] | None = None,
     execution_boundary: NativeCodexExecutionBoundary | None = None,
-) -> NativeAgentCodexOutput:
+) -> NativeAgentImplementerOutput:
     """Persist canonical response bytes before any accepted-result callback."""
     invocation_id = uuid.uuid4().hex
     attempt_invocation = (
@@ -2008,7 +2005,7 @@ def run_native_codex_agent_checked(
         else None
     )
     try:
-        output = run_native_codex_agent(
+        output = run_native_implementer_agent(
             adapter,
             bundle,
             config=config,

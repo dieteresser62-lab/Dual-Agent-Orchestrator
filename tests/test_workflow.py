@@ -23,7 +23,7 @@ from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     QuotaReset,
@@ -37,8 +37,8 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -65,10 +65,10 @@ from gates import (
     TestChangeEvidence as GateTestChangeEvidence,
 )
 from finding_reducer import project_open_set
-from native_codex_contract import (
-    NativeCodexContractError,
-    NativeCodexErrorCode,
-    NativeCodexRequestKind,
+from native_implementer_contract import (
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
+    NativeImplementerRequestKind,
 )
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
@@ -133,9 +133,9 @@ def test_request_recomposition_does_not_advance_reviewer_round() -> None:
     assert _review_round_number(unit, WorkflowHistory(3), AgentRole.CLAUDE) == 1
 
 
-def _test_native_codex_output(
+def _test_native_implementer_output(
     invocation: CodexInvocation, text: str
-) -> NativeAgentCodexOutput:
+) -> NativeAgentImplementerOutput:
     assert invocation.native_request is not None
     findings = list(invocation.previous_findings)
     for finding_id, decision, rationale in re.findall(
@@ -179,7 +179,7 @@ def _test_native_codex_output(
             r"^SLICE_PLAN: (\d+) \| ([^|]+) \| (.+)$", text, re.MULTILINE
         )
     )
-    result = CodexContractResult(
+    result = ImplementerContractResult(
         ready=None if stop else bool(ready_match and ready_match.group(1) == "YES"),
         stopped=stop is not None,
         stop_request=stop_request,
@@ -190,7 +190,7 @@ def _test_native_codex_output(
     )
     request_id = invocation.native_request.bound_context.request_id
     canonical = json.dumps({"request_id": request_id}, sort_keys=True)
-    return NativeAgentCodexOutput(
+    return NativeAgentImplementerOutput(
         result, canonical, request_id, hashlib.sha256(canonical.encode()).hexdigest()
     )
 
@@ -536,7 +536,7 @@ class FakeDriver:
             for item in self.checkpoint_histories[-1].attestations
         )
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
         self.codex_calls.append(invocation)
         self.snapshot_index += 1
         if self.codex_failures:
@@ -546,16 +546,16 @@ class FakeDriver:
         output = self.codex_outputs.pop(0)
         return (
             output
-            if isinstance(output, NativeAgentCodexOutput)
-            else _test_native_codex_output(invocation, output)
+            if isinstance(output, NativeAgentImplementerOutput)
+            else _test_native_implementer_output(invocation, output)
         )
 
-    def recover_pending_native_codex(
+    def recover_pending_native_implementer(
         self,
         invocation: CodexInvocation,
-        contract: CodexStepContract,
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None:
+    ) -> NativeAgentImplementerOutput | None:
         self.structured_events.append(
             ("recover-native-codex", (invocation, contract, history))
         )
@@ -790,9 +790,9 @@ class FakeDriver:
             if output.result.stopped
         )
 
-    def persist_native_codex_contract(
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
@@ -1486,7 +1486,7 @@ def test_native_implementation_package_matches_request_open_findings(
             "**Acceptance Criteria**\n\n- Keep one finding identity.\n"
         ),
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name="work-unit-2-codex_implementation",
         readiness_marker=ReadinessMarker.IMPLEMENTATION,
         slice_id="01",
@@ -1495,7 +1495,7 @@ def test_native_implementation_package_matches_request_open_findings(
         test_changes_approved=True,
     )
 
-    bundle = workflow_requests.native_codex_request(
+    bundle = workflow_requests.native_implementer_request(
         execution_error=WorkflowExecutionError,
         state=state,
         context=context,
@@ -1504,7 +1504,7 @@ def test_native_implementation_package_matches_request_open_findings(
             findings=(open_finding, closed_finding),
         ),
         contract=contract,
-        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+        request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
     )
 
     manifest_item = next(
@@ -1606,8 +1606,8 @@ def _structured_output_failure(
     )
 
 
-def _native_codex_contract_failure(
-    code: NativeCodexErrorCode,
+def _native_implementer_contract_failure(
+    code: NativeImplementerErrorCode,
     invocation_id: str,
     *,
     received_at: datetime,
@@ -1615,7 +1615,7 @@ def _native_codex_contract_failure(
     diagnostic: OrchestratorDiagnostic | None = None,
     provider_data: dict[str, object] | None = None,
 ) -> AgentInvocationError:
-    contract_error = NativeCodexContractError(
+    contract_error = NativeImplementerContractError(
         code,
         detail,
         orchestrator_diagnostic=diagnostic,
@@ -1820,8 +1820,8 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     now = datetime(2026, 9, 5, 22, 13, 8, tzinfo=timezone.utc)
     injected_provider_text = "secret text copied from the provider response"
     diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
-    contract_error = NativeCodexContractError(
-        NativeCodexErrorCode.SLICE_PLAN_INVALID,
+    contract_error = NativeImplementerContractError(
+        NativeImplementerErrorCode.SLICE_PLAN_INVALID,
         injected_provider_text,
         orchestrator_diagnostic=diagnostic,
     )
@@ -2405,7 +2405,7 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
         (WorkflowStep.CODEX_CORRECTION, "correction"),
     ),
 )
-def test_native_codex_result_bypasses_legacy_marker_parser(
+def test_native_implementer_result_bypasses_legacy_marker_parser(
     monkeypatch, step: WorkflowStep, request_type: str
 ) -> None:
     finding = FindingRecord(
@@ -2436,17 +2436,17 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     )
 
     @dataclass
-    class NativeCodexDriver(FakeDriver):
-        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+    class NativeImplementerDriver(FakeDriver):
+        persisted: list[NativeAgentImplementerOutput] = field(default_factory=list)
 
         def invoke_codex(
             self, invocation: CodexInvocation
-        ) -> NativeAgentCodexOutput:
+        ) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             assert invocation.prompt == ""
             assert invocation.native_request is not None
             bound = invocation.native_request.bound_context
-            result = CodexContractResult(
+            result = ImplementerContractResult(
                 ready=True,
                 stopped=False,
                 stop_request=None,
@@ -2463,16 +2463,16 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            return NativeAgentCodexOutput(
+            return NativeAgentImplementerOutput(
                 result=result,
                 canonical_json=canonical,
                 request_id=bound.request_id,
                 response_sha256="b" * 64,
             )
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -2491,7 +2491,7 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     if previous_findings:
         state = _with_open_findings(state, ("C-01",))
     previous_findings_expected = previous_findings
-    driver = NativeCodexDriver(
+    driver = NativeImplementerDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
         reviewer_outputs=[],
@@ -2516,7 +2516,7 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     )
 
 
-def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -> None:
+def test_native_implementer_correction_merges_offered_blocker_into_complete_ledger() -> None:
     findings = tuple(
         FindingRecord(
             finding_id=f"C-{index:02d}",
@@ -2542,15 +2542,15 @@ def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -
 
         def invoke_codex(
             self, invocation: CodexInvocation
-        ) -> NativeAgentCodexOutput:
+        ) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             assert invocation.native_request is not None
             assert tuple(
                 item.finding_id
                 for item in invocation.native_request.bound_context.context.previous_findings
             ) == ("C-03",)
-            return NativeAgentCodexOutput(
-                result=CodexContractResult(
+            return NativeAgentImplementerOutput(
+                result=ImplementerContractResult(
                     ready=True,
                     stopped=False,
                     stop_request=None,
@@ -2564,9 +2564,9 @@ def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -
                 response_sha256="b" * 64,
             )
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -2600,7 +2600,7 @@ def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -
     assert driver.persisted_previous == findings
 
 
-def test_native_codex_execution_packages_exclude_sibling_and_unaffected_evidence() -> None:
+def test_native_implementer_execution_packages_exclude_sibling_and_unaffected_evidence() -> None:
     plan = """# Approved multi-Slice plan
 
 ### Slice 1 - Target Slice
@@ -2637,20 +2637,20 @@ Implement TARGET-GOAL-SENTINEL only.
     implementation_state = _slice_state(
         scope_paths=("src/early.py", TEST_FILE)
     )
-    implementation_contract = CodexStepContract(
+    implementation_contract = ImplementerStepContract(
         name="compact-implementation",
         readiness_marker=ReadinessMarker.IMPLEMENTATION,
         slice_id="01",
         round_number=1,
         require_test_files_record=True,
     )
-    implementation = workflow_requests.native_codex_request(
+    implementation = workflow_requests.native_implementer_request(
         execution_error=WorkflowExecutionError,
         state=implementation_state,
         context=replace(_context(), approved_plan_text=plan),
         history=WorkflowHistory(implementation_state.current_work_unit_id),
         contract=implementation_contract,
-        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+        request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
     )
     implementation_json = implementation.canonical_json
 
@@ -2683,7 +2683,7 @@ Implement TARGET-GOAL-SENTINEL only.
         ("C-01",),
     )
     correction_contract = replace(implementation_contract, round_number=2)
-    correction = workflow_requests.native_codex_request(
+    correction = workflow_requests.native_implementer_request(
         execution_error=WorkflowExecutionError,
         state=correction_state,
         context=_context(),
@@ -2692,7 +2692,7 @@ Implement TARGET-GOAL-SENTINEL only.
             findings=(affected, unrelated),
         ),
         contract=correction_contract,
-        request_kind=NativeCodexRequestKind.CORRECTION,
+        request_kind=NativeImplementerRequestKind.CORRECTION,
         current_slice_diff="CURRENT-DELTA-SENTINEL",
         correction_fingerprint="c" * 64,
         correction_findings=(affected, unrelated),
@@ -2706,19 +2706,19 @@ Implement TARGET-GOAL-SENTINEL only.
     assert "PRIOR-FULL-DIFF-SENTINEL" not in correction_json
 
 
-def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
+def test_native_implementer_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
     @dataclass
     class NativePlanDriver(FakeDriver):
-        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+        persisted: list[NativeAgentImplementerOutput] = field(default_factory=list)
 
         def invoke_codex(
             self, invocation: CodexInvocation
-        ) -> NativeAgentCodexOutput:
+        ) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             assert invocation.prompt == ""
             assert invocation.native_request is not None
             bound = invocation.native_request.bound_context
-            result = CodexContractResult(
+            result = ImplementerContractResult(
                 ready=True,
                 stopped=False,
                 stop_request=None,
@@ -2733,7 +2733,7 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
                     ),
                 ),
             )
-            return NativeAgentCodexOutput(
+            return NativeAgentImplementerOutput(
                 result=result,
                 canonical_json=json.dumps(
                     {
@@ -2747,9 +2747,9 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
                 response_sha256="c" * 64,
             )
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -2797,7 +2797,7 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
     "step",
     (WorkflowStep.CODEX_PLAN_REVISION, WorkflowStep.CODEX_CORRECTION),
 )
-def test_combined_native_codex_finding_steps_fail_before_provider_on_mirror_drift(
+def test_combined_native_implementer_finding_steps_fail_before_provider_on_mirror_drift(
     step: WorkflowStep,
 ) -> None:
     finding = FindingRecord(
@@ -2901,7 +2901,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
     @dataclass
     class ConvergingNativeDriver(FakeDriver):
         persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
-        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
+        persisted_codex: list[NativeAgentImplementerOutput] = field(default_factory=list)
 
         def invoke_reviewer(
             self, invocation: ReviewerInvocation
@@ -2968,7 +2968,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
                 request_id=bound.request_id,
             )
 
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             assert invocation.prompt == ""
             assert invocation.native_request is not None
@@ -2983,7 +2983,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
                     ),
                 ),
             )
-            result = CodexContractResult(
+            result = ImplementerContractResult(
                 ready=True,
                 stopped=False,
                 stop_request=None,
@@ -2991,7 +2991,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
                 test_files=(TEST_FILE,),
                 findings=(answered,),
             )
-            return NativeAgentCodexOutput(
+            return NativeAgentImplementerOutput(
                 result=result,
                 canonical_json=json.dumps(
                     {
@@ -3015,9 +3015,9 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         ) -> None:
             self.persisted_reviews.append(output)
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -3073,7 +3073,7 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
     @dataclass
     class ConvergingNativePlanDriver(FakeDriver):
         persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
-        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
+        persisted_codex: list[NativeAgentImplementerOutput] = field(default_factory=list)
 
         def invoke_reviewer(
             self, invocation: ReviewerInvocation
@@ -3138,13 +3138,13 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
                 request_id=bound.request_id,
             )
 
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             assert invocation.step is WorkflowStep.CODEX_PLAN_REVISION
             assert invocation.prompt == ""
             assert invocation.native_request is not None
             bound = invocation.native_request.bound_context
-            assert bound.context.request_kind is NativeCodexRequestKind.PLAN
+            assert bound.context.request_kind is NativeImplementerRequestKind.PLAN
             finding = bound.context.previous_findings[0]
             answered = replace(
                 finding,
@@ -3155,8 +3155,8 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
                     ),
                 ),
             )
-            return NativeAgentCodexOutput(
-                result=CodexContractResult(
+            return NativeAgentImplementerOutput(
+                result=ImplementerContractResult(
                     ready=True,
                     stopped=False,
                     stop_request=None,
@@ -3193,9 +3193,9 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         ) -> None:
             self.persisted_reviews.append(output)
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             _request_sequence: int,
             _previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -3647,7 +3647,7 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
     )
 
 
-def test_native_codex_correction_binds_record_authority_before_recovery() -> None:
+def test_native_implementer_correction_binds_record_authority_before_recovery() -> None:
     finding = FindingRecord(
         finding_id="C-01",
         finding_class=FindingClass.BLOCKER,
@@ -3665,7 +3665,7 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
             ),
         ),
     )
-    result = CodexContractResult(
+    result = ImplementerContractResult(
         ready=True,
         stopped=False,
         stop_request=None,
@@ -3673,7 +3673,7 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
         test_files=(TEST_FILE,),
         findings=(answered,),
     )
-    recovered_output = NativeAgentCodexOutput(
+    recovered_output = NativeAgentImplementerOutput(
         result=result,
         canonical_json='{"result_type":"correction_result"}',
         request_id="native-codex-request-" + "a" * 64,
@@ -3688,7 +3688,7 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
 
     @dataclass
     class RecoveryDriver(FakeDriver):
-        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+        persisted: list[NativeAgentImplementerOutput] = field(default_factory=list)
 
         def authoritative_native_findings(
             self,
@@ -3707,15 +3707,15 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
         ) -> tuple[FindingRecord, ...]:
             return (answered,)
 
-        def recover_pending_native_codex(self, *_args):  # type: ignore[no-untyped-def]
+        def recover_pending_native_implementer(self, *_args):  # type: ignore[no-untyped-def]
             return recovered_output
 
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             raise AssertionError("record-ahead recovery must suppress the provider")
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
@@ -5092,8 +5092,8 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
         codex_outputs=[_codex_not_ready(plan=True)],
         reviewer_outputs=[],
         codex_failures=[
-            _native_codex_contract_failure(
-                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+            _native_implementer_contract_failure(
+                NativeImplementerErrorCode.SLICE_PLAN_INVALID,
                 "codex-slice-plan-invalid-1",
                 received_at=now[0],
                 detail=(
@@ -5154,8 +5154,8 @@ def test_codex_context_rejection_halts_without_retry() -> None:
         codex_outputs=[],
         reviewer_outputs=[],
         codex_failures=[
-            _native_codex_contract_failure(
-                NativeCodexErrorCode.CONTEXT_INVALID,
+            _native_implementer_contract_failure(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 "codex-context-invalid",
                 received_at=now,
             )
@@ -5183,8 +5183,8 @@ def test_codex_form_rejection_with_scope_violation_halts_without_retry() -> None
         codex_outputs=[],
         reviewer_outputs=[],
         codex_failures=[
-            _native_codex_contract_failure(
-                NativeCodexErrorCode.SCHEMA_INVALID,
+            _native_implementer_contract_failure(
+                NativeImplementerErrorCode.SCHEMA_INVALID,
                 "codex-form-with-scope-violation",
                 received_at=now,
             )
@@ -5208,8 +5208,8 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
     now = [datetime(2026, 9, 19, 20, 24, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)
     failures = [
-        _native_codex_contract_failure(
-            NativeCodexErrorCode.RESULT_CONTENT_INVALID,
+        _native_implementer_contract_failure(
+            NativeImplementerErrorCode.RESULT_CONTENT_INVALID,
             f"codex-content-invalid-{attempt}",
             received_at=now[0],
             provider_data={
@@ -6546,14 +6546,14 @@ def test_scope_extension_persists_and_second_access_needs_no_new_request() -> No
     rationale = _scope_extension_rationale(path)
 
     class ScopeExtensionDriver(FakeDriver):
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             if len(self.codex_calls) == 1:
                 assert invocation.native_request is not None
                 request_id = invocation.native_request.bound_context.request_id
                 canonical = json.dumps({"request_id": request_id}, sort_keys=True)
-                return NativeAgentCodexOutput(
-                    CodexContractResult(
+                return NativeAgentImplementerOutput(
+                    ImplementerContractResult(
                         ready=None,
                         stopped=True,
                         stop_request=StopRequest(
@@ -6570,7 +6570,7 @@ def test_scope_extension_persists_and_second_access_needs_no_new_request() -> No
                     request_id,
                     hashlib.sha256(canonical.encode()).hexdigest(),
                 )
-            return _test_native_codex_output(invocation, _codex_ready())
+            return _test_native_implementer_output(invocation, _codex_ready())
 
     state = _scope_extension_state(path, "unowned")
     assert path not in state.current_slice.scope_paths
@@ -6621,19 +6621,19 @@ def _requested_scope_extension_gate(
     test_changes_approved: bool = True,
 ) -> tuple[WorkflowEngine, FakeDriver, WorkflowContext, WorkflowRunResult]:
     class RequestedScopeDriver(FakeDriver):
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             self.snapshot_index += 1
             if len(self.codex_calls) > 1:
-                return _test_native_codex_output(
+                return _test_native_implementer_output(
                     invocation,
                     self.codex_outputs.pop(0),
                 )
             assert invocation.native_request is not None
             request_id = invocation.native_request.bound_context.request_id
             canonical = json.dumps({"request_id": request_id}, sort_keys=True)
-            return NativeAgentCodexOutput(
-                CodexContractResult(
+            return NativeAgentImplementerOutput(
+                ImplementerContractResult(
                     ready=None,
                     stopped=True,
                     stop_request=StopRequest(
@@ -6794,15 +6794,15 @@ def _record_ahead_scope_reprompt(
                 reviewer_outputs=[],
                 paths_existing_at_commits={(START_COMMIT, path)},
             )
-            self.responses: dict[int, NativeAgentCodexOutput] = {}
+            self.responses: dict[int, NativeAgentImplementerOutput] = {}
             self.recovery_attempts: list[tuple[int, str]] = []
 
-        def recover_pending_native_codex(
+        def recover_pending_native_implementer(
             self,
             invocation: CodexInvocation,
-            contract: CodexStepContract,
+            contract: ImplementerStepContract,
             history: WorkflowHistory,
-        ) -> NativeAgentCodexOutput | None:
+        ) -> NativeAgentImplementerOutput | None:
             _ = (contract, history)
             assert invocation.native_request is not None
             self.recovery_attempts.append(
@@ -6810,28 +6810,28 @@ def _record_ahead_scope_reprompt(
             )
             return self.responses.get(invocation.request_sequence)
 
-        def persist_native_codex_contract(
+        def persist_native_implementer_contract(
             self,
-            output: NativeAgentCodexOutput,
+            output: NativeAgentImplementerOutput,
             request_sequence: int,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
-            super().persist_native_codex_contract(
+            super().persist_native_implementer_contract(
                 output, request_sequence, previous_findings
             )
             self.responses[request_sequence] = output
 
-        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
             self.codex_calls.append(invocation)
             self.snapshot_index += 1
             assert len(self.codex_calls) <= 2, "scope re-prompt must not circle"
             if len(self.codex_calls) == 2 and not repeat_request:
-                return _test_native_codex_output(invocation, _codex_ready())
+                return _test_native_implementer_output(invocation, _codex_ready())
             assert invocation.native_request is not None
             request_id = invocation.native_request.bound_context.request_id
             canonical = json.dumps({"request_id": request_id}, sort_keys=True)
-            return NativeAgentCodexOutput(
-                CodexContractResult(
+            return NativeAgentImplementerOutput(
+                ImplementerContractResult(
                     ready=None,
                     stopped=True,
                     stop_request=StopRequest(

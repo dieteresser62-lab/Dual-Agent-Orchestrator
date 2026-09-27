@@ -9,8 +9,8 @@ import workflow_requests
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import technical_text_evidence
-from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
-from native_codex_contract import NativeCodexRequestKind
+from contracts import ImplementerStepContract, PlannedSlice, ReadinessMarker
+from native_implementer_contract import NativeImplementerRequestKind
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     WorkflowChanges,
@@ -218,7 +218,7 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
 
     engine = WorkflowEngine(Driver())  # type: ignore[arg-type]
 
-    assert engine._fingerprint_bound_codex_scope_paths(state) == (path,)
+    assert engine._fingerprint_bound_implementer_scope_paths(state) == (path,)
 
     class DriftedDriver:
         @staticmethod
@@ -226,10 +226,10 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
             return type("Changes", (), {"fingerprint": "c" * 64})()
 
     drifted = WorkflowEngine(DriftedDriver())  # type: ignore[arg-type]
-    assert drifted._fingerprint_bound_codex_scope_paths(state) == ()
+    assert drifted._fingerprint_bound_implementer_scope_paths(state) == ()
 
 
-def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation() -> None:
+def test_native_implementer_request_projects_fingerprint_bound_paths_and_explanation() -> None:
     state = init_workflow_state(
         run_id="native-scope",
         task_file="/repo/task.md",
@@ -247,7 +247,7 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         distilled_plan="Use the persisted task contract.",
         slice_summary="Plan the work.",
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         "native-plan",
         ReadinessMarker.PLAN,
         "01",
@@ -256,13 +256,13 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         plan_artifact_path="docs/internal/plan.md",
     )
 
-    bundle = workflow_requests.native_codex_request(
+    bundle = workflow_requests.native_implementer_request(
         execution_error=WorkflowExecutionError,
         state=state,
         context=context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         additional_authorized_paths=("src/runtime-hotfix.py",),
     )
 
@@ -504,7 +504,7 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
         )
 
 
-def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
+def test_protocol_binding_roundtrips_native_implementer_result_transport() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
         "2",
@@ -683,7 +683,7 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     assert resumed.current_work_unit.invocation_failures == (failure,)
 
 
-def test_native_codex_retry_feedback_roundtrips_in_state() -> None:
+def test_native_implementer_retry_feedback_roundtrips_in_state() -> None:
     diagnostic = OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID.text
     failure = InvocationFailureRecord(
         invocation_id="inv-codex-form-1",

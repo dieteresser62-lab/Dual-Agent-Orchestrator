@@ -41,7 +41,7 @@ from artifact_replay import (
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -52,16 +52,16 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
-from native_codex_contract import (
-    NativeCodexContext,
-    NativeCodexRequestKind,
-    canonical_native_codex_json,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    NativeImplementerContext,
+    NativeImplementerRequestKind,
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result,
 )
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestSpec,
-    build_native_codex_request,
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
 from native_review_contract import (
     NativeReviewContext,
@@ -492,7 +492,7 @@ def _replay_error() -> ArtifactReplayError:
 
 
 def _implementer_base() -> dict[str, object]:
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         "b53-implementer",
         ReadinessMarker.IMPLEMENTATION,
         "01",
@@ -501,16 +501,16 @@ def _implementer_base() -> dict[str, object]:
         expected_test_files=(),
         test_changes_approved=True,
     )
-    native_context = NativeCodexContext(
+    native_context = NativeImplementerContext(
         run_id=RUN_ID,
         work_unit_id="1",
         operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
         current_fingerprint=FINGERPRINT,
-        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+        request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
         contract=contract,
     )
-    bundle = build_native_codex_request(
-        NativeCodexRequestSpec(
+    bundle = build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=native_context,
             target_branch="feature/backlog-followups",
             base_commit="a" * 40,
@@ -518,7 +518,7 @@ def _implementer_base() -> dict[str, object]:
             assignment="Bind native implementer recovery.",
             work_context="B53 provider-free recovery corpus.",
             evidence=(
-                NativeCodexEvidenceInput(
+                NativeImplementerEvidenceInput(
                     "b53-task", "orchestrator_instruction", "Recover exactly once."
                 ),
             ),
@@ -533,8 +533,8 @@ def _implementer_base() -> dict[str, object]:
         "test_files": [],
         "finding_dispositions": [],
     }
-    canonical = canonical_native_codex_json(document)
-    result = parse_bound_native_codex_contract_result(document, bundle.bound_context)
+    canonical = canonical_native_implementer_json(document)
+    result = parse_bound_native_implementer_contract_result(document, bundle.bound_context)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     assert digest == IMPLEMENTER_RESPONSE_SHA256
     payload = agent_result_payload(
@@ -886,7 +886,7 @@ def _run_implementer_scenario(
     elif spec.scenario_id == "implementer-bound-response-invalid":
         document = dict(base["document"])
         document["request_id"] = "native-codex-request-" + "9" * 64
-        canonical = canonical_native_codex_json(document)
+        canonical = canonical_native_implementer_json(document)
         content = _content_record(
             "ar1-" + "3" * 64,
             role=Role.CODEX,
@@ -996,7 +996,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         acceptance_test="Recovery accepts its request-bound disposition.",
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         "b97-implementer",
         ReadinessMarker.IMPLEMENTATION,
         "16",
@@ -1007,14 +1007,14 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
     )
 
     def request(previous_findings: tuple[FindingRecord, ...]):
-        return build_native_codex_request(
-            NativeCodexRequestSpec(
-                context=NativeCodexContext(
+        return build_native_implementer_request(
+            NativeImplementerRequestSpec(
+                context=NativeImplementerContext(
                     run_id=RUN_ID,
                     work_unit_id="17",
                     operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
                     current_fingerprint=FINGERPRINT,
-                    request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+                    request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
                     contract=contract,
                     previous_findings=previous_findings,
                 ),
@@ -1024,7 +1024,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
                 assignment="Recover the request-bound finding context.",
                 work_context="B97 provider-free recovery regression.",
                 evidence=(
-                    NativeCodexEvidenceInput(
+                    NativeImplementerEvidenceInput(
                         "b97-task",
                         "orchestrator_instruction",
                         "Recover exactly once in the original finding context.",
@@ -1049,8 +1049,8 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
             }
         ],
     }
-    canonical = canonical_native_codex_json(document)
-    parsed = parse_bound_native_codex_contract_result(
+    canonical = canonical_native_implementer_json(document)
+    parsed = parse_bound_native_implementer_contract_result(
         document, original_bundle.bound_context
     )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -1194,7 +1194,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
         status_rationale="Closed before the recorded Codex request.",
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         "b123-implementer-invalid",
         ReadinessMarker.IMPLEMENTATION,
         "16",
@@ -1203,14 +1203,14 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
         expected_test_files=(),
         test_changes_approved=True,
     )
-    bundle = build_native_codex_request(
-        NativeCodexRequestSpec(
-            context=NativeCodexContext(
+    bundle = build_native_implementer_request(
+        NativeImplementerRequestSpec(
+            context=NativeImplementerContext(
                 run_id=RUN_ID,
                 work_unit_id="17",
                 operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
                 current_fingerprint=FINGERPRINT,
-                request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+                request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
                 contract=contract,
                 previous_findings=(closed,),
             ),
@@ -1220,7 +1220,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
             assignment="Reject a stale disposition.",
             work_context="B123 provider-free rejection regression.",
             evidence=(
-                NativeCodexEvidenceInput(
+                NativeImplementerEvidenceInput(
                     "b123-task",
                     "orchestrator_instruction",
                     "Reject the stale request-time disposition.",

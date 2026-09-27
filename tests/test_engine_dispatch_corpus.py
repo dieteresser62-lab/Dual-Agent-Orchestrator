@@ -16,8 +16,8 @@ import agent_runtime
 import pytest
 import workflow as production
 
-from agent_runtime import NativeAgentCodexOutput
-from contracts import AgentRole, CodexContractResult, PlannedSlice, StopRequest
+from agent_runtime import NativeAgentImplementerOutput
+from contracts import AgentRole, ImplementerContractResult, PlannedSlice, StopRequest
 from test_workflow import FakeDriver, TEST_FILE, _changes, _context, _slice_state
 from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
 from workflow_state import WorkflowStep, init_workflow_state
@@ -584,8 +584,8 @@ def _plan_state(scope: tuple[str, ...] = ("docs/internal/plan.md",)) -> object:
 
 def _codex_output(
     invocation: CodexInvocation,
-    result: CodexContractResult,
-) -> NativeAgentCodexOutput:
+    result: ImplementerContractResult,
+) -> NativeAgentImplementerOutput:
     assert invocation.native_request is not None
     request_id = invocation.native_request.bound_context.request_id
     canonical = json.dumps(
@@ -593,7 +593,7 @@ def _codex_output(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return NativeAgentCodexOutput(
+    return NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=request_id,
@@ -658,12 +658,12 @@ def _run_codex_scenario(
     elif scenario_id == "codex-stop-missing-request":
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(False, True, None, None, (), ()),
+            ImplementerContractResult(False, True, None, None, (), ()),
         )
     elif scenario_id == "codex-stop-invalid-content":
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 False,
                 True,
                 StopRequest(
@@ -685,7 +685,7 @@ def _run_codex_scenario(
         )
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -706,7 +706,7 @@ def _run_codex_scenario(
         )
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -731,7 +731,7 @@ def _run_codex_scenario(
         )
         driver.codex_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -916,7 +916,7 @@ def _change_first_codex_provider_request_field(tree: ast.Module) -> None:
         if isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "workflow_requests"
-        and node.func.attr == "native_codex_request"
+        and node.func.attr == "native_implementer_request"
     )
     context_keyword = next(
         keyword for keyword in request_call.keywords if keyword.arg == "context"
@@ -1001,7 +1001,14 @@ def _move_packet_helper_out_of_catcher(tree: ast.Module) -> None:
 
 def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None:
     baseline = json.loads(STATIC_BASELINE.read_text("utf-8"))
-    assert _static_document() == baseline
+    # Keep the pre-b51 source evidence intact while comparing today's API name.
+    current_names = copy.deepcopy(baseline)
+    output_guard = current_names["layers"][0]["conditions"][5]
+    assert output_guard["expression"] == "not isinstance(output, NativeAgentCodexOutput)"
+    assert output_guard["read_names"][0] == "NativeAgentCodexOutput"
+    output_guard["expression"] = "not isinstance(output, NativeAgentImplementerOutput)"
+    output_guard["read_names"][0] = "NativeAgentImplementerOutput"
+    assert _static_document() == current_names
     codex, review = baseline["layers"]
     assert (len(codex["conditions"]), len(codex["aborts"])) == (22, 7)
     assert (len(review["conditions"]), len(review["aborts"])) == (13, 6)

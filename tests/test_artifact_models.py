@@ -946,12 +946,12 @@ def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:
         )
 
 
-def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() -> None:
+def test_native_implementer_agent_result_roundtrips_with_closed_transport_binding() -> None:
     payload = AgentResultPayload(
         Role.CODEX,
         "work-01",
         "ready",
-        ("tests/test_native_codex_contract.py",),
+        ("tests/test_native_implementer_contract.py",),
         transport_schema="native-codex-v2",
         request_id="native-codex-request-" + "b" * 64,
         response_sha256="c" * 64,
@@ -963,7 +963,7 @@ def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() ->
     assert ArtifactRecord.from_dict(document) == record
 
 
-def test_native_codex_agent_result_rejects_partial_or_foreign_bindings() -> None:
+def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -> None:
     payload = AgentResultPayload(
         Role.CODEX,
         "work-01",

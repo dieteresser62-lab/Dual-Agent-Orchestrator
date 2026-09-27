@@ -85,7 +85,7 @@ DRIVER_FACADES = {
     "_persist_native_agent_request_bundle": "_persist_native_agent_request_bundle",
     "persist_review_packet": "persist_review_packet",
     "_persist_provider_content": "_persist_provider_content",
-    "persist_native_codex_contract": "persist_native_implementer_contract",
+    "persist_native_implementer_contract": "persist_native_implementer_contract",
     "persist_native_review_contract": "persist_native_review_contract",
     "_persist_review_finding_transitions": "_persist_review_finding_transitions",
     "persist_contract_diagnostic": "persist_contract_diagnostic",

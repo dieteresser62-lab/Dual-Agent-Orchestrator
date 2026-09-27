@@ -21,11 +21,11 @@ from agent_adapters import (
 )
 from agent_runtime import (
     AgentInvocationError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     OrchestratorConfig,
     ProviderAttemptLifecycle,
-    run_native_codex_agent_checked,
+    run_native_implementer_agent_checked,
     run_native_review_agent_checked,
 )
 from artifact_bridge import (
@@ -62,14 +62,14 @@ from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
 )
-from native_codex_contract import validate_native_correction_fingerprint  # allowlist:provider -- native result boundary
+from native_implementer_contract import validate_native_correction_fingerprint  # allowlist:provider -- native result boundary
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
     AgentRole,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     StepContract,
@@ -342,7 +342,7 @@ class ProductionWorkflowDriver:
                 canonical_agent_result=self._canonical_native_agent_result,
                 load_agent_request_bundle=self._load_native_agent_request_bundle,
                 content_text=self._provider_content_text,
-                persist_implementer_contract=self.persist_native_codex_contract,
+                persist_implementer_contract=self.persist_native_implementer_contract,
                 persist_review_contract=self.persist_native_review_contract,
                 store_implementer_output=lambda content: setattr(
                     self, "last_codex_output", content
@@ -1166,7 +1166,7 @@ class ProductionWorkflowDriver:
         self._replace_existing_run_id = None
         self.active_state = projected
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
         state = self.active_state
         if (
             state is None
@@ -1187,13 +1187,13 @@ class ProductionWorkflowDriver:
                 "configured Codex adapter is not the native result transport"
             )
         self._persist_native_agent_request_bundle(invocation)
-        raw_path = self._native_codex_response_path(invocation)
-        output = run_native_codex_agent_checked(
+        raw_path = self._native_implementer_response_path(invocation)
+        output = run_native_implementer_agent_checked(
                 adapter=native_adapter,
                 bundle=invocation.native_request,
                 raw_response_path=raw_path,
                 config=self.config,
-                write_file=self._write_native_codex_raw_response,
+                write_file=self._write_native_implementer_raw_response,
                 shorten=_shorten,
                 operation=invocation.step.value,
                 binding_fingerprint=(
@@ -1217,7 +1217,7 @@ class ProductionWorkflowDriver:
                     else None
                 ),
                 accepted_output_callback=lambda accepted: (
-                    self.persist_native_codex_contract(
+                    self.persist_native_implementer_contract(
                         accepted,
                         invocation.request_sequence,
                         invocation.previous_findings,
@@ -1317,7 +1317,7 @@ class ProductionWorkflowDriver:
             ) from exc
         return projected
 
-    def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
+    def _native_implementer_response_path(self, invocation: CodexInvocation) -> Path:
         state = self.active_state
         if state is None:
             raise WorkflowExecutionError("native Codex response has no active state")
@@ -1581,13 +1581,13 @@ class ProductionWorkflowDriver:
     def _write_native_agent_raw_response(self, path: Path, content: str) -> None:
         self._write_side_effect_file(path, content, normalized_text=False)
 
-    def _write_native_codex_raw_response(self, path: Path, content: str) -> None:
+    def _write_native_implementer_raw_response(self, path: Path, content: str) -> None:
         self._write_native_agent_raw_response(path, content)
 
     def _native_agent_response_files(
         self, invocation: CodexInvocation
     ) -> tuple[Path, ...]:
-        base = self._native_codex_response_path(invocation)
+        base = self._native_implementer_response_path(invocation)
         candidates = [base] if base.is_file() else []
         candidates.extend(
             path
@@ -1805,12 +1805,12 @@ class ProductionWorkflowDriver:
             )
         return canonical
 
-    def recover_pending_native_codex(
+    def recover_pending_native_implementer(
         self,
         invocation: CodexInvocation,
-        contract: CodexStepContract,
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None:
+    ) -> NativeAgentImplementerOutput | None:
         return self._recovery_boundary().recover_pending_native_implementer(
             invocation,
             contract,
@@ -1864,9 +1864,9 @@ class ProductionWorkflowDriver:
                 return state.current_slice.start_fingerprint
             raise
 
-    def persist_native_codex_contract(
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
         *,
