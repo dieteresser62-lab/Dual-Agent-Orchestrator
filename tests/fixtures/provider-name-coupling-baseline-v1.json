@@ -30,13 +30,17 @@
       "codex": 12,
       "claude": 12
     },
+    "schemas/role-provider-certifications-v1.json": {
+      "codex": 5,
+      "claude": 9
+    },
     "src/agent_adapters.py": {
       "codex": 53,
       "claude": 29
     },
     "src/agent_config.py": {
-      "codex": 7,
-      "claude": 22
+      "codex": 8,
+      "claude": 24
     },
     "src/agent_runtime.py": {
       "codex": 49,
@@ -108,6 +112,17 @@
       "codex": 7,
       "claude": 5
     },
+    "src/reviewer_input.py": {
+      "claude": 1
+    },
+    "src/role_binding.py": {
+      "codex": 3,
+      "claude": 2
+    },
+    "src/role_certification.py": {
+      "codex": 2,
+      "claude": 3
+    },
     "src/state_io.py": {
       "codex": 1,
       "claude": 2
@@ -147,8 +162,7 @@
       "claude": 18
     },
     "src/workflow_requests.py": {
-      "codex": 35,
-      "claude": 1
+      "codex": 4
     },
     "src/workflow_run_setup.py": {
       "codex": 9,

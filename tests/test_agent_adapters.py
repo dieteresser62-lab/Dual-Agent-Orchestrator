@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -12,9 +15,9 @@ from agent_adapters import (
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
-    _write_review_manifest,
     build_agent_registry,
 )
+from reviewer_input import _write_review_manifest
 from agent_config import AgentSettings
 from contracts import (
     AgentRole,
@@ -114,6 +117,95 @@ def test_registry_constructs_only_native_adapters() -> None:
     registry = build_agent_registry({"codex": _settings("codex"), "claude": _settings("claude")})
     assert type(registry["codex"]) is NativeCodexAdapter
     assert type(registry["claude"]) is NativeClaudeReviewAdapter
+
+
+def test_import_does_not_resolve_settings_or_construct_registry() -> None:
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import agent_config; "
+        "agent_config.default_agent_settings = lambda: (_ for _ in ()).throw(AssertionError('import built registry')); "
+        "import agent_adapters; "
+        "assert 'AGENT_REGISTRY' not in vars(agent_adapters)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_invocation_data_is_replaced_and_independent() -> None:
+    first = NativeClaudeReviewAdapter(_settings("claude"))
+    second = NativeClaudeReviewAdapter(_settings("claude"))
+    first.prepare_native_provider_input(_review_bundle())
+    second.prepare_native_provider_input(_review_bundle())
+    first_state = first.invocation
+    second_state = second.invocation
+    assert first_state is not second_state
+    assert first_state.reviewer_input is not second_state.reviewer_input
+    first_state.metadata["sentinel"] = 1
+    assert "sentinel" not in second_state.metadata
+    first.prepare_native_provider_input(_review_bundle())
+    assert first.invocation is not first_state
+    assert "sentinel" not in first.invocation.metadata
+    assert first_state.runtime_dir is None
+    first.cleanup()
+    second.cleanup()
+
+
+def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    adapter.prepare_native_provider_input(_review_bundle())
+    active = adapter.invocation
+    adapter.metadata = {"usage": {"input_tokens": 11}}
+    adapter.cleanup()
+    assert adapter.invocation is active
+    assert adapter.metadata == {"usage": {"input_tokens": 11}}
+    assert adapter.invocation.runtime_dir is None
+    adapter.prepare_native_provider_input(_review_bundle())
+    assert adapter.invocation is not active
+    assert adapter.metadata == {}
+    adapter.cleanup()
+
+
+@pytest.mark.parametrize("provider,expected_command,expected_components", [
+    (
+        "codex",
+        "7b25254cce9d482ceae43a8c9459093b17219c4588cf9e4917eb6449a888cdfc",
+        "fd3cd3a68b32bc7b8bb5eb6c0258a2bddaa9a61552418db0999dbd7643e853b8",
+    ),
+    (
+        "claude",
+        "ec9dd9fbf3987f4e90fdf09e7034d0077f319e16fe79dc1b978a8e9c78dfade2",
+        "6550fd2e68bc060fe13487d5a462437772f9ffc5cdb340e1154a9ca99338fd2b",
+    ),
+])
+def test_transport_command_environment_and_components_match_start_head(
+    provider: str, expected_command: str, expected_components: str,
+) -> None:
+    # Captured from HEAD 7064367 using the same helpers; only random runtime
+    # directory names are replaced with a fixed token before hashing.
+    adapter = (
+        NativeCodexAdapter(_settings(provider))
+        if provider == "codex"
+        else NativeClaudeReviewAdapter(_settings(provider))
+    )
+    bundle = _codex_bundle() if provider == "codex" else _review_bundle()
+    prepared = adapter.prepare_native_provider_input(bundle)
+    runtime = str(adapter.invocation.runtime_dir)
+
+    def digest(value: object) -> str:
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
+    assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
+        "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
+    )
+    assert digest([(item.name, item.content) for item in prepared.components]) == expected_components
+    adapter.cleanup()
 
 
 def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
@@ -219,11 +311,11 @@ def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
         }],
         "finding_dispositions": [],
     }
-    assert adapter._last_message_file is not None
-    adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
+    assert adapter.invocation.last_message_file is not None
+    adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     assert json.loads(adapter.extract_output("", "", {}))["request_id"] == bundle.bound_context.request_id
     document["request_id"] = "native-codex-request-" + "0" * 64
-    adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
+    adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     with pytest.raises(AgentOutputError, match="request_id"):
         adapter.extract_output("", "", {})
     adapter.cleanup()
@@ -333,7 +425,7 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
 
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     prepared = adapter.prepare_native_provider_input(bundle)
-    manifest = adapter._review_manifest_file
+    manifest = adapter.invocation.reviewer_input.manifest_file
     assert manifest is not None
     manifest_text = manifest.read_text(encoding="utf-8")
     assert "concatenate its numbered parts without separators" in manifest_text
@@ -348,8 +440,8 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
     assert all(f"content_ref={binding['content_ref']}" in row for row in evidence_rows)
 
     delivered_paths = [Path(row.split("`")[1]) for row in rows]
-    assert delivered_paths[:len(request_rows)] == list(adapter._review_packet_files)
-    assert delivered_paths[len(request_rows):] == list(adapter._native_evidence_files)
+    assert delivered_paths[:len(request_rows)] == list(adapter.invocation.reviewer_input.request_files)
+    assert delivered_paths[len(request_rows):] == list(adapter.invocation.reviewer_input.evidence_files)
     assert all(
         len(path.read_text(encoding="utf-8")) <= REVIEW_PACKET_CHUNK_CHARS
         for path in (manifest, *delivered_paths)
@@ -358,7 +450,7 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
         data = path.read_bytes()
         assert f"bytes={len(data)}" in row
         assert f"sha256={hashlib.sha256(data).hexdigest()}" in row
-    reconstructed = b"".join(path.read_bytes() for path in adapter._native_evidence_files)
+    reconstructed = b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files)
     assert reconstructed == content.encode("utf-8")
     assert len(reconstructed) == binding["byte_count"]
     assert hashlib.sha256(reconstructed).hexdigest() == binding["sha256"]
@@ -383,8 +475,8 @@ def test_reviewer_evidence_unicode_boundary_is_byte_exact() -> None:
     )
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     adapter.prepare_native_provider_input(bundle)
-    assert len(adapter._native_evidence_files) == 2
-    assert b"".join(path.read_bytes() for path in adapter._native_evidence_files) == content.encode("utf-8")
+    assert len(adapter.invocation.reviewer_input.evidence_files) == 2
+    assert b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files) == content.encode("utf-8")
     adapter.cleanup()
 
 
@@ -406,10 +498,10 @@ def test_reviewer_keeps_evidence_at_inline_limit_inline() -> None:
     assert bundle.document["evidence_manifest"][0]["content"] == content
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     adapter.prepare_native_provider_input(bundle)
-    assert adapter._native_evidence_files == ()
+    assert adapter.invocation.reviewer_input.evidence_files == ()
     assert all(
         len(path.read_text(encoding="utf-8")) <= REVIEW_PACKET_CHUNK_CHARS
-        for path in (adapter._review_manifest_file, *adapter._review_packet_files)
+        for path in (adapter.invocation.reviewer_input.manifest_file, *adapter.invocation.reviewer_input.request_files)
     )
     adapter.cleanup()
 
@@ -466,7 +558,7 @@ def test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts(
     )
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     prepared = adapter.prepare_native_provider_input(bundle)
-    manifest = adapter._review_manifest_file
+    manifest = adapter.invocation.reviewer_input.manifest_file
     assert manifest is not None
     index_text = manifest.read_text(encoding="utf-8")
     pages = [
@@ -480,9 +572,9 @@ def test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts(
         for line in page.read_text(encoding="utf-8").splitlines()
         if line.startswith("- `")
     ]
-    assert listed == [*adapter._review_packet_files, *adapter._native_evidence_files]
+    assert listed == [*adapter.invocation.reviewer_input.request_files, *adapter.invocation.reviewer_input.evidence_files]
     assert all(len(path.read_text(encoding="utf-8")) <= 5_000 for path in (manifest, *pages, *listed))
-    assert b"".join(path.read_bytes() for path in adapter._native_evidence_files) == content.encode("utf-8")
+    assert b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files) == content.encode("utf-8")
     directive = next(item.content for item in prepared.components if item.name == "start_directive")
     assert f"({1 + len(pages) + len(listed)} Read calls total)" in directive
     adapter.cleanup()
@@ -514,7 +606,7 @@ def test_reviewer_packet_components_stable_across_runtime_dirs(
     adapters = [NativeClaudeReviewAdapter(_settings("claude")) for _ in range(2)]
     try:
         prepared = [adapter.prepare_native_provider_input(bundle) for adapter in adapters]
-        manifests = [adapter._review_manifest_file for adapter in adapters]
+        manifests = [adapter.invocation.reviewer_input.manifest_file for adapter in adapters]
         assert all(manifest is not None for manifest in manifests)
         assert manifests[0].parent != manifests[1].parent
 

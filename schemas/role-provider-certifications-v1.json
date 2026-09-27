@@ -1,0 +1,121 @@
+{
+  "schema_version": "role-provider-certifications-v1",
+  "provider_manufacturers": {
+    "claude": "anthropic",
+    "codex": "openai"
+  },
+  "certifications": [
+    {
+      "slot": "implementer",
+      "role": "implementer",
+      "provider": "codex",
+      "manufacturer": "openai",
+      "status": "certified",
+      "version_scope": {
+        "cli_version": "codex-cli 0.156.1",
+        "version_policy": "same-major-forward"
+      },
+      "capability_sha256": "d57db52e04c2492e642512a6927ed4bac1e60a5b62bace486876c18ad21356fc",
+      "policy_sha256": "bfc0fe3376d4ba6e46b1c390bd95dcf1bc8ff9f6d44d59811d2d57f7a6e0253d",
+      "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+      "evidence": {
+        "path": "docs/evidence/role-certification-v1.json",
+        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+      },
+      "probe_profile": {
+        "provider": "codex",
+        "binary_name": "codex",
+        "model": "gpt-6-sol",
+        "reasoning_or_effort": "medium",
+        "schema_transport": "output-schema-file",
+        "semantic_flags": [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--color=never",
+          "--json",
+          "--output-last-message=<runtime-file>",
+          "stdin=-"
+        ]
+      }
+    },
+    {
+      "slot": "reviewer",
+      "role": "reviewer",
+      "provider": "claude",
+      "manufacturer": "anthropic",
+      "status": "certified",
+      "version_scope": {
+        "cli_version": "2.1.280 (Claude Code)",
+        "version_policy": "same-major-forward"
+      },
+      "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+      "policy_sha256": "3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6",
+      "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+      "evidence": {
+        "path": "docs/evidence/role-certification-v1.json",
+        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+      },
+      "probe_profile": {
+        "provider": "claude",
+        "binary_name": "claude",
+        "model": "opus",
+        "reasoning_or_effort": "high",
+        "schema_transport": "json-schema-argument",
+        "semantic_flags": [
+          "-p",
+          "--output-format=json",
+          "--tools=Read",
+          "--allowedTools=Read",
+          "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
+          "--permission-mode=dontAsk",
+          "--setting-sources=user",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--prompt-suggestions=false",
+          "--no-session-persistence",
+          "--disable-slash-commands"
+        ]
+      }
+    },
+    {
+      "slot": "final_reviewer",
+      "role": "reviewer",
+      "provider": "claude",
+      "manufacturer": "anthropic",
+      "status": "certified",
+      "version_scope": {
+        "cli_version": "2.1.280 (Claude Code)",
+        "version_policy": "same-major-forward"
+      },
+      "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+      "policy_sha256": "3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6",
+      "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+      "evidence": {
+        "path": "docs/evidence/role-certification-v1.json",
+        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+      },
+      "probe_profile": {
+        "provider": "claude",
+        "binary_name": "claude",
+        "model": "opus",
+        "reasoning_or_effort": "high",
+        "schema_transport": "json-schema-argument",
+        "semantic_flags": [
+          "-p",
+          "--output-format=json",
+          "--tools=Read",
+          "--allowedTools=Read",
+          "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
+          "--permission-mode=dontAsk",
+          "--setting-sources=user",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--prompt-suggestions=false",
+          "--no-session-persistence",
+          "--disable-slash-commands"
+        ]
+      }
+    }
+  ]
+}

@@ -47,7 +47,8 @@ from native_review_request import (
     PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
     build_native_review_request,
 )
-from prompts import NATIVE_CODEX_SYSTEM_POLICY
+from agent_roles import AgentRoleName
+from role_binding import binding_for_role
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from provider_input_efficiency import (
     ProviderInputEfficiencyError,
@@ -184,7 +185,7 @@ def native_implementer_request(
     )
     evidence = [
         NativeImplementerEvidenceInput(
-            "native-policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY
+            "native-policy", "system_policy", binding_for_role(AgentRoleName.IMPLEMENTER).policy
         )
     ]
     request_assignment = context.assignment

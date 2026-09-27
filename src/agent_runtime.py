@@ -22,8 +22,9 @@ from typing import Callable, Mapping, TextIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agent_adapters import (
-    AGENT_REGISTRY,
     AgentAdapter,
+    NativeImplementerAdapter,
+    NativeReviewAdapter,
     AgentBudgetError,
     AgentPermissionError,
     AgentOutputError,
@@ -1674,7 +1675,7 @@ class NativeAgentReviewOutput:
 
 
 def run_native_review_agent(
-    adapter: AgentAdapter,
+    adapter: NativeReviewAdapter,
     bundle: NativeReviewRequestBundle,
     *,
     config: OrchestratorConfig,
@@ -1687,10 +1688,7 @@ def run_native_review_agent(
     response_callback: Callable[[str], None] | None = None,
 ) -> NativeAgentReviewOutput:
     """Run one native Claude review without legacy marker or repair parsing."""
-    prepare = getattr(adapter, "prepare_native_provider_input", None)
-    if not callable(prepare):
-        raise TypeError("native review adapter lacks prepare_native_provider_input")
-    prepared = prepare(bundle)
+    prepared = adapter.prepare_native_provider_input(bundle)
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -1772,7 +1770,7 @@ def run_native_review_agent(
 
 def run_native_review_agent_checked(
     *,
-    adapter: AgentAdapter,
+    adapter: NativeReviewAdapter,
     bundle: NativeReviewRequestBundle,
     log_prefix: str,
     config: OrchestratorConfig,
@@ -1896,7 +1894,7 @@ class NativeAgentImplementerOutput:
 
 
 def run_native_implementer_agent(
-    adapter: AgentAdapter,
+    adapter: NativeImplementerAdapter,
     bundle: NativeImplementerRequestBundle,
     *,
     config: OrchestratorConfig,
@@ -1909,13 +1907,10 @@ def run_native_implementer_agent(
     execution_boundary: NativeCodexExecutionBoundary | None = None,
 ) -> NativeAgentImplementerOutput:
     """Run native Codex without marker parsing, flag extraction, or repair."""
-    prepare = getattr(adapter, "prepare_native_provider_input", None)
-    if not callable(prepare):
-        raise TypeError("native Codex adapter lacks prepare_native_provider_input")
     boundary = execution_boundary or NativeCodexExecutionBoundary.production(
         config.repo_root
     )
-    prepared = prepare(bundle, boundary)
+    prepared = adapter.prepare_native_provider_input(bundle, boundary)
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -1984,7 +1979,7 @@ def run_native_implementer_agent(
 
 def run_native_implementer_agent_checked(
     *,
-    adapter: AgentAdapter,
+    adapter: NativeImplementerAdapter,
     bundle: NativeImplementerRequestBundle,
     raw_response_path: Path,
     config: OrchestratorConfig,

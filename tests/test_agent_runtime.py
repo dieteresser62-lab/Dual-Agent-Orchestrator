@@ -15,7 +15,7 @@ import agent_runtime
 import provider_process
 from provider_identity import ProviderIdentity
 from agent_adapters import (
-    AGENT_REGISTRY,
+    build_agent_registry,
     AgentBudgetError,
     AgentOutputError,
     AgentPermissionError,
@@ -916,18 +916,19 @@ def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() 
         '"text":"Slice geprüft und bereit."}}'
     )
 
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", codex_line, state) == (
+    registry = build_agent_registry()
+    assert _compact_stream_text(registry["codex"], "stdout", codex_line, state) == (
         "Slice geprüft und bereit."
     )
     assert _compact_stream_text(
-        AGENT_REGISTRY["claude"],
+        registry["claude"],
         "stdout",
         '{"usage":{"output_tokens":9000},"result":"very large"}',
         {},
     ) is None
     warning = "same important warning"
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stderr", warning, state) == warning
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", warning, state) == warning
+    assert _compact_stream_text(registry["codex"], "stderr", warning, state) == warning
+    assert _compact_stream_text(registry["codex"], "stdout", warning, state) == warning
 
 
 def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
@@ -1437,7 +1438,7 @@ def test_preflight_skip_git_check_bypasses_dirty_repo(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": AGENT_REGISTRY["codex"]},
+        agents={"codex": build_agent_registry()["codex"]},
         skip_git_check=True,
     )
 
@@ -1457,7 +1458,7 @@ def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": AGENT_REGISTRY["codex"]},
+        agents={"codex": build_agent_registry()["codex"]},
     )
 
     assert ok is False

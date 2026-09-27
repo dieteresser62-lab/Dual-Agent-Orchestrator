@@ -4,6 +4,8 @@ import argparse
 from dataclasses import dataclass
 from typing import Mapping
 
+from agent_roles import AgentSlot
+
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -21,6 +23,15 @@ class AgentSettings:
     timeout_seconds: int | None
     effort: str
     max_budget_usd: float | None = None
+
+
+def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
+    """Temporary production occupancy until TOML selects slots in Slice 10."""
+    return {
+        AgentSlot.IMPLEMENTER: "codex",
+        AgentSlot.REVIEWER: "claude",
+        AgentSlot.FINAL_REVIEWER: "claude",
+    }
 
 
 # The selectable model families per role; the first family is the default.

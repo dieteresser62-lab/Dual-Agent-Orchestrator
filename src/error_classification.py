@@ -62,7 +62,9 @@ from provider_input_efficiency import ProviderInputEfficiencyError
 from provider_process import ProviderOutcomeUnknown
 from repo_changes import NotGitRepositoryError, RepositoryChangeError
 from readable_audit import ReadableAuditError
+from reviewer_input import ReviewerInputError
 from review_packets import ReviewPacketError
+from role_certification import CertificationError
 from schema_validation import SchemaDefinitionError, SchemaMismatch
 from semantic_markdown import SemanticMarkdownError
 from side_effects import SideEffectReconciliationError
@@ -126,7 +128,7 @@ _REJECT = FailureClass.TERMINAL_REJECTION
 _RECORD_BACKED_TERMINAL_REJECTIONS = frozenset({"ACCEPTANCE-REVIEW-LIMIT"})
 
 
-# Authoritative inventory: all 48 ``*Error`` classes currently defined in
+# Authoritative inventory: all 50 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
 # the seven project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
@@ -136,6 +138,8 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     AgentOutputError: _entry(_HALT, "AGENT-OUTPUT"),
     AgentPermissionError: _entry(_HALT, "AGENT-PERMISSION"),
     AgentBudgetError: _entry(_HALT, "AGENT-BUDGET"),
+    CertificationError: _entry(_HALT, "ROLE-CERTIFICATION"),
+    ReviewerInputError: _entry(_HALT, "REVIEWER-INPUT"),
     AgentInvocationError: _entry(_TRANSIENT, "AGENT-INVOCATION"),
     QuotaReachedError: _entry(_TRANSIENT, "PROVIDER-QUOTA"),
     AgentCompatibilityError: _entry(_HALT, "AGENT-COMPATIBILITY"),
@@ -227,7 +231,9 @@ _HALT_DIAGNOSTIC_CODES = frozenset(
         "PROVIDER-INPUT-EFFICIENCY",
         "PROVIDER-REQUEST-ROUND",
         "REPOSITORY-CHANGE",
+        "REVIEWER-INPUT",
         "REVIEW-PACKET",
+        "ROLE-CERTIFICATION",
         "SCHEMA-DEFINITION",
         "SCHEMA-MISMATCH",
         "SCRIPTED-INTERRUPTION",

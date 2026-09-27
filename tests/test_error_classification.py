@@ -334,7 +334,7 @@ def test_central_inventory_classifies_all_project_error_types_exactly_once() -> 
         for error_type in ERROR_CLASSIFICATIONS
     }
 
-    assert len(named_errors) == 49
+    assert len(named_errors) == 51
     assert registered == project_exceptions
     assert project_exceptions - named_errors == {
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",
