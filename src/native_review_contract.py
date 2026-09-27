@@ -45,6 +45,12 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
+from finding_identity import (
+    FINDING_ID_EXAMPLE,
+    FINDING_ID_PATTERN_TEXT,
+    FINDING_ID_PREFIX,
+    format_finding_id,
+)
 from finding_signature import (
     finding_record_signature,
     finding_signature,
@@ -166,7 +172,7 @@ _NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
         "Copy the reviewer field from this request into the response unchanged."
     ),
     NativeReviewErrorCode.FINDING_ID_INVALID: (
-        "Use review_contract.next_finding_id and contiguous following C- identifiers."
+        f"Use review_contract.next_finding_id and contiguous following {FINDING_ID_PREFIX} identifiers."
     ),
     NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN: (
         "Reference only reviewer-owned findings offered in review_contract.previous_findings."
@@ -582,7 +588,7 @@ class NativeReviewContext:
         ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "authoritative finding ids must use the C-01 namespace",
+                f"authoritative finding ids must use the {FINDING_ID_EXAMPLE} namespace",
             )
         if not set(previous_ids).issubset(authoritative_ids):
             raise NativeReviewContractError(
@@ -759,7 +765,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
         "oneOf": [
             {
                 "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                "pattern": FINDING_ID_PATTERN_TEXT,
             },
             {"type": "null"},
         ],
@@ -775,7 +781,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
         "properties": {
             "finding_id": {
                 "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                "pattern": FINDING_ID_PATTERN_TEXT,
             },
             "rationale": {
                 "type": "string",
@@ -994,7 +1000,7 @@ def native_review_provider_response_schema(
     definitions = schema["$defs"]
     definitions["finding"]["properties"]["finding_id"] = {
         "type": "string",
-        "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+        "pattern": FINDING_ID_PATTERN_TEXT,
     }
     definitions["prose_acceptance"]["properties"]["text"]["pattern"] = (
         NONBLANK_TEXT_PATTERN
@@ -1649,7 +1655,7 @@ def parse_bound_native_contract_result(
 
 def next_native_finding_id(context: NativeReviewContext) -> str:
     """Return the first reviewer-owned finding id not reserved by the ledger."""
-    prefix = "C"
+    prefix = FINDING_ID_PREFIX
     finding_ids = context.authoritative_finding_ids or tuple(
         item.finding_id for item in context.previous_findings
     )
@@ -1657,11 +1663,11 @@ def next_native_finding_id(context: NativeReviewContext) -> str:
         (
             int(finding_id.split("-", 1)[1])
             for finding_id in finding_ids
-            if finding_id.startswith(prefix + "-")
+            if finding_id.startswith(prefix)
         ),
         default=0,
     ) + 1
-    return f"{prefix}-{number:02d}"
+    return format_finding_id(number)
 
 
 def canonical_native_review_json(document: Mapping[str, Any]) -> str:
@@ -1919,7 +1925,7 @@ def _validate_response_events(
                 NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
                 f"finding {update.finding_id} status update must add a new rationale",
             )
-    expected_prefix = "C-"
+    expected_prefix = FINDING_ID_PREFIX
     first_id = next_native_finding_id(context)
     first_number = int(first_id.split("-", 1)[1])
     expected_new_ids = [
@@ -2136,7 +2142,7 @@ def _coalesce_known_finding_occurrences(
     first_number = int(next_native_finding_id(context).split("-", 1)[1])
     raw_ids = tuple(item.finding_id for item in response.new_findings)
     expected_raw_ids = tuple(
-        f"C-{first_number + index:02d}"
+        format_finding_id(first_number + index)
         for index in range(len(response.new_findings))
     )
     if raw_ids != expected_raw_ids:
@@ -2232,7 +2238,7 @@ def _coalesce_known_finding_occurrences(
             )
 
     renumbered = tuple(
-        replace(finding, finding_id=f"C-{first_number + index:02d}")
+        replace(finding, finding_id=format_finding_id(first_number + index))
         for index, finding in enumerate(retained)
     )
     return replace(
@@ -2454,7 +2460,7 @@ def _slice_decision_retry_guidance(
     if include_new_findings:
         first_number = int(next_native_finding_id(context).split("-", 1)[1])
         new_ids = tuple(
-            f"C-{first_number + offset:02d}" for offset in range(new_count)
+            format_finding_id(first_number + offset) for offset in range(new_count)
         )
     else:
         new_ids = ()

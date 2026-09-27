@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from finding_identity import FINDING_ID_EXAMPLE
+
 
 STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE = (
     "error_max_structured_output_retries"
@@ -263,7 +265,8 @@ class OrchestratorDiagnostic(StrEnum):
         "context-invalid: authoritative finding ids must be sorted and unique"
     )
     REVIEW_CONTEXT_AUTHORITATIVE_IDS_NAMESPACE = (
-        "context-invalid: authoritative finding ids must use the C-01 namespace"
+        "context-invalid: authoritative finding ids must use the "
+        f"{FINDING_ID_EXAMPLE} namespace"
     )
     REVIEW_CONTEXT_OFFERED_FINDINGS_AUTHORITATIVE = (
         "context-invalid: offered findings must belong to the authoritative finding set"

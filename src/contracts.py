@@ -15,13 +15,14 @@ from content_authority import (
     validation_output_digest,
 )
 from finding_order import sorted_finding_ids
+from finding_identity import FINDING_ID_EXAMPLE, FINDING_ID_PATTERN
 from native_finding_decisions import (
     NativeFindingClosure,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
-SOURCE_FINDING_ID_PATTERN = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
+SOURCE_FINDING_ID_PATTERN = FINDING_ID_PATTERN
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
@@ -724,7 +725,7 @@ class CodexContractResult:
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:
     match = SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id)
     if not match:
-        raise ValueError(f"invalid finding id '{finding_id}' (expected C-01)")
+        raise ValueError(f"invalid finding id '{finding_id}' (expected {FINDING_ID_EXAMPLE})")
     if reporter is not AgentRole.CLAUDE:
         raise ValueError(
             f"finding id '{finding_id}' does not match reporter {reporter.value}"

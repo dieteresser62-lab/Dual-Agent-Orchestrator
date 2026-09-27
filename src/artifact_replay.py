@@ -767,18 +767,6 @@ def _project_work_unit_round_and_kind(
         for candidate in transitions.transition_history
         if candidate.payload.work_unit_id == unit.work_unit_id
     )
-    if first_step == "codex_final_correction" and not isinstance(  # allowlist:provider -- canonical state-v3 step
-        definition, CorrectionWorkUnitPayload
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_MISSING,
-            "a correction cursor requires its correction work-unit record",
-            next(
-                record
-                for record in transitions.transition_history
-                if record.payload.work_unit_id == unit.work_unit_id
-            ),
-        )
     kind = (
         "correction"
         if isinstance(definition, CorrectionWorkUnitPayload)

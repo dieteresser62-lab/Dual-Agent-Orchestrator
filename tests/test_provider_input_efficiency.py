@@ -32,8 +32,8 @@ from prompts import NATIVE_CODEX_SYSTEM_POLICY
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/provider_input_efficiency/native-only-cutover-baseline-v1.json"
 LOCK = FIXTURE.with_name("native-only-cutover-baseline-v1.lock.json")
-REVIEWED_BASELINE_SHA256 = "3f07b52b79badf1340998973c4145b20a93892ea0f174942cd21ab1331c7adfc"
-REVIEWED_LOCK_SHA256 = "11bb60a6aed1ab78b7911d9a2eb9ea6a216b845a313c324df0558085ad9fabb9"
+REVIEWED_BASELINE_SHA256 = "66cad69014a7407d5fd0fdf2bc07f062b4da8c2c88f8a81b4e0dcef948d036a5"
+REVIEWED_LOCK_SHA256 = "f8a25a2d6c9d080984934da28d3f168bf684f7513c9f809e375f8bb8ba8f4152"
 
 
 def _sha256(data: bytes) -> str:
@@ -64,8 +64,6 @@ def test_frozen_baseline_component_bindings_are_internally_complete() -> None:
         "codex_plan_revision",
         "codex_implementation",
         "codex_correction",
-        "codex_final_review",
-        "codex_final_correction",
     ]
     for row in operations:
         components = {item["name"]: item for item in row["components"]}

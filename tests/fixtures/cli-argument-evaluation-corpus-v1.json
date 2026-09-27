@@ -157,22 +157,6 @@
             "__type__": "ProviderInputBudgetRule",
             "provider": "codex",
             "role": "codex",
-            "operation": "codex_final_correction",
-            "max_chars": 4000000,
-            "max_bytes": 16000000
-          },
-          {
-            "__type__": "ProviderInputBudgetRule",
-            "provider": "codex",
-            "role": "codex",
-            "operation": "codex_final_review",
-            "max_chars": 4000000,
-            "max_bytes": 16000000
-          },
-          {
-            "__type__": "ProviderInputBudgetRule",
-            "provider": "codex",
-            "role": "codex",
             "operation": "codex_implementation",
             "max_chars": 4000000,
             "max_bytes": 16000000
@@ -655,7 +639,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "60b80cad6cf13174982305cd357c1908d39d877747e8bd514625cbce64d1ecbb",
+        "namespace_sha256": "ebfec813a5d8e9ed6b7704d53231da2054cd09abb38a83a4b7138db63352d917",
         "return_trace": [
           {
             "function": "quota_int",
@@ -738,7 +722,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "06ee37a171b24c28287c8dd4a4b3c3fb5fd1ad8bc20058b70b63535ada5e274d",
+        "namespace_sha256": "c8ceaf6a9d2da2e369365ed8ed248760c1c999f1357e0be41a2f67b3ed9364db",
         "return_trace": [
           {
             "function": "quota_int",
@@ -812,7 +796,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "5aca75220ea0612e4711f68c0b0d61c34c3207a2b45958489be4178ff40cdeba",
+        "namespace_sha256": "9511c27f15f5c6fb21a23d0575e8b61d8d717b736e1a6e4ffcf04e363922dd57",
         "return_trace": [
           {
             "function": "quota_int",
@@ -893,7 +877,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "47bffbdd77841b1feb5312196f88ad730285361466fb2b00c95f0d2369531097",
+        "namespace_sha256": "af07b6f93c1a7a8d7c508ad8cc18c3f7264becad886d805fede677835d18708c",
         "return_trace": [
           {
             "function": "quota_int",

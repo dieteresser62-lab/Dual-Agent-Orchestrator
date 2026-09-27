@@ -286,7 +286,7 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
     canonical = json.dumps(
         {
             "schema_version": "native-agent-codex-result-v2",
-            "result_type": "final_report_result",
+            "result_type": "implementation_result",
             "request_id": "native-codex-request-" + ("b" * 64),
             "ready": True,
             "finding_dispositions": [],
@@ -302,10 +302,10 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
         role=Role.CODEX,
         work_unit_id=1,
         request_sequence=1,
-        operation="codex_final_review",
+        operation="codex_implementation",
         request_id="native-codex-request-" + ("b" * 64),
         canonical=canonical,
-        content_kind="final_report",
+        content_kind="agent_result",
         fingerprint=FINGERPRINT,
     )
 

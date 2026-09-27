@@ -16,8 +16,6 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
             "codex_plan_revision",
             "codex_implementation",
             "codex_correction",
-            "codex_final_review",
-            "codex_final_correction",
         }
     ),
     "claude": frozenset(

@@ -36,20 +36,6 @@ max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
-provider = "codex"
-role = "codex"
-operation = "codex_final_review"
-max_chars = 4000000
-max_bytes = 16000000
-
-[[provider_input_budget]]
-provider = "codex"
-role = "codex"
-operation = "codex_final_correction"
-max_chars = 4000000
-max_bytes = 16000000
-
-[[provider_input_budget]]
 provider = "claude"
 role = "claude"
 operation = "claude_plan_review"

@@ -352,14 +352,14 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     assert bridge.store.read_blob(payload.blob) == canonical.encode("utf-8")
 
 
-def test_final_correction_provider_content_key_is_canonical_and_idempotent(
+def test_implementation_provider_content_key_is_canonical_and_idempotent(
     tmp_path: Path,
 ) -> None:
     fields = {
         "role": Role.CODEX,
-        "work_unit_id": 45,
+        "work_unit_id": 4500,
         "request_sequence": 1,
-        "operation": "codex_final_correction",
+        "operation": "codex_implementation",
         "request_id": (
             "native-codex-request-"
             "a18a0c6b0b7822fd97d5cf80b8e0fd57b18b84744ba8c2b4b656a45c3e8bd960"
@@ -374,7 +374,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
     distinct_inputs = (
         fields,
         {**fields, "role": Role.CLAUDE},
-        {**fields, "work_unit_id": 46},
+        {**fields, "work_unit_id": 4600},
         {**fields, "request_sequence": 2},
         {**fields, "operation": "claude_slice_review"},
         {**fields, "request_id": "native-review-request-" + "b" * 64},
@@ -384,7 +384,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
         provider_content_idempotency_key(**item) for item in distinct_inputs
     }
     incident_key = (
-        "provider-content:codex:45:1:codex_final_correction:"
+        "provider-content:codex:4500:1:codex_implementation:"
         f"{fields['request_id']}:{fields['response_sha256']}"
     )
 

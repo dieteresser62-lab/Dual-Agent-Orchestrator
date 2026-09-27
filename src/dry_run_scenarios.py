@@ -31,6 +31,7 @@ from contracts import (
 )
 from content_authority import ValidationCapture, validation_output_digest
 from finding_order import finding_id_sort_key
+from finding_identity import format_finding_id
 from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
@@ -984,8 +985,8 @@ class ScriptedWorkflowDriver:
             return SliceConvergenceEvaluation(
                 phase=phase,
                 cohort_finding_ids=(),
-                newly_opened_finding_ids=("C-01",) if round_number == 1 else (),
-                closed_local_finding_ids=("C-01",) if progress and round_number > 1 else (),
+                newly_opened_finding_ids=(format_finding_id(1),) if round_number == 1 else (),
+                closed_local_finding_ids=(format_finding_id(1),) if progress and round_number > 1 else (),
                 attested_remediation_finding_ids=(),
                 progress_made=progress,
                 reason=(
@@ -2178,15 +2179,15 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                _s5_review_result(approved=False, blockers=("C-01",)),
+                _s5_review_result(approved=False, blockers=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
-                _s5_codex_result("correction_result", dispositions=("C-01",), test_files=[]),  # allowlist:provider
+                _s5_codex_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
-                _s5_review_result(approved=True, closed=("C-01",)),
+                _s5_review_result(approved=True, closed=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE,
@@ -2201,7 +2202,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                     "scan_complete": True,
                     "new_findings": [
                         {
-                            "finding_id": "C-02",
+                            "finding_id": format_finding_id(2),
                             "finding_class": "BLOCKER",
                             "affected_paths": ["src/second.py"],
                             "summary": "The final branch review found a follow-up defect.",
@@ -2374,11 +2375,11 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
         ),
         ScriptedAgentEvent(
             reviewer_role, 2, 1, slice_review_step,
-            review(approved=False, opened=("C-01",)),
+            review(approved=False, opened=(format_finding_id(1),)),
         ),
         ScriptedAgentEvent(
             implementer_role, 2, 2, correction_step,
-            implementer_result("correction_result", ("C-01",)),
+            implementer_result("correction_result", (format_finding_id(1),)),
         ),
     ]
     correction_rounds = 1 if stalled else 5
@@ -2403,7 +2404,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                     ScriptedAgentEvent(
                         implementer_role, 2, round_number + 2,
                         correction_step,
-                        implementer_result("correction_result", ("C-01",)),
+                        implementer_result("correction_result", (format_finding_id(1),)),
                     ),
                 )
             )
@@ -2412,7 +2413,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                 ScriptedAgentEvent(
                     reviewer_role, 2, round_number + 1,
                     slice_review_step,
-                    review(approved=True, closed=("C-01",)),
+                    review(approved=True, closed=(format_finding_id(1),)),
                 )
             )
     final_fingerprint = "9" * 64

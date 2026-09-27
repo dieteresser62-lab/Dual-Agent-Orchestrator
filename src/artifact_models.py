@@ -34,6 +34,7 @@ from schema_validation import (
     validate_schema_document,
 )
 from finding_order import sorted_finding_ids
+from finding_identity import FINDING_ID_PATTERN, FINDING_ID_PREFIX
 from path_policy import PathClass
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
@@ -77,7 +78,7 @@ PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
 LEGACY_CHAIN_VERIFIER = "scripts/verify_legacy_chain.py"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
-_FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
+_FINDING_ID_RE = FINDING_ID_PATTERN
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
 
 
@@ -2991,7 +2992,9 @@ def _require_record_id(value: str, name: str) -> None:
 
 def _require_finding_id(value: str, name: str) -> None:
     if not isinstance(value, str) or _FINDING_ID_RE.fullmatch(value) is None:
-        raise ArtifactValidationError(f"{name} must be a canonical C-* finding ID")
+        raise ArtifactValidationError(
+            f"{name} must be a canonical {FINDING_ID_PREFIX}* finding ID"
+        )
 
 
 def _require_sha256(value: str, name: str) -> None:

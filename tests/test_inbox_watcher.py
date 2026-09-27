@@ -1298,7 +1298,7 @@ def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
             run_id=args.watch_run_id,
             disposition=WatchTaskDisposition.RESUMABLE_HALT,
             status="awaiting_resume",
-            step="codex_final_review",
+            step="claude_final_review",
             work_unit_id=4,
             gate_reason=GateReason.BOOTSTRAP_CHECK.value,
             failure_detail="FINAL-REVIEW-PREFLIGHT | restore matching records",

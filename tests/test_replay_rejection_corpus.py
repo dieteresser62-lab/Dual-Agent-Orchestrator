@@ -805,15 +805,15 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             fingerprint=FP_B,
         )
     elif case_id == "final-preflight-references-a-missing-measurement":
-        _append(records, FinalReviewPreflightPayload(Role.CODEX, Role.CODEX, "codex_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
+        _append(records, FinalReviewPreflightPayload(Role.CLAUDE, Role.CLAUDE, "claude_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
     elif case_id == "final-preflight-fingerprint-differs-from-its-measurement":
         measurement = _append(records, _measurement())
         _append(
             records,
             FinalReviewPreflightPayload(
-                Role.CODEX,
-                Role.CODEX,
-                "codex_final_review",
+                Role.CLAUDE,
+                Role.CLAUDE,
+                "claude_final_review",
                 "1",
                 "a" * 64,
                 "b" * 64,

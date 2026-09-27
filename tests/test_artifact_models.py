@@ -169,7 +169,7 @@ def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
     measurement = ProviderInputMeasurementPayload(
         Role.CODEX,
         Role.CODEX,
-        "codex_final_review",
+        "codex_implementation",
         "work-01",
         DIGEST,
         "b" * 64,
@@ -595,18 +595,18 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
     ProviderInputMeasurementPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+        Role.CODEX, Role.CODEX, "codex_implementation", "work-01", DIGEST, "b" * 64,
         "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
     ),
     ProviderAttemptPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+        Role.CODEX, Role.CODEX, "codex_implementation", "work-01",
         "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
         "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None,
         ProviderUsagePayload(input_tokens=0, output_tokens=7, turns=1),
     ),
     FinalReviewPreflightPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+        Role.CLAUDE, Role.CLAUDE, "claude_final_review", "work-01", DIGEST, "b" * 64,
         "measurement-01", "passed", None, None, (), (), None,
     ),
 ])
@@ -1448,7 +1448,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     assert failed_without_usage.usage is None
     succeeded = _record(
         ProviderAttemptPayload(
-            Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+            Role.CODEX, Role.CODEX, "codex_implementation", "work-01",
             "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
             "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             None, ProviderUsagePayload(output_tokens=1),

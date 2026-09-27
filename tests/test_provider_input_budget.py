@@ -48,13 +48,9 @@ def test_budget_table_covers_every_reachable_provider_operation() -> None:
         for provider in ("codex", "claude")
     }
 
-    assert reachable["codex"] <= PROVIDER_OPERATIONS["codex"]
-    assert reachable["claude"] <= PROVIDER_OPERATIONS["claude"]
-    assert PROVIDER_OPERATIONS["codex"] - reachable["codex"] == {
-        "codex_final_correction",
-        "codex_final_review",
+    assert PROVIDER_OPERATIONS == {
+        provider: frozenset(steps) for provider, steps in reachable.items()
     }
-    assert PROVIDER_OPERATIONS["claude"] - reachable["claude"] == set()
 
 
 def test_final_review_uses_the_slice_review_input_ceiling() -> None:

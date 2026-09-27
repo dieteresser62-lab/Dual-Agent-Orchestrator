@@ -11,6 +11,7 @@ import re
 from typing import Any, Mapping
 
 from contracts import AgentRole, ApprovalMarker
+from finding_identity import FINDING_ID_PATTERN_TEXT
 from native_review_contract import (
     BoundNativeReviewContext,
     MAX_FINAL_REVIEW_NEW_FINDINGS,
@@ -708,7 +709,7 @@ def _enable_native_review_request_finding_decision_schema(
         "maxItems": 10000,
         "items": {
             "type": "string",
-            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+            "pattern": FINDING_ID_PATTERN_TEXT,
         },
     }
     contract["required"].append("slice_commit_decision_finding_ids")

@@ -10,11 +10,12 @@ the returned model.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import re
 from typing import Any, Mapping
 
+from finding_identity import FINDING_ID_PATTERN
 
-_FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
+
+_FINDING_ID_RE = FINDING_ID_PATTERN
 
 _KNOWN_FIELDS = frozenset(
     {
