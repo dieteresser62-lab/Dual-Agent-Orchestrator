@@ -1,7 +1,5 @@
 {
   "schema_version": "cli-argument-evaluation-corpus-v1",
-  "source_commit": "36fb8a8edb9d2c4bea861b3198c268240473f649",
-  "source_blob": "366d01322ca79a3ba120f3ddb1d66f403f3c7c97",
   "namespace_base": {
     "acknowledge_post_merge": null,
     "agent_live_stream": true,
@@ -241,13 +239,17 @@
         "second.md"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 1,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "args.task_path and args.task_file",
+        "expression": "parser.error('task file must be provided either positionally or with --task-file, not both')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 835,
+          "site": "parser.error('task file must be provided either positionally or with --task-file, not both')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -267,13 +269,17 @@
         "scenario.json"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 2,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "args.dry_run_scenario and (not args.dry_run)",
+        "expression": "parser.error('--dry-run-scenario requires --dry-run')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 840,
+          "site": "parser.error('--dry-run-scenario requires --dry-run')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -293,13 +299,17 @@
         "report.json"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 3,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "args.dry_run_report and (not args.dry_run_scenario)",
+        "expression": "parser.error('--dry-run-report requires --dry-run-scenario')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 842,
+          "site": "parser.error('--dry-run-report requires --dry-run-scenario')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -319,13 +329,17 @@
         "missing.toml"
       ],
       "environment": {},
-      "source_kind": "raise",
-      "source_ordinal": 1,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "raise",
+        "guard": "config_value is not None and (not config_path.is_file())",
+        "expression": "raise ConfigError(f'Explicit configuration file does not exist: {config_path.resolve()}')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 851,
+          "site": "raise ConfigError(f'Explicit configuration file does not exist: {config_path.resolve()}')",
           "type": "ConfigError",
           "message": "Explicit configuration file does not exist: <SCENARIO_ROOT>/missing.toml"
         }
@@ -349,31 +363,39 @@
       "environment": {
         "RUN_TASK_QUOTA_SAFETY_MARGIN": "not-an-integer"
       },
-      "source_kind": "raise",
-      "source_ordinal": 2,
-      "catcher_ordinal": 1,
+      "source": {
+        "function": "quota_int",
+        "kind": "raise",
+        "guard": "except ValueError from int",
+        "expression": "raise ConfigError(f'{environment_name} must be an integer') from exc"
+      },
+      "catcher": {
+        "function": "quota_int",
+        "exception_type": "ValueError",
+        "operation": "int"
+      },
       "exception_events": [
         {
           "function": "quota_int",
-          "line": 879,
+          "site": "return int(raw.strip())",
           "type": "ValueError",
           "message": "invalid literal for int() with base 10: 'not-an-integer'"
         },
         {
           "function": "quota_int",
-          "line": 881,
+          "site": "raise ConfigError(f'{environment_name} must be an integer') from exc",
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 886,
+          "site": "args.quota_wait_policy = QuotaWaitPolicy(automatic=quota_automatic, safety_margin_seconds=quota_int(args.quota_safety_margin, 'RUN_TASK_QUOTA_SAFETY_MARGIN', quota_defaults.safety_margin_seconds), maximum_wait_seconds=quota_int(args.quota_max_wait, 'RUN_TASK_QUOTA_MAX_WAIT', quota_defaults.maximum_wait_seconds), maximum_auto_resumes=quota_int(args.quota_max_auto_resumes, 'RUN_TASK_QUOTA_MAX_AUTO_RESUMES', quota_defaults.maximum_auto_resumes), heartbeat_interval_seconds=quota_int(args.quota_heartbeat_interval, 'RUN_TASK_QUOTA_HEARTBEAT_INTERVAL', quota_defaults.heartbeat_interval_seconds))",
           "type": "ConfigError",
           "message": "RUN_TASK_QUOTA_SAFETY_MARGIN must be an integer"
         },
         {
           "function": "parse_args",
-          "line": 908,
+          "site": "parser.error(str(exc))",
           "type": "SystemExit",
           "message": "2"
         }
@@ -393,19 +415,27 @@
         "-1"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 4,
-      "catcher_ordinal": 2,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "except ValueError from QuotaWaitPolicy",
+        "expression": "parser.error(str(exc))"
+      },
+      "catcher": {
+        "function": "parse_args",
+        "exception_type": "ValueError",
+        "operation": "QuotaWaitPolicy"
+      },
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 884,
+          "site": "args.quota_wait_policy = QuotaWaitPolicy(automatic=quota_automatic, safety_margin_seconds=quota_int(args.quota_safety_margin, 'RUN_TASK_QUOTA_SAFETY_MARGIN', quota_defaults.safety_margin_seconds), maximum_wait_seconds=quota_int(args.quota_max_wait, 'RUN_TASK_QUOTA_MAX_WAIT', quota_defaults.maximum_wait_seconds), maximum_auto_resumes=quota_int(args.quota_max_auto_resumes, 'RUN_TASK_QUOTA_MAX_AUTO_RESUMES', quota_defaults.maximum_auto_resumes), heartbeat_interval_seconds=quota_int(args.quota_heartbeat_interval, 'RUN_TASK_QUOTA_HEARTBEAT_INTERVAL', quota_defaults.heartbeat_interval_seconds))",
           "type": "ValueError",
           "message": "quota safety margin must be a non-negative integer"
         },
         {
           "function": "parse_args",
-          "line": 908,
+          "site": "parser.error(str(exc))",
           "type": "SystemExit",
           "message": "2"
         }
@@ -425,19 +455,27 @@
         "-1"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 5,
-      "catcher_ordinal": 3,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "except ValueError from TransientRetryPolicy",
+        "expression": "parser.error(str(exc))"
+      },
+      "catcher": {
+        "function": "parse_args",
+        "exception_type": "ValueError",
+        "operation": "TransientRetryPolicy"
+      },
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 917,
+          "site": "args.transient_retry_policy = TransientRetryPolicy(automatic=transient_automatic, initial_delay_seconds=quota_int(args.transient_retry_initial_delay, 'RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY', transient_defaults.initial_delay_seconds), maximum_delay_seconds=quota_int(args.transient_retry_max_delay, 'RUN_TASK_TRANSIENT_RETRY_MAX_DELAY', transient_defaults.maximum_delay_seconds), maximum_auto_resumes=quota_int(args.transient_retry_max_auto_resumes, 'RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES', transient_defaults.maximum_auto_resumes))",
           "type": "ValueError",
           "message": "transient retry initial delay must be a positive integer"
         },
         {
           "function": "parse_args",
-          "line": 936,
+          "site": "parser.error(str(exc))",
           "type": "SystemExit",
           "message": "2"
         }
@@ -458,13 +496,17 @@
         "reviewed"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 6,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "args.resume is not True",
+        "expression": "parser.error('--approve-gate/--reject-gate requires explicit --resume')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 941,
+          "site": "parser.error('--approve-gate/--reject-gate requires explicit --resume')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -484,13 +526,17 @@
         "--approve-gate"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 7,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "not (args.gate_rationale or '').strip()",
+        "expression": "parser.error('an explicit gate decision requires --gate-rationale')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 943,
+          "site": "parser.error('an explicit gate decision requires --gate-rationale')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -511,13 +557,17 @@
         "reviewed"
       ],
       "environment": {},
-      "source_kind": "parser_error",
-      "source_ordinal": 8,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "parser_error",
+        "guard": "args.gate_rationale is not None",
+        "expression": "parser.error('--gate-rationale requires --approve-gate or --reject-gate')"
+      },
+      "catcher": null,
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 945,
+          "site": "parser.error('--gate-rationale requires --approve-gate or --reject-gate')",
           "type": "SystemExit",
           "message": "2"
         }
@@ -536,19 +586,27 @@
       "environment": {
         "RUN_TASK_CLAUDE_EFFORT": "extreme"
       },
-      "source_kind": "raise",
-      "source_ordinal": 3,
-      "catcher_ordinal": 4,
+      "source": {
+        "function": "parse_args",
+        "kind": "raise",
+        "guard": "except AgentConfigError from resolve_agent_settings",
+        "expression": "raise ConfigError(str(exc)) from exc"
+      },
+      "catcher": {
+        "function": "parse_args",
+        "exception_type": "AgentConfigError",
+        "operation": "resolve_agent_settings"
+      },
       "exception_events": [
         {
           "function": "parse_args",
-          "line": 980,
+          "site": "args.agent_settings = resolve_agent_settings(args, env)",
           "type": "AgentConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         },
         {
           "function": "parse_args",
-          "line": 982,
+          "site": "raise ConfigError(str(exc)) from exc",
           "type": "ConfigError",
           "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         }
@@ -585,24 +643,68 @@
         "15"
       ],
       "environment": {},
-      "source_kind": "return",
-      "source_ordinal": 1,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "quota_int",
+        "kind": "return",
+        "guard": "argument is not None",
+        "expression": "argument"
+      },
+      "catcher": null,
       "exception_events": [],
       "process_starts": 0,
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
         "namespace_sha256": "60b80cad6cf13174982305cd357c1908d39d877747e8bd514625cbce64d1ecbb",
-        "return_ordinals": [
-          1,
-          1,
-          1,
-          1,
-          2,
-          2,
-          2,
-          4
+        "return_trace": [
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "argument is not None",
+            "expression": "argument"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "argument is not None",
+            "expression": "argument"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "argument is not None",
+            "expression": "argument"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "argument is not None",
+            "expression": "argument"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "parse_args",
+            "kind": "return",
+            "guard": "",
+            "expression": "args"
+          }
         ],
         "stderr": ""
       },
@@ -624,24 +726,68 @@
       "description": "Absent quota and retry settings use their default return path.",
       "arguments": [],
       "environment": {},
-      "source_kind": "return",
-      "source_ordinal": 2,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "quota_int",
+        "kind": "return",
+        "guard": "raw is None or not raw.strip()",
+        "expression": "default"
+      },
+      "catcher": null,
       "exception_events": [],
       "process_starts": 0,
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
         "namespace_sha256": "06ee37a171b24c28287c8dd4a4b3c3fb5fd1ad8bc20058b70b63535ada5e274d",
-        "return_ordinals": [
-          2,
-          2,
-          2,
-          2,
-          2,
-          2,
-          2,
-          4
+        "return_trace": [
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "parse_args",
+            "kind": "return",
+            "guard": "",
+            "expression": "args"
+          }
         ],
         "stderr": ""
       },
@@ -654,24 +800,68 @@
       "environment": {
         "RUN_TASK_QUOTA_SAFETY_MARGIN": "17"
       },
-      "source_kind": "return",
-      "source_ordinal": 3,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "quota_int",
+        "kind": "return",
+        "guard": "",
+        "expression": "int(raw.strip())"
+      },
+      "catcher": null,
       "exception_events": [],
       "process_starts": 0,
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
         "namespace_sha256": "5aca75220ea0612e4711f68c0b0d61c34c3207a2b45958489be4178ff40cdeba",
-        "return_ordinals": [
-          3,
-          2,
-          2,
-          2,
-          2,
-          2,
-          2,
-          4
+        "return_trace": [
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "",
+            "expression": "int(raw.strip())"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "parse_args",
+            "kind": "return",
+            "guard": "",
+            "expression": "args"
+          }
         ],
         "stderr": ""
       },
@@ -691,24 +881,68 @@
         "reviewed exact persisted evidence"
       ],
       "environment": {},
-      "source_kind": "return",
-      "source_ordinal": 4,
-      "catcher_ordinal": null,
+      "source": {
+        "function": "parse_args",
+        "kind": "return",
+        "guard": "",
+        "expression": "args"
+      },
+      "catcher": null,
       "exception_events": [],
       "process_starts": 0,
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
         "namespace_sha256": "47bffbdd77841b1feb5312196f88ad730285361466fb2b00c95f0d2369531097",
-        "return_ordinals": [
-          2,
-          2,
-          2,
-          2,
-          2,
-          2,
-          2,
-          4
+        "return_trace": [
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "quota_int",
+            "kind": "return",
+            "guard": "raw is None or not raw.strip()",
+            "expression": "default"
+          },
+          {
+            "function": "parse_args",
+            "kind": "return",
+            "guard": "",
+            "expression": "args"
+          }
         ],
         "stderr": ""
       },
