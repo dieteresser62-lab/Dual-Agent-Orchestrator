@@ -80,6 +80,10 @@ from provider_process import (
     ProcessIdentity, ProcessStatus, capture_process_identity,
     count_process_group_members, observe_identity, signal_process_group,
 )
+from provider_identity import (
+    ProviderIdentity, capture_provider_identity, check_provider_candidate,
+    executable_candidates, inspect_provider_installations,
+)
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
     PreparedProviderInput,
@@ -906,38 +910,93 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
         return 1, "", str(exc)
 
 
-def _resolve_agent_binary(binary: str) -> str | None:
-    candidate = Path(binary).expanduser()
-    if candidate.is_absolute() or "/" in binary or "\\" in binary:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            return None
-        if resolved.is_file() and os.access(resolved, os.X_OK):
-            return str(resolved)
-        return None
-    return shutil.which(binary)
+def _resolve_agent_binary(binary: str, *, path: str | None = None) -> str | None:
+    candidates = executable_candidates(binary, os.environ.get("PATH", os.defpath) if path is None else path)
+    return candidates[0] if candidates else None
 
 
-def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False) -> None:
+def _binary_remedy(adapter: AgentAdapter) -> str:
+    return (
+        f"Remedy: set --{adapter.name}-binary or RUN_TASK_{adapter.name.upper()}_BINARY "
+        "to an absolute Linux path, or adjust PATH"
+    )
+
+
+def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = None) -> ProviderIdentity:
+    bound = getattr(adapter, "provider_identity", None)
+    if bound is None:
+        raise AgentCompatibilityError(f"{adapter.name} has no verified binary identity")
+    search_path = os.environ.get("PATH", os.defpath) if path is None else path
+    entry = _resolve_agent_binary(adapter.cli_binary, path=search_path)
+    if entry is None:
+        raise AgentCompatibilityError(f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}")
+    try:
+        current = capture_provider_identity(
+            entry, adapter.capability.version_args, run_local_command,
+            path=search_path,
+        )
+    except ValueError as exc:
+        raise AgentCompatibilityError(
+            f"{adapter.name} binary identity drift at {entry}: {exc}; {_binary_remedy(adapter)}"
+        ) from exc
+    if current != bound:
+        raise AgentCompatibilityError(
+            f"{adapter.name} binary identity drift: expected {bound!r}; observed {current!r}"
+        )
+    return bound
+
+
+def _bound_launch_command(adapter: AgentAdapter, command: tuple[str, ...]) -> list[str]:
+    if not command or command[0] != adapter.cli_binary:
+        raise AgentCompatibilityError(
+            f"{adapter.name} prepared command does not use its configured binary"
+        )
+    identity = getattr(adapter, "provider_identity", None)
+    if identity is None:
+        raise AgentCompatibilityError(f"{adapter.name} has no verified binary identity")
+    return [*identity.launch_prefix, *command[1:]]
+
+
+def verify_agent_capabilities(
+    adapter: AgentAdapter, *, strict_dns: bool = False, path: str | None = None,
+) -> None:
     """Verify the configured role once, immediately before its first real invocation."""
     if adapter.capability_verified:
+        _check_bound_provider_identity(adapter, path=path)
         return
-    resolved_binary = _resolve_agent_binary(adapter.cli_binary)
+    search_path = os.environ.get("PATH", os.defpath) if path is None else path
+    resolved_binary = _resolve_agent_binary(adapter.cli_binary, path=search_path)
     if resolved_binary is None:
         raise AgentCompatibilityError(
             f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}"
         )
+    try:
+        check_provider_candidate(resolved_binary, path=search_path)
+    except ValueError as exc:
+        raise AgentCompatibilityError(
+            f"{adapter.name} CLI {resolved_binary}: {exc}; {_binary_remedy(adapter)}"
+        ) from exc
 
-    version_rc, version_out, version_err = run_local_command(
-        [resolved_binary, *adapter.capability.version_args]
+    identities, failures = inspect_provider_installations(
+        adapter.cli_binary, adapter.capability.version_args, run_local_command,
+        path=search_path,
     )
-    version_text = (version_out or version_err).strip()
-    if version_rc != 0 or not version_text:
+    if len(identities) + len(failures) > 1:
+        logger.warning(
+            "Multiple %s CLI installations: %s",
+            adapter.name,
+            "; ".join(
+                [f"{item.entry_path} -> {item.real_path} ({item.version})" for item in identities]
+                + list(failures)
+            ),
+        )
+    identity = next((item for item in identities if item.entry_path == resolved_binary), None)
+    if identity is None:
         raise AgentCompatibilityError(
             f"Cannot determine {adapter.name} version using {resolved_binary}: "
-            f"{(version_err or version_out).strip() or 'empty output'}"
+            + (next((item for item in failures if item.startswith(resolved_binary + ":")), "unknown error"))
         )
+    version_text = identity.version
     version_matches_static_pattern = any(
         re.fullmatch(pattern, version_text)
         for pattern in adapter.capability.supported_version_patterns
@@ -955,7 +1014,7 @@ def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False
             ) from exc
 
     help_rc, help_out, help_err = run_local_command(
-        [resolved_binary, *adapter.capability.help_args]
+        [*identity.launch_prefix, *adapter.capability.help_args]
     )
     help_text = "\n".join(part for part in (help_out, help_err) if part)
     if help_rc != 0:
@@ -980,10 +1039,11 @@ def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False
             )
 
     adapter.capability_verified = True
+    adapter.provider_identity = identity
     logger.info(
         "Agent ready: role=%s binary=%s version=%s model=%s effort=%s timeout=%ss profile=%s",
         adapter.name,
-        resolved_binary,
+        identity.real_path,
         version_text,
         adapter.model,
         adapter.effort,
@@ -1493,11 +1553,14 @@ def run_agent(
         if not measurement.allowed:
             raise ProviderInputBudgetExceeded(measurement)
 
-        verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
-        command_parts = list(prepared.command)
-        stdin_text = prepared.stdin_text
         env = os.environ.copy()
         env.update(adapter.env)
+        verify_agent_capabilities(
+            adapter, strict_dns=config.strict_preflight,
+            path=env.get("PATH", os.defpath),
+        )
+        command_parts = _bound_launch_command(adapter, prepared.command)
+        stdin_text = prepared.stdin_text
         if adapter.reviewer:
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             for variable in (

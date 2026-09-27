@@ -666,6 +666,8 @@ def _execute_scenario(
     class FakeAdapter:
         def __init__(self) -> None:
             self.name = str(trigger.get("adapter_name", "codex"))
+            self.cli_binary = expected_command[0]
+            self.provider_identity = SimpleNamespace(launch_prefix=(expected_command[0],))
             self.timeout = 1
             self.reviewer = bool(trigger.get("reviewer", False))
             self.env: dict[str, str] = {}

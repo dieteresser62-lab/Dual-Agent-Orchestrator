@@ -36,6 +36,7 @@ from native_provider_schema import (
     normalize_transport_profile,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from provider_identity import ProviderIdentity
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -282,6 +283,7 @@ class AgentAdapter(Protocol):
     required_hosts: tuple[str, ...]
     capability: CapabilitySpec
     capability_verified: bool
+    provider_identity: ProviderIdentity | None
     metadata: dict[str, object]
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
@@ -313,6 +315,7 @@ class _BaseAdapter:
         self.max_budget_usd = settings.max_budget_usd
         self.env: dict[str, str] = {"NO_COLOR": "1"}
         self.capability_verified = False
+        self.provider_identity: ProviderIdentity | None = None
         self.metadata: dict[str, object] = {}
         self._runtime_dir: Path | None = None
 

@@ -13,6 +13,7 @@ import pytest
 
 import agent_runtime
 import provider_process
+from provider_identity import ProviderIdentity
 from agent_adapters import (
     AGENT_REGISTRY,
     AgentBudgetError,
@@ -134,7 +135,7 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
 
 
 def test_capability_verification_accepts_forward_compatible_claude_minor(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
     class FakeClaude:
         name = "claude"
@@ -157,11 +158,10 @@ def test_capability_verification_accepts_forward_compatible_claude_minor(
             assert stderr == ""
 
     adapter = FakeClaude()
-    monkeypatch.setattr(
-        agent_runtime,
-        "_resolve_agent_binary",
-        lambda binary: "/opt/bin/claude",
-    )
+    binary = tmp_path / "claude"
+    binary.write_bytes(b"fake executable")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
 
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
@@ -178,7 +178,7 @@ def test_capability_verification_accepts_forward_compatible_claude_minor(
 
 
 def test_capability_verification_accepts_forward_compatible_codex_minor(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
     class FakeCodex:
         name = "codex"
@@ -201,11 +201,10 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
             assert stderr == ""
 
     adapter = FakeCodex()
-    monkeypatch.setattr(
-        agent_runtime,
-        "_resolve_agent_binary",
-        lambda binary: "/opt/bin/codex",
-    )
+    binary = tmp_path / "codex"
+    binary.write_bytes(b"fake executable")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
 
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
@@ -1640,7 +1639,7 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
             _ = prompt
-            return ["timeout-cli"], True
+            return ["timeout"], True
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             _ = stdout
@@ -1661,6 +1660,8 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             self.cleaned = True
 
     adapter = TimeoutAdapter()
+    adapter.provider_identity = ProviderIdentity("timeout", "/fake/timeout", "1", "0" * 64, None, None, None)
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda _adapter, **_kwargs: adapter.provider_identity)
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
         _ = args
@@ -1698,7 +1699,7 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
         metadata: dict[str, object] = {}
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
-            return ["rejecting-cli"], True
+            return ["rejecting"], True
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             raise AgentOutputError(
@@ -1720,10 +1721,13 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
         stderr = ""
 
     monkeypatch.setattr(agent_runtime, "_run_agent_process", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda adapter, **_kwargs: adapter.provider_identity)
+    adapter = RejectingAdapter()
+    adapter.provider_identity = ProviderIdentity("rejecting", "/fake/rejecting", "1", "0" * 64, None, None, None)
 
     with pytest.raises(AgentOutputError) as exc_info:
         run_agent(
-            RejectingAdapter(),
+            adapter,
             "prompt",
             config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
             shorten=lambda text, _limit: text or "",
@@ -1929,12 +1933,15 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         return Result()
 
     monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_run)
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda adapter, **_kwargs: adapter.provider_identity)
+    adapter = ReviewerAdapter()
+    adapter.provider_identity = ProviderIdentity("reviewer", "/fake/reviewer", "1", "0" * 64, None, None, None)
     monkeypatch.setenv("RUN_TASK_REVIEW_TEST_COMMAND", "python3 -m pytest tests/ -v")
     monkeypatch.setenv("RUN_TASK_REVIEW_PROBE_PATH", "README.md")
     monkeypatch.setenv("RUN_TASK_REVIEW_TIMEOUT", "1800")
     caplog.set_level("INFO")
     output = run_agent(
-        ReviewerAdapter(),
+        adapter,
         "prompt",
         config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
         shorten=lambda text, limit: (text or "")[:limit],
