@@ -1,6 +1,6 @@
 {
   "schema_version": "provider-free-crash-harness-v1",
-  "scenario_version": "post-merge-hook-boundaries-v2",
+  "scenario_version": "provider-groups-v3",
   "effect_classes": [
     "git_commit",
     "git_merge",
@@ -76,6 +76,10 @@
   "runtime_boundaries": {
     "slice_commit": "git_commit",
     "slice_provider": "provider_start",
+    "provider_group_after_start": "provider_start",
+    "provider_group_after_identity": "provider_start",
+    "provider_group_leader_lost": "provider_start",
+    "provider_group_after_cleanup": "provider_start",
     "implementation_handoff": "file_write",
     "queue_finalization": "queue_move",
     "slice_validation": "internal",

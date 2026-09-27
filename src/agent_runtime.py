@@ -7,6 +7,7 @@ import math
 import os
 import queue
 import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -75,6 +76,10 @@ from native_provider_schema import (
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
 from artifact_models import ProviderUsagePayload
+from provider_process import (
+    ProcessIdentity, ProcessStatus, capture_process_identity,
+    count_process_group_members, observe_identity, signal_process_group,
+)
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
     PreparedProviderInput,
@@ -1145,6 +1150,66 @@ def print_agent_output(
     logger.info("%s", shorten(output, config.agent_output_max_chars))
 
 
+def _detach_provider_pipe(stream: TextIO, flags: int) -> None:
+    """Unblock eventual pipe users without freeing a descriptor they still own."""
+    try:
+        target = stream.fileno()
+        replacement = os.open(os.devnull, flags)
+        if replacement != target:
+            try:
+                os.dup2(replacement, target)
+            finally:
+                os.close(replacement)
+    except (OSError, ValueError):
+        pass
+
+
+def _stop_provider_group(
+    process: subprocess.Popen[str], identity: ProcessIdentity | None,
+    *, drain_seconds: float = 2.0, drained: bool = False,
+) -> None:
+    """Bound TERM, KILL, pipe drain and leader reap after every exit path."""
+    if identity is not None:
+        signal_process_group(identity, signal.SIGTERM)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if identity is None or observe_identity(identity).status is not ProcessStatus.RUNNING:
+            break
+        time.sleep(0.05)
+    if identity is not None:
+        signal_process_group(identity, signal.SIGKILL)
+    if drained:
+        return
+    if process.stdin is not None:
+        # Bypass TextIOWrapper's lock: a daemon writer can be blocked in write().
+        _detach_provider_pipe(process.stdin, os.O_WRONLY)
+        process.stdin = None
+    try:
+        process.communicate(timeout=drain_seconds)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                _detach_provider_pipe(stream, os.O_RDONLY)
+        process.stdout = None
+        process.stderr = None
+
+
+def _finish_exited_leader_group(
+    process: subprocess.Popen[str], identity: ProcessIdentity | None, agent_key: str,
+) -> None:
+    """Release inherited pipes while preserving the leader's completed result."""
+    remaining = count_process_group_members(identity) if identity is not None else None
+    _stop_provider_group(process, identity, drained=True)
+    logger.warning(
+        "[AGENT] %s terminated %s remaining provider group process(es) after leader exit",
+        agent_key, remaining if remaining is not None else "an unknown number of",
+    )
+
+
 def _run_agent_process(
     adapter: AgentAdapter,
     command_parts: list[str],
@@ -1157,148 +1222,174 @@ def _run_agent_process(
     agent_key: str,
     process_started: Callable[[int], None] | None = None,
 ) -> StreamResult | subprocess.CompletedProcess[str]:
-    """Start one provider process and retain ownership through its cleanup boundary."""
-    if config.agent_live_stream:
-        # Stream mode captures stdout/stderr incrementally while still preserving full output.
-        process = subprocess.Popen(
-            command_parts,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            cwd=execution_root,
-            bufsize=1,
-        )
+    """Own a provider session until its pipes and process group are settled."""
+    process = subprocess.Popen(
+        command_parts,
+        stdin=subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env, cwd=execution_root, bufsize=1, start_new_session=True,
+    )
+    identity: ProcessIdentity | None = None
+    start = time.monotonic()
+    finished = False
+    group_cleanup_done = False
+    try:
+        try:
+            identity = capture_process_identity(process.pid)
+        except (OSError, ValueError, IndexError, UnicodeError):
+            pass
         if process_started is not None:
-            try:
-                process_started(process.pid)
-            except Exception:
-                process.kill()
-                process.wait(timeout=5)
-                raise
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
-
-        if stdin_text is not None:
-            process.stdin.write(stdin_text)
-        process.stdin.close()
-
-        stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-        start = time.monotonic()
-        stream_state: dict[str, str | bool] = {
-            "skip_prompt_echo": False,
-            "last_emitted_line": "",
-        }
-
-        def read_stream(stream: TextIO, channel: str) -> None:
-            # Use sentinel None to signal channel completion to the main loop.
-            try:
-                while True:
-                    line = stream.readline()
-                    if line == "":
-                        break
-                    stream_queue.put((channel, line))
-            finally:
-                stream_queue.put((channel, None))
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-
-        threads = [
-            threading.Thread(
-                target=read_stream,
-                args=(process.stdout, "stdout"),
-                daemon=True,
-            ),
-            threading.Thread(
-                target=read_stream,
-                args=(process.stderr, "stderr"),
-                daemon=True,
-            ),
-        ]
-        for thread in threads:
-            thread.start()
-
-        completed_channels: set[str] = set()
-        heartbeat_interval_seconds = 30.0
-        last_heartbeat = start
-        while len(completed_channels) < 2:
-            if timeout_seconds is not None and time.monotonic() - start > timeout_seconds:
-                process.kill()
-                raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-            now = time.monotonic()
-            if now - last_heartbeat >= heartbeat_interval_seconds:
-                elapsed = int(now - start)
-                logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
-                last_heartbeat = now
-            try:
-                channel, line = stream_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-
-            if line is None:
-                completed_channels.add(channel)
-                continue
-            if channel == "stdout":
-                stdout_chunks.append(line)
-            else:
-                stderr_chunks.append(line)
-
-            if config.agent_live_stream_channels == "stdout" and channel != "stdout":
-                continue
-            if config.agent_live_stream_channels == "stderr" and channel != "stderr":
-                continue
-            if config.agent_live_stream_mode == "full":
-                logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
-            else:
-                rendered = _compact_stream_text(adapter, channel, line, stream_state)
-                if rendered is not None:
-                    logger.info("[%s:%s] %s", agent_key, channel, rendered)
-
-        for thread in threads:
-            thread.join(timeout=1)
-        process.wait(timeout=5)
-        result = StreamResult(
-            process.returncode if process.returncode is not None else 1,
-            "".join(stdout_chunks),
-            "".join(stderr_chunks),
-        )
-    elif process_started is not None:
-        process = subprocess.Popen(
-            command_parts, stdin=subprocess.PIPE if stdin_text is not None else None,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=env, cwd=execution_root,
-        )
-        try:
             process_started(process.pid)
-        except Exception:
-            process.kill()
-            process.wait(timeout=5)
-            raise
-        try:
-            stdout, stderr = process.communicate(input=stdin_text, timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
-            raise
-        result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
-    else:
-        result = subprocess.run(
-            command_parts,
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=execution_root,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    return result
+        if config.agent_live_stream:
+            assert process.stdout is not None and process.stderr is not None
+            if stdin_text is None and process.stdin is not None:
+                process.stdin.close()
+                process.stdin = None
+            stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+            stream_state: dict[str, str | bool] = {
+                "skip_prompt_echo": False, "last_emitted_line": "",
+            }
+            writer_errors: queue.Queue[BaseException] = queue.Queue()
+
+            def write_input() -> None:
+                if process.stdin is None:
+                    return
+                try:
+                    process.stdin.write(stdin_text or "")
+                    process.stdin.close()
+                except BaseException as exc:
+                    writer_errors.put(exc)
+
+            def read_stream(stream: TextIO, channel: str) -> None:
+                try:
+                    while line := stream.readline():
+                        stream_queue.put((channel, line))
+                except (OSError, ValueError):
+                    # Forced bounded cleanup may replace an outstanding pipe read.
+                    pass
+                finally:
+                    stream_queue.put((channel, None))
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            threads = [threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True),
+                       threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True)]
+            for thread in threads:
+                thread.start()
+            writer: threading.Thread | None = None
+            if stdin_text is not None:
+                writer = threading.Thread(target=write_input, daemon=True)
+                writer.start()
+            completed_channels: set[str] = set()
+            last_heartbeat = start
+            leader_exit_at: float | None = None
+            drain_deadline: float | None = None
+            while len(completed_channels) < 2:
+                now = time.monotonic()
+                if timeout_seconds is not None and now - start > timeout_seconds:
+                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+                if process.poll() is not None:
+                    leader_exit_at = leader_exit_at or now
+                    if (now - leader_exit_at > 1.0 and not group_cleanup_done
+                            and any(thread.is_alive() for thread in threads)):
+                        _finish_exited_leader_group(process, identity, agent_key)
+                        group_cleanup_done = True
+                        drain_deadline = time.monotonic() + 2.0
+                if (drain_deadline is not None and now > drain_deadline
+                        and any(thread.is_alive() for thread in threads)):
+                    raise AgentProcessError(
+                        f"{agent_key} output pipes remained open after group cleanup.",
+                        kind_hint=AgentFailureKind.PROCESS,
+                    )
+                if now - last_heartbeat >= 30.0:
+                    logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, int(now - start))
+                    last_heartbeat = now
+                try:
+                    channel, line = stream_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    completed_channels.add(channel)
+                    continue
+                if channel == "stdout":
+                    stdout_chunks.append(line)
+                else:
+                    stderr_chunks.append(line)
+                if config.agent_live_stream_channels not in {"both", channel}:
+                    continue
+                if config.agent_live_stream_mode == "full":
+                    logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
+                else:
+                    rendered = _compact_stream_text(adapter, channel, line, stream_state)
+                    if rendered is not None:
+                        logger.info("[%s:%s] %s", agent_key, channel, rendered)
+            for thread in threads:
+                thread.join(timeout=0.2)
+            if writer is not None:
+                writer.join(timeout=1)
+                if writer.is_alive():
+                    raise RuntimeError("provider stdin writer did not finish")
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired as exc:
+                if timeout_seconds is not None and time.monotonic() - start >= timeout_seconds:
+                    raise
+                raise AgentProcessError(
+                    f"{agent_key} closed output pipes without exiting.",
+                    kind_hint=AgentFailureKind.PROCESS,
+                ) from exc
+            result: StreamResult | subprocess.CompletedProcess[str] = StreamResult(
+                process.returncode if process.returncode is not None else 1,
+                "".join(stdout_chunks), "".join(stderr_chunks),
+            )
+        else:
+            first_input = stdin_text
+            leader_exit_at = None
+            drain_deadline = None
+            while True:
+                now = time.monotonic()
+                remaining = None if timeout_seconds is None else timeout_seconds - (now - start)
+                if remaining is not None and remaining <= 0:
+                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                if drain_deadline is not None and now > drain_deadline:
+                    raise AgentProcessError(
+                        f"{agent_key} output pipes remained open after group cleanup.",
+                        kind_hint=AgentFailureKind.PROCESS,
+                    )
+                try:
+                    stdout, stderr = process.communicate(input=first_input, timeout=min(0.2, remaining) if remaining is not None else 0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    first_input = None
+                    if process.poll() is not None:
+                        leader_exit_at = leader_exit_at or time.monotonic()
+                        if time.monotonic() - leader_exit_at > 1.0 and not group_cleanup_done:
+                            _finish_exited_leader_group(process, identity, agent_key)
+                            group_cleanup_done = True
+                            drain_deadline = time.monotonic() + 2.0
+            result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
+        finished = True
+        return result
+    except BaseException:
+        if identity is None:
+            try:
+                identity = capture_process_identity(process.pid)
+            except (OSError, ValueError, IndexError, UnicodeError):
+                pass
+        _stop_provider_group(process, identity, drain_seconds=0.2 if group_cleanup_done else 2.0)
+        raise
+    finally:
+        if finished:
+            # The leader can exit before children. Reap any remaining group members.
+            _stop_provider_group(process, identity, drained=True)
 
 
 def run_agent(

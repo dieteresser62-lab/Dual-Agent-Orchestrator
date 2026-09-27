@@ -5,11 +5,14 @@ import hashlib
 import json
 import subprocess
 import sys
+import signal
+import time
 from pathlib import Path
 
 import pytest
 
 import agent_runtime
+import provider_process
 from agent_adapters import (
     AGENT_REGISTRY,
     AgentBudgetError,
@@ -1661,9 +1664,9 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
         _ = args
-        raise agent_runtime.subprocess.TimeoutExpired("timeout-cli", kwargs["timeout"])
+        raise agent_runtime.subprocess.TimeoutExpired("timeout-cli", kwargs["timeout_seconds"])
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_run)
 
     try:
         run_agent(
@@ -1716,7 +1719,7 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
         stdout = '{"status":"ERROR"}'
         stderr = ""
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", lambda *args, **kwargs: Result())
 
     with pytest.raises(AgentOutputError) as exc_info:
         run_agent(
@@ -1925,7 +1928,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         captured.update(kwargs)
         return Result()
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_run)
     monkeypatch.setenv("RUN_TASK_REVIEW_TEST_COMMAND", "python3 -m pytest tests/ -v")
     monkeypatch.setenv("RUN_TASK_REVIEW_PROBE_PATH", "README.md")
     monkeypatch.setenv("RUN_TASK_REVIEW_TIMEOUT", "1800")
@@ -1938,7 +1941,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         operation="claude_slice_review",
     )
 
-    working_directory = captured["cwd"]
+    working_directory = captured["execution_root"]
     process_environment = captured["env"]
     assert isinstance(working_directory, Path)
     assert isinstance(process_environment, dict)
@@ -1977,3 +1980,159 @@ def test_provider_usage_normalization_is_closed_and_preserves_unknown() -> None:
     )
     assert normalize_provider_usage({"conversation_id": "secret"}) is None
     assert _compact_usage_metadata(None) == "unknown"
+
+
+@pytest.mark.parametrize("interruption", ("keyboard", "callback", "timeout"))
+def test_provider_group_cleanup_reaps_grandchild_and_reconciles_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str,
+) -> None:
+    response = tmp_path / "response.json"
+    ready = tmp_path / "grandchild.pid"
+    code = (
+        "import pathlib,subprocess,sys,time\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "print('ready',flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    config = OrchestratorConfig(
+        repo_root=tmp_path, agent_live_stream=interruption == "keyboard",
+        agent_live_stream_mode="compact",
+    )
+    started_pids: list[int] = []
+
+    def on_start(pid: int) -> None:
+        started_pids.append(pid)
+        provider_process.record_process_start(response, "effect", pid)
+        if interruption == "callback":
+            deadline = time.monotonic() + 2
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ready.exists()
+            raise RuntimeError("callback failed")
+
+    if interruption == "keyboard":
+        def interrupt(*_args: object) -> None:
+            raise KeyboardInterrupt
+        monkeypatch.setattr(agent_runtime, "_compact_stream_text", interrupt)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            KeyboardInterrupt if interruption == "keyboard" else
+            RuntimeError if interruption == "callback" else subprocess.TimeoutExpired
+        ):
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-u", "-c", code, str(ready)], None,
+                config=config, env=os.environ.copy(), execution_root=tmp_path,
+                timeout_seconds=1 if interruption == "timeout" else 5,
+                agent_key="implementer", process_started=on_start,
+            )
+        assert time.monotonic() - started < 5
+        assert len(started_pids) == 1
+        assert ready.exists()
+        assert provider_process.observe_process(response, "effect").status is provider_process.ProcessStatus.ENDED
+        grandchild = provider_process._proc_stat(int(ready.read_text()))
+        assert grandchild is None or grandchild.state in {"Z", "X", "x"}
+    finally:
+        if started_pids:
+            identity = provider_process.capture_process_identity(started_pids[0])
+            if identity is not None:
+                provider_process.signal_process_group(identity, signal.SIGKILL)
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+def test_full_stdin_has_bounded_group_cleanup(
+    tmp_path: Path, live_stream: bool,
+) -> None:
+    config = OrchestratorConfig(repo_root=tmp_path, agent_live_stream=live_stream)
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        agent_runtime._run_agent_process(
+            object(), [sys.executable, "-c", "import time; time.sleep(60)"],
+            "x" * (16 * 1024 * 1024), config=config, env=os.environ.copy(),
+            execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+        )
+    assert time.monotonic() - start < 5
+
+
+def test_successful_leader_exit_does_not_leave_a_child_running(tmp_path: Path) -> None:
+    ready = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); print('ok',flush=True)"
+    )
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code, str(ready)], None,
+        config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+        execution_root=tmp_path, timeout_seconds=5, agent_key="implementer",
+    )
+    assert result.returncode == 0 and result.stdout == "ok\n"
+    child = provider_process._proc_stat(int(ready.read_text()))
+    assert child is None or child.state in {"Z", "X", "x"}
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+@pytest.mark.parametrize("timeout_seconds", (None, 5))
+def test_exited_leader_with_inherited_pipe_has_bounded_wait(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    live_stream: bool, timeout_seconds: int | None,
+) -> None:
+    ready = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); print('ok',flush=True)"
+    )
+    started = time.monotonic()
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code, str(ready)], None,
+        config=OrchestratorConfig(
+            repo_root=tmp_path, agent_live_stream=live_stream, agent_live_stream_mode="full",
+        ),
+        env=os.environ.copy(), execution_root=tmp_path,
+        timeout_seconds=timeout_seconds, agent_key="implementer",
+    )
+    assert result.returncode == 0
+    assert result.stdout == "ok\n"
+    assert time.monotonic() - started < 5
+    child = provider_process._proc_stat(int(ready.read_text()))
+    assert child is None or child.state in {"Z", "X", "x"}
+    assert "terminated 1 remaining provider group process(es)" in caplog.text
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+def test_exited_leader_with_escaped_pipe_holder_has_bounded_process_error(
+    tmp_path: Path, live_stream: bool,
+) -> None:
+    ready = tmp_path / "escaped.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'], "
+        "start_new_session=True); "
+        "stat=pathlib.Path(f'/proc/{child.pid}/stat').read_text(); "
+        "ticks=stat[stat.rfind(')')+2:].split()[19]; "
+        "pathlib.Path(sys.argv[1]).write_text(f'{child.pid} {ticks}'); "
+        "print('ok',flush=True)"
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(agent_runtime.AgentProcessError, match="after group cleanup") as exc:
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-c", code, str(ready)], None,
+                config=OrchestratorConfig(
+                    repo_root=tmp_path, agent_live_stream=live_stream,
+                    agent_live_stream_mode="full",
+                ),
+                env=os.environ.copy(), execution_root=tmp_path,
+                timeout_seconds=10, agent_key="implementer",
+            )
+        assert exc.value.kind_hint is agent_runtime.AgentFailureKind.PROCESS
+        assert time.monotonic() - started < 7
+    finally:
+        if ready.exists():
+            pid, ticks = map(int, ready.read_text().split())
+            child = provider_process._proc_stat(pid)
+            if child is not None and child.start_ticks == ticks and child.state not in {"Z", "X", "x"}:
+                os.kill(pid, signal.SIGKILL)

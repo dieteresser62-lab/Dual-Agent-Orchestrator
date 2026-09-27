@@ -17,6 +17,8 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Mapping
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SOURCE_ROOT) not in sys.path:
@@ -48,6 +50,7 @@ from dry_run_scenarios import (
 )
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
+import provider_process
 from side_effects import (
     Reconciliation,
     ReconciliationOutcome,
@@ -91,6 +94,10 @@ BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
 RUNTIME_BOUNDARY_EFFECTS = {
     "slice_commit": "git_commit",
     "slice_provider": "provider_start",
+    "provider_group_after_start": "provider_start",
+    "provider_group_after_identity": "provider_start",
+    "provider_group_leader_lost": "provider_start",
+    "provider_group_after_cleanup": "provider_start",
     "implementation_handoff": "file_write",
     "queue_finalization": "queue_move",
     "slice_validation": "internal",
@@ -103,6 +110,45 @@ RUNTIME_BOUNDARY_EFFECTS = {
     "post_merge_after_process_start": "post_merge_hook",
     "post_merge_after_process_end": "post_merge_hook",
 }
+
+
+def _prove_provider_group_boundary(root: Path, boundary: str) -> None:
+    """Exercise the process evidence consulted when a provider start is replayed."""
+    if boundary not in {
+        "provider_group_after_start", "provider_group_after_identity",
+        "provider_group_leader_lost", "provider_group_after_cleanup",
+    }:
+        return
+    identity = provider_process.ProcessIdentity("test-boot", 711, 41, 711, 711)
+    if boundary == "provider_group_after_start":
+        status = provider_process.observe_process(root / "absent-provider.json", "effect").status
+        expected = provider_process.ProcessStatus.UNKNOWN
+    else:
+        class ProcEntries:
+            def __enter__(self):
+                return iter([SimpleNamespace(name="712")] if boundary == "provider_group_leader_lost" else [])
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        def stat_for(pid: int) -> provider_process.ProcStat | None:
+            if boundary == "provider_group_after_identity" and pid == 711:
+                return provider_process.ProcStat("S", 41, 711, 711)
+            if boundary == "provider_group_leader_lost" and pid == 712:
+                return provider_process.ProcStat("S", 42, 711, 711)
+            return None
+
+        with (patch.object(provider_process, "_boot_id", return_value="test-boot"),
+              patch.object(provider_process, "_proc_stat", side_effect=stat_for),
+              patch.object(provider_process.os, "scandir", return_value=ProcEntries())):
+            status = provider_process.observe_identity(identity).status
+        expected = (
+            provider_process.ProcessStatus.ENDED
+            if boundary == "provider_group_after_cleanup"
+            else provider_process.ProcessStatus.RUNNING
+        )
+    if status is not expected:
+        raise CrashHarnessError(f"provider group boundary {boundary} lost its fail-closed outcome")
 
 HOOK_RUNTIME_BOUNDARIES = frozenset({
     "post_merge_with_merge", "post_merge_without_merge",
@@ -698,6 +744,7 @@ def _run_baseline_stop_case(
     run_id = "s5-ledger"
     case_root = root / f"{run_id}-{phase.value}-{requested_crashes}"
     case_root.mkdir(parents=True, exist_ok=False)
+    _prove_provider_group_boundary(case_root, runtime_boundary)
     injector = CrashInjector("ledger", phase, requested_crashes)
     attempts = 0
     production_resume_attempts = 0

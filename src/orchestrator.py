@@ -991,7 +991,7 @@ class ProductionWorkflowDriver:
             observation = observe_process(durable_response_path, spec.effect_key)
             if observation.status is ProcessStatus.RUNNING:
                 raise SideEffectReconciliationError(
-                    f"provider process PID {observation.pid} is still running; "
+                    f"provider process group led by PID {observation.pid} is still running; "
                     "no second attempt may start"
                 )
             if observation.status is ProcessStatus.UNKNOWN:

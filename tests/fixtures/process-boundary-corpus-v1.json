@@ -10,15 +10,15 @@
     },
     {
       "scenario_id": "timeout-live",
-      "description": "Die Live-Leseschleife überschreitet das Limit, tötet den Prozess und der Timeout-Fänger übersetzt den internen Abbruch.",
+      "description": "Die Live-Leseschleife überschreitet das Limit, bereinigt die Gruppe begrenzt und der Timeout-Fänger übersetzt den internen Abbruch.",
       "trigger": {"mode": "live", "stdout_chunks": [], "stderr_chunks": [], "returncode": 0, "stall_stream_threads": true},
-      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex timed out after 1s."}, {"type": "TimeoutExpired", "message": "Command '['provider-double', '--scenario', 'timeout-live']' timed out after 1 seconds"}], "process_lifecycle": ["Popen", "kill"], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["timeout-expired"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex timed out after 1s."}, {"type": "TimeoutExpired", "message": "Command '['provider-double', '--scenario', 'timeout-live']' timed out after 1 seconds"}], "process_lifecycle": ["Popen", "communicate"], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["timeout-expired"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
     },
     {
       "scenario_id": "agent-output-error-run",
       "description": "Der Adapter lehnt die vollständig gelesene Providerhülle ab; der Fänger ergänzt den Exitcode und wirft denselben Fehler weiter.",
       "trigger": {"mode": "run", "stdout_chunks": ["{\"status\":\"ERROR\"}\n"], "stderr_chunks": ["Ablehnung vollständig\n"], "returncode": 9, "validate_error": "provider rejected envelope"},
-      "expected": {"output": null, "error_chain": [{"type": "AgentOutputError", "message": "provider rejected envelope"}], "error_exit_code": 9, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "7b22737461747573223a224552524f52227d0a", "stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e6469670a", "validated_stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e646967", "catcher_ids": ["agent-output-error"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+      "expected": {"output": null, "error_chain": [{"type": "AgentOutputError", "message": "provider rejected envelope"}], "error_exit_code": 9, "process_lifecycle": ["Popen", "communicate"], "open_processes": 0, "stdout_bytes_hex": "7b22737461747573223a224552524f52227d0a", "stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e6469670a", "validated_stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e646967", "catcher_ids": ["agent-output-error"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
     },
     {
       "scenario_id": "queue-empty-live",
@@ -42,7 +42,7 @@
       "scenario_id": "cleanup-error-run",
       "description": "Der synchrone Doppelgänger endet und liefert die Ausgabe vollständig; der abschließende Adapter-Cleanup-Fehler wird gefangen.",
       "trigger": {"mode": "run", "stdout_chunks": ["Erfolg trotz Cleanup\n"], "stderr_chunks": [], "returncode": 0, "cleanup_error": "cleanup failed"},
-      "expected": {"output": "Erfolg trotz Cleanup", "error_chain": [], "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "4572666f6c672074726f747a20436c65616e75700a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["cleanup-exception"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+      "expected": {"output": "Erfolg trotz Cleanup", "error_chain": [], "process_lifecycle": ["Popen", "communicate"], "open_processes": 0, "stdout_bytes_hex": "4572666f6c672074726f747a20436c65616e75700a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["cleanup-exception"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
     },
     {
       "scenario_id": "unregistered-provider",
@@ -78,13 +78,13 @@
       "scenario_id": "nonzero-exit-run",
       "description": "Der synchrone Doppelgänger liefert beide Ausgabekanäle vollständig und ein Fehlercode bindet die stderr-Ablehnung.",
       "trigger": {"mode": "run", "stdout_chunks": ["Fallback-Ausgabe\n"], "stderr_chunks": ["Provider fehlgeschlagen\n"], "returncode": 7},
-      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "Provider fehlgeschlagen"}], "error_exit_code": 7, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "46616c6c6261636b2d417573676162650a", "stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e0a", "validated_stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "Provider fehlgeschlagen"}], "error_exit_code": 7, "process_lifecycle": ["Popen", "communicate"], "open_processes": 0, "stdout_bytes_hex": "46616c6c6261636b2d417573676162650a", "stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e0a", "validated_stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
     },
     {
       "scenario_id": "empty-output-run",
       "description": "Nur Whitespace wird vollständig gelesen und danach als leere Providerantwort abgelehnt.",
       "trigger": {"mode": "run", "stdout_chunks": [" \n"], "stderr_chunks": [], "returncode": 0},
-      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex returned empty output."}], "error_exit_code": 0, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "200a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex returned empty output."}], "error_exit_code": 0, "process_lifecycle": ["Popen", "communicate"], "open_processes": 0, "stdout_bytes_hex": "200a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
     },
     {
       "scenario_id": "dry-run-rejected",

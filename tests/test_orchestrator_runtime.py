@@ -4,12 +4,15 @@ import hashlib
 import json
 import os
 import subprocess
+import signal
+import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import agent_runtime
+import provider_process
 import orchestrator
 import pytest
 import workflow_audit_projection
@@ -909,7 +912,7 @@ def test_crashed_provider_ended_resumes_with_next_attempt(
     repository, driver, state, measured, bootstrap, started = (
         _open_crashed_provider_attempt(tmp_path, role)
     )
-    process = subprocess.Popen(("sleep", "60"))
+    process = subprocess.Popen(("sleep", "60"), start_new_session=True)
     try:
         record_process_start(started[2], started[1].effect_key, process.pid)
     finally:
@@ -928,6 +931,12 @@ def test_crashed_provider_ended_resumes_with_next_attempt(
         and item.payload.phase == "failed"
     ]
     assert len(failures) == 1 and failures[0].failure_kind == "process"
+    effects = [
+        item.payload for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, SideEffectPayload)
+        and item.payload.effect_key == started[1].effect_key
+    ]
+    assert [effect.phase for effect in effects] == ["intent", "result"]
 
 
 @pytest.mark.parametrize("role", ("codex", "claude"))
@@ -937,7 +946,7 @@ def test_resume_loop_dispatches_next_provider_attempt_in_same_invocation(
     repository, driver, state, measured, bootstrap, started = (
         _open_crashed_provider_attempt(tmp_path, role)
     )
-    process = subprocess.Popen(("sleep", "60"))
+    process = subprocess.Popen(("sleep", "60"), start_new_session=True)
     try:
         record_process_start(started[2], started[1].effect_key, process.pid)
     finally:
@@ -986,7 +995,7 @@ def test_crashed_provider_still_running_halts_with_pid(
     repository, driver, state, _measured, _bootstrap, started = (
         _open_crashed_provider_attempt(tmp_path, role)
     )
-    process = subprocess.Popen(("sleep", "60"))
+    process = subprocess.Popen(("sleep", "60"), start_new_session=True)
     try:
         record_process_start(started[2], started[1].effect_key, process.pid)
         with pytest.raises(SideEffectReconciliationError, match=f"PID {process.pid} is still running"):
@@ -999,6 +1008,82 @@ def test_crashed_provider_still_running_halts_with_pid(
     finally:
         process.kill()
         process.wait()
+
+
+def test_crashed_provider_leader_exit_with_live_child_blocks_second_start(
+    tmp_path: Path,
+) -> None:
+    repository, driver, state, measured, bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, "codex")
+    )
+    code = (
+        "import subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); "
+        "print(child.pid,flush=True); time.sleep(60)"
+    )
+    process = subprocess.Popen(
+        (sys.executable, "-u", "-c", code), stdout=subprocess.PIPE,
+        start_new_session=True, text=True,
+    )
+    assert process.stdout is not None
+    child_pid = int(process.stdout.readline())
+    identity = provider_process.capture_process_identity(process.pid)
+    assert identity is not None
+    try:
+        record_process_start(started[2], started[1].effect_key, process.pid)
+        process.kill()
+        process.wait(timeout=2)
+        assert provider_process._proc_stat(child_pid) is not None
+        with pytest.raises(SideEffectReconciliationError, match="still running"):
+            driver._start_provider_attempt(
+                measured, bootstrap, operation_instance="request:1",
+                durable_response_path=repository / ".orchestrator" / "answer.json",
+            )
+        attempts = [
+            item for item in ArtifactStore(repository, state.run_id).load_chain()
+            if isinstance(item.payload, ProviderAttemptPayload)
+        ]
+        assert len(attempts) == 1
+    finally:
+        provider_process.signal_process_group(identity, signal.SIGKILL)
+        process.stdout.close()
+
+
+def test_keyboard_interrupt_cleanup_reconciles_one_provider_intent_result(
+    tmp_path: Path,
+) -> None:
+    repository, driver, state, _measured, _bootstrap, started = (
+        _open_crashed_provider_attempt(tmp_path, "codex")
+    )
+
+    def interrupt(pid: int) -> None:
+        record_process_start(started[2], started[1].effect_key, pid)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        agent_runtime._run_agent_process(
+            object(), [sys.executable, "-c", "import time; time.sleep(60)"], None,
+            config=agent_runtime.OrchestratorConfig(repo_root=repository),
+            env=os.environ.copy(), execution_root=repository,
+            timeout_seconds=None, agent_key="codex", process_started=interrupt,
+        )
+    assert provider_process.observe_process(
+        started[2], started[1].effect_key,
+    ).status is provider_process.ProcessStatus.ENDED
+    assert driver._reconcile_pending_side_effects(state) is True
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    effects = [
+        item.payload for item in chain
+        if isinstance(item.payload, SideEffectPayload)
+        and item.payload.effect_key == started[1].effect_key
+    ]
+    assert [effect.phase for effect in effects] == ["intent", "result"]
+    attempts = [
+        item.payload for item in chain
+        if isinstance(item.payload, ProviderAttemptPayload)
+    ]
+    assert [attempt.phase for attempt in attempts] == ["started", "failed"]
+    assert attempts[-1].failure_kind == "process"
 
 
 @pytest.mark.parametrize("role", ("codex", "claude"))
