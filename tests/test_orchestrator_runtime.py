@@ -988,6 +988,161 @@ def test_resume_loop_dispatches_next_provider_attempt_in_same_invocation(
     assert attempts == [2]
 
 
+@pytest.mark.parametrize(
+    ("step", "partial_edit"),
+    (
+        (WorkflowStep.CODEX_PLAN, False),
+        (WorkflowStep.CODEX_PLAN_REVISION, False),
+        (WorkflowStep.CODEX_IMPLEMENTATION, False),
+        (WorkflowStep.CODEX_CORRECTION, False),
+        (WorkflowStep.CODEX_CORRECTION, True),
+    ),
+)
+def test_ended_codex_attempt_resumes_through_native_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    step: WorkflowStep, partial_edit: bool,
+) -> None:
+    branch = "feature/native-crashed-dispatch"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    state = init_workflow_state(
+        run_id="native-crashed-dispatch", task_file=str(task), branch=branch,
+        branch_base=head, first_slice_start_commit=head, slice_count=1,
+        task_digest=digest, task_scope_patterns=("src/runtime.py",),
+        target_branch=branch,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    finding = FindingRecord(
+        finding_id="C-01", finding_class=FindingClass.FINDING,
+        status=FindingStatus.OPEN, summary="Correct runtime.",
+        acceptance_test="Runtime is corrected.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    if step in {WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION}:
+        state = state.with_current_step(step)
+    else:
+        state = state.complete_current_work_unit().start_work_unit(
+            slice_id=1, kind=WorkUnitKind.SLICE, step=step,
+        ).bind_current_slice_git_boundary(
+            start_commit=head, scope_paths=("src/runtime.py",),
+            start_fingerprint="c" * 64,
+        )
+    if step is WorkflowStep.CODEX_CORRECTION:
+        state = state._replace_current_unit(replace(
+            state.current_work_unit, open_findings=("C-01",),
+        ))
+        (repository / "src").mkdir()
+        (repository / "src" / "runtime.py").write_text(
+            "initial delta\n", encoding="utf-8",
+        )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=((finding,) if step is WorkflowStep.CODEX_CORRECTION else ()),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={"codex": SimpleNamespace(model="test", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    if step is WorkflowStep.CODEX_CORRECTION:
+        monkeypatch.setattr(
+            driver, "authoritative_native_findings",
+            lambda _state, _findings: (finding,),
+        )
+    engine = WorkflowEngine(driver)
+    context = WorkflowContext("Implement runtime.", "plan", "slice")
+    _, _, invocation, _, _ = engine._prepare_agent_dispatch(state, context, history)
+    assert invocation.native_request is not None
+    driver._persist_native_agent_request_bundle(invocation)
+    fingerprint = invocation.native_request.bound_context.context.current_fingerprint
+    measurement = measure_provider_input(
+        PreparedProviderInput(
+            command=("provider-double",),
+            stdin_text=invocation.native_request.canonical_json,
+            components=(ProviderInputComponent(
+                "stdin_prompt", invocation.native_request.canonical_json,
+            ),),
+        ),
+        provider="codex", role="codex", operation=step.value,
+        binding_fingerprint=fingerprint,
+        policy=default_provider_input_budget_policy(),
+    )
+    bootstrap = driver._persist_provider_bootstrap(measurement)
+    started = driver._start_provider_attempt(
+        measurement, bootstrap, operation_instance="request:1",
+        durable_response_path=driver._native_codex_response_path(invocation),
+    )
+    process = subprocess.Popen(("sleep", "60"), start_new_session=True)
+    try:
+        record_process_start(started[2], started[1].effect_key, process.pid)
+    finally:
+        process.kill()
+        process.wait()
+    if partial_edit:
+        (repository / "src" / "runtime.py").write_text(
+            "initial delta\npartial correction\n", encoding="utf-8",
+        )
+    assert driver._reconcile_pending_side_effects(state) is True
+    reconciled_chain = ArtifactStore(repository, state.run_id).load_chain()
+    assert [
+        item.payload.phase for item in reconciled_chain
+        if isinstance(item.payload, SideEffectPayload)
+        and item.payload.effect_key == started[1].effect_key
+    ] == ["intent", "result"]
+    assert [
+        item.payload.result for item in reconciled_chain
+        if isinstance(item.payload, SideEffectPayload)
+        and item.payload.effect_key == started[1].effect_key
+        and item.payload.phase == "result"
+    ] == ["failed:process"]
+    starts: list[int] = []
+
+    def fake_invoke(next_invocation: CodexInvocation) -> None:
+        assert next_invocation.native_request is not None
+        driver._persist_native_agent_request_bundle(next_invocation)
+        current_fingerprint = (
+            next_invocation.native_request.bound_context.context.current_fingerprint
+        )
+        next_measurement = measure_provider_input(
+            PreparedProviderInput(
+                command=("provider-double",),
+                stdin_text=next_invocation.native_request.canonical_json,
+                components=(ProviderInputComponent(
+                    "stdin_prompt", next_invocation.native_request.canonical_json,
+                ),),
+            ),
+            provider="codex", role="codex", operation=step.value,
+            binding_fingerprint=current_fingerprint,
+            policy=default_provider_input_budget_policy(),
+        )
+        next_bootstrap = driver._persist_provider_bootstrap(next_measurement)
+        next_started = driver._start_provider_attempt(
+            next_measurement, next_bootstrap,
+            operation_instance=f"request:{next_invocation.request_sequence}",
+            durable_response_path=driver._native_codex_response_path(next_invocation),
+        )
+        starts.append(next_started[0].payload.attempt_number)
+        return None
+
+    monkeypatch.setattr(driver, "invoke_codex", fake_invoke)
+    resumed_state, _ = engine._run_codex(state, context, history)
+    if partial_edit:
+        assert starts == []
+        assert resumed_state.current_work_unit.request_sequence == 2
+        resumed_state, _ = engine._run_codex(resumed_state, context, history)
+    assert starts == [1 if partial_edit else 2]
+    assert resumed_state.current_work_unit.request_sequence == (2 if partial_edit else 1)
+
+
 @pytest.mark.parametrize("role", ("codex", "claude"))
 def test_crashed_provider_still_running_halts_with_pid(
     tmp_path: Path, role: str,

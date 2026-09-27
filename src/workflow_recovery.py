@@ -42,6 +42,7 @@ from artifact_models import (
 from artifact_replay import (
     ArtifactReplayError,
     ArtifactReplayResult,
+    ReplayedSideEffect,
     project_workflow_state,
     replay_artifacts,
 )
@@ -119,6 +120,53 @@ logger = logging.getLogger(__name__)
 
 ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
 _IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
+
+
+def _completed_implementer_responses(
+    chain: tuple[ArtifactRecord, ...],
+    effects: tuple[ReplayedSideEffect, ...],
+    invocation: ImplementerInvocation,
+) -> tuple[ReplayedSideEffect, ...]:
+    """Distinguish terminal provider failures from durable raw responses."""
+    responses = tuple(
+        item for item in effects
+        if item.result is not None
+        and re.fullmatch(r"[0-9a-f]{64}", item.result) is not None
+    )
+    failures = tuple(
+        item for item in effects
+        if item.result is not None and item.result.startswith("failed:")
+    )
+    if any(
+        item.result is not None and item not in responses and item not in failures
+        for item in effects
+    ) or any(
+        re.fullmatch(
+            r"failed:(?:quota|network|timeout|permission|auth|binary|output|process|runtime)",
+            item.result,
+        ) is None
+        for item in failures
+    ):
+        raise WorkflowExecutionError(
+            "native agent raw-response ledger has an invalid content digest"
+        )
+    for item in failures:
+        if not any(
+            isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.phase == "failed"
+            and record.payload.provider is _IMPLEMENTER_ARTIFACT_ROLE
+            and record.payload.work_unit_id == str(invocation.work_unit_id)
+            and record.payload.operation == invocation.step.value
+            and record.payload.input_digest == item.operation[2]
+            and record.payload.binding_fingerprint == item.operation[3]
+            and record.payload.attempt_number == int(item.operation[5])
+            and item.result == f"failed:{record.payload.failure_kind}"
+            for record in chain
+        ):
+            raise WorkflowExecutionError(
+                "native agent raw-response failure lacks its terminal attempt"
+            )
+    return responses
 
 
 @dataclass(frozen=True)
@@ -1276,19 +1324,9 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "native agent raw-response binding does not match its persisted request"
             )
-        provider_effects = tuple(
-            item
-            for item in related_effects
-            if item.result is not None
-            and re.fullmatch(r"[0-9a-f]{64}", item.result) is not None
+        provider_effects = _completed_implementer_responses(
+            chain, related_effects, invocation
         )
-        if any(
-            item.result is not None and item not in provider_effects
-            for item in related_effects
-        ):
-            raise WorkflowExecutionError(
-                "native agent raw-response ledger has an invalid content digest"
-            )
         if not provider_effects:
             return None
         if len(provider_effects) != 1:

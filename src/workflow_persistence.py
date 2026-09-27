@@ -40,6 +40,7 @@ from artifact_models import (
     GateTransitionPayload,
     InvocationFailurePayload,
     ProviderContentPayload,
+    ProviderAttemptPayload,
     QuotaPausePayload,
     RecordType,
     ReviewAnchor,
@@ -861,6 +862,7 @@ class WorkflowPersistence:
                 )
             previous = path.read_text(encoding="utf-8")
             if previous != content:
+                self._recompose_failed_correction_request(invocation, previous, content)
                 self._raise_request_binding_difference(previous, content)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -874,6 +876,7 @@ class WorkflowPersistence:
                 )
             previous = path.read_text(encoding="utf-8")
             if previous != content:
+                self._recompose_failed_correction_request(invocation, previous, content)
                 self._raise_request_binding_difference(previous, content)
         if path.read_text(encoding="utf-8") != content:
             raise WorkflowExecutionError(
@@ -881,24 +884,79 @@ class WorkflowPersistence:
             )
 
     @staticmethod
-    def _raise_request_binding_difference(previous: str, current: str) -> None:
-        def binding(document_text: str) -> str:
-            try:
-                wrapper = json.loads(document_text)
-                request = json.loads(wrapper["canonical_request"])
-                value = request["current_fingerprint"]
-            except (KeyError, TypeError, json.JSONDecodeError) as exc:
-                raise WorkflowExecutionError(
-                    "persisted native agent request binding is invalid"
-                ) from exc
-            if not isinstance(value, str):
-                raise WorkflowExecutionError(
-                    "persisted native agent request binding is invalid"
-                )
-            return value
+    def _request_binding(document_text: str) -> str:
+        try:
+            wrapper = json.loads(document_text)
+            request = json.loads(wrapper["canonical_request"])
+            value = request["current_fingerprint"]
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise WorkflowExecutionError(
+                "persisted native agent request binding is invalid"
+            ) from exc
+        if not isinstance(value, str):
+            raise WorkflowExecutionError(
+                "persisted native agent request binding is invalid"
+            )
+        return value
 
-        previous_binding = binding(previous)
-        current_binding = binding(current)
+    def _recompose_failed_correction_request(
+        self, invocation: object, previous: str, current: str
+    ) -> None:
+        if invocation.step is not WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- fixed implementer step
+            return
+        previous_binding = self._request_binding(previous)
+        current_binding = self._request_binding(current)
+        if previous_binding == current_binding:
+            return
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            return
+        chain = bridge.store.current_chain()
+        replay = replay_artifacts(chain, state.run_id)
+        effects = tuple(
+            item for item in replay.side_effects
+            if item.effect_class == "provider_start"
+            and item.work_unit_id == str(invocation.work_unit_id)
+            and len(item.operation) == 7
+            and item.operation[0] == Role.CODEX.value  # allowlist:provider -- fixed implementer role
+            and item.operation[1] == invocation.step.value
+            and item.operation[4] in {
+                f"request:{invocation.request_sequence}",
+                f"round:{invocation.request_sequence}",
+            }
+        )
+        if not effects or any(
+            item.operation[3] != previous_binding
+            or item.result is None
+            or not item.result.startswith("failed:")
+            for item in effects
+        ):
+            return
+        for item in effects:
+            if not any(
+                isinstance(record.payload, ProviderAttemptPayload)
+                and record.payload.phase == "failed"
+                and record.payload.provider is Role.CODEX  # allowlist:provider -- fixed implementer role
+                and record.payload.work_unit_id == str(invocation.work_unit_id)
+                and record.payload.operation == invocation.step.value
+                and record.payload.input_digest == item.operation[2]
+                and record.payload.binding_fingerprint == previous_binding
+                and record.payload.attempt_number == int(item.operation[5])
+                and item.result == f"failed:{record.payload.failure_kind}"
+                for record in chain
+            ):
+                return
+        raise ProviderRequestRoundRequired(
+            binding_fingerprint=current_binding,
+            previous_input_digest=hashlib.sha256(previous.encode("utf-8")).hexdigest(),
+            current_input_digest=hashlib.sha256(current.encode("utf-8")).hexdigest(),
+        )
+
+    @classmethod
+    def _raise_request_binding_difference(cls, previous: str, current: str) -> None:
+        previous_binding = cls._request_binding(previous)
+        current_binding = cls._request_binding(current)
         if previous_binding != current_binding:
             raise WorkflowExecutionError(
                 "native agent request immutable binding differs: "
