@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -141,9 +143,9 @@ class CompletionRun:
 def completion(root: Path, *, merge: bool = True,
                archive_pattern: str | None = None,
                run_id: str = "run", branch: str = "feature/task") -> CompletionRun:
-    return CompletionRun(root, MemoryBridge(), RunProfilePayload(
-        RoleProfilePayload("implementer", "high"),
-        RoleProfilePayload("reviewer", "high"),
+    return CompletionRun(root, MemoryBridge(), bound_run_profile(
+        bound_role_profile("implementer", "high"),
+        bound_role_profile("reviewer", "high"),
         merge_completed_branch=merge, base_branch="main",
         archive_run_directory=archive_pattern,
     ), run_id, branch)
@@ -913,7 +915,7 @@ def test_legacy_profile_completion_does_not_start_post_merge_hook(
     hook.chmod(0o755)
     run = completion(root, merge=merge)
     legacy_document = artifact_payload_document(
-        RunProfilePayload(
+        bound_run_profile(
             run.profile.implementer, run.profile.reviewer,
             merge_completed_branch=merge, base_branch="main",
             post_merge_hook_enabled=False,

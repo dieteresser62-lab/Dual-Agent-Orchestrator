@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -15,7 +16,7 @@ from agent_config import AgentSettings
 from agent_roles import AgentRoleName, AgentSlot
 from role_binding import binding_for_role
 from role_certification import (
-    CertificationError, CertificationErrorCode, load_role_certifications,
+    CertificationError, CertificationErrorCode, CertificationTable, load_role_certifications,
 )
 
 
@@ -80,6 +81,23 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     assert table.entries[0].probe_profile["model"] == "gpt-6-sol"
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
     assert not hasattr(table.entries[0], "profile")
+
+
+def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> None:
+    baseline = load_role_certifications().entries
+    aliases = CertificationTable((
+        replace(baseline[0], provider="one", manufacturer="vendor-a"),
+        replace(baseline[1], provider="two", manufacturer="vendor-b"),
+        replace(baseline[2], provider="three", manufacturer="vendor-b"),
+    ))
+    selected = {AgentSlot.IMPLEMENTER: "one", AgentSlot.REVIEWER: "two", AgentSlot.FINAL_REVIEWER: "three"}
+    assert set(aliases.require_occupancy(selected)) == set(AgentSlot)
+    same_maker = CertificationTable((aliases.entries[0], replace(aliases.entries[1], manufacturer="vendor-a"), aliases.entries[2]))
+    with pytest.raises(CertificationError, match="slot=reviewer provider=two"):
+        same_maker.require_occupancy(selected)
+    missing = {**selected, AgentSlot.FINAL_REVIEWER: "not-qualified"}
+    with pytest.raises(CertificationError, match="slot=final_reviewer provider=not-qualified"):
+        aliases.require_occupancy(missing)
 
 
 def test_every_evidence_node_id_exists_in_the_test_suite() -> None:

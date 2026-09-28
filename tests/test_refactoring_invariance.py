@@ -414,6 +414,7 @@ def provider_free_record_types(
         cwd=repository,
         environ={},
     )
+    args.scripted_provider_identity = True
 
     patch = pytest.MonkeyPatch()
 

@@ -119,6 +119,13 @@ def test_registry_constructs_only_native_adapters() -> None:
     assert type(registry["claude"]) is NativeClaudeReviewAdapter
 
 
+def test_toml_usd_setting_is_emitted_in_claude_command() -> None:
+    settings = AgentSettings("claude", "claude", "opus", None, "high", 5.0)
+    adapter = NativeClaudeReviewAdapter(settings)
+    prepared = adapter.prepare_native_provider_input(_review_bundle())
+    assert prepared.command[prepared.command.index("--max-budget-usd") + 1] == "5.0"
+
+
 def test_import_does_not_resolve_settings_or_construct_registry() -> None:
     root = Path(__file__).resolve().parents[1]
     code = (

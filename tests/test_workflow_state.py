@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_state_profile
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -514,12 +516,19 @@ def test_protocol_binding_roundtrips_native_implementer_result_transport() -> No
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
 
 
+def test_protocol_binding_roundtrips_full_final_slot_profile() -> None:
+    profile = bound_state_profile("sonnet", "xhigh", provider="claude", binary="/opt/claude", max_budget_usd=10.0, manufacturer="anthropic", certification_sha256="a" * 64)
+    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3", final_reviewer_profile=profile)
+    assert ProtocolBinding.from_dict(binding.to_dict()) == binding
+    assert binding.to_dict()["final_reviewer_profile"]["certification_sha256"] == "a" * 64
+
+
 def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
         "3",
-        implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-        reviewer_profile=AgentProfileBinding("sonnet", "high"),
+        implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+        reviewer_profile=bound_state_profile("sonnet", "high"),
     )
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
 
@@ -528,7 +537,25 @@ def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
     with pytest.raises(WorkflowStateValidationError, match="implementer_profile"):
         ProtocolBinding.from_dict(document)
     with pytest.raises(WorkflowStateValidationError, match="unsupported"):
-        AgentProfileBinding("sonnet", "extreme")
+        bound_state_profile("sonnet", "extreme")
+
+
+@pytest.mark.parametrize("field", (
+    "provider", "binary", "timeout_seconds", "manufacturer",
+    "capability_sha256", "transport_sha256", "rights_sha256",
+    "policy_sha256", "certification_sha256", "binary_identity",
+    "binary_identity_sha256",
+))
+def test_state_profile_reader_rejects_absent_or_null_binding(field: str) -> None:
+    valid = bound_state_profile("opus", "high").to_dict()
+    missing = dict(valid)
+    missing.pop(field)
+    with pytest.raises(WorkflowStateValidationError):
+        AgentProfileBinding.from_dict(missing, "reviewer")
+    null = dict(valid)
+    null[field] = None
+    with pytest.raises(WorkflowStateValidationError):
+        AgentProfileBinding.from_dict(null, "reviewer")
 
 
 @pytest.mark.parametrize(

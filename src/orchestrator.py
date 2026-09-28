@@ -326,6 +326,18 @@ class ProductionWorkflowDriver:
         self._side_effect_boundary_observer = side_effect_boundary_observer
         self._reported_code_version_changes: set[tuple[str, str]] = set()
 
+    def _adapter_for_slot(self, slot: str):
+        if slot in self.agents:
+            return self.agents[slot]
+        binding = self.active_state.protocol_binding if self.active_state is not None else None
+        if binding is None:
+            raise WorkflowExecutionError(f"slot={slot}: no bound agent profile")
+        profile = getattr(binding, f"{slot}_profile")
+        try:
+            return self.agents[profile.provider]
+        except KeyError as exc:
+            raise WorkflowExecutionError(f"slot={slot} provider={profile.provider}: adapter is missing") from exc
+
     def _recovery_boundary(self) -> WorkflowRecovery:
         """Bind driver-owned state to one recovery operation explicitly."""
 
@@ -1181,7 +1193,7 @@ class ProductionWorkflowDriver:
                 "native Codex invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents["codex"]
+        native_adapter = self._adapter_for_slot("implementer")
         if not isinstance(native_adapter, NativeCodexAdapter):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
@@ -1616,7 +1628,7 @@ class ProductionWorkflowDriver:
                 "native Claude invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents["claude"]
+        native_adapter = self._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
         if not isinstance(native_adapter, NativeClaudeReviewAdapter):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"

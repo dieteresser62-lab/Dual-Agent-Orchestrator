@@ -10,6 +10,8 @@ from typing import TypeVar
 from agent_roles import AgentRoleName
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from role_occupancy import provider_roles
+import role_occupancy
+from agent_roles import AgentSlot
 from workflow_state import WorkflowStep
 
 
@@ -155,13 +157,11 @@ class ProviderInputBudgetRule:
     max_bytes: int
 
     def __post_init__(self) -> None:
-        if self.provider not in PROVIDER_OPERATIONS:
+        if not isinstance(self.provider, str) or not self.provider.strip():
             raise ProviderInputBudgetError(f"unknown provider: {self.provider}")
-        if self.role != PROVIDER_ROLES[self.provider]:
-            raise ProviderInputBudgetError(
-                f"unsupported provider/role combination: {self.provider}/{self.role}"
-            )
-        if self.operation not in PROVIDER_OPERATIONS[self.provider]:
+        if self.role not in _ROLE_OPERATIONS:
+            raise ProviderInputBudgetError(f"unknown role: {self.role}")
+        if self.operation not in _ROLE_OPERATIONS[AgentRoleName(self.role)]:
             raise ProviderInputBudgetError(
                 f"unknown operation for {self.provider}: {self.operation}"
             )
@@ -177,15 +177,21 @@ class ProviderInputBudgetRule:
 @dataclass(frozen=True)
 class ProviderInputBudgetPolicy:
     rules: tuple[ProviderInputBudgetRule, ...]
+    occupancy: tuple[tuple[str, str, str], ...] = (("implementer", "implementer", "codex"), ("reviewer", "reviewer", "claude"), ("final_reviewer", "reviewer", "claude"))
 
     def __post_init__(self) -> None:
         keys = tuple(rule.key for rule in self.rules)
         if len(keys) != len(set(keys)):
             raise ProviderInputBudgetError("provider input budget rules must be unique")
+        slots = {slot: (role, provider) for slot, role, provider in self.occupancy}
+        if set(slots) != {"implementer", "reviewer", "final_reviewer"} or slots["implementer"][0] != "implementer" or slots["reviewer"][0] != "reviewer" or slots["final_reviewer"][0] != "reviewer":
+            raise ProviderInputBudgetError("invalid provider input budget occupancy")
         expected = {
-            (provider, PROVIDER_ROLES[provider], operation)
-            for provider, operations in PROVIDER_OPERATIONS.items()
-            for operation in operations
+            (slots["implementer"][1], "implementer", operation)
+            for operation in _ROLE_OPERATIONS[AgentRoleName.IMPLEMENTER]
+        } | {
+            (slots["reviewer"][1] if operation != WorkflowStep.REVIEWER_FINAL_REVIEW.value else slots["final_reviewer"][1], "reviewer", operation)
+            for operation in _ROLE_OPERATIONS[AgentRoleName.REVIEWER]
         }
         actual = set(keys)
         if actual != expected:
@@ -237,7 +243,8 @@ def default_provider_input_budget_policy() -> ProviderInputBudgetPolicy:
             )
             for provider, operations in sorted(PROVIDER_OPERATIONS.items())
             for operation in sorted(operations)
-        )
+        ),
+        tuple((slot.value, (AgentRoleName.IMPLEMENTER if slot is AgentSlot.IMPLEMENTER else AgentRoleName.REVIEWER).value, provider) for slot, provider in role_occupancy.current_pre_toml_occupancy().items()),
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile
+
 import hashlib
 import json
 import os
@@ -223,11 +225,11 @@ def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
         fingerprint_kind=identity.fingerprint.kind,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload(
+        bound_run_profile(
+            bound_role_profile(
                 binding.implementer_profile.model, binding.implementer_profile.effort
             ),
-            RoleProfilePayload(
+            bound_role_profile(
                 binding.reviewer_profile.model, binding.reviewer_profile.effort
             ),
         ),
@@ -727,7 +729,7 @@ def _final_review_test_state(state: WorkflowState) -> WorkflowState:
 
 
 def _args(repository: Path, task: Path):
-    return parse_args(
+    args = parse_args(
         [
             "--task-file", str(task),
             "--test-command", "python3 -c 'print(\"ok\")'",
@@ -738,6 +740,8 @@ def _args(repository: Path, task: Path):
         cwd=repository,
         environ={},
     )
+    args.scripted_provider_identity = True
+    return args
 
 
 def _write_task(path: Path, branch: str, *scope: str) -> None:
@@ -1781,6 +1785,9 @@ def test_new_watch_task_switches_to_existing_target_and_uses_merge_base_as_ancho
     args.agent_settings["claude"] = replace(
         args.agent_settings["claude"], model="opus", effort="medium"
     )
+    args.slot_settings["implementer"] = args.agent_settings["codex"]
+    args.slot_settings["reviewer"] = args.agent_settings["claude"]
+    args.slot_settings["final_reviewer"] = args.agent_settings["claude"]
     args.watch_run_id = "watch-existing-target"
     captured: dict[str, object] = {}
     real_fresh_state = orchestrator._fresh_state
@@ -1805,12 +1812,9 @@ def test_new_watch_task_switches_to_existing_target_and_uses_merge_base_as_ancho
         repository, "merge-base", "master", "feature/inbox-target"
     )
     assert state.current_slice.start_commit == target_head
-    assert state.protocol_binding.implementer_profile == AgentProfileBinding(
-        "gpt-profile", "high"
-    )
-    assert state.protocol_binding.reviewer_profile == AgentProfileBinding(
-        "opus", "medium"
-    )
+    assert (state.protocol_binding.implementer_profile.model, state.protocol_binding.implementer_profile.effort) == ("gpt-profile", "high")
+    assert (state.protocol_binding.reviewer_profile.model, state.protocol_binding.reviewer_profile.effort) == ("opus", "medium")
+    assert state.protocol_binding.final_reviewer_profile.provider == "claude"
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
 
 
@@ -1919,16 +1923,16 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
         run_id="profile-resume",
         repository_root=repository,
         task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
-        implementer_profile=AgentProfileBinding("gpt-persisted", "high"),
-        reviewer_profile=AgentProfileBinding("opus-persisted", "medium"),
+        implementer_profile=bound_state_profile("gpt-persisted", "high"),
+        reviewer_profile=bound_state_profile("opus-persisted", "medium"),
     )
 
     resumed = _args(repository, task)
     orchestrator._apply_resumed_agent_profiles(resumed, state)
-    assert resumed.agent_settings["codex"].model == "gpt-persisted"
-    assert resumed.agent_settings["codex"].effort == "high"
-    assert resumed.agent_settings["claude"].model == "opus-persisted"
-    assert resumed.agent_settings["claude"].effort == "medium"
+    assert resumed.slot_settings["implementer"].model == "gpt-persisted"
+    assert resumed.slot_settings["implementer"].effort == "high"
+    assert resumed.slot_settings["reviewer"].model == "opus-persisted"
+    assert resumed.slot_settings["reviewer"].effort == "medium"
 
     mismatched = parse_args(
         ["--task-file", str(task), "--implementer-model", "terra"],
@@ -1937,6 +1941,23 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
     )
     with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF"):
         orchestrator._apply_resumed_agent_profiles(mismatched, state)
+
+
+def test_resume_rejects_changed_toml_binary_before_provider(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/profile-binary-resume")
+    task = tmp_path / "profile-binary-resume.md"
+    _write_task(task, "feature/profile-binary-resume", "src/new.py")
+    state = orchestrator._fresh_state(
+        task_file=task, run_id="profile-binary-resume", repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+        implementer_profile=bound_state_profile("gpt-6-sol", "high", provider="codex", binary="codex"),
+        reviewer_profile=bound_state_profile("opus", "high", provider="claude", binary="claude"),
+        final_reviewer_profile=bound_state_profile("opus", "high", provider="claude", binary="claude"),
+    )
+    (repository / "orchestrator.toml").write_text('[agent_profiles.implementation]\nbinary = "/changed/codex"\n', encoding="utf-8")
+    changed = _args(repository, task)
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*slot=implementer"):
+        orchestrator._apply_resumed_agent_profiles(changed, state)
 
 
 def test_run_records_exist_before_first_workflow_dispatch(
@@ -1952,6 +1973,9 @@ def test_run_records_exist_before_first_workflow_dispatch(
     args.agent_settings["claude"] = replace(
         args.agent_settings["claude"], model="opus-order", effort="max"
     )
+    args.slot_settings["implementer"] = args.agent_settings["codex"]
+    args.slot_settings["reviewer"] = args.agent_settings["claude"]
+    args.slot_settings["final_reviewer"] = args.agent_settings["claude"]
     observed: dict[str, object] = {}
 
     class DispatchObserved(RuntimeError):
@@ -1996,13 +2020,10 @@ def test_run_records_exist_before_first_workflow_dispatch(
         "IMPLEMENT",
         None,
     )
-    assert observed["profile"] == RunProfilePayload(
-        RoleProfilePayload("gpt-order", "max"),
-        RoleProfilePayload("opus-order", "max"),
-        orchestrator.orchestrator_code_version(),
-        base_branch="master",
-        archive_run_directory="{run_id}",
-    )
+    assert (observed["profile"].implementer.model, observed["profile"].implementer.effort) == ("gpt-order", "max")
+    assert (observed["profile"].reviewer.model, observed["profile"].reviewer.effort) == ("opus-order", "max")
+    assert observed["profile"].final_reviewer.provider == "claude"
+    assert observed["profile"].base_branch == "master"
 
 
 def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
@@ -7116,9 +7137,10 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
 
     assert captured["state"].run_id == "new-watch-run"
     assert captured["state"].branch == "feature/new-watch-target"
-    assert captured["state"].protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2, "3"
-    )
+    assert captured["state"].protocol_binding.mode is ProtocolMode.STRUCTURED_V2
+    assert captured["state"].protocol_binding.implementer_profile.provider == "codex"
+    assert captured["state"].protocol_binding.reviewer_profile.provider == "claude"
+    assert captured["state"].protocol_binding.final_reviewer_profile.provider == "claude"
     assert orchestrator.load_workflow_state(
         old_checkpoint,
         allowed_roots=(repository, new_task.parent.resolve()),

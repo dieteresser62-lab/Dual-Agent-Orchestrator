@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import agent_runtime
+import agent_adapters
 import provider_identity
+import workflow_run_setup
 from agent_adapters import CapabilitySpec
+from agent_config import AgentSettings
 from agent_runtime import AgentCompatibilityError, OrchestratorConfig, run_agent
 from provider_identity import capture_provider_identity, executable_candidates
+from state_io import StateSchemaError
+from workflow_state import ProtocolBinding, ProtocolMode, scripted_profile_binding, init_workflow_state
 
 
 def _executable(path: Path, content: bytes) -> Path:
@@ -78,6 +84,74 @@ def _install_script(root: Path, version: str, *, name: str = "codex") -> tuple[P
     link = root / "bin" / name
     link.symlink_to(starter)
     return link, starter, node
+
+
+@pytest.mark.parametrize("mutation", ("unchanged", "symlink", "version", "content", "interpreter", "windows"))
+def test_resume_rechecks_recorded_identity_without_provider_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    link, script, interpreter = _install_script(tmp_path, "0.156.1")
+    monkeypatch.setenv("PATH", str(link.parent))
+    versions = {
+        str(script): "codex-cli 0.156.1",
+        str(interpreter): "v22.23.2",
+    }
+    calls: list[list[str]] = []
+    monkeypatch.setattr(agent_runtime, "run_local_command", _recording_runner(versions, calls))
+    bound = capture_provider_identity(str(link), ("--version",), lambda args: _fake_runner(versions)(args))
+    slots = {}
+    profiles = {}
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        default = scripted_profile_binding(slot)
+        slots[slot] = AgentSettings(default.provider, str(link), default.model, None, default.effort, default.max_budget_usd)
+        profiles[slot] = replace(
+            default, binary=str(link), binary_identity=bound,
+            binary_identity_sha256=bound.digest,
+        )
+    state = init_workflow_state(
+        run_id="identity-resume", task_file="/tmp/task.md", branch="feature/identity",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=profiles["implementer"],
+            reviewer_profile=profiles["reviewer"],
+            final_reviewer_profile=profiles["final_reviewer"],
+        ),
+    )
+
+    def fake_registry(_slots):
+        registry = {}
+        for slot in _slots:
+            adapter = FakeAdapter()
+            adapter.cli_binary = str(link)
+            registry[slot] = adapter
+        return registry
+
+    monkeypatch.setattr(agent_adapters, "build_slot_agent_registry", fake_registry)
+    if mutation == "symlink":
+        alternate = _executable(tmp_path / "package" / "other.js", b"#!/usr/bin/env node\n")
+        link.unlink()
+        link.symlink_to(alternate)
+        versions[str(alternate)] = "codex-cli 0.156.1"
+    elif mutation == "version":
+        versions[str(script)] = "codex-cli 0.156.2"
+    elif mutation == "content":
+        script.write_bytes(b"#!/usr/bin/env node\n// changed\n")
+    elif mutation == "interpreter":
+        interpreter.write_bytes(b"changed node bytes")
+    elif mutation == "windows":
+        monkeypatch.setattr(provider_identity, "_windows_mount_points", lambda: (tmp_path,))
+
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=())
+    if mutation == "unchanged":
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
+        assert args.slot_identities["final_reviewer"] == bound
+        assert args.slot_settings["implementer"].model == profiles["implementer"].model
+    else:
+        with pytest.raises(StateSchemaError, match=r"slot=implementer.*path=.*(drift|preflight failed)"):
+            workflow_run_setup._apply_resumed_agent_profiles(args, state)
+    assert calls if mutation != "windows" else not calls
+    assert all(command[-1] == "--version" or command[-2:] == ["exec", "--help"] for command in calls)
 
 
 def test_two_installations_bind_first_real_script_and_report_both(

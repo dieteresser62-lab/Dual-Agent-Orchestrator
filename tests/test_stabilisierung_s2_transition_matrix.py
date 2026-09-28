@@ -193,6 +193,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "codex_result_transport",
         "implementer_profile",
         "reviewer_profile",
+        "final_reviewer_profile",
     },
     "InvocationFailureRecord": {
         "invocation_id",
@@ -567,11 +568,11 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_audit_projection.py:_attach_record_events': 13,
  'src/orchestrator.py:_load_bound_queue_terminal': 4,
  'src/orchestrator.py:run_pipeline': 16,
- 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 3,
+ 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 16,
  'src/workflow_production.py:_read_production_task': 2,
  'src/workflow_production.py:_prepare_new_watch_task': 1,
  'src/workflow_production.py:_validate_resumed_state': 8,
- 'src/workflow_production.py:_create_production_state': 0,
+ 'src/workflow_production.py:_create_production_state': 2,
  'src/workflow_production.py:_recover_final_review_history': 2,
  'src/workflow_production.py:run_production_workflow': 4,
  'src/workflow_production.py:_run_production_transition_loop': 22,
@@ -917,7 +918,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 17
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 18
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document

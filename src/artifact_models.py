@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 import hashlib
@@ -45,7 +45,8 @@ from rejected_response_shape import (
     rejected_native_response_shape_document,
     rejected_native_response_shape_from_document,
 )
-from role_occupancy import role_for_provider
+from provider_identity import ProviderIdentity
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 
 SCHEMA_VERSION = "3"
 STATE_PROJECTION_REDUCER_VERSION = (
@@ -149,8 +150,12 @@ class Role(StrEnum):
 
 
 def _agent_provider_role_matches(provider: str, role: Role) -> bool:
-    expected = role_for_provider(provider)
-    return expected is not None and role == expected.value
+    return (
+        isinstance(provider, str)
+        and provider in {OPENAI_PROVIDER, ANTHROPIC_PROVIDER}
+        and isinstance(role, Role)
+        and role in {Role.IMPLEMENTER, Role.REVIEWER}
+    )
 
 
 class FindingSeverity(StrEnum):
@@ -235,6 +240,18 @@ class RunIdentityPayload:
 class RoleProfilePayload:
     model: str
     effort: str
+    provider: str
+    binary: str
+    timeout_seconds: int
+    manufacturer: str
+    capability_sha256: str
+    transport_sha256: str
+    rights_sha256: str
+    policy_sha256: str
+    certification_sha256: str
+    binary_identity: ProviderIdentity
+    binary_identity_sha256: str
+    max_budget_usd: float | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.model, "model")
@@ -242,6 +259,22 @@ class RoleProfilePayload:
             raise ArtifactValidationError("model must be canonical")
         if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ArtifactValidationError("effort is unsupported")
+        for label in ("provider", "binary", "manufacturer"):
+            value = getattr(self, label)
+            if not isinstance(value, str) or not value.strip():
+                raise ArtifactValidationError(f"{label} is invalid")
+        for label in ("capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256", "certification_sha256"):
+            value = getattr(self, label)
+            _require_sha256(value, label)
+        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
+            raise ArtifactValidationError("profile timeout is invalid")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise ArtifactValidationError("profile binary identity is invalid")
+        _require_sha256(self.binary_identity_sha256, "binary_identity_sha256")
+        if self.binary_identity_sha256 != self.binary_identity.digest:
+            raise ArtifactValidationError("profile binary identity digest differs")
+        if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
+            raise ArtifactValidationError("profile USD budget is invalid")
 
 
 
@@ -274,6 +307,7 @@ class RunProfilePayload:
     base_branch: str | None = None
     archive_run_directory: str | None = None
     post_merge_hook_enabled: bool = True
+    final_reviewer: RoleProfilePayload = dataclass_field(kw_only=True)
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -282,6 +316,8 @@ class RunProfilePayload:
             raise ArtifactValidationError("implementer profile is invalid")
         if not isinstance(self.reviewer, RoleProfilePayload):
             raise ArtifactValidationError("reviewer profile is invalid")
+        if not isinstance(self.final_reviewer, RoleProfilePayload):
+            raise ArtifactValidationError("final reviewer profile is invalid")
         _require_sha256(
             self.orchestrator_code_version, "orchestrator_code_version"
         )
@@ -2342,6 +2378,9 @@ ArtifactPayload: TypeAlias = (
 def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     """Serialize one payload while preserving its optional-field wire shape."""
     raw = asdict(payload)
+    if isinstance(payload, RunProfilePayload):
+        for slot in ("implementer", "reviewer", "final_reviewer"):
+            raw[slot]["binary_identity"]["interpreter_args"] = list(raw[slot]["binary_identity"]["interpreter_args"])
     if (isinstance(payload, RunProfilePayload)
         and payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION):
         raw.pop("merge_completed_branch", None)
@@ -2619,14 +2658,15 @@ _PAYLOAD_READERS: dict[
             data["audit_report_path"],
         ),
     RecordType.RUN_PROFILE: lambda data: RunProfilePayload(
-            RoleProfilePayload(**data["implementer"]),
-            RoleProfilePayload(**data["reviewer"]),
+            RoleProfilePayload(**{**data["implementer"], "binary_identity": ProviderIdentity.from_dict(data["implementer"]["binary_identity"])}),
+            RoleProfilePayload(**{**data["reviewer"], "binary_identity": ProviderIdentity.from_dict(data["reviewer"]["binary_identity"])}),
             data["orchestrator_code_version"],
             data["reducer_version"],
             data.get("merge_completed_branch", False),
             data.get("base_branch"),
             data.get("archive_run_directory"),
             data.get("post_merge_hook_enabled", False),
+            final_reviewer=RoleProfilePayload(**{**data["final_reviewer"], "binary_identity": ProviderIdentity.from_dict(data["final_reviewer"]["binary_identity"])}),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],

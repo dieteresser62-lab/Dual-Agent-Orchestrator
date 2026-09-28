@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import ast
 import json
 from pathlib import Path
@@ -211,9 +213,9 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
         records,
         revisions,
         "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
     )
     classes: dict[str, FindingSeverity] = {}

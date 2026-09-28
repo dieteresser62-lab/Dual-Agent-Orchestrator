@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -28,6 +29,64 @@ class ProviderIdentity:
     interpreter_real_path: str | None
     interpreter_version: str | None
     interpreter_args: tuple[str, ...] = ()
+    interpreter_sha256: str | None = None
+    kind: str = "verified"
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"verified", "dry_run"}:
+            raise ValueError("provider identity kind is invalid")
+        if not all(isinstance(value, str) and value for value in (self.entry_path, self.real_path, self.version)):
+            raise ValueError("provider identity paths and version are required")
+        if self.sha256 is None:
+            raise ValueError("provider identity requires a binary SHA-256")
+        if self.interpreter_real_path is None:
+            if any(value is not None for value in (self.interpreter_entry_path, self.interpreter_version, self.interpreter_sha256)) or self.interpreter_args:
+                raise ValueError("provider identity has an incomplete interpreter binding")
+        elif not all(isinstance(value, str) and value for value in (self.interpreter_entry_path, self.interpreter_real_path, self.interpreter_version, self.interpreter_sha256)):
+            raise ValueError("provider identity requires a complete interpreter binding")
+        for value in (self.sha256, self.interpreter_sha256):
+            if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError("provider identity SHA-256 is invalid")
+        if not isinstance(self.interpreter_args, tuple) or any(not isinstance(arg, str) for arg in self.interpreter_args):
+            raise ValueError("provider interpreter arguments are invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind, "entry_path": self.entry_path, "real_path": self.real_path,
+            "version": self.version, "sha256": self.sha256,
+            "interpreter_entry_path": self.interpreter_entry_path,
+            "interpreter_real_path": self.interpreter_real_path,
+            "interpreter_version": self.interpreter_version,
+            "interpreter_args": list(self.interpreter_args),
+            "interpreter_sha256": self.interpreter_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ProviderIdentity:
+        if not isinstance(value, dict) or set(value) != {
+            "kind", "entry_path", "real_path", "version", "sha256",
+            "interpreter_entry_path", "interpreter_real_path", "interpreter_version",
+            "interpreter_args", "interpreter_sha256",
+        } or not isinstance(value["interpreter_args"], list):
+            raise ValueError("provider identity fields are missing or unknown")
+        return cls(
+            entry_path=value["entry_path"], real_path=value["real_path"],
+            version=value["version"], sha256=value["sha256"],
+            interpreter_entry_path=value["interpreter_entry_path"],
+            interpreter_real_path=value["interpreter_real_path"],
+            interpreter_version=value["interpreter_version"],
+            interpreter_args=tuple(value["interpreter_args"]),
+            interpreter_sha256=value["interpreter_sha256"], kind=value["kind"],
+        )
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    @classmethod
+    def dry_run(cls, slot: str) -> ProviderIdentity:
+        marker = f"dry-run:{slot}"
+        return cls(marker, marker, "dry-run", hashlib.sha256(marker.encode()).hexdigest(), None, None, None, kind="dry_run")
 
     @property
     def launch_prefix(self) -> tuple[str, ...]:
@@ -208,9 +267,11 @@ def capture_provider_identity(
         entry, path=path,
     )
     try:
-        digest = None
-        if interpreter_real is None:
-            digest = hashlib.sha256(real.read_bytes()).hexdigest()
+        digest = hashlib.sha256(real.read_bytes()).hexdigest()
+        interpreter_digest = (
+            hashlib.sha256(Path(interpreter_real).read_bytes()).hexdigest()
+            if interpreter_real is not None else None
+        )
     except OSError as exc:
         raise ValueError(f"CLI target cannot be read: {entry}") from exc
     prefix = (
@@ -225,6 +286,7 @@ def capture_provider_identity(
     return ProviderIdentity(
         entry, str(real), version, digest,
         interpreter_entry, interpreter_real, interpreter_version, interpreter_args,
+        interpreter_digest,
     )
 
 

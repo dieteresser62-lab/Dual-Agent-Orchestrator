@@ -6,7 +6,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from agent_adapters import build_agent_registry
+from agent_adapters import build_slot_agent_registry
+from agent_roles import AgentSlot, role_for_slot
+from role_certification import load_role_certifications
 from agent_runtime import OrchestratorConfig
 from audit_trail import ValidationAuditEvent
 from artifact_bridge import ArtifactBridgeError
@@ -49,6 +51,8 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
 )
+from workflow_run_setup import _capture_slot_identities
+from provider_identity import ProviderIdentity
 
 
 logger = logging.getLogger(__name__)
@@ -313,10 +317,34 @@ def _create_production_state(
     prepared_branch_base: str | None,
     managed_audit_path: str | None,
     agent_settings: dict[str, Any],
+    slot_identities: dict[str, ProviderIdentity],
     max_rounds_per_loop: int,
     base_branch: str | None,
     fresh_state: Callable[..., WorkflowState],
 ) -> WorkflowState:
+    if set(agent_settings) != {slot.value for slot in AgentSlot}:
+        raise StateSchemaError("slot_settings missing: resolved TOML profile binding is required")
+    if set(slot_identities) != set(agent_settings):
+        raise StateSchemaError("slot identities are incomplete")
+    slots = agent_settings
+    certifications = load_role_certifications()
+
+    def bound_profile(slot: AgentSlot) -> AgentProfileBinding:
+        settings = slots[slot.value]
+        certificate = certifications.require(settings.name, role_for_slot(slot), slot)
+        return AgentProfileBinding(
+            model=settings.model, effort=settings.effort, provider=settings.name,
+            binary=settings.binary, timeout_seconds=settings.timeout_seconds or 0,
+            max_budget_usd=settings.max_budget_usd,
+            manufacturer=certificate.manufacturer,
+            capability_sha256=certificate.capability_sha256,
+            transport_sha256=certificate.transport_sha256,
+            rights_sha256=certificate.rights_sha256,
+            policy_sha256=certificate.policy_sha256,
+            certification_sha256=certificate.digest,
+            binary_identity=slot_identities[slot.value],
+            binary_identity_sha256=slot_identities[slot.value].digest,
+        )
     return fresh_state(
         task_file=task_file,
         run_id=run_id,
@@ -324,14 +352,9 @@ def _create_production_state(
         task_contract=task_contract,
         branch_base_override=prepared_branch_base,
         audit_report_path=managed_audit_path,
-        implementer_profile=AgentProfileBinding(
-            agent_settings["codex"].model,
-            agent_settings["codex"].effort,
-        ),
-        reviewer_profile=AgentProfileBinding(
-            agent_settings["claude"].model,
-            agent_settings["claude"].effort,
-        ),
+        implementer_profile=bound_profile(AgentSlot.IMPLEMENTER),
+        reviewer_profile=bound_profile(AgentSlot.REVIEWER),
+        final_reviewer_profile=bound_profile(AgentSlot.FINAL_REVIEWER),
         max_rounds_per_loop=max_rounds_per_loop,
         base_branch=base_branch,
     )
@@ -549,6 +572,13 @@ def run_production_workflow(
             raise StateSchemaError(
                 "existing state requires --resume or --force-overwrite-state"
             )
+        if not hasattr(args, "slot_settings"):
+            raise StateSchemaError("slot_settings missing: resolved TOML profile binding is required")
+        args.slot_identities = _capture_slot_identities(
+            args.slot_settings,
+            scripted=bool(getattr(args, "scripted_provider_identity", False)),
+            strict_dns=bool(getattr(args, "strict_preflight", False)),
+        )
         state = _create_production_state(
             task_file=task_file,
             run_id=run_id,
@@ -556,7 +586,8 @@ def run_production_workflow(
             task_contract=task_contract,
             prepared_branch_base=prepared_branch_base,
             managed_audit_path=managed_audit_path,
-            agent_settings=args.agent_settings,
+            agent_settings=args.slot_settings,
+            slot_identities=args.slot_identities,
             max_rounds_per_loop=max_rounds_per_loop,
             base_branch=args.repo_config.repository.base_branch,
             fresh_state=dependencies.fresh_state,
@@ -579,10 +610,17 @@ def run_production_workflow(
         max_acceptance_reviews=max_acceptance_reviews,
         provider_input_budget=args.repo_config.provider_input_budget,
     )
+    if not hasattr(args, "slot_settings") or not hasattr(args, "slot_identities"):
+        raise StateSchemaError("slot_settings or slot identities missing after profile binding")
+    agents = build_slot_agent_registry(args.slot_settings)
+    for slot in AgentSlot:
+        adapter = agents[slot.value]
+        adapter.provider_identity = args.slot_identities[slot.value]
+        adapter.capability_verified = True
     driver: ProductionWorkflowLoopDriver = dependencies.driver_factory(
         repository_root=root,
         state_file=state_file,
-        agents=build_agent_registry(args.agent_settings),
+        agents=agents,
         config=config,
         allowed_roots=allowed_roots,
         replace_existing_run_id=replacement_run_id,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile
+
 import ast
 import base64
 from dataclasses import asdict, replace
@@ -75,6 +77,7 @@ from workflow import WorkflowHistory
 
 from workflow_state import (
     AgentProfileBinding,
+    scripted_profile_binding,
     GateReason,
     ProtocolBinding,
     ProtocolMode,
@@ -348,9 +351,9 @@ def _journey(
         round_number=None,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("gpt-5.6-sol", "medium"),
-            RoleProfilePayload("opus", "max"),
+        bound_run_profile(
+            bound_role_profile("gpt-5.6-sol", "medium"),
+            bound_role_profile("opus", "max"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -1023,8 +1026,9 @@ def _independent_mirror_snapshots(
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
         "3",
-        implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-        reviewer_profile=AgentProfileBinding("opus", "max"),
+        implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+        reviewer_profile=bound_state_profile("opus", "max"),
+        final_reviewer_profile=replace(scripted_profile_binding("final_reviewer"), model="opus", effort="max"),
     )
     state = init_workflow_state(
         run_id=RUN_ID,
@@ -1991,9 +1995,9 @@ def test_chain_without_workflow_events_is_rejected_fail_closed(tmp_path: Path) -
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("model-a", "medium"),
-            RoleProfilePayload("model-b", "high"),
+        bound_run_profile(
+            bound_role_profile("model-a", "medium"),
+            bound_role_profile("model-b", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",

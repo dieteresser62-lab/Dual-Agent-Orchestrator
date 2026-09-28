@@ -31,7 +31,6 @@
     "agents_file": "<ROOT>/AGENTS.md",
     "approve_gate": false,
     "auto_resume": false,
-    "claude_max_budget_usd": null,
     "completed_state_replaced": false,
     "config": null,
     "config_file": null,
@@ -39,6 +38,10 @@
     "dry_run": false,
     "dry_run_report": null,
     "dry_run_scenario": null,
+    "final_reviewer_binary": null,
+    "final_reviewer_effort": null,
+    "final_reviewer_model": null,
+    "final_reviewer_timeout": null,
     "force_overwrite_state": false,
     "gate_decision": null,
     "gate_rationale": null,
@@ -173,11 +176,53 @@
             "max_chars": 4000000,
             "max_bytes": 16000000
           }
+        ],
+        "occupancy": [
+          [
+            "implementer",
+            "implementer",
+            "codex"
+          ],
+          [
+            "reviewer",
+            "reviewer",
+            "claude"
+          ],
+          [
+            "final_reviewer",
+            "reviewer",
+            "claude"
+          ]
         ]
       },
       "repository": {
         "__type__": "RepositoryConfig",
         "base_branch": null
+      },
+      "roles": {
+        "final_reviewer": "review",
+        "implementer": "implementation",
+        "reviewer": "review"
+      },
+      "agent_profiles": {
+        "implementation": {
+          "__type__": "AgentProfileConfig",
+          "provider": "codex",
+          "binary": "codex",
+          "model": "sol",
+          "effort": "high",
+          "timeout_seconds": null,
+          "max_budget_usd": null
+        },
+        "review": {
+          "__type__": "AgentProfileConfig",
+          "provider": "claude",
+          "binary": "claude",
+          "model": "opus",
+          "effort": "high",
+          "timeout_seconds": null,
+          "max_budget_usd": null
+        }
       }
     },
     "resume": false,
@@ -190,6 +235,35 @@
     "reviewer_timeout": null,
     "skip_git_check": false,
     "skip_git_check_source": "default",
+    "slot_settings": {
+      "final_reviewer": {
+        "__type__": "AgentSettings",
+        "name": "claude",
+        "binary": "claude",
+        "model": "opus",
+        "timeout_seconds": null,
+        "effort": "high",
+        "max_budget_usd": null
+      },
+      "implementer": {
+        "__type__": "AgentSettings",
+        "name": "codex",
+        "binary": "codex",
+        "model": "gpt-6-sol",
+        "timeout_seconds": null,
+        "effort": "high",
+        "max_budget_usd": null
+      },
+      "reviewer": {
+        "__type__": "AgentSettings",
+        "name": "claude",
+        "binary": "claude",
+        "model": "opus",
+        "timeout_seconds": null,
+        "effort": "high",
+        "max_budget_usd": null
+      }
+    },
     "state_was_frozen": false,
     "strict_preflight": false,
     "target_branch": null,
@@ -584,7 +658,7 @@
       "exception_events": [
         {
           "function": "parse_args",
-          "site": "args.agent_settings = resolve_agent_settings(args, env)",
+          "site": "args.slot_settings = resolve_agent_settings(args, env, roles=repo_config.roles, profiles=repo_config.agent_profiles)",
           "type": "AgentConfigError",
           "message": "reviewer effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         },
@@ -638,8 +712,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 69,
-        "namespace_sha256": "41c9cc956a944b97441b4b18d786a088c107b675e3301fb96386f2edd31cf967",
+        "namespace_field_count": 73,
+        "namespace_sha256": "94fc8b3f7d866dee58529b5a87889067f58051b68b034fa749c234df5f9554b2",
         "return_trace": [
           {
             "function": "quota_int",
@@ -721,8 +795,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 69,
-        "namespace_sha256": "fd60f780aa68fad3492272c9940292632f922580e74f4f6777ebffbadc03e43b",
+        "namespace_field_count": 73,
+        "namespace_sha256": "0ce1d13bc19b9e6a1741c1cb5fb11e4497345ad66c9309283d130e42caed992e",
         "return_trace": [
           {
             "function": "quota_int",
@@ -795,8 +869,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 69,
-        "namespace_sha256": "3023f9445d3a550541bb323f15ba10ccbc8573806b34d757aa44b388b54ed2b1",
+        "namespace_field_count": 73,
+        "namespace_sha256": "d49ae7792dd3c33b8a9f1e1abc0215d839336711091e80bad9e943312b4ab103",
         "return_trace": [
           {
             "function": "quota_int",
@@ -876,8 +950,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 69,
-        "namespace_sha256": "0ae1d8c7e6aedc3ef30a2a48bb9ee91460dbb6aabc5caea0804a9ff4e2703567",
+        "namespace_field_count": 73,
+        "namespace_sha256": "0bd53250c510d7cbb22d5a090315941b900ee81c2252cd164424c2e3a1e0a781",
         "return_trace": [
           {
             "function": "quota_int",

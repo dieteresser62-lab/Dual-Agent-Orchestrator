@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -179,6 +179,14 @@ class RoleProviderCertification:
     evidence_path: str
     evidence_sha256: str
 
+    @property
+    def digest(self) -> str:
+        return _digest(asdict(self))
+
+    @property
+    def transport_sha256(self) -> str:
+        return _digest(self.probe_profile)
+
 
 @dataclass(frozen=True, slots=True)
 class CertificationTable:
@@ -194,6 +202,22 @@ class CertificationTable:
             CertificationErrorCode.NOT_CERTIFIED,
             f"slot={slot.value} provider={provider} role={role.value}: missing qualification evidence",
         )
+
+    def require_occupancy(self, providers: dict[AgentSlot, str]) -> dict[AgentSlot, RoleProviderCertification]:
+        if set(providers) != set(AgentSlot):
+            raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "slot occupancy is incomplete")
+        selected = {
+            slot: self.require(providers[slot], role_for_slot(slot), slot)
+            for slot in AgentSlot
+        }
+        implementer = selected[AgentSlot.IMPLEMENTER].manufacturer
+        for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
+            if implementer == selected[slot].manufacturer:
+                raise CertificationError(
+                    CertificationErrorCode.NOT_CERTIFIED,
+                    f"slot={slot.value} provider={providers[slot]}: implementer and reviewer manufacturers must differ",
+                )
+        return selected
 
 
 def _load_role_certifications(

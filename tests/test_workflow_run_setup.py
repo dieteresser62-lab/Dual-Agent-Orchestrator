@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import workflow_run_setup
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
+from agent_config import AgentSettings
 from contracts import PlannedSlice
 from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
 from task_contract import TaskContract, TaskMode
 from workflow import WorkflowContext
 from workflow_state import (
+    scripted_profile_binding,
     ProtocolBinding,
     ProtocolMode,
     SliceStatus,
@@ -22,6 +24,7 @@ from workflow_state import (
     WorkUnitKind,
     init_workflow_state,
 )
+from state_io import StateSchemaError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,10 +32,15 @@ SETUP_PATH = ROOT / "src/workflow_run_setup.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
+    "agent_adapters",
+    "agent_roles",
+    "agent_runtime",
     "artifact_models",
     "git_service",
     "inbox_watcher",
+    "provider_identity",
     "repo_changes",
+    "role_certification",
     "state_io",
     "task_contract",
     "validation_matrix",
@@ -40,6 +48,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "workflow_state",
 }
 EXPECTED_SETUP_FUNCTIONS = {
+    "_capture_slot_identities",
     "_apply_resumed_agent_profiles",
     "_context",
     "_current_gate_approval",
@@ -51,6 +60,7 @@ EXPECTED_SETUP_FUNCTIONS = {
 }
 EXPECTED_SETUP_EDGES = Counter(
     {
+        ("_apply_resumed_agent_profiles", "_capture_slot_identities"): 1,
         ("_context", "_plan_only_step_boundary"): 1,
     }
 )
@@ -63,6 +73,75 @@ EXPECTED_PRODUCTION_BINDINGS = {
     "new_watch_task_preserved_paths": "_new_watch_task_preserved_paths",
     "recover_legacy_plan_only_post_gate": "_recover_legacy_plan_only_post_gate",
 }
+
+
+@pytest.mark.parametrize("field", (
+    "provider", "manufacturer", "capability_sha256", "transport_sha256",
+    "rights_sha256", "policy_sha256", "certification_sha256",
+))
+def test_resume_rejects_tampered_qualification_before_binary_probe(
+    monkeypatch: pytest.MonkeyPatch, field: str,
+) -> None:
+    profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
+    original = profiles["implementer"]
+    changed = "claude" if field == "provider" else "foreign" if field == "manufacturer" else "f" * 64
+    profiles["implementer"] = replace(original, **{field: changed})
+    state = init_workflow_state(
+        run_id="tampered-profile", task_file="/tmp/task.md", branch="feature/qualification",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=profiles["implementer"],
+            reviewer_profile=profiles["reviewer"],
+            final_reviewer_profile=profiles["final_reviewer"],
+        ),
+    )
+    slots = {
+        slot: AgentSettings(profile.provider, profile.binary, profile.model, None, profile.effort, profile.max_budget_usd)
+        for slot, profile in (
+            ("implementer", original), ("reviewer", profiles["reviewer"]),
+            ("final_reviewer", profiles["final_reviewer"]),
+        )
+    }
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*slot=implementer"):
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
+
+
+def test_resume_requires_resolved_slot_settings() -> None:
+    state = init_workflow_state(
+        run_id="missing-slots", task_file="/tmp/task.md", branch="feature/missing",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
+    )
+    with pytest.raises(StateSchemaError, match="slot_settings missing"):
+        workflow_run_setup._apply_resumed_agent_profiles(SimpleNamespace(), state)
+
+
+def test_resume_rejects_changed_configuration_occupancy_before_binary_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
+    state = init_workflow_state(
+        run_id="occupancy-resume", task_file="/tmp/task.md", branch="feature/occupancy",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=profiles["implementer"],
+            reviewer_profile=profiles["reviewer"],
+            final_reviewer_profile=profiles["final_reviewer"],
+        ),
+    )
+    slots = {
+        slot: AgentSettings(profile.provider, profile.binary, profile.model, None, profile.effort, profile.max_budget_usd)
+        for slot, profile in profiles.items()
+    }
+    slots["implementer"] = replace(slots["implementer"], name="claude")
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
+    with pytest.raises(StateSchemaError, match="slot=implementer.*provider=claude"):
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 
 def _tree(path: Path = SETUP_PATH, source: str | None = None) -> ast.Module:
@@ -149,10 +228,10 @@ def test_run_setup_module_has_complete_inventory_and_one_way_layering() -> None:
             for node in ast.walk(_tree(path))
         ):
             importers.append(path.relative_to(ROOT).as_posix())
-    assert importers == ["src/orchestrator.py"]
+    assert importers == ["src/orchestrator.py", "src/workflow_production.py"]
 
     for path in sorted((ROOT / "src").glob("workflow_*.py")):
-        if path == SETUP_PATH:
+        if path in {SETUP_PATH, ROOT / "src/workflow_production.py"}:
             continue
         assert "workflow_run_setup" not in _internal_imports(path)
 

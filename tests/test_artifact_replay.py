@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import asdict, replace
 
 import pytest
@@ -108,9 +110,9 @@ def _append(
         _append(
             records,
             "run-profile",
-            RunProfilePayload(
-                RoleProfilePayload("implementer-model", "medium"),
-                RoleProfilePayload("reviewer-model", "high"),
+            bound_run_profile(
+                bound_role_profile("implementer-model", "medium"),
+                bound_role_profile("reviewer-model", "high"),
             ),
         )
     record = ArtifactRecord.create(
@@ -146,9 +148,9 @@ def _chain() -> tuple[ArtifactRecord, ...]:
     _append(
         records,
         "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
     )
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
@@ -231,9 +233,9 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
         execution_mode="PLAN_ONLY",
         audit_report_path=None,
     )
-    profile = RunProfilePayload(
-        implementer=RoleProfilePayload("gpt-5.6-sol", "max"),
-        reviewer=RoleProfilePayload("opus", "max"),
+    profile = bound_run_profile(
+        implementer=bound_role_profile("gpt-5.6-sol", "max"),
+        reviewer=bound_role_profile("opus", "max"),
     )
     _append(records, "run-identity", identity)
     _append(records, "run-profile", profile)
@@ -266,9 +268,9 @@ def test_pre_r1_chain_without_complete_run_binding_is_rejected(missing: str) -> 
         _append(
             records,
             "run-profile",
-            RunProfilePayload(
-                RoleProfilePayload("implementer-model", "medium"),
-                RoleProfilePayload("reviewer-model", "high"),
+            bound_run_profile(
+                bound_role_profile("implementer-model", "medium"),
+                bound_role_profile("reviewer-model", "high"),
             ),
         )
 

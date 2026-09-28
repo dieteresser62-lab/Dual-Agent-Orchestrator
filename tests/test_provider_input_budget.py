@@ -185,8 +185,8 @@ def test_policy_rejects_duplicates_and_incomplete_tables() -> None:
         ProviderInputBudgetPolicy((rule,))
 
 
-def test_budget_rule_rejects_provider_with_the_other_role() -> None:
-    with pytest.raises(ProviderInputBudgetError, match="provider/role combination"):
+def test_budget_rule_rejects_operation_of_the_other_role() -> None:
+    with pytest.raises(ProviderInputBudgetError, match="unknown operation"):
         ProviderInputBudgetRule(
             "codex",
             AgentRole.REVIEWER.value,
@@ -194,6 +194,11 @@ def test_budget_rule_rejects_provider_with_the_other_role() -> None:
             10,
             10,
         )
+
+
+def test_budget_rule_accepts_provider_independent_of_role() -> None:
+    rule = ProviderInputBudgetRule("synthetic-review-transport", "implementer", WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value, 10, 20)
+    assert rule.key == ("synthetic-review-transport", "implementer", WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value)
 
 
 @pytest.mark.parametrize(

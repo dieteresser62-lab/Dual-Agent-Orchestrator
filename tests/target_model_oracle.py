@@ -13,6 +13,8 @@ combinatorial axes.
 
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
@@ -996,9 +998,9 @@ def _finding_record_prefix(
     _new_record(
         records,
         "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("oracle-implementer", "medium"),
-            RoleProfilePayload("oracle-reviewer", "high"),
+        bound_run_profile(
+            bound_role_profile("oracle-implementer", "medium"),
+            bound_role_profile("oracle-reviewer", "high"),
         ),
     )
     for prior in probe.context.previous_findings:

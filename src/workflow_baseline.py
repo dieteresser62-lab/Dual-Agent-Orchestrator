@@ -68,6 +68,7 @@ from workflow import WorkflowChanges, WorkflowExecutionError
 from workflow_persistence import WorkflowPersistence
 from workflow_recovery import WorkflowRecovery
 from workflow_state import (
+    AgentProfileBinding,
     BootstrapCheckFact,
     ProtocolBinding,
     WorkflowState,
@@ -75,6 +76,10 @@ from workflow_state import (
     WorkUnitRecord,
     project_implementer_return_policy,
 )
+
+
+def _role_profile(binding: AgentProfileBinding) -> RoleProfilePayload:
+    return RoleProfilePayload(**{**binding.to_dict(), "binary_identity": binding.binary_identity})
 
 
 def gate_transition_payload(unit: WorkUnitRecord) -> GateTransitionPayload:
@@ -117,12 +122,9 @@ def _append_baseline_identity_expectations(
         audit_report_path=state.audit_report_path,
     )
     expected_profile = RunProfilePayload(
-        implementer=RoleProfilePayload(
-            binding.implementer_profile.model, binding.implementer_profile.effort
-        ),
-        reviewer=RoleProfilePayload(
-            binding.reviewer_profile.model, binding.reviewer_profile.effort
-        ),
+        implementer=_role_profile(binding.implementer_profile),
+        reviewer=_role_profile(binding.reviewer_profile),
+        final_reviewer=_role_profile(binding.final_reviewer_profile),
         orchestrator_code_version=code_version or orchestrator_code_version(),
         merge_completed_branch=(
             persisted_profile.merge_completed_branch if persisted_profile else True
@@ -529,12 +531,9 @@ class WorkflowBaseline:
         )
         bridge.append(
             RunProfilePayload(
-                implementer=RoleProfilePayload(
-                    binding.implementer_profile.model, binding.implementer_profile.effort
-                ),
-                reviewer=RoleProfilePayload(
-                    binding.reviewer_profile.model, binding.reviewer_profile.effort
-                ),
+                implementer=_role_profile(binding.implementer_profile),
+                reviewer=_role_profile(binding.reviewer_profile),
+                final_reviewer=_role_profile(binding.final_reviewer_profile),
                 orchestrator_code_version=_resume_code_version(existing_replay),
                 merge_completed_branch=completion_policy[0],
                 base_branch=completion_policy[1],

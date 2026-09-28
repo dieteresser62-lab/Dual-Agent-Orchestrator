@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_state_profile
+
 import ast
 import copy
 import json
@@ -359,8 +361,8 @@ def _state(
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
             "3",
-            implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-            reviewer_profile=AgentProfileBinding("sonnet", "high"),
+            implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+            reviewer_profile=bound_state_profile("sonnet", "high"),
         ),
         timestamp=STAMP,
     )

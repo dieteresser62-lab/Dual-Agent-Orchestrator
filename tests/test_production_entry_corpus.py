@@ -330,6 +330,10 @@ def _ordered_entry_decisions(tree: ast.Module) -> list[dict[str, object]]:
             if isinstance(statement, ast.For):
                 continue
             if isinstance(statement, ast.If):
+                if ast.unparse(statement.test) == "'implementer' not in agent_settings":
+                    # Slice 10 adds a compatibility path for old test callers;
+                    # it is outside the pre-B46 entry decision inventory.
+                    continue
                 decisions.append(statement)
                 visit(statement.body)
                 visit(statement.orelse)
@@ -419,6 +423,13 @@ def _transition_loop_sha256(tree: ast.Module, source: str) -> str:
 
 
 def _args(**overrides: object) -> SimpleNamespace:
+    from agent_config import AgentSettings
+    from provider_identity import ProviderIdentity
+    slots = {
+        "implementer": AgentSettings("codex", "codex", "codex-anchor", None, "medium"),
+        "reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+        "final_reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+    }
     values: dict[str, object] = {
         "plan_only": None,
         "work_plan": None,
@@ -431,6 +442,9 @@ def _args(**overrides: object) -> SimpleNamespace:
             "codex": SimpleNamespace(model="codex-anchor", effort="medium"),
             "claude": SimpleNamespace(model="claude-anchor", effort="high"),
         },
+        "slot_settings": slots,
+        "slot_identities": {slot: ProviderIdentity.dry_run(slot) for slot in slots},
+        "scripted_provider_identity": True,
         "agent_output": "none",
         "agent_output_max_chars": 1000,
         "agent_live_stream": False,
@@ -628,10 +642,17 @@ def _run_scenario(
         )
         monkeypatch.setattr(production_module, "load_workflow_state", load_workflow)
         monkeypatch.setattr(
+            production_module, "_capture_slot_identities",
+            lambda slots, **_kwargs: {slot: args.slot_identities[slot] for slot in slots},
+        )
+        monkeypatch.setattr(
             production_module, "load_resumable_workflow_state", load_resumable
         )
         monkeypatch.setattr(
-            production_module, "build_agent_registry", lambda _settings: {}
+            production_module, "build_slot_agent_registry", lambda _settings: {
+                slot: SimpleNamespace(provider_identity=None, capability_verified=False)
+                for slot in ("implementer", "reviewer", "final_reviewer")
+            }
         )
         monkeypatch.setattr(
             production_module,
@@ -789,7 +810,14 @@ def test_pre_cut_anchor_is_bound_to_git_and_current_logical_entry() -> None:
         for item in baseline["entry_decisions"]
     ]
     assert len(expected) == 18
-    assert _ordered_entry_decisions(SOURCE_TREE) == expected
+    actual = _ordered_entry_decisions(SOURCE_TREE)
+    assert actual[:18] == expected
+    assert actual[18:] == [
+        {"ordinal": 19, "test_expression": "not hasattr(args, 'slot_settings')", "read_names": ["args", "hasattr"]},
+        {"ordinal": 20, "test_expression": "set(agent_settings) != {slot.value for slot in AgentSlot}", "read_names": ["AgentSlot", "agent_settings", "set", "slot"]},
+        {"ordinal": 21, "test_expression": "set(slot_identities) != set(agent_settings)", "read_names": ["agent_settings", "set", "slot_identities"]},
+        {"ordinal": 22, "test_expression": "not hasattr(args, 'slot_settings') or not hasattr(args, 'slot_identities')", "read_names": ["args", "hasattr"]},
+    ]
 
 
 def test_four_catchers_and_transition_loop_match_pre_cut_anchor() -> None:

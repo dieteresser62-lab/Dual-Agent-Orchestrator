@@ -141,20 +141,16 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     parser = argparse.ArgumentParser()
     add_agent_arguments(parser)
     settings = resolve_agent_settings(parser.parse_args([]), {})
-    binding_defaults = {
-        field.name: field.default for field in dataclasses.fields(ProtocolBinding)
-    }
     setup_defaults = inspect.signature(_fresh_state).parameters
     expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
     for role, provider in (("implementer", "codex"), ("reviewer", "claude")):
         role_field = AgentRole(role).name.lower() + "_profile"
         assert expected[provider][0] in MODEL_FAMILIES[provider].values()
-        assert (settings[provider].model, settings[provider].effort) == expected[provider]
-        for default in (
-            binding_defaults[role_field],
-            setup_defaults[role_field].default,
-        ):
-            assert (default.model, default.effort) == expected[provider]
+        assert (settings[role].model, settings[role].effort) == expected[provider]
+        binding_field = next(field for field in dataclasses.fields(ProtocolBinding) if field.name == role_field)
+        default = binding_field.default_factory()
+        assert (default.model, default.effort) == expected[provider]
+        assert setup_defaults[role_field].default is None
 
 
 def test_model_and_effort_are_recorded_but_do_not_bind_the_transport() -> None:

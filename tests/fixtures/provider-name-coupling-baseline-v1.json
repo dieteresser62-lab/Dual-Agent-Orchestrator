@@ -145,8 +145,8 @@
       "codex": 5
     },
     "tests/test_agent_adapters.py": {
-      "codex": 38,
-      "claude": 42
+      "codex": 36,
+      "claude": 46
     },
     "tests/test_agent_roles.py": {
       "codex": 1,
@@ -157,19 +157,24 @@
       "claude": 38
     },
     "tests/test_artifact_bridge.py": {
-      "claude": 10
+      "claude": 11,
+      "codex": 3
     },
     "tests/test_artifact_models.py": {
-      "codex": 24,
-      "claude": 18
+      "codex": 22,
+      "claude": 20
     },
     "tests/test_artifact_replay.py": {
       "codex": 2,
       "claude": 4
     },
+    "tests/test_artifact_resume.py": {
+      "codex": 1,
+      "claude": 1
+    },
     "tests/test_cli.py": {
-      "codex": 18,
-      "claude": 33
+      "codex": 21,
+      "claude": 47
     },
     "tests/test_collect_changes_cohesion.py": {
       "codex": 1
@@ -249,8 +254,8 @@
       "claude": 7
     },
     "tests/test_orchestrator_runtime.py": {
-      "codex": 175,
-      "claude": 47
+      "codex": 171,
+      "claude": 59
     },
     "tests/test_orchestrator_version.py": {
       "codex": 4,
@@ -263,18 +268,18 @@
       "codex": 5
     },
     "tests/test_production_entry_corpus.py": {
-      "codex": 2,
-      "claude": 2
+      "codex": 5,
+      "claude": 8
     },
     "tests/test_production_transition_corpus.py": {
-      "codex": 3,
-      "claude": 2
+      "codex": 6,
+      "claude": 8
     },
     "tests/test_prompts.py": {
       "claude": 3
     },
     "tests/test_provider_identity.py": {
-      "codex": 27,
+      "codex": 30,
       "claude": 11
     },
     "tests/test_provider_input_budget.py": {
@@ -372,9 +377,12 @@
       "codex": 11,
       "claude": 2
     },
+    "tests/test_workflow_run_setup.py": {
+      "claude": 3
+    },
     "tests/test_workflow_state.py": {
       "codex": 18,
-      "claude": 2
+      "claude": 4
     },
     "tests/test_workflow_transition_matrix.py": {
       "codex": 10,

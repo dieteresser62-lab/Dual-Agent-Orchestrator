@@ -911,6 +911,7 @@ _PROVIDER_REFERENCE_CATEGORIES = (
     "transport", "schema-bound diagnostic", "wire until slice 8/9",
     "certification data", "role policy file", "legacy branch syntax",
     "stable audit marker", "historical wire proof",
+    "profile configuration",
 )
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"

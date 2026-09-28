@@ -852,15 +852,16 @@ def create_agent_pair(
 
 def build_agent_registry(
     settings: dict[str, AgentSettings] | None = None,
+    *, final_settings: AgentSettings | None = None,
 ) -> dict[str, AgentAdapter]:
-    """Compatibility facade for the pre-TOML production occupancy."""
+    """Create adapters from the shipped slot defaults for callers without a run."""
     resolved = settings if settings is not None else default_agent_settings()
     if set(resolved) != {"codex", "claude"}:
         raise ValueError("agent settings must contain exactly codex and claude")
     occupancy = current_pre_toml_occupancy()
     table = load_role_certifications()
     table.require(occupancy[AgentSlot.FINAL_REVIEWER], AgentRoleName.REVIEWER, AgentSlot.FINAL_REVIEWER)
-    return {
+    registry = {
         "codex": create_agent_pair(
             occupancy[AgentSlot.IMPLEMENTER], AgentRoleName.IMPLEMENTER,
             slot=AgentSlot.IMPLEMENTER, settings=resolved["codex"], certifications=table,
@@ -870,3 +871,30 @@ def build_agent_registry(
             slot=AgentSlot.REVIEWER, settings=resolved["claude"], certifications=table,
         ),
     }
+    if final_settings is not None:
+        registry["final_reviewer"] = create_agent_pair(
+            occupancy[AgentSlot.FINAL_REVIEWER], AgentRoleName.REVIEWER,
+            slot=AgentSlot.FINAL_REVIEWER, settings=final_settings, certifications=table,
+        )
+    return registry
+
+
+def build_slot_agent_registry(
+    slots: dict[str, AgentSettings], *, certifications: CertificationTable | None = None,
+) -> dict[str, AgentAdapter]:
+    """Create the run's adapters solely from its resolved slot settings."""
+    if set(slots) != {slot.value for slot in AgentSlot}:
+        raise ValueError("slot_settings must contain implementer, reviewer and final_reviewer")
+    table = certifications or load_role_certifications()
+    table.require_occupancy({slot: slots[slot.value].name for slot in AgentSlot})
+    registry = {
+        slot.value: create_agent_pair(
+            slots[slot.value].name, role_for_slot(slot), slot=slot,
+            settings=slots[slot.value], certifications=table,
+        )
+        for slot in AgentSlot
+    }
+    for slot in AgentSlot:
+        registry[slot.value].bound_slot = slot.value
+        registry.setdefault(slots[slot.value].name, registry[slot.value])
+    return registry

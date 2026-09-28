@@ -916,22 +916,28 @@ def _resolve_agent_binary(binary: str, *, path: str | None = None) -> str | None
 
 
 def _binary_remedy(adapter: AgentAdapter) -> str:
-    role = role_for_provider(adapter.name)
-    if role is None:
+    slot = getattr(adapter, "bound_slot", None)
+    if slot is None:
+        role = role_for_provider(adapter.name)
+        slot = None if role is None else role.value
+    if slot is None:
         return (
             f"Remedy: no role is assigned to provider {adapter.name!r}; "
             "configure a supported provider binary or adjust PATH"
         )
     return (
-        f"Remedy: set --{role.value}-binary or RUN_TASK_{role.value.upper()}_BINARY "
+        f"Remedy: set --{slot.replace('_', '-')}-binary or RUN_TASK_{slot.upper()}_BINARY "
         "to an absolute Linux path, or adjust PATH"
     )
 
 
 def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = None) -> ProviderIdentity:
     bound = getattr(adapter, "provider_identity", None)
+    slot = getattr(adapter, "bound_slot", adapter.name)
     if bound is None:
-        raise AgentCompatibilityError(f"{adapter.name} has no verified binary identity")
+        raise AgentCompatibilityError(f"slot={slot} has no verified binary identity")
+    if bound.kind != "verified":
+        raise AgentCompatibilityError(f"slot={slot}: dry-run binary identity cannot authorize a provider start")
     search_path = os.environ.get("PATH", os.defpath) if path is None else path
     entry = _resolve_agent_binary(adapter.cli_binary, path=search_path)
     if entry is None:
@@ -943,11 +949,12 @@ def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = 
         )
     except ValueError as exc:
         raise AgentCompatibilityError(
-            f"{adapter.name} binary identity drift at {entry}: {exc}; {_binary_remedy(adapter)}"
+            f"slot={slot} binary identity drift at {entry}: {exc}; {_binary_remedy(adapter)}"
         ) from exc
     if current != bound:
         raise AgentCompatibilityError(
-            f"{adapter.name} binary identity drift: expected {bound!r}; observed {current!r}"
+            f"slot={slot} binary identity drift at {entry}: expected {bound!r}; "
+            f"observed {current!r}; {_binary_remedy(adapter)}"
         )
     return bound
 

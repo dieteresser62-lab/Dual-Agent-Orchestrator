@@ -466,6 +466,11 @@ def replay_artifacts(
             + " and ".join(missing),
         )
 
+    bound_profile = next(record.payload for record in chain if isinstance(record.payload, RunProfilePayload))
+    for record in chain:
+        if isinstance(record.payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)):
+            validate_provider_record_binding(record.payload, bound_profile, record)
+
     strict_content = (
         require_content_authority
         if require_content_authority is not None
@@ -502,6 +507,30 @@ def replay_artifacts(
         chain,
         pending_review_record_id=pending_review_record_id,
     )
+
+
+def validate_provider_record_binding(
+    payload: ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload,
+    profile: RunProfilePayload,
+    record: ArtifactRecord | None = None,
+) -> None:
+    """Check provider facts against this chain's immutable slot occupancy."""
+    if payload.operation == "reviewer_final_review":
+        slot = "final_reviewer"
+        expected_role = Role.REVIEWER
+    elif payload.role is Role.IMPLEMENTER:
+        slot = "implementer"
+        expected_role = Role.IMPLEMENTER
+    else:
+        slot = "reviewer"
+        expected_role = Role.REVIEWER
+    selected = getattr(profile, slot)
+    if payload.role is not expected_role or payload.provider != selected.provider:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            f"slot={slot} provider={payload.provider}: provider record differs from run profile provider={selected.provider}",
+            record,
+        )
 
 
 def replay_findings(
@@ -1056,14 +1085,9 @@ def _assemble_workflow_state_document(
             "schema_version": "3",
             "claude_review_transport": "native-claude-review-v3",  # allowlist:provider -- transport: canonical protocol binding
             "codex_result_transport": "native-codex-v3",  # allowlist:provider -- transport: canonical protocol binding
-            "implementer_profile": {
-                "model": profile.implementer.model,
-                "effort": profile.implementer.effort,
-            },
-            "reviewer_profile": {
-                "model": profile.reviewer.model,
-                "effort": profile.reviewer.effort,
-            },
+            "implementer_profile": {**asdict(profile.implementer), "binary_identity": profile.implementer.binary_identity.to_dict()},
+            "reviewer_profile": {**asdict(profile.reviewer), "binary_identity": profile.reviewer.binary_identity.to_dict()},
+            "final_reviewer_profile": {**asdict(profile.final_reviewer), "binary_identity": profile.final_reviewer.binary_identity.to_dict()},
         },
         "bootstrap_checks": tuple(
             _project_bootstrap_fact(record.payload)

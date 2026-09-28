@@ -1159,7 +1159,18 @@
       "additionalProperties": false,
       "required": [
         "model",
-        "effort"
+        "effort",
+        "provider",
+        "binary",
+        "timeout_seconds",
+        "manufacturer",
+        "capability_sha256",
+        "transport_sha256",
+        "rights_sha256",
+        "policy_sha256",
+        "certification_sha256",
+        "binary_identity",
+        "binary_identity_sha256"
       ],
       "properties": {
         "model": {
@@ -1173,7 +1184,36 @@
             "xhigh",
             "max"
           ]
-        }
+        },
+        "provider": {"$ref": "#/$defs/non_empty"},
+        "binary": {"$ref": "#/$defs/non_empty"},
+        "timeout_seconds": {"type": "integer", "minimum": 0},
+        "max_budget_usd": {"type": ["number", "null"], "minimum": 0},
+        "manufacturer": {"$ref": "#/$defs/non_empty"},
+        "capability_sha256": {"$ref": "#/$defs/sha256"},
+        "transport_sha256": {"$ref": "#/$defs/sha256"},
+        "rights_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_sha256": {"$ref": "#/$defs/sha256"},
+        "certification_sha256": {"$ref": "#/$defs/sha256"},
+        "binary_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "binary_identity": {"$ref": "#/$defs/provider_identity"}
+      }
+    },
+    "provider_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entry_path", "real_path", "version", "sha256", "interpreter_entry_path", "interpreter_real_path", "interpreter_version", "interpreter_args", "interpreter_sha256"],
+      "properties": {
+        "kind": {"enum": ["verified", "dry_run"]},
+        "entry_path": {"$ref": "#/$defs/non_empty"},
+        "real_path": {"$ref": "#/$defs/non_empty"},
+        "version": {"$ref": "#/$defs/non_empty"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "interpreter_entry_path": {"type": ["string", "null"]},
+        "interpreter_real_path": {"type": ["string", "null"]},
+        "interpreter_version": {"type": ["string", "null"]},
+        "interpreter_args": {"type": "array", "items": {"type": "string"}},
+        "interpreter_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
       }
     },
     "run_profile": {
@@ -1182,6 +1222,7 @@
       "required": [
         "implementer",
         "reviewer",
+        "final_reviewer",
         "orchestrator_code_version",
         "reducer_version"
       ],
@@ -1190,6 +1231,9 @@
           "$ref": "#/$defs/role_profile"
         },
         "reviewer": {
+          "$ref": "#/$defs/role_profile"
+        },
+        "final_reviewer": {
           "$ref": "#/$defs/role_profile"
         },
         "orchestrator_code_version": {

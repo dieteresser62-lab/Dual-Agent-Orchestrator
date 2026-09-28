@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile
+
 from collections import Counter
 import hashlib
 import json
@@ -758,7 +760,7 @@ def test_code_version_change_is_warned_and_recorded_before_provider_start(
             "protocol_binding": ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
                 "3",
-                implementer_profile=AgentProfileBinding("foreign-codex", "medium"),
+                implementer_profile=bound_state_profile("foreign-codex", "medium"),
             )
         },
     ),
@@ -951,11 +953,11 @@ def _legacy_final_denial_recovery_case(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload(
+        bound_run_profile(
+            bound_role_profile(
                 binding.implementer_profile.model, binding.implementer_profile.effort
             ),
-            RoleProfilePayload(
+            bound_role_profile(
                 binding.reviewer_profile.model, binding.reviewer_profile.effort
             ),
         ),
@@ -1907,32 +1909,25 @@ def test_pre_r1_failure_artifact_chain_is_rejected_without_synthesized_facts(
         idempotency_key="work-unit:1",
         fingerprint_sha256="a" * 64,
     )
-    measurement = bridge.append(
-        ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
+    with pytest.raises(ArtifactBridgeError, match="earlier run profile"):
+        bridge.append(
+            ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "a" * 64, "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt_file", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,
             "prompt_file",
         ),
-        logical_id="measurement-legacy",
-        idempotency_key="measurement:legacy",
-        fingerprint_sha256="a" * 64,
-    )
-    before = store.load_chain()
-
-    with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
-        bridge.start_provider_attempt(
-            measurement_record=measurement,
-            binding_fingerprint="a" * 64,
-            work_unit_id="1",
+            logical_id="measurement-legacy",
+            idempotency_key="measurement:legacy",
+            fingerprint_sha256="a" * 64,
         )
+    before = store.load_chain()
 
     after = store.load_chain()
     assert after == before
     assert Counter(record.record_type for record in after) == Counter(
         {
             RecordType.WORK_UNIT: 1,
-            RecordType.PROVIDER_INPUT_MEASUREMENT: 1,
         }
     )
     assert not any(

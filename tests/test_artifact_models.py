@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import asdict, replace
 import json
 from types import SimpleNamespace
@@ -119,11 +121,10 @@ def _preflight_for_pair(provider: str, role: Role) -> FinalReviewPreflightPayloa
     ("provider", "role"),
     ((_PROVIDER_TWO, Role.IMPLEMENTER), (_PROVIDER_ONE, Role.REVIEWER)),
 )
-def test_provider_payloads_reject_wrong_role_pair(
+def test_provider_payloads_accept_registered_provider_and_agent_role_locally(
     make_payload, provider: str, role: Role,
 ) -> None:
-    with pytest.raises(ArtifactValidationError, match="provider and role"):
-        make_payload(provider, role)
+    assert make_payload(provider, role).provider == provider
 
 
 def test_occupancy_patch_changes_payload_budget_and_binary_remedy_together(
@@ -148,11 +149,9 @@ def test_occupancy_patch_changes_payload_budget_and_binary_remedy_together(
     }
     for make_payload in (_measurement_for_pair, _attempt_for_pair):
         assert make_payload(_PROVIDER_TWO, Role.IMPLEMENTER).provider == _PROVIDER_TWO
-        with pytest.raises(ArtifactValidationError, match="provider and role"):
-            make_payload(_PROVIDER_ONE, Role.IMPLEMENTER)
+        assert make_payload(_PROVIDER_ONE, Role.IMPLEMENTER).provider == _PROVIDER_ONE
     assert _preflight_for_pair(_PROVIDER_ONE, Role.REVIEWER).provider == _PROVIDER_ONE
-    with pytest.raises(ArtifactValidationError, match="provider and role"):
-        _preflight_for_pair(_PROVIDER_TWO, Role.REVIEWER)
+    assert _preflight_for_pair(_PROVIDER_TWO, Role.REVIEWER).provider == _PROVIDER_TWO
     assert "--implementer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
     assert "RUN_TASK_IMPLEMENTER_BINARY" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
     assert "--reviewer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_ONE))
@@ -289,28 +288,73 @@ def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
 
 
 def test_run_profile_record_fields_are_role_keyed() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
 
-    assert asdict(profile) == {
-        "implementer": {"model": "implementer-model", "effort": "medium"},
-        "reviewer": {"model": "reviewer-model", "effort": "high"},
-        "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
-        "merge_completed_branch": True,
-        "base_branch": None,
-        "archive_run_directory": None,
-        "post_merge_hook_enabled": True,
-    }
+    payload = _record(profile).to_dict()["payload"]
+    assert set(payload) >= {"implementer", "reviewer", "final_reviewer", "orchestrator_code_version"}
+    assert payload["implementer"]["model"] == "implementer-model"
+    assert payload["reviewer"]["effort"] == "high"
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        assert payload[slot]["binary_identity"]["kind"] == "dry_run"
+        assert len(payload[slot]["binary_identity_sha256"]) == 64
     assert not {"codex", "claude"} & set(asdict(profile))
 
 
+def test_full_slot_profiles_roundtrip_with_certificate_and_final_override() -> None:
+    impl = bound_role_profile("gpt-6-sol", "high", provider="codex", binary="/opt/codex", manufacturer="openai", capability_sha256="a" * 64, transport_sha256="b" * 64, rights_sha256="c" * 64, policy_sha256="d" * 64, certification_sha256="e" * 64)
+    review = bound_role_profile("opus", "high", provider="claude", binary="/opt/claude", manufacturer="anthropic", max_budget_usd=5.0, certification_sha256="f" * 64)
+    final = replace(review, model="sonnet", max_budget_usd=10.0)
+    payload = bound_run_profile(impl, review, final_reviewer=final)
+    record = _record(payload)
+    assert ArtifactRecord.from_dict(record.to_dict()).payload == payload
+    assert record.to_dict()["payload"]["final_reviewer"]["max_budget_usd"] == 10.0
+
+
+@pytest.mark.parametrize("slot", ("implementer", "reviewer", "final_reviewer"))
+@pytest.mark.parametrize("field", (
+    "provider", "binary", "timeout_seconds", "manufacturer",
+    "capability_sha256", "transport_sha256", "rights_sha256",
+    "policy_sha256", "certification_sha256", "binary_identity",
+    "binary_identity_sha256",
+))
+@pytest.mark.parametrize("replacement", ("missing", None))
+def test_run_profile_rejects_missing_or_null_binding_fields(
+    slot: str, field: str, replacement: object,
+) -> None:
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high"),
+        bound_role_profile("reviewer-model", "high"),
+    )
+    document = _record(profile).to_dict()
+    if replacement == "missing":
+        document["payload"][slot].pop(field)
+    else:
+        document["payload"][slot][field] = None
+    with pytest.raises(ArtifactValidationError):
+        ArtifactRecord.from_dict(document)
+
+
+def test_run_profile_requires_explicit_final_and_allows_null_usd_and_zero_timeout() -> None:
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high", timeout_seconds=0),
+        bound_role_profile("reviewer-model", "high", max_budget_usd=None),
+    )
+    document = _record(profile).to_dict()
+    assert document["payload"]["implementer"]["timeout_seconds"] == 0
+    assert document["payload"]["reviewer"]["max_budget_usd"] is None
+    assert ArtifactRecord.from_dict(document).payload == profile
+    document["payload"].pop("final_reviewer")
+    with pytest.raises(ArtifactValidationError):
+        ArtifactRecord.from_dict(document)
+
+
 def test_run_profile_archive_pattern_wire_compatibility() -> None:
-    legacy = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    legacy = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
     legacy_document = _record(legacy).to_dict()
     assert "archive_run_directory" not in legacy_document["payload"]
@@ -327,9 +371,9 @@ def test_run_profile_archive_pattern_wire_compatibility() -> None:
 
 
 def test_pre_hook_run_profile_keeps_its_original_wire_shape() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
         post_merge_hook_enabled=False,
     )
     document = _record(profile).to_dict()
@@ -348,17 +392,17 @@ def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION,
         )
 
 
 def test_foreign_reducer_document_reports_found_and_installed_versions() -> None:
-    document = _record(RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    document = _record(bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )).to_dict()
     document["payload"]["reducer_version"] = "foreign-reducer"
 
@@ -379,9 +423,9 @@ def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed()
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION
             ),
@@ -397,9 +441,9 @@ def test_pre_scope_extension_reducer_is_named_and_rejected_fail_closed() -> None
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_SCOPE_EXTENSION_REDUCER_VERSION,
         )
 
@@ -413,9 +457,9 @@ def test_pre_family_from_entry_reducer_is_named_and_rejected_fail_closed() -> No
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION,
         )
 
@@ -429,9 +473,9 @@ def test_pre_target_finding_lifecycle_reducer_is_named_and_rejected_fail_closed(
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION
             ),
@@ -447,9 +491,9 @@ def test_pre_target_routing_removal_reducer_is_named_and_rejected_fail_closed() 
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_ROUTING_REMOVAL_REDUCER_VERSION
             ),
@@ -465,9 +509,9 @@ def test_pre_target_acceptance_removal_reducer_is_named_and_rejected_fail_closed
         ArtifactValidationError,
         match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_ACCEPTANCE_REMOVAL_REDUCER_VERSION
             ),
@@ -569,9 +613,9 @@ def test_legacy_plan_record_omits_empty_acceptance_criteria() -> None:
 
 
 def test_run_profile_without_orchestrator_code_version_is_rejected() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
     document = _record(profile).to_dict()
     document["payload"].pop("orchestrator_code_version")
@@ -636,9 +680,9 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "IMPLEMENT",
         "docs/internal/task-audit.md",
     ),
-    RunProfilePayload(
-        RoleProfilePayload("gpt-5.6-sol", "max"),
-        RoleProfilePayload("opus", "high"),
+    bound_run_profile(
+        bound_role_profile("gpt-5.6-sol", "max"),
+        bound_role_profile("opus", "high"),
     ),
     WorkflowTransitionPayload(
         "1", "in_progress", "2", "implementer_implementation", "in_progress"

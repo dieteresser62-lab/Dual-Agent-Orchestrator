@@ -1,14 +1,18 @@
 """Current slot occupancy and its provider-to-role projection."""
 
+from pathlib import Path
+import tomllib
+
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
 
 
 def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
-    """Temporary production occupancy until TOML selects slots in Slice 10."""
+    """Read the shipped TOML defaults for compatibility callers."""
+    with (Path(__file__).resolve().parents[1] / "orchestrator.toml").open("rb") as stream:
+        shipped = tomllib.load(stream)
     return {
-        AgentSlot.IMPLEMENTER: "codex",  # allowlist:provider -- role policy file: transitional occupancy
-        AgentSlot.REVIEWER: "claude",  # allowlist:provider -- role policy file: transitional occupancy
-        AgentSlot.FINAL_REVIEWER: "claude",  # allowlist:provider -- role policy file: transitional occupancy
+        slot: shipped["agent_profiles"][shipped["roles"][slot.value]]["provider"]
+        for slot in AgentSlot
     }
 
 

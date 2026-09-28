@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -52,9 +54,9 @@ def _bound_bridge(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     setup.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -608,6 +610,38 @@ def _measurement() -> ProviderInputMeasurementPayload:
         (ProviderInputComponentPayload("prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
     )
+
+
+def test_provider_records_follow_the_run_profile_occupancy(tmp_path: Path) -> None:
+    """An alternate synthetic qualification binds its own provider records."""
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "alternate-occupancy"))
+    bridge.append(
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity", idempotency_key="run-identity",
+        fingerprint_sha256=DIGEST, fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    implementation = bound_role_profile("implementation-model", "high", provider="claude", manufacturer="synthetic-b", certification_sha256="1" * 64)
+    review = bound_role_profile("review-model", "high", provider="codex", manufacturer="synthetic-a", certification_sha256="2" * 64)
+    final = replace(review, certification_sha256="3" * 64)
+    bridge.append(
+        bound_run_profile(implementation, review, final_reviewer=final),
+        logical_id="run-profile", idempotency_key="run-profile",
+        fingerprint_sha256=DIGEST, fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    own = replace(_measurement(), provider="codex")
+    bridge.append(
+        own, logical_id="measurement-own", idempotency_key="measurement-own",
+        fingerprint_sha256=DIGEST,
+    )
+    assert replay_artifacts(bridge.store.load_chain(), "alternate-occupancy").run_profile.reviewer.provider == "codex"
+    with pytest.raises(ArtifactReplayError, match="slot=reviewer.*differs from run profile"):
+        bridge.append(
+            _measurement(), logical_id="measurement-wrong", idempotency_key="measurement-wrong",
+            fingerprint_sha256=DIGEST,
+        )
+    tampered = replace(bridge.store.load_chain()[-1], payload=_measurement())
+    with pytest.raises(ArtifactReplayError, match="slot=reviewer.*differs from run profile"):
+        replay_artifacts((*bridge.store.load_chain()[:-1], tampered), "alternate-occupancy")
 
 
 def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -> None:

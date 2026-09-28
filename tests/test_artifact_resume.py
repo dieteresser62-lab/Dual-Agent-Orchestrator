@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 import hashlib
 import json
 from pathlib import Path
@@ -11,11 +12,14 @@ import pytest
 import artifact_models
 import artifact_resume
 import artifact_store as artifact_store_module
+import agent_runtime
+import workflow_run_setup
 import orchestrator as orchestrator_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import FingerprintKind, WorkUnitPayload, canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
+from agent_config import AgentSettings
 from artifact_store import ArtifactCorruptionError, ArtifactStore
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from state_io import (
@@ -26,6 +30,7 @@ from state_io import (
     write_workflow_state_projection,
 )
 from workflow_state import (
+    scripted_profile_binding,
     ProtocolBinding,
     ProtocolMode,
     WorkflowState,
@@ -140,6 +145,39 @@ def test_resume_projects_records_and_uses_state_only_as_run_locator(
     assert resolved.state == projected
     assert resolved.state.branch == "feature/cutover"
     assert resolved.state.task_scope_patterns == ("src/cutover.py",)
+
+
+def test_cache_loss_reconstructs_full_profile_and_checks_identity_before_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locator, projected, _driver = _record_run(tmp_path, run_id="complete-profile-cache-loss")
+    store = ArtifactStore(tmp_path, locator.run_id)
+    (tmp_path / ".orchestrator" / "state.json").unlink(missing_ok=True)
+    store.head_path.unlink(missing_ok=True)
+    resolved = resolve_resume_state(tmp_path, locator.run_id)
+    binding = resolved.state.protocol_binding
+    assert binding == projected.protocol_binding
+    assert binding is not None
+    assert {binding.implementer_profile.provider, binding.reviewer_profile.provider} == {"codex", "claude"}
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        profile = getattr(binding, f"{slot}_profile")
+        assert profile.binary_identity.kind == "dry_run"
+        assert profile.binary_identity_sha256 == profile.binary_identity.digest
+        assert profile.certification_sha256
+    slots = {}
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        profile = scripted_profile_binding(slot)
+        alternate_model = "gpt-5.6-sol" if slot == "implementer" else "sonnet"
+        slots[slot] = AgentSettings(
+            profile.provider, profile.binary, alternate_model, None,
+            profile.effort, profile.max_budget_usd,
+        )
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    monkeypatch.setattr(agent_runtime, "verify_agent_capabilities", lambda *_args, **_kwargs: pytest.fail("provider binary must not start"))
+    workflow_run_setup._apply_resumed_agent_profiles(args, resolved.state)
+    for slot in slots:
+        assert args.slot_settings[slot].model == getattr(binding, f"{slot}_profile").model
+        assert args.slot_identities[slot] == getattr(binding, f"{slot}_profile").binary_identity
 
 
 def test_process_local_resolution_is_warm_but_explicit_resume_fully_reloads(

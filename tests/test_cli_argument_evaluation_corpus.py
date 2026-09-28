@@ -425,10 +425,12 @@ def _handler_classification(handler: ast.ExceptHandler) -> str:
 
 def _static_document() -> dict[str, object]:
     tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
-    function = _logical_parse_args_function(tree)
+    # The immutable pre-B64 blob is the historical contract. Slice 10 adds
+    # profile and environment guards to the current parser deliberately.
     pre_cut_function = _parse_args_function(
         ast.parse(_git("show", f"{SOURCE_COMMIT}:src/cli.py"))
     )
+    function = pre_cut_function
     conditions = _ordered(function, ast.If)
     raises = _ordered(function, ast.Raise)
     parser_errors = [
@@ -613,9 +615,9 @@ def _containing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
 
 def _catcher_anchor(handler: ast.ExceptHandler, parents: dict[ast.AST, ast.AST]) -> dict[str, str]:
     owner = parents[handler]
-    assert isinstance(owner, ast.Try) and len(owner.body) == 1
+    assert isinstance(owner, ast.Try) and owner.body
     statement = owner.body[0]
-    assert isinstance(statement, (ast.Assign, ast.Return))
+    assert isinstance(statement, (ast.Assign, ast.Return, ast.Expr))
     value = statement.value
     assert isinstance(value, ast.Call)
     return {
@@ -665,6 +667,10 @@ def _source_catalog() -> dict[str, object]:
                for node in _ordered(function, ast.Return)]
     catchers = [_catcher_anchor(node, parents)
                 for node in _ordered(function, ast.ExceptHandler)]
+    # These are new Slice-10 failures. The historical 11 scenarios stay
+    # bijective with their original source guards.
+    raises = [item for item in raises if "unknown_env" not in item["expression"] and "CertificationError" not in item["guard"]]
+    catchers = [item for item in catchers if item["exception_type"] != "CertificationError"]
     # Four post-B64 acknowledgment guards are outside the historical 11-case corpus.
     acknowledgment_messages = {
         "--acknowledge-post-merge requires --resume and --task-file",
@@ -1022,11 +1028,8 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     ) == ast.dump(
         _top_level_function(pre_cut_tree, "build_parser"), include_attributes=False
     )
-    assert ast.dump(
-        _logical_parse_args_function(active_tree), include_attributes=False
-    ) == ast.dump(
-        _parse_args_function(pre_cut_tree), include_attributes=False
-    )
+    # The pre-cut parser is still checked by its committed blob and static
+    # corpus. Current profile branches have their own runtime cases below.
 
     expected_helpers = anchor["post_cut_contract"]["helpers"]
     assert [item["helper"] for item in expected_helpers] == list(B65_HELPERS)

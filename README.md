@@ -444,8 +444,9 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 |---|---|---|
 | Implementer (Codex) | `--implementer-binary`, `--implementer-model`, `--implementer-timeout`, `--implementer-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
 | Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`, `--reviewer-timeout`, `--reviewer-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
+| Finalreviewer (Claude) | `--final-reviewer-binary`, `--final-reviewer-model`, `--final-reviewer-timeout`, `--final-reviewer-effort` | erbt den Reviewer; eigener TOML-Finalslot kann überschreiben |
 
-`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus.
+`agent_profiles.<name>.provider_options.claude.max_budget_usd` setzt eine optionale Budgetobergrenze für den Claude-Print-Modus in der TOML-Konfiguration.
 
 Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--implementer-timeout` und `--reviewer-timeout` beziehungsweise `RUN_TASK_IMPLEMENTER_TIMEOUT` und `RUN_TASK_REVIEWER_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
 

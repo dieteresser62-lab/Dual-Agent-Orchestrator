@@ -7,6 +7,23 @@ generated = [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]
 [validation]
 default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_harness"]
 
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "review"
+
+[agent_profiles.implementation]
+provider = "codex" # allowlist:provider -- profile configuration: shipped implementer default
+model = "sol"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.review]
+provider = "claude" # allowlist:provider -- profile configuration: shipped reviewer default
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+
 [[provider_input_budget]]
 provider = "codex"
 role = "implementer"

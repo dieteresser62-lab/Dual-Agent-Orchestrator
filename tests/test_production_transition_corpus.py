@@ -374,6 +374,13 @@ def _static_facts(tree: ast.Module) -> dict[str, object]:
 
 
 def _args(**overrides: object) -> SimpleNamespace:
+    from agent_config import AgentSettings
+    from provider_identity import ProviderIdentity
+    slots = {
+        "implementer": AgentSettings("codex", "codex", "codex-anchor", None, "medium"),
+        "reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+        "final_reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+    }
     values: dict[str, object] = {
         "plan_only": None,
         "work_plan": None,
@@ -389,6 +396,9 @@ def _args(**overrides: object) -> SimpleNamespace:
             "codex": SimpleNamespace(model="codex-anchor", effort="medium"),
             "claude": SimpleNamespace(model="claude-anchor", effort="high"),
         },
+        "slot_settings": slots,
+        "slot_identities": {slot: ProviderIdentity.dry_run(slot) for slot in slots},
+        "scripted_provider_identity": True,
         "agent_output": "none",
         "agent_output_max_chars": 1000,
         "agent_live_stream": False,
@@ -729,7 +739,11 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         monkeypatch.chdir(scenario_root)
         monkeypatch.setattr(workflow_production, "new_run_id", lambda: "candidate")
         monkeypatch.setattr(workflow_production, "watch_run_has_records", lambda *_args: False)
-        monkeypatch.setattr(workflow_production, "build_agent_registry", lambda _settings: {})
+        monkeypatch.setattr(workflow_production, "_capture_slot_identities", lambda slots, **_kwargs: {slot: args.slot_identities[slot] for slot in slots})
+        monkeypatch.setattr(workflow_production, "build_slot_agent_registry", lambda _settings: {
+            slot: SimpleNamespace(provider_identity=None, capability_verified=False)
+            for slot in ("implementer", "reviewer", "final_reviewer")
+        })
         monkeypatch.setattr(workflow_production, "require_production_workflow_loop_driver", lambda _driver: None)
         monkeypatch.setattr(workflow_production, "WorkflowEngine", lambda _driver: engine)
         monkeypatch.setattr(workflow_production, "_create_production_state", lambda **_kwargs: initial)

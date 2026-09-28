@@ -12,7 +12,7 @@ from agent_adapters import (
 )
 from agent_config import AgentSettings
 from cli import build_parser, parse_args
-from workflow_state import ProtocolBinding, WorkflowStateValidationError
+from workflow_state import ProtocolBinding, ProtocolMode, WorkflowStateValidationError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,7 +178,9 @@ def test_retired_transport_flags_are_unknown(flag: str, tmp_path: Path) -> None:
 def test_incomplete_persisted_transport_binding_is_rejected(
     document: dict[str, object],
 ) -> None:
+    complete = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3").to_dict()
+    complete.update({key: value for key, value in document.items() if not key.endswith("_profile")})
     with pytest.raises(
         WorkflowStateValidationError, match="transport.*string|complete native"
     ):
-        ProtocolBinding.from_dict(document)
+        ProtocolBinding.from_dict(complete)

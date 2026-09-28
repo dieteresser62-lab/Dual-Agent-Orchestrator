@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import itertools
 import logging
 import os
 import re
@@ -23,6 +24,7 @@ from cli import (
     run_cli,
 )
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
+from cli import ALLOWED_ENV_NAMES
 
 
 def _write_config(repo: Path, text: str) -> Path:
@@ -42,6 +44,83 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     assert config.workflow.max_transport_failures == 3
     assert config.workflow.max_contract_rejections == 3
     assert config.workflow.merge_completed_branch is True
+
+
+def test_shipped_roles_and_profiles_resolve_with_final_inheritance(tmp_path: Path) -> None:
+    args = parse_args([], cwd=tmp_path, environ={})
+    assert {slot: setting.name for slot, setting in args.slot_settings.items()} == {
+        "implementer": "codex", "reviewer": "claude", "final_reviewer": "claude",
+    }
+    assert args.slot_settings["final_reviewer"] == args.slot_settings["reviewer"]
+
+
+def test_toml_final_profile_and_usd_budget_reach_adapters(tmp_path: Path) -> None:
+    shipped = (Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text(encoding="utf-8")
+    _write_config(tmp_path, shipped.replace('final_reviewer = "review"', 'final_reviewer = "final"') + """
+[agent_profiles.final]
+provider = "claude"
+model = "sonnet"
+effort = "xhigh"
+timeout_seconds = 0
+[agent_profiles.final.provider_options.claude]
+max_budget_usd = 10.0
+""")
+    args = parse_args([], cwd=tmp_path, environ={})
+    assert len(args.repo_config.provider_input_budget.rules) == 7
+    final = args.slot_settings["final_reviewer"]
+    assert (final.model, final.effort, final.timeout_seconds, final.max_budget_usd) == ("sonnet", "xhigh", None, 10.0)
+    from agent_adapters import build_agent_registry
+    adapters = build_agent_registry(args.agent_settings, final_settings=final)
+    assert adapters["final_reviewer"].max_budget_usd == 10.0
+    assert adapters["claude"].max_budget_usd is None
+
+
+@pytest.mark.parametrize("providers", itertools.product(("codex", "claude"), repeat=3))
+def test_all_provider_topologies_parse_but_only_certified_one_starts(tmp_path: Path, providers: tuple[str, str, str]) -> None:
+    def profile(name: str, provider: str) -> str:
+        model = "sol" if provider == "codex" else "opus"
+        return f'[agent_profiles.{name}]\nprovider = "{provider}"\nmodel = "{model}"\neffort = "high"\n'
+    config = _write_config(tmp_path, '[roles]\nimplementer = "impl"\nreviewer = "rev"\nfinal_reviewer = "fin"\n' + ''.join(profile(name, provider) for name, provider in zip(("impl", "rev", "fin"), providers)))
+    assert set(load_repo_config(config).agent_profiles) >= {"impl", "rev", "fin"}
+    if providers == ("codex", "claude", "claude"):
+        assert parse_args([], cwd=tmp_path, environ={}).slot_settings["final_reviewer"].name == "claude"
+    else:
+        with pytest.raises(ConfigError, match="slot=.*provider="):
+            parse_args([], cwd=tmp_path, environ={})
+
+
+@pytest.mark.parametrize("fragment,diagnostic", (
+    ('[roles]\nreviewer = "missing"\n', "missing agent profile"),
+    ('[agent_profiles.unused]\nprovider = "claude"\nmodel = "opus"\neffort = "extreme"\n', "effort"),
+    ('[agent_profiles.unused]\nprovider = "claude"\nmodel = "opus"\neffort = "high"\nunknown = 1\n', "unknown"),
+    ('[agent_profiles.review]\ntimeout_seconds = -1\n', "timeout_seconds"),
+    ('[agent_profiles.review.provider_options.claude]\nmax_budget_usd = inf\n', "positive number"),
+    ('[agent_profiles.review.provider_options.claude]\nmax_budget_usd = -1.0\n', "positive number"),
+    ('[agent_profiles.implementation.provider_options.claude]\nmax_budget_usd = 1.0\n', "require provider claude"),
+))
+def test_invalid_or_unused_profiles_fail_syntactically(tmp_path: Path, fragment: str, diagnostic: str) -> None:
+    with pytest.raises(ConfigError, match=diagnostic):
+        load_repo_config(_write_config(tmp_path, fragment))
+
+
+def test_profile_precedence_and_unknown_environment_are_strict(tmp_path: Path) -> None:
+    _write_config(tmp_path, '[agent_profiles.review]\nmodel = "sonnet"\neffort = "low"\ntimeout_seconds = 17\n')
+    args = parse_args(["--reviewer-model", "opus"], cwd=tmp_path, environ={"RUN_TASK_REVIEWER_MODEL": "fable", "RUN_TASK_REVIEWER_EFFORT": ""})
+    assert (args.slot_settings["reviewer"].model, args.slot_settings["reviewer"].effort, args.slot_settings["reviewer"].timeout_seconds) == ("opus", "low", 17)
+    assert args.slot_settings["final_reviewer"] == args.slot_settings["reviewer"]
+    with pytest.raises(ConfigError, match="RUN_TASK_UNKNOWN"):
+        parse_args([], cwd=tmp_path, environ={"RUN_TASK_UNKNOWN": "1"})
+    with pytest.raises(ConfigError, match="RUN_TASK_CLAUDE_MAX_BUDGET_USD"):
+        parse_args([], cwd=tmp_path, environ={"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1"})
+    with pytest.raises(SystemExit):
+        parse_args(["--claude-max-budget-usd", "1"], cwd=tmp_path, environ={})  # allowlist:provider -- profile configuration: retired flag rejection
+
+
+def test_run_task_environment_mentions_are_allowlisted() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = "\n".join(path.read_text(encoding="utf-8") for path in [*sorted((root / "src").glob("*.py")), root / "README.md", root / "Quickstart.md"])
+    mentioned = set(re.findall(r"RUN_TASK_[A-Z][A-Z0-9_]*", text))
+    assert mentioned <= ALLOWED_ENV_NAMES
 
 
 def test_merge_completion_setting_defaults_true_and_accepts_false(tmp_path: Path) -> None:
@@ -110,13 +189,8 @@ max_bytes = 20
 """,
         encoding="utf-8",
     )
-    config = load_repo_config(path)
-    assert config.provider_input_budget.select(
-        "codex", "implementer", "implementer_implementation"
-    ).max_chars == 10
-    assert config.provider_input_budget.select(
-        "claude", "reviewer", "reviewer_final_review"
-    ).max_chars == 4_000_000
+    with pytest.raises(ConfigError, match="must be complete"):
+        load_repo_config(path)
 
     path.write_text(path.read_text(encoding="utf-8") * 2, encoding="utf-8")
     with pytest.raises(ConfigError, match="duplicate"):
@@ -468,6 +542,7 @@ def test_every_public_parser_action_has_help_text() -> None:
 
 
 def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Path) -> None:
+    _write_config(tmp_path, "[agent_profiles.review.provider_options.claude]\nmax_budget_usd = 2.5\n")
     args = parse_args(
         [
             "--reviewer-binary",
@@ -478,8 +553,6 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
             "321",
             "--reviewer-effort",
             "high",
-            "--claude-max-budget-usd",
-            "2.5",
         ],
         cwd=tmp_path,
         environ={
@@ -487,7 +560,6 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
             "RUN_TASK_REVIEWER_MODEL": "sonnet",
             "RUN_TASK_REVIEWER_TIMEOUT": "999",
             "RUN_TASK_REVIEWER_EFFORT": "low",
-            "RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1.0",
             "RUN_TASK_IMPLEMENTER_MODEL": "luna",
             "RUN_TASK_IMPLEMENTER_EFFORT": "high",
         },
@@ -680,7 +752,7 @@ def test_post_merge_acknowledgment_parses_exact_commit(tmp_path: Path) -> None:
     [
         ({"RUN_TASK_REVIEWER_TIMEOUT": "-1"}, "reviewer timeout"),
         ({"RUN_TASK_REVIEWER_EFFORT": "extreme"}, "reviewer effort"),
-        ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "claude max budget"),
+        ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "Unknown RUN_TASK"),
     ],
 )
 def test_invalid_agent_environment_is_a_configuration_error(

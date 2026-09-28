@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
@@ -17,6 +18,7 @@ from rejected_response_shape import (
     rejected_native_response_shape_document,
     rejected_native_response_shape_from_document,
 )
+from provider_identity import ProviderIdentity
 
 
 STATE_VERSION = 3
@@ -205,10 +207,22 @@ NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v3"
 
 @dataclass(frozen=True)
 class AgentProfileBinding:
-    """Immutable model and reasoning selection for one workflow role."""
+    """Immutable selected profile for one workflow slot."""
 
     model: str
     effort: str
+    provider: str
+    binary: str
+    timeout_seconds: int
+    manufacturer: str
+    capability_sha256: str
+    transport_sha256: str
+    rights_sha256: str
+    policy_sha256: str
+    certification_sha256: str
+    binary_identity: ProviderIdentity
+    binary_identity_sha256: str
+    max_budget_usd: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str) or not self.model.strip():
@@ -219,18 +233,66 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile model must be canonical")
         if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise WorkflowStateValidationError("agent profile effort is unsupported")
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise WorkflowStateValidationError("agent profile provider is invalid")
+        if not isinstance(self.binary, str) or not self.binary.strip():
+            raise WorkflowStateValidationError("agent profile binary is invalid")
+        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
+            raise WorkflowStateValidationError("agent profile timeout is invalid")
+        if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
+            raise WorkflowStateValidationError("agent profile USD budget is invalid")
+        if not isinstance(self.manufacturer, str) or not self.manufacturer.strip():
+            raise WorkflowStateValidationError("agent profile manufacturer is invalid")
+        for label in ("capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256", "certification_sha256"):
+            value = getattr(self, label)
+            if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
+                raise WorkflowStateValidationError(f"agent profile {label} is invalid")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise WorkflowStateValidationError("agent profile binary identity is invalid")
+        if not isinstance(self.binary_identity_sha256, str) or SHA256_PATTERN.fullmatch(self.binary_identity_sha256) is None:
+            raise WorkflowStateValidationError("agent profile binary identity SHA-256 is invalid")
+        if self.binary_identity_sha256 != self.binary_identity.digest:
+            raise WorkflowStateValidationError("agent profile binary identity digest differs")
 
-    def to_dict(self) -> dict[str, str]:
-        return {"model": self.model, "effort": self.effort}
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **{name: getattr(self, name) for name in self.__dataclass_fields__ if name != "binary_identity"},
+            "binary_identity": self.binary_identity.to_dict(),
+        }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
-        if set(raw) != {"model", "effort"}:
+        if not (set(cls.__dataclass_fields__) - {"max_budget_usd"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
             raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
-        return cls(
-            model=_string(raw["model"], f"{label} model"),
-            effort=_string(raw["effort"], f"{label} effort"),
-        )
+        try:
+            return cls(**{**raw, "binary_identity": ProviderIdentity.from_dict(raw["binary_identity"])})
+        except (TypeError, ValueError) as exc:
+            raise WorkflowStateValidationError(f"{label} has invalid identity: {exc}") from exc
+
+
+def scripted_profile_binding(slot: str) -> AgentProfileBinding:
+    """Fully bound scripted profile used by in-memory workflow fixtures."""
+    import argparse
+    from agent_config import resolve_agent_settings
+    from agent_roles import AgentSlot, role_for_slot
+    from role_certification import load_role_certifications
+
+    selected = AgentSlot(slot)
+    namespace = argparse.Namespace(**{
+        f"{name}_{field}": None
+        for name in (item.value for item in AgentSlot)
+        for field in ("binary", "model", "timeout", "effort")
+    })
+    config = resolve_agent_settings(namespace, {})[slot]
+    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected)
+    identity = ProviderIdentity.dry_run(slot)
+    return AgentProfileBinding(
+        config.model, config.effort, config.name, config.binary,
+        config.timeout_seconds or 0, cert.manufacturer,
+        cert.capability_sha256, cert.transport_sha256, cert.rights_sha256,
+        cert.policy_sha256, cert.digest, identity, identity.digest,
+        config.max_budget_usd,
+    )
 
 
 @dataclass(frozen=True)
@@ -241,8 +303,9 @@ class ProtocolBinding:
     schema_version: str
     claude_review_transport: str | None = NATIVE_CLAUDE_REVIEW_TRANSPORT
     codex_result_transport: str | None = NATIVE_CODEX_RESULT_TRANSPORT
-    implementer_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high")
-    reviewer_profile: AgentProfileBinding = AgentProfileBinding("opus", "high")
+    implementer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("implementer"))
+    reviewer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("reviewer"))
+    final_reviewer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("final_reviewer"))
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ProtocolMode):
@@ -282,6 +345,8 @@ class ProtocolBinding:
             raise WorkflowStateValidationError(
                 "structured-v2 requires the complete native Codex-Claude transport binding"
             )
+        if any(not isinstance(profile, AgentProfileBinding) for profile in (self.implementer_profile, self.reviewer_profile, self.final_reviewer_profile)):
+            raise WorkflowStateValidationError("protocol binding requires all three bound profiles")
 
     def to_dict(self) -> dict[str, object]:
         result = {"mode": self.mode.value, "schema_version": self.schema_version}
@@ -291,12 +356,17 @@ class ProtocolBinding:
             result["codex_result_transport"] = self.codex_result_transport
         result["implementer_profile"] = self.implementer_profile.to_dict()
         result["reviewer_profile"] = self.reviewer_profile.to_dict()
+        result["final_reviewer_profile"] = self.final_reviewer_profile.to_dict()
         return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ProtocolBinding:
         keys = set(raw)
-        if not {"mode", "schema_version"}.issubset(keys) or not keys.issubset(
+        required = {"mode", "schema_version", "implementer_profile", "reviewer_profile", "final_reviewer_profile"}
+        missing = required - keys
+        if missing:
+            raise WorkflowStateValidationError(f"protocol binding missing {', '.join(sorted(missing))}")
+        if not keys.issubset(
             {
                 "mode",
                 "schema_version",
@@ -304,6 +374,7 @@ class ProtocolBinding:
                 "codex_result_transport",
                 "implementer_profile",
                 "reviewer_profile",
+                "final_reviewer_profile",
             }
         ):
             raise WorkflowStateValidationError(
@@ -336,6 +407,7 @@ class ProtocolBinding:
                 _mapping(raw.get("reviewer_profile"), "protocol reviewer_profile"),
                 "protocol reviewer_profile",
             ),
+            final_reviewer_profile=AgentProfileBinding.from_dict(_mapping(raw["final_reviewer_profile"], "protocol final_reviewer_profile"), "protocol final_reviewer_profile"),
         )
 
 

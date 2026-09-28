@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import ast
 import copy
 from dataclasses import replace
@@ -337,14 +339,21 @@ def test_incomplete_profile_prefix_preserves_persisted_code_version(
     binding = cast(ProtocolBinding, state.protocol_binding)
     persisted_version = "d" * 64
     profile = bridge.append(
-        RunProfilePayload(
-            implementer=RoleProfilePayload(
+        bound_run_profile(
+            implementer=bound_role_profile(
                 binding.implementer_profile.model,
                 binding.implementer_profile.effort,
             ),
-            reviewer=RoleProfilePayload(
+            reviewer=bound_role_profile(
                 binding.reviewer_profile.model,
                 binding.reviewer_profile.effort,
+            ),
+            final_reviewer=bound_role_profile(
+                binding.final_reviewer_profile.model,
+                binding.final_reviewer_profile.effort,
+                binary_identity=binding.final_reviewer_profile.binary_identity,
+                binary_identity_sha256=binding.final_reviewer_profile.binary_identity_sha256,
+                certification_sha256=binding.final_reviewer_profile.certification_sha256,
             ),
             orchestrator_code_version=persisted_version,
             merge_completed_branch=False,

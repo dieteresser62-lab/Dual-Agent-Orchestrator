@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import subprocess
 import sys
 import hashlib
@@ -383,9 +385,9 @@ def test_halt_with_identity_profile_baseline_has_no_second_diagnostic(
     _append_test_record(
         tmp_path,
         run_id,
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         "run-profile",
     )

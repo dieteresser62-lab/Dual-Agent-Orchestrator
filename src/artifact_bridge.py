@@ -25,6 +25,7 @@ from artifact_models import (
     FinalReviewCompletedPayload,
     FinalReviewFindingPayload,
     FinalReviewOccurrencePayload,
+    FinalReviewPreflightPayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -36,6 +37,7 @@ from artifact_models import (
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
+    RunProfilePayload,
     ProviderUsagePayload,
     RecordType,
     GatePayload,
@@ -77,6 +79,7 @@ from artifact_replay import (
     ReplayDiagnosticCode,
     _validate_work_unit_revision,
     replay_artifacts,
+    validate_provider_record_binding,
 )
 
 
@@ -577,6 +580,14 @@ class ArtifactBridge:
     store: ArtifactStore
     now: Callable[[], str] = _now
 
+    def _require_bound_provider(self, payload: ArtifactPayload, chain: tuple[ArtifactRecord, ...]) -> None:
+        if not isinstance(payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)):
+            return
+        profile = next((record.payload for record in chain if isinstance(record.payload, RunProfilePayload)), None)
+        if profile is None:
+            raise ArtifactBridgeError("provider record requires an earlier run profile")
+        validate_provider_record_binding(payload, profile)
+
     def append(
         self,
         payload: ArtifactPayload,
@@ -595,6 +606,7 @@ class ArtifactBridge:
                     "resume or inspect this run with the matching older orchestrator release",
                 )
             )
+        self._require_bound_provider(payload, self.store.current_chain())
         fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)
         context = self.store.append_context(
             record_type=payload.record_type,
@@ -682,6 +694,8 @@ class ArtifactBridge:
             return persisted
 
         chain = self.store.current_chain()
+        for payload, *_ in entries:
+            self._require_bound_provider(payload, chain)
         revisions = {
             (record.record_type, record.logical_id): record.revision
             for record in chain
