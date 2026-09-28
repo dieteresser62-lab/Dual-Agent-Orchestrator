@@ -47,6 +47,7 @@ _ROLE_BINDINGS = {
             "allowed_tools": "Read",
             "disallowed_tools": "Bash,Edit,Write,NotebookEdit,Grep,Glob",
             "permission_mode": "dontAsk",
+            "restricted_flag": "--restricted",
         }),
     ),
 }

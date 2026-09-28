@@ -668,7 +668,6 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
         "--allowedTools": "Read",
         "--disallowedTools": "Bash,Edit,Write,NotebookEdit,Grep,Glob",
         "--permission-mode": "dontAsk",
-        "--setting-sources": "user",
         "--prompt-suggestions": "false",
     }
     for flag, expected in expected_pairs.items():
@@ -683,6 +682,7 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
     _discard_pair(values, "--json-schema")
     flags = {
         "-p",
+        "--restricted",
         "--safe-mode",
         "--strict-mcp-config",
         "--no-session-persistence",
@@ -690,7 +690,7 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
     }
     positional = [item for item in values if item not in flags]
     seen_flags = {item for item in values if item in flags}
-    if seen_flags != flags or len(positional) != 1:
+    if seen_flags != flags or values.count("--restricted") != 1 or len(positional) != 1:
         raise NativeProviderSchemaError(
             f"unclassified Claude command arguments: {values!r}"
         )
@@ -707,7 +707,7 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
             "--allowedTools=Read",
             "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
             "--permission-mode=dontAsk",
-            "--setting-sources=user",
+            "--restricted",
             "--safe-mode",
             "--strict-mcp-config",
             "--prompt-suggestions=false",

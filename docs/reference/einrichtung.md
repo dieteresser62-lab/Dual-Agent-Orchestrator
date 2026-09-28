@@ -99,7 +99,7 @@ Merge können Sie in der Konfiguration abschalten.
 | Git | – | `git --version` |
 | eine Git-Identität | – | `git config user.name` und `git config user.email` |
 | Codex CLI | 0.156.1 | `codex --version` |
-| Claude Code | 2.1.280 | `claude --version` |
+| Claude Code | 2.1.283 | `claude --version` |
 | ein ChatGPT-Konto mit Zugriff auf **GPT-6 Sol** | – | `codex login` |
 | ein Claude-Konto mit Zugriff auf **Opus** | – | `claude`, dann der Anmeldung folgen |
 
@@ -861,6 +861,15 @@ Das Fähigkeitsregister
 bindet die Aufrufform der beiden Kommandozeilen, nicht Modell und Effort. Die
 Schemamerkmale wurden am 23.9.2026 für alle wählbaren Modelle und Effort-Stufen
 gemessen und waren überall gleich.
+
+Claude-Reviewer und Final-Reviewer starten mit `--tools Read`,
+`--allowedTools Read`, `--permission-mode dontAsk` und `--restricted`.
+`--restricted` begrenzt Dateiwerkzeuge auf den schreibgeschützten Snapshot als
+Arbeitsverzeichnis und den per `--add-dir` freigegebenen privaten Runtime-Ordner;
+absolute Fremdpfade, Traversal und aus dem Snapshot hinausführende Symlinks
+bleiben für `Read` gesperrt. Die Grenze gilt auch bei Planreviews und
+Vertragsreparaturen mit leerem Snapshot. Claude Code 2.1.283 wurde dafür live
+geprüft.
 
 Dasselbe Register legt die geprüften CLI-Versionen fest. Neuere Versionen
 derselben Hauptversion werden akzeptiert, ältere und andere Hauptversionen

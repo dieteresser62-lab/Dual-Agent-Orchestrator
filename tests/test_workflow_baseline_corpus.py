@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from profile_helpers import bound_state_profile
+from profile_helpers import bound_state_profile, historical_reviewer_state_profile
 
 import ast
 import copy
@@ -362,7 +362,8 @@ def _state(
             ProtocolMode.STRUCTURED_V2,
             "3",
             implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
-            reviewer_profile=bound_state_profile("sonnet", "high"),
+            reviewer_profile=historical_reviewer_state_profile("sonnet", "high"),
+            final_reviewer_profile=historical_reviewer_state_profile("opus", "high", slot="final_reviewer"),
         ),
         timestamp=STAMP,
     )

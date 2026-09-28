@@ -46,15 +46,15 @@
       "manufacturer": "anthropic",
       "status": "certified",
       "version_scope": {
-        "cli_version": "2.1.280 (Claude Code)",
+        "cli_version": "2.1.283 (Claude Code)",
         "version_policy": "same-major-forward"
       },
-      "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+      "capability_sha256": "3ad91986e6992ab2e15f045bb5e290f9f8194d8482a728ab985cece75d1a587f",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
-      "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
-        "path": "docs/evidence/role-certification-v1.json",
-        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+        "path": "docs/evidence/role-certification-reviewer-restricted-v1.json",
+        "sha256": "81d558966b965e0dfee02c7d395324c1ac7fdecda498acea4afe09fa43386a80"
       },
       "probe_profile": {
         "provider": "claude",
@@ -69,7 +69,7 @@
           "--allowedTools=Read",
           "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
           "--permission-mode=dontAsk",
-          "--setting-sources=user",
+          "--restricted",
           "--safe-mode",
           "--strict-mcp-config",
           "--prompt-suggestions=false",
@@ -85,15 +85,15 @@
       "manufacturer": "anthropic",
       "status": "certified",
       "version_scope": {
-        "cli_version": "2.1.280 (Claude Code)",
+        "cli_version": "2.1.283 (Claude Code)",
         "version_policy": "same-major-forward"
       },
-      "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+      "capability_sha256": "3ad91986e6992ab2e15f045bb5e290f9f8194d8482a728ab985cece75d1a587f",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
-      "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
-        "path": "docs/evidence/role-certification-v1.json",
-        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+        "path": "docs/evidence/role-certification-reviewer-restricted-v1.json",
+        "sha256": "81d558966b965e0dfee02c7d395324c1ac7fdecda498acea4afe09fa43386a80"
       },
       "probe_profile": {
         "provider": "claude",
@@ -108,7 +108,7 @@
           "--allowedTools=Read",
           "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
           "--permission-mode=dontAsk",
-          "--setting-sources=user",
+          "--restricted",
           "--safe-mode",
           "--strict-mcp-config",
           "--prompt-suggestions=false",

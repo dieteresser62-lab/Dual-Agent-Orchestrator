@@ -23,10 +23,11 @@ from role_certification import (
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = "schemas/role-provider-certifications-v1.json"
 EVIDENCE = "docs/evidence/role-certification-v1.json"
+REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.json"
 
 
 def _copy_sources(root: Path) -> None:
-    paths = {TABLE, EVIDENCE, "schemas/native-provider-schema-capabilities-v1.json"}
+    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, "schemas/native-provider-schema-capabilities-v1.json"}
     for path in paths:
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,8 @@ def _mutate_evidence(root: Path, change: Callable[[dict[str, object]], object]) 
 
     def update_digest(table: dict[str, object]) -> None:
         for row in table["certifications"]:
-            row["evidence"]["sha256"] = digest
+            if row["evidence"]["path"] == EVIDENCE:
+                row["evidence"]["sha256"] = digest
 
     _mutate(root, update_digest)
 
@@ -83,6 +85,20 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     assert not hasattr(table.entries[0], "profile")
 
 
+def test_reviewer_qualification_binds_restricted_transport_without_changing_codex() -> None:
+    table = load_role_certifications()
+    implementer, reviewer, final = table.entries
+    assert implementer.capability_sha256 == "d57db52e04c2492e642512a6927ed4bac1e60a5b62bace486876c18ad21356fc"
+    assert implementer.rights_sha256 == "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8"
+    for entry in (reviewer, final):
+        assert entry.probe_profile["semantic_flags"].count("--restricted") == 1
+        assert "--setting-sources=user" not in entry.probe_profile["semantic_flags"]
+        assert entry.version_scope["cli_version"] == "2.1.283 (Claude Code)"
+        assert entry.capability_sha256 != "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e"
+        assert entry.rights_sha256 != "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c"
+        assert entry.evidence_path == REVIEWER_EVIDENCE
+
+
 def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> None:
     baseline = load_role_certifications().entries
     aliases = CertificationTable((
@@ -102,6 +118,7 @@ def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> Non
 
 def test_every_evidence_node_id_exists_in_the_test_suite() -> None:
     _assert_node_ids_exist(json.loads((ROOT / EVIDENCE).read_text()))
+    _assert_node_ids_exist(json.loads((ROOT / REVIEWER_EVIDENCE).read_text()))
 
 
 def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -> None:
