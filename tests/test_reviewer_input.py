@@ -25,10 +25,10 @@ def _adapter() -> NativeClaudeReviewAdapter:
 def test_reviewer_components_match_start_head_bytes() -> None:
     # Slice 8b wire cut; the historical component digests are checked below.
     expected = {
-        "request_chunk_001": ("5dbbf48dd842d6c9e207b382a53ebd14c1b3d884d966227481d45f6c22515d8b", 1813),
-        "packet_manifest": ("583b08d2958e03a257cbc301a2dac7493cb08198858b62462bd508bb6308e999", 502),
+        "request_chunk_001": ("fa2a6a9354dfdf4601423c2d4690e68c7f5e55512d14c30672ad8039ad0dfb8e", 1813),
+        "packet_manifest": ("cbfe0df44c026e0f2c66fb20cb77f520c151b2ea73eb5883fe6d6b7bd7dd22ed", 502),
         "system_policy": ("a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d", 2440),
-        "response_schema": ("8ecef1f1d81582ef94d64f85f046495a247b9de37d019eafcedd72d37f4e09b2", 25916),
+        "response_schema": ("ec2b2abccea7faab60c31c1ae8eb15138a8f7e5973dcd67fc2c020034cef2cca", 38898),
         "start_directive": ("344363a35fdc403d7803b5c1edfaf731becbade36c37b941d7b8e204c65db6a0", 280),
     }
     adapter = _adapter()
@@ -47,14 +47,14 @@ def test_reviewer_components_match_start_head_bytes() -> None:
             .replace('"const":"reviewer"', '"const":"claude"')
             .replace('"enum":["reviewer"]', '"enum":["claude"]'))
         prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
-        assert prior_schema_digest == "8892fb0113d102afa886f2be6421c393440a683fd6065e31198823205c2c9746"
+        assert prior_schema_digest == "96234209de18341a86a38ec920a1d1fd4c19984fa97c0610c1b621598a5f3317"
         prior_request = prior_role_wire_document(
             bundle.document, prior_schema_sha256=prior_schema_digest
         )
         prior_chunk = json.dumps(prior_request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         prior_chunk_digest = hashlib.sha256(prior_chunk.encode()).hexdigest()
         assert (prior_chunk_digest, len(prior_chunk.encode())) == (
-            "09f1fbb1a0e29d88d73e9c1373e0a8ee0ae2d1c3f6a49325f5427529b131f85b", 1809
+            "9fc6e7944cb4781e426695c6e1b7cd1e0243cf946caeb5ed69364ba3c747e8f8", 1809
         )
         current_chunk = next(item for item in prepared.components if item.name == "request_chunk_001")
         current_manifest = next(item for item in prepared.components if item.name == "packet_manifest")
@@ -62,7 +62,7 @@ def test_reviewer_components_match_start_head_bytes() -> None:
             .replace(str(len(current_chunk.content.encode())), str(len(prior_chunk.encode())))
             .replace(hashlib.sha256(current_chunk.content.encode()).hexdigest(), prior_chunk_digest))
         assert hashlib.sha256(prior_manifest.encode()).hexdigest() == (
-            "26ee597cd0f1ad6d8e566286d5f6bc88fad04ebceaa0b273081a499b93548c1e"
+            "aa89f7d38bb3e87a15907a32a26fa542318535528b517b75184feb29ccbaa072"
         )
         assert {
             item.name: (hashlib.sha256(historical_content(item.content).encode()).hexdigest(),

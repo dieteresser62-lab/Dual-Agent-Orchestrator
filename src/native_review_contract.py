@@ -871,12 +871,7 @@ def _final_review_provider_response_schema(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
     )
     finding["properties"]["predecessor_finding_ref"] = {"type": "null"}
-    finding["properties"]["evidence_anchor_sha256"] = {
-        "oneOf": [
-            {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            {"type": "null"},
-        ]
-    }
+    finding["properties"]["evidence_anchor_sha256"] = {"type": "null"}
     finding["required"].extend(
         ["predecessor_finding_ref", "evidence_anchor_sha256"]
     )
@@ -920,12 +915,21 @@ def _final_review_provider_response_schema(
         "type": "string",
         "const": context.reviewer.value,
     }
+    completed["properties"]["request_id"]["description"] = (
+        "Copy the exact request_id from the current canonical request."
+    )
     completed["properties"]["scan_complete"] = {
         "type": "boolean",
         "const": True,
     }
     completed["properties"]["new_findings"]["maxItems"] = (
         context.max_new_findings
+    )
+    completed["properties"]["new_findings"]["description"] = (
+        "Use distinct Finding IDs starting at the request's next_finding_id in "
+        "contiguous ascending order. A scan reaching max_new_findings must stop "
+        "with DISCOVERY_OUTPUT_LIMIT; a capacity-sized result is partial. "
+        "Do not duplicate a known open Finding signature."
     )
     completed["properties"]["new_findings"]["items"] = {
         "$ref": "#/$defs/bound_final_review_finding"
@@ -937,6 +941,10 @@ def _final_review_provider_response_schema(
         )
     else:
         _bind_required_empty_array(completed["properties"]["occurrences"])
+    completed["properties"]["occurrences"]["description"] = (
+        "Each known Finding ID may occur at most once; describe only an "
+        "offered known open Finding and do not repeat a new Finding signature."
+    )
     definitions["bound_final_review_completed"] = completed
     stop = _bound_stop_result_definition(
         definitions["stop_request"], reviewer=context.reviewer
@@ -952,16 +960,22 @@ def _final_review_provider_response_schema(
         "request-bound max_new_findings capacity; no partial result is authoritative."
     )
     definitions["bound_final_review_stop"] = stop
+    validation = context.validation_attestation
+    completion_possible = (
+        validation is not None
+        and validation.complete
+        and validation.passed
+        and (not context.test_files or context.test_changes_approved)
+    )
+    result_refs = []
+    if completion_possible:
+        result_refs.append({"$ref": "#/$defs/bound_final_review_completed"})
+    result_refs.append({"$ref": "#/$defs/bound_final_review_stop"})
     return {
         "title": "Native final review writer projection",
         "type": "object",
         "properties": {
-            "result": {
-                "oneOf": [
-                    {"$ref": "#/$defs/bound_final_review_completed"},
-                    {"$ref": "#/$defs/bound_final_review_stop"},
-                ]
-            }
+            "result": {"oneOf": result_refs}
         },
         "required": ["result"],
         "additionalProperties": False,
@@ -1006,6 +1020,13 @@ def native_review_provider_response_schema(
         "type": "string",
         "pattern": FINDING_ID_PATTERN_TEXT,
     }
+    definitions["finding"]["properties"]["affected_paths"]["description"] = (
+        "List unique canonical repository-relative POSIX paths. Duplicate paths "
+        "are forbidden even when the provider omits uniqueItems."
+    )
+    definitions["anchor"]["properties"]["anchor_id"]["description"] = (
+        "Use a distinct anchor_id for every anchor in this response."
+    )
     definitions["prose_acceptance"]["properties"]["text"]["pattern"] = (
         NONBLANK_TEXT_PATTERN
     )
@@ -1055,6 +1076,8 @@ def native_review_provider_response_schema(
     denied_finding = _bound_review_definition(
         definitions["finding"], finding_ids=new_ids
     )
+    for finding in (approved_finding, denied_finding):
+        _bind_finding_generation_pair(finding)
     approved_finding["properties"]["summary"]["pattern"] = NONBLANK_TEXT_PATTERN
     denied_finding["properties"]["summary"]["pattern"] = NONBLANK_TEXT_PATTERN
     approved_finding["properties"]["summary"]["maxLength"] = 3000
@@ -1098,6 +1121,24 @@ def native_review_provider_response_schema(
     )
     status["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
     status["properties"]["rationale"]["maxLength"] = 3000
+    status["properties"]["rationale"]["description"] = (
+        "For an existing Finding, add a new rationale different from its "
+        "previous status_rationale. A rejected closure needs named evidence."
+    )
+    status["anyOf"] = [
+        {
+            "properties": {
+                "status": {"const": FindingStatus.OPEN.value},
+                "closure": {"type": "null"},
+            }
+        },
+        {
+            "properties": {
+                "status": {"const": FindingStatus.CLOSED.value},
+                "closure": {"$ref": "#/$defs/finding_closure"},
+            }
+        },
+    ]
 
     definitions["bound_approved_finding"] = approved_finding
     definitions["bound_denied_finding"] = denied_finding
@@ -1116,6 +1157,11 @@ def native_review_provider_response_schema(
         )
     else:
         _bind_required_empty_array(approved["properties"]["new_findings"])
+    approved["properties"]["new_findings"]["description"] = (
+        "Use distinct Finding IDs starting at next_finding_id in contiguous "
+        "ascending order; do not duplicate a known open Finding signature. "
+        "Every new Finding must be closed in this response for approval."
+    )
     approved_status_max = _bind_approved_status_changes(
         approved,
         status,
@@ -1127,6 +1173,11 @@ def native_review_provider_response_schema(
             minItems=0,
             maxItems=approved_status_max,
         )
+    approved["properties"]["status_changes"]["description"] = (
+        "Each Finding ID may occur at most once. Close every open Finding "
+        "assigned to this plan or Slice before approval; a newly opened "
+        "Finding may be closed in the same response."
+    )
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
     }
@@ -1150,6 +1201,10 @@ def native_review_provider_response_schema(
         )
     else:
         _bind_required_empty_array(denied["properties"]["new_findings"])
+    denied["properties"]["new_findings"]["description"] = (
+        "Use distinct Finding IDs starting at next_finding_id in contiguous "
+        "ascending order; do not duplicate a known open Finding signature."
+    )
     if own_disposition_max:
         denied["properties"]["status_changes"].update(
             maxItems=own_disposition_max,
@@ -1157,6 +1212,10 @@ def native_review_provider_response_schema(
         )
     else:
         _bind_required_empty_array(denied["properties"]["status_changes"])
+    denied["properties"]["status_changes"]["description"] = (
+        "Each Finding ID may occur at most once. A denied review must leave "
+        "at least one reviewer-owned Finding or BLOCKER open."
+    )
     denied["properties"]["pre_mortem"] = {
         "anyOf": [
             {"type": "null"},
@@ -1281,6 +1340,38 @@ def _bound_review_definition(
     return projected
 
 
+def _bind_finding_generation_pair(finding: dict[str, Any]) -> None:
+    """Express the generation pair in the common provider grammar."""
+
+    finding["required"].extend(
+        ["predecessor_finding_ref", "evidence_anchor_sha256"]
+    )
+    finding["anyOf"] = [
+        {
+            "properties": {
+                "predecessor_finding_ref": {"type": "null"},
+                "evidence_anchor_sha256": {"type": "null"},
+            }
+        },
+        {
+            "properties": {
+                "predecessor_finding_ref": {
+                    "type": "string",
+                    "pattern": FINDING_ID_PATTERN_TEXT,
+                },
+                "evidence_anchor_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                },
+            }
+        },
+    ]
+    finding["properties"]["predecessor_finding_ref"]["description"] = (
+        "Provide predecessor_finding_ref and evidence_anchor_sha256 together "
+        "or both null. A Finding cannot be its own predecessor."
+    )
+
+
 def _bound_review_result_definition(
     definitions: Mapping[str, Any],
     *,
@@ -1301,6 +1392,9 @@ def _bound_review_result_definition(
         "type": "string",
         "const": reviewer.value,
     }
+    projected["properties"]["request_id"]["description"] = (
+        "Copy the exact request_id from the current canonical request."
+    )
     projected["properties"]["decision"] = {
         "type": "string",
         "const": decision,
@@ -1332,6 +1426,14 @@ def _bound_stop_result_definition(
         "type": "string",
         "const": reviewer.value,
     }
+    projected["properties"]["request_id"]["description"] = (
+        "Copy the exact request_id from the current canonical request."
+    )
+    projected["properties"]["remediation_paths"]["description"] = (
+        "List canonical repository-relative POSIX paths in ascending UTF-8 "
+        "byte order, without duplicates or the .orchestrator root and its "
+        "descendants."
+    )
     return projected
 
 

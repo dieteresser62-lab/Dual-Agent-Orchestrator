@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
+import json
 
 import pytest
 import finding_reducer
@@ -52,6 +53,7 @@ from native_review_contract import (
     parse_native_review_response,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from native_provider_schema import ANTHROPIC_PROVIDER, OPENAI_PROVIDER
 from rejected_response_shape import extract_rejected_native_response_shape
 from schema_validation import SchemaMismatch, validate_schema_document
 from workflow_state import WorkUnitKind
@@ -768,6 +770,8 @@ def test_slice_approval_rejects_new_open_findings_with_actionable_ids(
         }
         for finding_id in ("R-01", "R-02")
     ]
+    for finding in document["new_findings"]:
+        finding.update(predecessor_finding_ref=None, evidence_anchor_sha256=None)
 
     validate_schema_document(
         {"result": document}, native_review_provider_response_schema(context)
@@ -816,6 +820,10 @@ def test_slice_approval_accepts_finding_opened_and_closed_in_same_response(
         }
     ]
 
+    document["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
+
     validate_schema_document(
         {"result": document}, native_review_provider_response_schema(context)
     )
@@ -851,6 +859,9 @@ def test_slice_denial_allows_new_undecided_finding(
             "affected_paths": [],
         }
     ]
+    document["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
 
     validate_schema_document(
         {"result": document}, native_review_provider_response_schema(context)
@@ -1369,6 +1380,9 @@ def test_slice_writer_exposes_sparse_approval_but_local_contract_rejects_it() ->
             "affected_paths": [],
         }
     ]
+    document["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
 
     writer = native_review_provider_response_schema(context)
     validate_schema_document({"result": document}, writer)
@@ -1931,3 +1945,153 @@ def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
     assert result.evidence is None
     assert result.pre_mortem is None
     assert result.validation is context.validation_attestation
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+def test_final_review_writer_rejects_live_unpaired_evidence_anchor(
+    profile: str,
+) -> None:
+    context = replace(
+        _context(anchor_origin=None),
+        operation="reviewer_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
+        slice_id="FINAL",
+    )
+    writer = native_review_provider_response_schema(context, profile=profile)
+    completed = writer["$defs"]["bound_final_review_completed"]
+    assert "max_new_findings" in completed["properties"]["new_findings"]["description"]
+    assert "at most once" in completed["properties"]["occurrences"]["description"]
+    assert "exact request_id" in completed["properties"]["request_id"]["description"]
+    document = {
+        "schema_version": "native-agent-review-result-v3",
+        "result_type": "final_review_completed",
+        "request_id": context.request_id,
+        "reviewer": "reviewer",
+        "scan_complete": True,
+        "new_findings": [{
+            "finding_id": "R-01",
+            "finding_class": "BLOCKER",
+            "summary": "A new branch defect.",
+            "acceptance_test": {"kind": "prose", "text": "Correct the defect."},
+            "affected_paths": [],
+            "predecessor_finding_ref": None,
+            "evidence_anchor_sha256": None,
+        }],
+        "occurrences": [],
+        "review_evidence": {
+            "dimensions": "correctness and failure paths",
+            "largest_residual_risk": "a later provider change",
+            "break_condition": "the new defect is lost",
+        },
+        "pre_mortem": "A partial scan could look complete.",
+    }
+    validate_schema_document({"result": document}, writer)
+    document["new_findings"][0]["evidence_anchor_sha256"] = "a" * 64
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+def test_final_review_writer_requires_attestation_for_completion(profile: str) -> None:
+    context = replace(
+        _context(anchor_origin=None),
+        operation="reviewer_final_review",
+        approval_marker=ApprovalMarker.FINAL_REVIEW,
+        slice_id="FINAL",
+        validation_attestation=None,
+    )
+    writer = native_review_provider_response_schema(context, profile=profile)
+    assert writer["properties"]["result"]["anyOf" if profile == OPENAI_PROVIDER else "oneOf"] == [
+        {"$ref": "#/$defs/bound_final_review_stop"}
+    ]
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+def test_review_writer_binds_generation_and_closure_pairs(profile: str) -> None:
+    context = _context(previous=(_finding("R-01", AgentRole.REVIEWER),))
+    writer = native_review_provider_response_schema(context, profile=profile)
+    document = _review(context, approved=False)
+    document["new_findings"] = [{
+        "finding_id": "R-02",
+        "finding_class": "BLOCKER",
+        "summary": "A second defect.",
+        "acceptance_test": {"kind": "prose", "text": "Correct it."},
+        "affected_paths": [],
+        "predecessor_finding_ref": None,
+        "evidence_anchor_sha256": None,
+    }]
+    validate_schema_document({"result": document}, writer)
+    document["new_findings"][0]["evidence_anchor_sha256"] = "b" * 64
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+    document["new_findings"][0]["evidence_anchor_sha256"] = None
+    document["new_findings"][0]["predecessor_finding_ref"] = "R-01"
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+    document["new_findings"][0]["predecessor_finding_ref"] = None
+    document["status_changes"] = [{
+        "finding_id": "R-01", "status": "OPEN",
+        "rationale": "Still open.", "closure": None,
+    }]
+    validate_schema_document({"result": document}, writer)
+    document["status_changes"][0]["closure"] = {"kind": "fixed"}
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+    document["status_changes"][0]["status"] = "CLOSED"
+    validate_schema_document({"result": document}, writer)
+    document["status_changes"][0]["closure"] = None
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+def test_stop_writer_describes_and_domain_rejects_unsorted_paths(profile: str) -> None:
+    context = _context()
+    writer = native_review_provider_response_schema(context, profile=profile)
+    stop = {
+        "schema_version": "native-agent-review-result-v3",
+        "result_type": "stop_request",
+        "request_id": context.request_id,
+        "reviewer": "reviewer",
+        "rule_id": "CONTRACT-UNCLEAR",
+        "rationale": "The requested contract needs clarification.",
+        "remediation_paths": ["tests/z.py", "src/a.py"],
+    }
+    validate_schema_document({"result": stop}, writer)
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(stop, context)
+    assert raised.value.code is NativeReviewErrorCode.STOP_CONTENT_INVALID
+    assert raised.value.detail == "remediation paths must be sorted and unique"
+    bound_stop = writer["$defs"]["bound_slice_convergence_stop"]
+    description = bound_stop["properties"]["remediation_paths"]["description"]
+    assert "ascending UTF-8 byte order" in description
+    assert "without duplicates" in description
+    assert description in json.dumps(writer, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+def test_review_writer_retains_unexpressible_rule_descriptions(profile: str) -> None:
+    writer = native_review_provider_response_schema(_context(), profile=profile)
+    definitions = writer["$defs"]
+    finding = definitions["bound_denied_finding"]
+    assert "cannot be its own predecessor" in finding["properties"][
+        "predecessor_finding_ref"
+    ]["description"]
+    assert "Duplicate paths" in finding["properties"]["affected_paths"][
+        "description"
+    ]
+    assert "contiguous ascending order" in definitions[
+        "bound_slice_convergence_denied"
+    ]["properties"]["new_findings"]["description"]
+    assert "at most once" in definitions["bound_slice_convergence_denied"][
+        "properties"
+    ]["status_changes"]["description"]
+    assert "exact request_id" in definitions["bound_slice_convergence_denied"][
+        "properties"
+    ]["request_id"]["description"]
+    assert "exact request_id" in definitions["bound_slice_convergence_stop"][
+        "properties"
+    ]["request_id"]["description"]
+    writer_bytes = json.dumps(writer, ensure_ascii=False)
+    assert "cannot be its own predecessor" in writer_bytes
+    assert "contiguous ascending order" in writer_bytes

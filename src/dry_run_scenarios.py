@@ -2090,6 +2090,8 @@ def _s5_review_result(
             "finding_id": finding_id,
             "finding_class": finding_class,
             "affected_paths": ["src/second.py"],
+            "predecessor_finding_ref": None,
+            "evidence_anchor_sha256": None,
             "summary": f"Provider-free finding {finding_id}.",
             "acceptance_test": {
                 "kind": "prose",
@@ -2343,6 +2345,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                     "finding_id": finding_id,
                     "finding_class": "BLOCKER",
                     "affected_paths": ["src/orchestrator.py"],
+                    **{"predecessor_finding_ref": None, "evidence_anchor_sha256": None},
                     "summary": f"Scripted correction finding {finding_id}.",
                     "acceptance_test": {
                         "kind": "prose",

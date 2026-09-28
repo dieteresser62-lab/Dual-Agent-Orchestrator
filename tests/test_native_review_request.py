@@ -177,16 +177,16 @@ def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
         .replace('"enum":["reviewer"]', '"enum":["claude"]')
     )
     prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
-    assert prior_schema_digest == "ff428b9654124e5fe2ad36df43f6e464dbea15e05ef9e4f702a1a102f329e0aa"
+    assert prior_schema_digest == "ed48ed6759e3f67f1aa47caf6c80e1f00ab41d793a587a791ea96881751cf544"
     prior = prior_role_wire_document(bundle.document, prior_schema_sha256=prior_schema_digest)
     assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
-        "ac487a3c35574934e6319f477802a183c73d70a4ffab795bd780d9ccdd81e1ae"
+        "ced9fcac8445f062e31041d6afaa0dcb6b2c97f2e892d54b63d0144ad3bec751"
     )
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "6ff1f871609d06ddb9396d73a69b3301ff3e8dc29497edcbed490b0fbd9595fc"
+        "5f41b390fc3c64a4d316503d172c684fa337b195e40d985f5921d1d30a70b8ab"
     )
     assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
-        "c7cf6bfb5064a4511cb5f22a0e4967d7c2d5d9d4fcf66b4eb026989aaa1752b8"
+        "45880c8397ad9395ca1f052fea80cb40f572279033d9d69462d424b86ae5896d"
     )
 
 
@@ -560,6 +560,9 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
             "affected_paths": [],
         }
     ]
+    approved["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
 
     validate_schema_document({"result": approved}, schema)
 
@@ -646,6 +649,9 @@ def test_denied_writer_response_may_include_nonblank_pre_mortem() -> None:
             "affected_paths": [],
         }
     ]
+    denied["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
     denied["pre_mortem"] = "The same defect could recur after a provider update."
 
     validate_schema_document(
@@ -681,6 +687,9 @@ def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> Non
             "affected_paths": [],
         }
     ]
+    denied["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
 
     validate_schema_document(
         {"result": denied}, bundle.provider_response_schema
@@ -726,6 +735,9 @@ def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> Non
             "affected_paths": [],
         }
     ]
+    ordinary_only["new_findings"][0].update(
+        predecessor_finding_ref=None, evidence_anchor_sha256=None
+    )
     validate_schema_document(
         {"result": ordinary_only},
         no_prior_bundle.provider_response_schema,
@@ -921,6 +933,10 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
         for finding_id in ("R-02", "R-01")
     ]
     contexts_and_responses.append((_context(), noncontiguous))
+
+    for response in (duplicate_signature, noncontiguous):
+        for finding in response["new_findings"]:
+            finding.update(predecessor_finding_ref=None, evidence_anchor_sha256=None)
 
     no_remaining_blocker = _writer_response(decision="denied")
     no_remaining_blocker["status_changes"] = [
