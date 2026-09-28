@@ -1,0 +1,51 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "implementer": [
+      {
+        "node_id": "tests/test_agent_adapters.py::test_transport_command_environment_and_components_match_start_head",
+        "proves": "Current implementer command, environment and input bytes match the baseline."
+      },
+      {
+        "node_id": "tests/test_native_contract_differential.py::test_implementer_request_and_response_bytes_match_pre_rename_baseline",
+        "proves": "Implementer request and response bytes match the reviewed baseline."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_agent_adapters.py::test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts",
+        "proves": "Reviewer manifest pages and evidence parts are included in the input budget."
+      },
+      {
+        "node_id": "tests/test_native_review_request.py::test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests",
+        "proves": "Plan and Slice review contexts bind their writer digests."
+      },
+      {
+        "node_id": "tests/test_agent_adapters.py::test_every_claude_review_command_restricts_snapshot_and_runtime",
+        "proves": "Every reviewer command, including retries, carries exactly one --restricted flag."
+      },
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_claude_transport_requires_exactly_one_restricted_flag",
+        "proves": "Missing and duplicate --restricted flags fail transport normalization."
+      }
+    ],
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_native_review_request.py::test_final_review_request_binds_default_and_hard_capacity",
+        "proves": "Final review binds its own finding capacity."
+      },
+      {
+        "node_id": "tests/test_native_review_request.py::test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests",
+        "proves": "Final review binds a distinct writer digest."
+      },
+      {
+        "node_id": "tests/test_agent_adapters.py::test_every_claude_review_command_restricts_snapshot_and_runtime",
+        "proves": "Every final_reviewer command, including retries, carries exactly one --restricted flag."
+      },
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_claude_transport_requires_exactly_one_restricted_flag",
+        "proves": "Missing and duplicate --restricted flags fail transport normalization."
+      }
+    ]
+  }
+}

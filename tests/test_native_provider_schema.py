@@ -71,8 +71,7 @@ def _claude_command(*, budget: str | None = None) -> list[str]:
         "Bash,Edit,Write,NotebookEdit,Grep,Glob",
         "--permission-mode",
         "dontAsk",
-        "--setting-sources",
-        "user",
+        "--restricted",
         "--safe-mode",
         "--strict-mcp-config",
         "--prompt-suggestions",
@@ -203,6 +202,7 @@ def test_unprobed_feature_and_out_of_policy_version_fail_closed() -> None:
     assert compatible_cli_version("codex", "codex-cli 0.999.0") is True
     for provider, version in (
         ("claude", "2.1.279 (Claude Code)"),
+        ("claude", "2.1.282 (Claude Code)"),
         ("claude", "3.0.0 (Claude Code)"),
         ("codex", "codex-cli 0.156.0"),
         ("codex", "codex-cli 1.0.0"),
@@ -242,6 +242,19 @@ def test_claude_budget_is_deliberately_profile_neutral_for_c25() -> None:
 
     assert with_budget == without_budget
     assert with_budget.document == provider_capability("claude")["transport_profile"]
+
+
+@pytest.mark.parametrize("restricted_count", (0, 2))
+def test_claude_transport_requires_exactly_one_restricted_flag(
+    restricted_count: int,
+) -> None:
+    command = _claude_command()
+    command.remove("--restricted")
+    command[command.index("--safe-mode"):command.index("--safe-mode")] = (
+        ["--restricted"] * restricted_count
+    )
+    with pytest.raises(NativeProviderSchemaError, match="unclassified Claude command arguments"):
+        normalize_transport_profile("claude", command)
 
 
 def test_unknown_command_argument_is_profile_drift() -> None:

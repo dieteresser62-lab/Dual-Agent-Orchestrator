@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
 import agent_adapters
@@ -32,8 +33,8 @@ from contracts import (
 )
 from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
 from native_implementer_request import NativeImplementerEvidenceInput, NativeImplementerRequestSpec, build_native_implementer_request
-from native_review_contract import NativeReviewContext
-from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
+from native_review_contract import NativeReviewContext, NativeReviewErrorCode
+from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, NativeReviewRetryFeedback, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 from prompts import (
     GERMAN_DOCUMENT_LANGUAGE_RULE,
@@ -239,16 +240,15 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     ),
     (
         "claude",
-        "5ed0c3eb1b0d482f43687fdad58e3c91f06352644ac9f79d2e6fee937eb4bbfc",
+        "6b83ef239379787de1d5c6bacb082c124558fa5efd369b4f213d3458274a77f4",
         "9251537e4303a1c600ac7711e34608ce289c831face267ba890a2b34225001f2",
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
     provider: str, expected_command: str, expected_components: str,
 ) -> None:
-    # Slice 8b wire cut: component digests include the newly bound request bytes.
-    # Captured from HEAD 7064367 using the same helpers; only random runtime
-    # directory names are replaced with a fixed token before hashing.
+    # The Codex baseline is unchanged; Claude's command digest includes --restricted.
+    # Random runtime directory names are replaced before hashing.
     adapter = (
         NativeCodexAdapter(_settings(provider))
         if provider == "codex"
@@ -404,8 +404,56 @@ def test_native_claude_workspace_binding_and_capability_smoke(tmp_path: Path) ->
     assert use_stdin is False
     assert str(snapshot / "src/review_harness.py") in " ".join(command)
     assert "--json-schema" in command
+    assert command.count("--restricted") == 1
+    assert "--setting-sources" not in command
+    assert "--restricted" in NativeClaudeReviewAdapter.capability.required_help_flags
     assert NativeClaudeReviewAdapter.required_hosts == ("api.anthropic.com",)
     adapter.cleanup()
+
+
+@pytest.mark.parametrize("slot", ("reviewer", "final_reviewer"))
+@pytest.mark.parametrize("kind", tuple(NativeReviewKind))
+@pytest.mark.parametrize("retry", (False, True))
+def test_every_claude_review_command_restricts_snapshot_and_runtime(
+    slot: str, kind: NativeReviewKind, retry: bool,
+) -> None:
+    context = _review_bundle().bound_context.context
+    if kind is NativeReviewKind.PLAN:
+        context = replace(
+            context, operation="reviewer_plan_review", approval_marker=ApprovalMarker.PLAN,
+            plan_artifact_path="docs/internal/plan.md",
+        )
+    elif kind is NativeReviewKind.FINAL_REVIEW:
+        context = replace(
+            context, operation="reviewer_final_review",
+            approval_marker=ApprovalMarker.FINAL_REVIEW,
+        )
+    bundle = build_native_review_request(NativeReviewRequestSpec(
+        context=context,
+        review_kind=kind,
+        target_branch="feature/native",
+        base_commit="b" * 40,
+        authorized_paths=("src/workflow.py",),
+        acceptance_criteria=("Inspect bound evidence.",),
+        evidence=(NativeReviewEvidenceInput("diff", "diff", "diff --git"),),
+        retry_feedback=(NativeReviewRetryFeedback(
+            "prior-invocation", NativeReviewErrorCode.SCHEMA_INVALID,
+            "Return the required JSON object.",
+        ) if retry else None),
+    ))
+    registry = build_agent_registry({
+        "implementer": _settings("codex"),
+        "reviewer": _settings("claude"),
+        "final_reviewer": _settings("claude"),
+    })
+    adapter = registry[slot]
+    try:
+        command = adapter.prepare_native_provider_input(bundle).command
+        assert command.count("--restricted") == 1
+        assert "--setting-sources" not in command
+        assert command[command.index("--add-dir") + 1] == str(adapter.invocation.runtime_dir)
+    finally:
+        adapter.cleanup()
 
 
 def test_native_claude_prepares_request_components_and_bound_output() -> None:

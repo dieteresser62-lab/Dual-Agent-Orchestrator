@@ -28,6 +28,30 @@ def bound_state_profile(model: str, effort: str, **overrides: object) -> AgentPr
     return AgentProfileBinding(**{**binding.__dict__, "model": model, "effort": effort, **overrides})
 
 
+def historical_reviewer_state_profile(
+    model: str, effort: str, *, slot: str = "reviewer",
+) -> AgentProfileBinding:
+    """Preserve the qualification bound into pre-restriction golden records."""
+    old_certification = {
+        "reviewer": "07c602ac6595c18ed1b58d58b3bb56c5ed6173140a685b51276eb15f263e01db",
+        "final_reviewer": "51ca820cfe26d54e013fad58d4cbbac025052ce7514294980720a4f0046880ce",
+    }[slot]
+    return replace(
+        scripted_profile_binding(slot),
+        model=model, effort=effort,
+        capability_sha256="3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+        transport_sha256="2ea6376d95c6e012529277f7907a91d52907a43ee5835155a9e1f15da1a61cc4",
+        rights_sha256="d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+        certification_sha256=old_certification,
+    )
+
+
+def historical_reviewer_role_profile(
+    model: str, effort: str, *, slot: str = "reviewer",
+) -> RoleProfilePayload:
+    return RoleProfilePayload(**historical_reviewer_state_profile(model, effort, slot=slot).__dict__)
+
+
 def bound_run_profile(*args: object, **kwargs: object) -> RunProfilePayload:
     if "final_reviewer" not in kwargs:
         reviewer = kwargs.get("reviewer", args[1] if len(args) > 1 else None)

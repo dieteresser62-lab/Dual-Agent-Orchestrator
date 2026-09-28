@@ -1,11 +1,11 @@
 {
   "schema_version": "native-provider-schema-capabilities-v1",
-  "probed_on": "2026-09-23",
+  "probed_on": "2026-09-28",
   "providers": [
     {
       "provider": "claude",
       "binary_name": "claude",
-      "cli_version": "2.1.280 (Claude Code)",
+      "cli_version": "2.1.283 (Claude Code)",
       "version_policy": "same-major-forward",
       "transport_profile": {
         "provider": "claude",
@@ -20,7 +20,7 @@
           "--allowedTools=Read",
           "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
           "--permission-mode=dontAsk",
-          "--setting-sources=user",
+          "--restricted",
           "--safe-mode",
           "--strict-mcp-config",
           "--prompt-suggestions=false",
@@ -37,7 +37,8 @@
         "positional_tuple": false
       },
       "probe_evidence": {
-        "positional_tuple": "Claude Code rejected prefixItems as an unknown strict-mode keyword; all other listed probes exited successfully."
+        "positional_tuple": "Claude Code rejected prefixItems as an unknown strict-mode keyword; all other listed probes exited successfully.",
+        "restricted": "Claude Code 2.1.283: --restricted denied Read outside cwd and --add-dir, including absolute paths, symlinks, and traversal; cwd and --add-dir remained readable."
       }
     },
     {

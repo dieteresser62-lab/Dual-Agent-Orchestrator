@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import workflow_run_setup
+from profile_helpers import historical_reviewer_state_profile
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
 from agent_config import AgentSettings
 from contracts import PlannedSlice
@@ -117,6 +118,35 @@ def test_resume_requires_resolved_slot_settings() -> None:
     )
     with pytest.raises(StateSchemaError, match="slot_settings missing"):
         workflow_run_setup._apply_resumed_agent_profiles(SimpleNamespace(), state)
+
+
+@pytest.mark.parametrize("slot", ("reviewer", "final_reviewer"))
+def test_resume_rejects_old_unrestricted_claude_qualification_before_probe(
+    monkeypatch: pytest.MonkeyPatch, slot: str,
+) -> None:
+    profiles = {name: scripted_profile_binding(name) for name in ("implementer", "reviewer", "final_reviewer")}
+    recorded = historical_reviewer_state_profile(
+        profiles[slot].model, profiles[slot].effort, slot=slot,
+    )
+    recorded_profiles = {**profiles, slot: recorded}
+    state = init_workflow_state(
+        run_id="old-claude-qualification", task_file="/tmp/task.md", branch="feature/qualification",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=recorded_profiles["implementer"],
+            reviewer_profile=recorded_profiles["reviewer"],
+            final_reviewer_profile=recorded_profiles["final_reviewer"],
+        ),
+    )
+    slots = {
+        name: AgentSettings(profile.provider, profile.binary, profile.model, None, profile.effort, profile.max_budget_usd)
+        for name, profile in profiles.items()
+    }
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
+    with pytest.raises(StateSchemaError, match=f"AGENT-PROFILE-DIFF \\| slot={slot} qualification digest changed"):
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 
 def test_resume_uses_recorded_occupancy_after_configuration_changes(
