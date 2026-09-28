@@ -1190,7 +1190,7 @@
         "provider": {"$ref": "#/$defs/non_empty"},
         "binary": {"$ref": "#/$defs/non_empty"},
         "timeout_seconds": {"type": "integer", "minimum": 0},
-        "max_budget_usd": {"type": ["number", "null"], "minimum": 0},
+        "max_budget_usd": {"type": ["number", "null"], "exclusiveMinimum": 0},
         "manufacturer": {"$ref": "#/$defs/non_empty"},
         "capability_sha256": {"$ref": "#/$defs/sha256"},
         "transport_sha256": {"$ref": "#/$defs/sha256"},
@@ -3734,38 +3734,6 @@
         }
       },
       "allOf": [
-        {
-          "if": {
-            "properties": {
-              "provider": {
-                "const": "codex"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "role": {
-                "const": "implementer"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "provider": {
-                "const": "claude"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "role": {
-                "const": "reviewer"
-              }
-            }
-          }
-        },
         {
           "if": {
             "properties": {

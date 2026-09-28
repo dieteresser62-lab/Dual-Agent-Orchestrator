@@ -379,6 +379,8 @@ def replay_artifacts(
                 "record type does not match its typed payload",
                 record,
             )
+        if isinstance(record.payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)) and RecordType.RUN_PROFILE not in singleton_types:
+            _fail(ReplayDiagnosticCode.RECORD_MISSING, "provider record precedes the bound run profile", record)
         if (
             isinstance(record.payload, RunProfilePayload)
             and record.payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION

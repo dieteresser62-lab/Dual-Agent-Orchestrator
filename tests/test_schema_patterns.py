@@ -40,6 +40,7 @@ def test_allowed_grammar_matches_entire_body(
     "pattern, rule",
     (
         ("abc", "outer-anchors-required"),
+        (r"^a|b$", "top-level-alternation"),
         (r"^a^b$", "inner-anchor"),
         (r"^a$b$", "inner-anchor"),
         (r"^(?i:a)$", "lookaround-or-flags"),

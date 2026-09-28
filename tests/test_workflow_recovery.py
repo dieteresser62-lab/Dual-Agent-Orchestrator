@@ -23,7 +23,7 @@ from artifact_store import ArtifactStore
 from contracts import AgentRole, FindingClass, FindingOrigin, FindingRecord, FindingStatus
 from test_workflow import _attestation, _changes, _completed_single_slice_state, _context
 from workflow import WorkflowExecutionError, WorkflowHistory
-from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies
+from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies, _bound_provider
 from workflow_state import WorkflowStep
 
 
@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_PATH = ROOT / "src/workflow_recovery.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
-    "agent_config",
     "agent_runtime",
     "artifact_bridge",
     "artifact_models",
@@ -46,12 +45,24 @@ EXPECTED_INTERNAL_IMPORTS = {
     "native_implementer_request",
     "native_review_contract",
     "native_review_request",
+    "native_provider_schema",
     "provider_input_budget",
     "side_effects",
     "state_io",
     "workflow",
     "workflow_state",
 }
+
+
+def test_recovery_uses_each_bound_slot_provider() -> None:
+    state = SimpleNamespace(protocol_binding=SimpleNamespace(
+        implementer_profile=SimpleNamespace(provider="claude"),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=SimpleNamespace(provider="codex"),  # allowlist:provider -- transport: swapped occupancy fixture
+        final_reviewer_profile=SimpleNamespace(provider="claude"),  # allowlist:provider -- transport: final slot fixture
+    ))
+    assert _bound_provider(state, "implementer") == "claude"  # allowlist:provider -- transport: bound slot check
+    assert _bound_provider(state, "reviewer") == "codex"  # allowlist:provider -- transport: bound slot check
+    assert _bound_provider(state, "final_reviewer") == "claude"  # allowlist:provider -- transport: bound slot check
 
 EXPECTED_RECOVERY_EDGES = {
     "_reconcile_pending_side_effects": {

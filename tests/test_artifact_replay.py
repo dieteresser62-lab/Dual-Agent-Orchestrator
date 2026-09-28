@@ -778,6 +778,22 @@ def test_replay_rejects_activity_that_references_a_later_work_unit() -> None:
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
 
 
+def test_replay_rejects_provider_measurement_before_run_profile() -> None:
+    identity, profile = _chain()[:2]
+    measurement = ArtifactRecord.create(
+        run_id="run-replay", logical_id="early-measurement", revision=1,
+        fingerprint=FP, predecessor_ids=(identity.record_id,),
+        created_at="2026-08-21T10:00:02+00:00", idempotency_key="early-measurement",
+        payload=ProviderInputMeasurementPayload(
+            "claude", Role.REVIEWER, "reviewer_slice_review", "1", "a" * 64,  # allowlist:provider -- transport: provider-before-profile regression
+            "b" * 64, "c" * 64, "d" * 64,
+            (ProviderInputComponentPayload("prompt", 3, 3),),
+            3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
+        ),
+    )
+    _assert_code((identity, measurement, profile), ReplayDiagnosticCode.RECORD_MISSING)
+
+
 def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start() -> None:
     records: list[ArtifactRecord] = []
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))

@@ -582,6 +582,9 @@ def _execute_scenario(
             self.returncode = -9
             self.open = False
 
+        def terminate(self) -> None:
+            self.returncode = -15
+
         def poll(self) -> int | None:
             return self.returncode
 

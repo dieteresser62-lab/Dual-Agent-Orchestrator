@@ -15,7 +15,6 @@ import hashlib
 import logging
 from typing import Callable, Iterable
 
-from agent_config import current_provider_for_role
 
 from artifact_models import (
     AgentResultPayload,
@@ -1146,13 +1145,12 @@ class ArtifactBridge:
 
 
 def logical_provider_operation_id(
-    *, run_id: str, work_unit_id: str, provider: str | Role, operation: str,
+    *, run_id: str, work_unit_id: str, provider: str, operation: str,
     binding_fingerprint: str, operation_instance: str | None = None,
 ) -> str:
-    provider_name = (
-        current_provider_for_role(provider.value)
-        if isinstance(provider, Role) else provider
-    )
+    if type(provider) is not str:
+        raise TypeError("logical provider operation requires the bound provider name")
+    provider_name = provider
     digest = hashlib.sha256(
         canonical_json(
             [

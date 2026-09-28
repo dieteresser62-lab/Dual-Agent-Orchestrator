@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -235,6 +236,8 @@ def check_provider_candidate(
     entry: str, *, path: str | None = None,
 ) -> tuple[Path, str | None, str | None, tuple[str, ...]]:
     """Reject unsafe targets and interpreters without invoking either one."""
+    if not sys.platform.startswith("linux"):
+        raise ValueError("unsupported platform: only Linux and WSL2 are supported")
     search_path = os.environ.get("PATH", os.defpath) if path is None else path
     mounts = _windows_mount_points()
     real = _real_file(entry)
@@ -260,7 +263,7 @@ def _version(command: list[str], run: CommandRunner) -> str:
 
 def capture_provider_identity(
     entry: str, version_args: tuple[str, ...], run: CommandRunner,
-    *, path: str | None = None,
+    *, path: str | None = None, expected: ProviderIdentity | None = None,
 ) -> ProviderIdentity:
     """Inspect one entry and probe precisely the launch prefix returned below."""
     real, interpreter_entry, interpreter_real, interpreter_args = check_provider_candidate(
@@ -274,6 +277,15 @@ def capture_provider_identity(
         )
     except OSError as exc:
         raise ValueError(f"CLI target cannot be read: {entry}") from exc
+    if expected is not None and (
+        entry != expected.entry_path or str(real) != expected.real_path
+        or digest != expected.sha256
+        or interpreter_entry != expected.interpreter_entry_path
+        or interpreter_real != expected.interpreter_real_path
+        or interpreter_args != expected.interpreter_args
+        or interpreter_digest != expected.interpreter_sha256
+    ):
+        raise ValueError("on-disk binary or interpreter identity differs from the bound identity")
     prefix = (
         (str(real),) if interpreter_real is None else
         (interpreter_real, *interpreter_args, str(real))

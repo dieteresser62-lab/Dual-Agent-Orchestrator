@@ -471,6 +471,8 @@ class StepContract:
             if self.validation_attestation.diff_fingerprint != self.review_fingerprint:
                 raise ValueError("validation attestation fingerprint does not match review")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
+        if any(not is_canonical_repository_relative_path(path) for path in normalized):
+            raise ValueError("expected test files contain an unsafe repository path")
         object.__setattr__(self, "expected_test_files", normalized)
         if self.red_state_followup_slice is not None and not self.red_state_followup_slice.strip():
             raise ValueError("red-state exception requires a named follow-up slice")
@@ -663,6 +665,8 @@ class ImplementerStepContract:
         elif self.request_sequence < 1:
             raise ValueError("Codex request sequence must be 1-based")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
+        if any(not is_canonical_repository_relative_path(path) for path in normalized):
+            raise ValueError("expected test files contain an unsafe repository path")
         object.__setattr__(self, "expected_test_files", normalized)
         if normalized and not self.require_test_files_record:
             raise ValueError("expected test files require a TEST_FILES_TOUCHED record")

@@ -14,7 +14,7 @@ from typing import Callable, Mapping
 from path_policy import PathPolicyError, resolve_path_within_roots
 from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
 from artifact_models import canonical_json, foreign_reducer_diagnostic
-from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
+from artifact_replay import ReplayDiagnosticCode, STATE_PROJECTION_REDUCER_VERSION
 from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError
 
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
@@ -654,6 +654,9 @@ def _discover_resume_resolution(
         try:
             resolution = resolve_resume_state(repository_root, candidate.name)
         except ArtifactResumeError as exc:
+            if exc.code is ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL:
+                logger.warning("Skipping unsupported record run %s: %s", candidate.name, exc)
+                continue
             candidate_errors.append(exc)
             continue
         state = resolution.state

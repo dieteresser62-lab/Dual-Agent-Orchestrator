@@ -96,6 +96,11 @@ def _context() -> NativeReviewContext:
     )
 
 
+def test_native_review_context_rejects_traversing_test_path() -> None:
+    with pytest.raises(NativeReviewContractError, match="test files must be sorted, unique"):
+        replace(_context(), test_files=("../outside.py",))
+
+
 def _spec() -> NativeReviewRequestSpec:
     return NativeReviewRequestSpec(
         context=_context(),

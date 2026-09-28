@@ -90,6 +90,46 @@ def _install_script(root: Path, version: str, *, name: str = "codex") -> tuple[P
     return link, starter, node
 
 
+def test_non_linux_reports_unsupported_platform_before_mount_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _executable(tmp_path / "provider", b"binary")
+    monkeypatch.setattr(provider_identity.sys, "platform", "darwin")
+    monkeypatch.setattr(provider_identity, "_windows_mount_points", lambda: pytest.fail("mount probe ran"))
+    with pytest.raises(ValueError, match="unsupported platform: only Linux and WSL2"):
+        provider_identity.check_provider_candidate(str(target))
+
+
+def test_user_guides_name_supported_platforms_and_configurable_role_slots() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md"):
+        guide = (root / relative).read_text(encoding="utf-8")
+        assert "macOS" not in guide
+        assert "WSL2" in guide and "Linux" in guide
+    for relative in ("README.md", "Quickstart.md"):
+        guide = (root / relative).read_text(encoding="utf-8")
+        assert "[roles]" in guide and "[agent_profiles]" in guide
+        assert "Final-Reviewer" in guide
+
+
+@pytest.mark.parametrize("drift", ("binary", "interpreter"))
+def test_drifted_installation_is_never_executed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
+) -> None:
+    link, script, interpreter = _install_script(tmp_path, "0.156.1")
+    monkeypatch.setenv("PATH", str(link.parent))
+    versions = {str(script): "codex-cli 0.156.1", str(interpreter): "v22.23.2"}  # allowlist:provider -- transport: checked fixture version
+    bound = capture_provider_identity(str(link), ("--version",), _fake_runner(versions))
+    (script if drift == "binary" else interpreter).write_bytes(b"changed binary")
+    calls: list[list[str]] = []
+    with pytest.raises(ValueError, match="on-disk binary or interpreter identity differs"):
+        capture_provider_identity(
+            str(link), ("--version",), lambda args: (calls.append(args) or (0, "version", "")),
+            expected=bound, path=str(link.parent),
+        )
+    assert calls == []
+
+
 @pytest.mark.parametrize("mutation", ("unchanged", "symlink", "version", "content", "interpreter", "windows"))
 def test_resume_rechecks_recorded_identity_without_provider_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,

@@ -2633,6 +2633,11 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
     schema self-check rejects unknown keywords, preventing an unsupported
     extension from being accepted silently.
     """
+    if document.get("schema_version") != SCHEMA_VERSION:
+        raise ArtifactValidationError(
+            f"UNSUPPORTED-PROTOCOL: record schema_version {document.get('schema_version')!r} "
+            "requires the matching older orchestrator release"
+        )
     payload = document.get("payload")
     if (
         document.get("record_type") == RecordType.RUN_PROFILE.value

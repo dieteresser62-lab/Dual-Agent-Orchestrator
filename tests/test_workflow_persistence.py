@@ -37,7 +37,6 @@ PERSISTENCE_PATH = ROOT / "src/workflow_persistence.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
-    "agent_config",
     "agent_runtime",
     "artifact_bridge",
     "artifact_models",
@@ -130,6 +129,49 @@ def test_changed_request_with_same_binding_requests_a_new_round() -> None:
     assert raised.value.current_input_digest == hashlib.sha256(
         current.encode("utf-8")
     ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("detail", "diagnostic"),
+    (
+        ("native implementer persistence lacks its immutable transport binding", "WORKFLOW_IMPLEMENTER_BINDING_MISSING"),
+        ("native review persistence lacks its immutable reviewer binding", "WORKFLOW_REVIEW_BINDING_MISSING"),
+        ("final review completion lacks its dedicated run binding", "WORKFLOW_FINAL_REVIEW_BINDING_MISSING"),
+    ),
+)
+def test_persistence_binding_errors_keep_specific_diagnostics(
+    detail: str, diagnostic: str,
+) -> None:
+    from orchestrator_diagnostics import OrchestratorDiagnostic
+    error = WorkflowExecutionError(detail)
+    assert error.orchestrator_diagnostic is OrchestratorDiagnostic[diagnostic]
+    assert detail in PERSISTENCE_PATH.read_text(encoding="utf-8")
+
+
+def test_literal_workflow_execution_details_are_enum_bound_or_reviewed_value_free() -> None:
+    from orchestrator_diagnostics import OrchestratorDiagnostic
+
+    allowlist = json.loads(
+        (ROOT / "tests/fixtures/workflow-execution-value-free-details.json").read_text(encoding="utf-8")
+    )
+    known = {member.value.removeprefix("workflow-execution: ") for member in OrchestratorDiagnostic}
+    observed: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "src").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        details = sorted({
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "WorkflowExecutionError"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value not in known
+        })
+        if details:
+            observed[path.name] = details
+    assert observed == allowlist
 
 
 def _tree(path: Path = PERSISTENCE_PATH, source: str | None = None) -> ast.Module:

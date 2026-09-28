@@ -435,6 +435,17 @@ class NativeCodexAdapter(_BaseAdapter):
         bundle: NativeImplementerRequestBundle,
         execution_boundary: NativeCodexExecutionBoundary | None = None,
     ) -> PreparedProviderInput:
+        try:
+            return self._prepare_native_provider_input_unchecked(bundle, execution_boundary)
+        except BaseException:
+            self.cleanup()
+            raise
+
+    def _prepare_native_provider_input_unchecked(
+        self,
+        bundle: NativeImplementerRequestBundle,
+        execution_boundary: NativeCodexExecutionBoundary | None = None,  # allowlist:provider -- transport: typed preparation boundary
+    ) -> PreparedProviderInput:
         if not isinstance(bundle, NativeImplementerRequestBundle):
             raise TypeError("native Codex adapter requires NativeImplementerRequestBundle")
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(

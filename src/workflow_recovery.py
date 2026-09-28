@@ -15,7 +15,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
 
-from agent_config import current_provider_for_role
 from agent_runtime import (
     NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
@@ -83,6 +82,7 @@ from native_review_request import (
     validate_native_review_provider_response,
     validate_native_review_provider_response_for_context,
 )
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
     Reconciliation,
@@ -118,6 +118,19 @@ from workflow_state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _bound_provider(state: WorkflowState, slot: str) -> str:
+    binding = getattr(state, "protocol_binding", None)
+    profile = getattr(binding, f"{slot}_profile", None)
+    return getattr(profile, "provider", None) or (
+        OPENAI_PROVIDER if slot == "implementer" else ANTHROPIC_PROVIDER
+    )
+
+
+def _review_provider(state: WorkflowState) -> str:
+    slot = "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer"
+    return _bound_provider(state, slot)
 
 
 ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
@@ -337,6 +350,7 @@ class WorkflowRecovery:
         response_anchor: ArtifactRecord,
         *,
         role: Role,
+        provider_name: str,
         run_id: str,
         work_unit_id: int,
         operation: str,
@@ -349,7 +363,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
                 operation_instance=f"request:{request_sequence}",
@@ -359,7 +373,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
                 operation_instance=f"round:{request_sequence}",
@@ -369,7 +383,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
             ),
@@ -563,6 +577,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=Role.REVIEWER,
+            provider_name=_review_provider(state),
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -600,10 +615,11 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
+        profile: str = ANTHROPIC_PROVIDER,
     ) -> ContractResult:
         try:
             validate_native_review_provider_response_for_context(
-                document, native_context
+                document, native_context, profile=profile
             )
             return parse_bound_native_contract_result(
                 document,
@@ -675,6 +691,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=Role.REVIEWER,
+            provider_name=_review_provider(state),
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -710,7 +727,8 @@ class WorkflowRecovery:
                 validate_native_review_provider_response(document, bundle)
             else:
                 validate_native_review_provider_response_for_context(
-                    document, native_context
+                    document, native_context,
+                    profile=_review_provider(state),
                 )
             result = parse_bound_native_contract_result(
                 document,
@@ -1099,6 +1117,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=response_role,
+            provider_name=_bound_provider(state, "implementer"),
             run_id=state.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
@@ -1209,6 +1228,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=response_role,
+            provider_name=_bound_provider(state, "implementer"),
             run_id=invocation.native_request.bound_context.context.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
@@ -1306,7 +1326,7 @@ class WorkflowRecovery:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == current_provider_for_role(_IMPLEMENTER_ARTIFACT_ROLE.value)
+            and item.operation[0] == _bound_provider(state, "implementer")
             and item.operation[1] == invocation.step.value
             and item.operation[4] in instances
         )
@@ -1387,7 +1407,7 @@ class WorkflowRecovery:
         logical_operation_id = logical_provider_operation_id(
             run_id=state.run_id,
             work_unit_id=str(invocation.work_unit_id),
-            provider=_IMPLEMENTER_ARTIFACT_ROLE,
+            provider=_bound_provider(state, "implementer"),
             operation=invocation.step.value,
             binding_fingerprint=effect.operation[3],
             operation_instance=effect.operation[4],
@@ -1763,6 +1783,7 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
+        profile: str = ANTHROPIC_PROVIDER,
     ) -> ContractResult:
         document = json.loads(canonical)
         if not isinstance(document, dict):
@@ -1773,6 +1794,7 @@ class WorkflowRecovery:
             payload,
             request_digest,
             request_ledger,
+            profile,
         )
 
     def recover_pending_native_reviewer_before_policy(
@@ -1916,6 +1938,7 @@ class WorkflowRecovery:
             request_replay,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
+        profile = _review_provider(state)
         try:
             result = self._parse_pending_native_reviewer_response(
                 canonical,
@@ -1923,6 +1946,7 @@ class WorkflowRecovery:
                 payload,
                 request_digest,
                 request_ledger,
+                profile,
             )
         except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
             raise WorkflowExecutionError(

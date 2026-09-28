@@ -55,6 +55,7 @@ from provider_input_efficiency import (
     build_correction_execution_package,
     build_slice_execution_package,
 )
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 from review_packets import (
     ReviewPacket,
     ReviewPacketError,
@@ -63,6 +64,7 @@ from review_packets import (
 from slice_exit import slice_commit_decision_finding_ids
 from workflow_state import (
     WorkflowState,
+    WorkflowStep,
     WorkUnitKind,
     project_implementer_return_policy,
 )
@@ -268,7 +270,9 @@ def native_implementer_request(
             work_context=effective_work_context,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
-        )
+        ),
+        profile=(state.protocol_binding.implementer_profile.provider
+                 if state.protocol_binding is not None else OPENAI_PROVIDER),
     )
 
 
@@ -611,5 +615,9 @@ def native_review_request(
             acceptance_criteria=acceptance_criteria,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
-        )
+        ),
+        profile=(state.protocol_binding.final_reviewer_profile.provider
+                 if state.protocol_binding is not None and state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
+                 else state.protocol_binding.reviewer_profile.provider
+                 if state.protocol_binding is not None else ANTHROPIC_PROVIDER),
     )

@@ -467,11 +467,12 @@ def validate_native_review_provider_response(
 
 
 def validate_native_review_provider_response_for_context(
-    document: Mapping[str, Any], context: NativeReviewContext
+    document: Mapping[str, Any], context: NativeReviewContext,
+    *, profile: str = ANTHROPIC_PROVIDER,
 ) -> None:
     """Validate recovery bytes against the writer deterministically rebuilt from context."""
     _validate_native_review_provider_response_schema(
-        document, native_review_provider_response_schema(context)
+        document, native_review_provider_response_schema(context, profile)
     )
 
 

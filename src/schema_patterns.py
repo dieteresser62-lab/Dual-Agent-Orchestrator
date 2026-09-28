@@ -76,6 +76,8 @@ def portable_pattern_violations(pattern: object) -> tuple[str, ...]:
             can_quantify = True
             continue
         if char == "|":
+            if depth == 0:
+                issues.add("top-level-alternation")
             can_quantify = False
             index += 1
             continue

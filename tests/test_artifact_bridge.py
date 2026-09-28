@@ -13,10 +13,24 @@ import artifact_store as artifact_store_module
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
+    logical_provider_operation_id,
     finding_payload, review_payload, review_payload_matches_complete_result,
     review_payload_matches_result,
     validation_request_payload,
 )
+
+
+def test_logical_operation_requires_actual_provider_not_role_default() -> None:
+    with pytest.raises(TypeError, match="bound provider name"):
+        logical_provider_operation_id(
+            run_id="run", work_unit_id="1", provider=Role.IMPLEMENTER,
+            operation="implementer_plan", binding_fingerprint="a" * 64,
+        )
+    operation = logical_provider_operation_id(
+        run_id="run", work_unit_id="1", provider="claude",  # allowlist:provider -- transport: swapped occupancy regression
+        operation="implementer_plan", binding_fingerprint="a" * 64,
+    )
+    assert operation.startswith("provider-operation-")
 from artifact_models import (
     ArtifactRecord, ArtifactValidationError, CorrectionWorkUnitPayload,
     FindingSeverity, FindingTransitionPayload,

@@ -92,20 +92,26 @@ def _group_state(identity: ProcessIdentity) -> ProcessStatus:
         return ProcessStatus.UNKNOWN
     if boot != identity.boot_id:
         return ProcessStatus.ENDED
-    leader = _proc_stat(identity.pid)
-    if leader is not None:
-        if leader.start_ticks != identity.start_ticks:
-            # Linux cannot reuse this PID while it still names our PGID or SID.
-            return ProcessStatus.ENDED
-        if leader.state not in {"Z", "X", "x"}:
-            if leader.pgid != identity.pgid or leader.sid != identity.sid:
-                return ProcessStatus.UNKNOWN
-            return ProcessStatus.RUNNING
-    # A leader may have exited while descendants retain its pipes and group.
-    # Scan the whole session too: a member can move to another process group.
+    groups = _session_groups(identity)
+    if groups is None:
+        return ProcessStatus.UNKNOWN
+    return ProcessStatus.RUNNING if groups else ProcessStatus.ENDED
+
+
+def _session_groups(identity: ProcessIdentity) -> set[int] | None:
+    """Return all live groups in the bound session, only with ownership proof."""
+    if _boot_id() != identity.boot_id:
+        return None
     try:
-        entries = os.scandir("/proc")
-        with entries as directory:
+        leader = _proc_stat(identity.pid)
+        if leader is not None and leader.start_ticks != identity.start_ticks:
+            return set()
+        groups: set[int] = set()
+        if leader is not None and leader.state not in {"Z", "X", "x"}:
+            if leader.pgid != identity.pgid or leader.sid != identity.sid:
+                return None
+            groups.add(leader.pgid)
+        with os.scandir("/proc") as directory:
             for entry in directory:
                 if not entry.name.isdecimal():
                     continue
@@ -115,15 +121,23 @@ def _group_state(identity: ProcessIdentity) -> ProcessStatus:
                 member = _proc_stat(pid)
                 if member is None or member.state in {"Z", "X", "x"}:
                     continue
-                if member.pgid == identity.pgid and member.sid != identity.sid:
-                    return ProcessStatus.UNKNOWN
                 if member.sid == identity.sid:
                     if member.start_ticks < identity.start_ticks:
-                        return ProcessStatus.UNKNOWN
-                    return ProcessStatus.RUNNING
+                        return None
+                    groups.add(member.pgid)
+                elif member.pgid in groups or member.pgid == identity.pgid:
+                    return None
+        # A foreign member of a group discovered later in /proc must also veto it.
+        with os.scandir("/proc") as directory:
+            for entry in directory:
+                if entry.name.isdecimal():
+                    member = _proc_stat(int(entry.name))
+                    if member is not None and member.state not in {"Z", "X", "x"}:
+                        if member.pgid in groups and member.sid != identity.sid:
+                            return None
+        return groups
     except (OSError, ValueError, IndexError):
-        return ProcessStatus.UNKNOWN
-    return ProcessStatus.ENDED
+        return None
 
 
 def observe_identity(identity: ProcessIdentity) -> ProcessObservation:
@@ -134,28 +148,20 @@ def observe_identity(identity: ProcessIdentity) -> ProcessObservation:
 
 
 def count_process_group_members(identity: ProcessIdentity) -> int | None:
-    """Count live members only when the bound group's ownership is provable."""
-    if _boot_id() != identity.boot_id:
+    """Count the same session members targeted by signal_process_group."""
+    groups = _session_groups(identity)
+    if groups is None:
         return None
     try:
-        leader = _proc_stat(identity.pid)
-        if leader is not None and leader.start_ticks != identity.start_ticks:
-            return 0
         count = 0
-        if leader is not None and leader.state not in {"Z", "X", "x"}:
-            if leader.pgid != identity.pgid or leader.sid != identity.sid:
-                return None
-            count = 1
         with os.scandir("/proc") as directory:
             for entry in directory:
-                if not entry.name.isdecimal() or int(entry.name) == identity.pid:
+                if not entry.name.isdecimal():
                     continue
                 member = _proc_stat(int(entry.name))
                 if member is None or member.state in {"Z", "X", "x"}:
                     continue
-                if member.pgid == identity.pgid:
-                    if member.sid != identity.sid or member.start_ticks < identity.start_ticks:
-                        return None
+                if member.sid == identity.sid and member.pgid in groups:
                     count += 1
         return count
     except (OSError, ValueError, IndexError):
@@ -163,36 +169,22 @@ def count_process_group_members(identity: ProcessIdentity) -> int | None:
 
 
 def signal_process_group(identity: ProcessIdentity, sig: signal.Signals) -> bool:
-    """Signal only while a member of the bound group is still observable."""
-    if _boot_id() != identity.boot_id:
+    """Signal each provably owned process group in the bound session."""
+    groups = _session_groups(identity)
+    if not groups:
         return False
-    try:
-        leader = _proc_stat(identity.pid)
-        if leader is not None and leader.start_ticks != identity.start_ticks:
-            return False
-        if leader is not None and leader.state not in {"Z", "X", "x"}:
-            if leader.pgid != identity.pgid or leader.sid != identity.sid:
-                return False
-            own_member = True
-        else:
-            own_member = False
-        with os.scandir("/proc") as directory:
-            for entry in directory:
-                if not entry.name.isdecimal() or int(entry.name) == identity.pid:
-                    continue
-                member = _proc_stat(int(entry.name))
-                if member is None or member.state in {"Z", "X", "x"}:
-                    continue
-                if member.pgid == identity.pgid:
-                    if member.sid != identity.sid or member.start_ticks < identity.start_ticks:
-                        return False
-                    own_member = True
-        if not own_member:
-            return False
-        os.killpg(identity.pgid, sig)
-        return True
-    except (OSError, ValueError, IndexError):
-        return False
+    signalled = False
+    for pgid in sorted(groups):
+        # Recheck immediately before signalling; groups may disappear meanwhile.
+        current = _session_groups(identity)
+        if current is None or pgid not in current:
+            continue
+        try:
+            os.killpg(pgid, sig)
+            signalled = True
+        except ProcessLookupError:
+            pass
+    return signalled
 
 
 def _write_evidence(path: Path, payload: dict[str, object]) -> None:

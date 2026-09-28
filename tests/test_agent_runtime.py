@@ -2074,6 +2074,71 @@ def test_full_stdin_has_bounded_group_cleanup(
     assert time.monotonic() - start < 5
 
 
+@pytest.mark.parametrize("timeout_seconds", (None, 5))
+def test_non_live_large_prompt_reaches_eof_after_delayed_read(
+    tmp_path: Path, timeout_seconds: int | None,
+) -> None:
+    prompt = "x" * (256 * 1024)
+    code = (
+        "import hashlib,sys,time; time.sleep(.35); "
+        "data=sys.stdin.read(); "
+        "print(len(data),hashlib.sha256(data.encode()).hexdigest())"
+    )
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code], prompt,
+        config=OrchestratorConfig(repo_root=tmp_path, agent_live_stream=False),
+        env=os.environ.copy(), execution_root=tmp_path,
+        timeout_seconds=timeout_seconds, agent_key="implementer",
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"{len(prompt)} {hashlib.sha256(prompt.encode()).hexdigest()}"
+
+
+def test_missing_proc_identity_still_kills_owned_unreaped_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[int] = []
+    monkeypatch.setattr(agent_runtime, "capture_process_identity", lambda _pid: None)
+    with pytest.raises(subprocess.TimeoutExpired):
+        agent_runtime._run_agent_process(
+            object(), [sys.executable, "-c", "import time; time.sleep(60)"], None,
+            config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+            execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+            process_started=started.append,
+        )
+    assert len(started) == 1
+    observed = provider_process._proc_stat(started[0])
+    assert observed is None or observed.state in {"Z", "X", "x"}
+
+
+def test_timeout_kills_grandchild_in_separate_group_of_same_session(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "grandchild.pid"
+    code = (
+        "import os,pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "preexec_fn=os.setpgrp); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-c", code, str(ready)], None,
+                config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+                execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+            )
+        assert ready.exists()
+        observed = provider_process._proc_stat(int(ready.read_text()))
+        assert observed is None or observed.state in {"Z", "X", "x"}
+    finally:
+        if ready.exists():
+            pid = int(ready.read_text())
+            observed = provider_process._proc_stat(pid)
+            if observed is not None and observed.state not in {"Z", "X", "x"}:
+                os.kill(pid, signal.SIGKILL)
+
+
 def test_successful_leader_exit_does_not_leave_a_child_running(tmp_path: Path) -> None:
     ready = tmp_path / "child.pid"
     code = (

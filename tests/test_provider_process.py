@@ -209,3 +209,28 @@ def test_unreadable_group_membership_is_unknown(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(provider_process.os, "scandir", denied)
     assert provider_process.observe_identity(identity).status is ProcessStatus.UNKNOWN
     assert not provider_process.signal_process_group(identity, signal.SIGTERM)
+
+
+def test_separate_group_in_same_session_is_observed_and_signalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = provider_process.ProcessIdentity("boot", 711, 41, 711, 711)
+    members = {
+        711: provider_process.ProcStat("S", 41, 711, 711),
+        712: provider_process.ProcStat("S", 42, 712, 711),
+        713: provider_process.ProcStat("S", 43, 713, 999),
+    }
+    monkeypatch.setattr(provider_process, "_boot_id", lambda: "boot")
+    monkeypatch.setattr(provider_process, "_proc_stat", members.get)
+    monkeypatch.setattr(provider_process.os, "scandir", lambda _path: _FakeProcDirectory(("711", "712", "713")))
+    signalled: list[int] = []
+    monkeypatch.setattr(provider_process.os, "killpg", lambda pgid, _sig: signalled.append(pgid))
+    assert provider_process.observe_identity(identity).status is ProcessStatus.RUNNING
+    assert provider_process.count_process_group_members(identity) == 2
+    assert provider_process.signal_process_group(identity, signal.SIGTERM)
+    assert signalled == [711, 712]
+    members[713] = provider_process.ProcStat("S", 43, 712, 999)
+    signalled.clear()
+    assert provider_process.observe_identity(identity).status is ProcessStatus.UNKNOWN
+    assert not provider_process.signal_process_group(identity, signal.SIGKILL)
+    assert signalled == []

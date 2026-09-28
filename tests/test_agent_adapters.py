@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+import agent_adapters
 
 from agent_adapters import (
     REVIEW_PACKET_CHUNK_CHARS,
@@ -60,6 +61,8 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
+
+
     context = NativeImplementerContext(
         run_id="run-native",
         work_unit_id="1",
@@ -79,6 +82,18 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
             evidence=(NativeImplementerEvidenceInput("policy", "system_policy", NATIVE_IMPLEMENTER_SYSTEM_POLICY),),
         )
     )
+
+
+def test_implementer_preparation_failure_removes_runtime_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = NativeCodexAdapter(_settings("codex"))  # allowlist:provider -- transport: exercise the concrete adapter
+    def fail_capabilities(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("capability check failed")
+    monkeypatch.setattr(agent_adapters, "assert_provider_capabilities", fail_capabilities)
+    with pytest.raises(RuntimeError, match="capability check failed"):
+        adapter.prepare_native_provider_input(_codex_bundle())  # allowlist:provider -- transport: bound request fixture
+    assert adapter.invocation.runtime_dir is None or not adapter.invocation.runtime_dir.exists()
 
 
 def _review_bundle():

@@ -1,8 +1,8 @@
 # Dual-Agent Task Orchestrator
 
-**Codex baut, Claude prüft, und committet wird nur, was getestet und freigegeben ist.**
+**Der Implementer baut, der Reviewer prüft, und committet wird nur, was getestet und freigegeben ist.**
 
-Du beschreibst eine Aufgabe in einer Markdown-Datei. Der Orchestrator lässt sie von zwei Coding-Agenten verschiedener Hersteller in festen Rollen umsetzen: **Codex** plant und implementiert, **Claude** prüft ausschließlich lesend. Tests, Buchführung und Git-Commits übernimmt der Orchestrator selbst. Keiner der beiden Agenten kann seine eigene Arbeit freigeben.
+Du beschreibst eine Aufgabe in einer Markdown-Datei. Der Orchestrator besetzt drei getrennte Slots: **Implementer** (standardmäßig Codex) plant und implementiert, **Reviewer** und **Final-Reviewer** (standardmäßig Claude) prüfen ausschließlich lesend. `[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung. Tests, Buchführung und Git-Commits übernimmt der Orchestrator selbst. Kein Agent kann seine eigene Arbeit freigeben.
 
 ## Überblick
 
@@ -13,15 +13,15 @@ Ein einzelner Agent kann in einem Durchgang erstaunlich viel erzeugen. Bei grö�
 ### So läuft eine Aufgabe ab
 
 1. **Idee ablegen.** Eine formlose Markdown-Datei in `inbox/` genügt.
-2. **Planen.** Codex zerlegt die Aufgabe in kleine Arbeitspakete (*Slices*). Für jedes Paket ist genau festgelegt, welche Dateien es ändern darf. Claude prüft den Plan.
-3. **Umsetzen, Paket für Paket.** Codex implementiert. Der Orchestrator führt die Tests aus, Claude reviewt den Diff. Jeder Befund muss beantwortet werden, entweder behoben oder begründet abgelehnt. Erst wenn kein blockierender Befund offen ist, committet der Orchestrator das Paket lokal.
-4. **Abnahme.** Zum Schluss liest Claude den kompletten Branch. Findet sich Restarbeit, wird daraus automatisch eine neue Aufgabe.
+2. **Planen.** Der Implementer zerlegt die Aufgabe in kleine Arbeitspakete (*Slices*). Für jedes Paket ist genau festgelegt, welche Dateien es ändern darf. Der Reviewer prüft den Plan.
+3. **Umsetzen, Paket für Paket.** Der Implementer setzt um. Der Orchestrator führt die Tests aus, der Reviewer prüft den Diff. Jeder Befund muss beantwortet werden, entweder behoben oder begründet abgelehnt. Erst wenn kein blockierender Befund offen ist, committet der Orchestrator das Paket lokal.
+4. **Abnahme.** Zum Schluss liest der Final-Reviewer den kompletten Branch. Findet sich Restarbeit, wird daraus automatisch eine neue Aufgabe.
 
 ![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/HEAD/workflow.puml)
 
 ### Was ihn von anderen Ansätzen unterscheidet
 
-- **Getrennte Rollen.** Codex schreibt, darf aber weder freigeben noch committen. Claude arbeitet auf einer schreibgeschützten Kopie. Tests laufen nur im Orchestrator, sodass kein Agent ein Testergebnis behaupten kann.
+- **Getrennte Rollen.** Der Implementer schreibt, darf aber weder freigeben noch committen. Reviewer arbeiten auf einer schreibgeschützten Kopie. Tests laufen nur im Orchestrator, sodass kein Agent ein Testergebnis behaupten kann.
 - **Harte Grenzen.** Ein Paket, das Dateien außerhalb seiner Liste ändert, wird nicht committet.
 - **Konvergenz statt Endlosschleife.** Jede weitere Reviewrunde muss nachweisbar Fortschritt bringen. Wenn nicht, endet das Paket ohne Commit.
 - **Fail-closed.** Bei Unklarheiten, Widersprüchen oder unbekanntem Zustand hält der Lauf an, statt zu raten.
@@ -37,8 +37,7 @@ Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP
 ### Stand und Grenzen
 
 - Ein-Personen-Projekt seit Februar 2026, Python ohne Laufzeitabhängigkeiten, gut 1.600 Tests. Seit August entsteht der Orchestrator zunehmend mit sich selbst.
-- Läuft unter Linux, macOS und WSL2. Natives Windows wird nicht unterstützt.
-  Das automatische Fortsetzen nach einem Absturz braucht Linux oder WSL mit lesbarem `/proc`; auf anderen Systemen führt der Weg über ein Freigabe-Gate.
+- Läuft unter Linux und WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt.
 - Setzt installierte und angemeldete `codex`- und `claude`-CLIs voraus.
 - Gründlichkeit kostet Zeit und Tokens: Ein Lauf dauert deutlich länger als ein One-Shot-Durchgang.
 - Die Dokumentation ist deutsch.
@@ -59,19 +58,19 @@ Für den echten Einstieg: [Quickstart.md](Quickstart.md) oder die ausführliche 
 
 ## Ablauf im Detail
 
-Die Rollenbesetzung wird aus TOML aufgelöst: Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen im Zielrepository gelten die mitgelieferten Profile aus dem Orchestrator-TOML (Codex für Implementierung, Claude für beide Reviews). Das Zielrepository kann Profile und den Finalslot ausdrücklich überschreiben.
+Die Rollenbesetzung wird aus TOML aufgelöst: Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen im Zielrepository gelten die mitgelieferten Profile aus dem Orchestrator-TOML (Implementer: Codex; Reviewer und Final-Reviewer: Claude). Das Zielrepository kann Profile und den Finalslot ausdrücklich überschreiben.
 
 Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
-2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude den Planfingerprint prüfen lassen.
+2. Den Implementer geordnete `SLICE_PLAN`-Datensätze erstellen und den Reviewer den Planfingerprint prüfen lassen.
 3. Den von Claude freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
 4. Für jeden geplanten Slice:
-   - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
+   - Der Implementer bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix für diesen Fingerprint aus. Ein grüner erster Durchgang bleibt einmalig; nach einem roten ersten Durchgang folgt eine vorab laufzeitabhängig begrenzte Flackerprobe, deren Einzelergebnisse vollständig und fail-closed attestiert werden.
-   - Claude prüft in jeder Runde den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start.
+   - Der Reviewer prüft in jeder Runde den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
 5. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
 
@@ -98,10 +97,9 @@ Erforderlich ist Python 3.11 oder neuer. Für das TOML-Parsing wird die Python-S
 Unterstützte Ausführungsumgebungen sind:
 
 - Linux
-- macOS
 - WSL2
 
-Natives Windows wird derzeit nicht unterstützt, weil der vollständige Workflow dort noch nicht verifiziert wurde.
+Andere Plattformen werden nicht unterstützt; die Prozessidentität benötigt Linux-`/proc`.
 
 Beide Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend müssen sie in `PATH` liegen oder über explizite Binärpfade konfiguriert werden:
 

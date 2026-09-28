@@ -708,7 +708,7 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "ORCHESTRATOR_MODE: IMPLEMENT",
         "TARGET_BRANCH:",
         "TASK_SCOPE",
-        "Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`",
+        "Der Implementer nutzt standardmäßig Codex mit Sol (`gpt-6-sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus",
         "nano inbox/meine-idee.md",
         "run_task --watch",
         "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",

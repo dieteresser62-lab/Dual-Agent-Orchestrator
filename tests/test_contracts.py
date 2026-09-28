@@ -7,6 +7,10 @@ import pytest
 import contracts
 from contracts import (
     AgentRole,
+    ApprovalMarker,
+    ImplementerStepContract,
+    ReadinessMarker,
+    StepContract,
     AnchorRecord,
     FindingClass,
     FindingOrigin,
@@ -17,6 +21,21 @@ from contracts import (
     apply_reviewer_finding_update,
     compare_anchors,
 )
+
+
+def test_step_contracts_reject_traversing_expected_test_paths() -> None:
+    with pytest.raises(ValueError, match="unsafe repository path"):
+        StepContract(
+            name="review", reviewer=AgentRole.REVIEWER, slice_id="01",
+            round_number=1, approval_marker=ApprovalMarker.SLICE,
+            expected_test_files=("../outside.py",),
+        )
+    with pytest.raises(ValueError, match="unsafe repository path"):
+        ImplementerStepContract(
+            name="implement", readiness_marker=ReadinessMarker.IMPLEMENTATION,
+            slice_id="01", round_number=1,
+            expected_test_files=("../outside.py",), require_test_files_record=True,
+        )
 
 
 MISSING_ANCHOR_DETAIL = (

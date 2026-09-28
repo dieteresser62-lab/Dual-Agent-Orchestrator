@@ -44,6 +44,9 @@ from workflow_state import (
     InvocationFailureRecord,
     WorkflowState,
     WorkflowStep,
+    ProtocolBinding,
+    ProtocolMode,
+    scripted_profile_binding,
     init_workflow_state,
 )
 
@@ -74,9 +77,9 @@ def _context() -> WorkflowContext:
 
 
 def _codex_bundle(
-    *, context: WorkflowContext | None = None
+    *, context: WorkflowContext | None = None, state: WorkflowState | None = None,
 ) -> workflow_requests.NativeImplementerRequestBundle:
-    state = init_workflow_state(
+    state = state or init_workflow_state(
         run_id="b31-request-builder",
         task_file="/repo/inbox/backlog/00-b31.md",
         branch="feature/backlog-followups",
@@ -104,6 +107,36 @@ def _codex_bundle(
         request_kind=NativeImplementerRequestKind.PLAN,
         execution_error=WorkflowExecutionError,
     )
+
+
+def test_request_builders_pass_bound_slot_capability_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = ProtocolBinding(
+        ProtocolMode.STRUCTURED_V2, "3",
+        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude"),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex"),  # allowlist:provider -- transport: swapped occupancy fixture
+        final_reviewer_profile=scripted_profile_binding("final_reviewer"),
+    )
+    state = init_workflow_state(
+        run_id="swapped-request", task_file="/repo/task.md", branch="feature/swapped",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        task_digest="b" * 64, task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/swapped",
+        protocol_binding=binding,
+    )
+    observed: dict[str, str] = {}
+    monkeypatch.setattr(
+        workflow_requests, "build_native_implementer_request",
+        lambda _spec, *, profile: observed.setdefault("implementer", profile),
+    )
+    monkeypatch.setattr(
+        workflow_requests, "build_native_review_request",
+        lambda _spec, *, profile: observed.setdefault("reviewer", profile),
+    )
+    _codex_bundle(state=state)  # allowlist:provider -- transport: implementer request fixture
+    _review_bundle(state=state.with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW))
+    assert observed == {"implementer": "claude", "reviewer": "codex"}  # allowlist:provider -- transport: forwarded profiles
 
 
 def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> None:

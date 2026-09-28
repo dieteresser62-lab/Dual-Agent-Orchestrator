@@ -1185,7 +1185,7 @@ def _references(value):  # type: ignore[no-untyped-def]
 def test_closed_schema_rejects_unknown_missing_or_inconsistent_fields(mutation) -> None:  # type: ignore[no-untyped-def]
     raw = _record(TaskPayload("feature/records", ("src/a.py",), DIGEST)).to_dict()
     mutation(raw)
-    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+    with pytest.raises(ArtifactValidationError, match="schema validation failed|UNSUPPORTED-PROTOCOL"):
         validate_artifact_document(raw)
 
 
@@ -1584,6 +1584,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     validate_artifact_document(failed.to_dict())
     assert ArtifactRecord.from_dict(failed.to_dict()) == failed
 
+
     failed_without_usage = replace(failed.payload, usage=None)
     assert failed_without_usage.usage is None
     succeeded = _record(
@@ -1596,6 +1597,11 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     succeeded["status"] = "started"
     with pytest.raises(ArtifactValidationError, match="schema validation failed"):
         validate_artifact_document(succeeded)
+
+
+def test_artifact_schema_accepts_swapped_attempt_occupancy() -> None:
+    attempt = _record(_attempt_for_pair("claude", Role.IMPLEMENTER))  # allowlist:provider -- transport: swapped occupancy regression
+    validate_artifact_document(attempt.to_dict())
 
 
 def test_failed_network_attempt_with_usage_roundtrips_model_and_schema() -> None:

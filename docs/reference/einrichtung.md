@@ -79,8 +79,9 @@ und er nimmt dort die Aufgaben aus einem Eingangsordner.
     └── AGENTS.md         was die Agenten über das Projekt wissen sollen
 ```
 
-Zwei KI-Agenten arbeiten darin: **Codex** plant und programmiert, **Claude**
-prüft. Der Orchestrator führt die Tests aus und legt die Ergebnisse als lokale
+Der **Implementer** (standardmäßig Codex) plant und programmiert; **Reviewer**
+und **Final-Reviewer** (standardmäßig Claude) prüfen. `[roles]` und
+`[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung. Der Orchestrator führt die Tests aus und legt die Ergebnisse als lokale
 Commits auf einem eigenen Branch ab. Nach befundfreier Abnahme führt er
 standardmäßig einen lokalen Merge in den Basisbranch aus. Er pusht nie; den
 Merge können Sie in der Konfiguration abschalten.
@@ -93,7 +94,7 @@ Merge können Sie in der Konfiguration abschalten.
 
 | Was | Mindestens | Prüfen mit |
 |---|---|---|
-| Linux, macOS oder Windows mit WSL2 | – | natives Windows wird nicht unterstützt |
+| Linux oder Windows mit WSL2 und lesbarem `/proc` | – | andere Plattformen werden nicht unterstützt |
 | Python | 3.11 | `python3 --version` |
 | Git | – | `git --version` |
 | eine Git-Identität | – | `git config user.name` und `git config user.email` |
@@ -838,7 +839,7 @@ dieses Repositorys.
 
 ### 4.3 Modelle und CLI-Versionen
 
-| | Codex (Implementierer) | Claude (Prüfer) |
+| | Codex (Standard-Implementer) | Claude (Standard-Reviewer und Final-Reviewer) |
 |---|---|---|
 | Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
 | Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |

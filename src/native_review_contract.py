@@ -12,6 +12,7 @@ from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+from path_policy import is_canonical_repository_relative_path
 from typing import Any, Mapping, TypeAlias
 
 from schema_validation import (
@@ -630,7 +631,7 @@ class NativeReviewContext:
                 )
         normalized_tests = tuple(sorted(set(self.test_files)))
         if normalized_tests != self.test_files or any(
-            not item.strip() for item in self.test_files
+            not is_canonical_repository_relative_path(item) for item in self.test_files
         ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,

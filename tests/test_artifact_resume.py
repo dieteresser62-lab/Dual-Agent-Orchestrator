@@ -478,6 +478,55 @@ def test_deleted_cache_fails_closed_when_any_candidate_chain_is_corrupt(
         )
 
 
+def test_cache_discovery_skips_foreign_schema_and_reducer_runs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    task = tmp_path / "task.md"
+    _record_run(tmp_path, run_id="old-schema", task_file=task)
+    _record_run(tmp_path, run_id="old-reducer", task_file=task)
+    _valid, projected, driver = _record_run(tmp_path, run_id="current-run", task_file=task)
+
+    for run_id, field, value in (
+        ("old-schema", "schema_version", "2"),
+        ("old-reducer", "reducer_version", artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION),
+    ):
+        store = ArtifactStore(tmp_path, run_id)
+        record = next(
+            item for item in store.load_chain()
+            if item.record_type.value == ("task" if field == "schema_version" else "run_profile")
+        )
+        path = store.records_dir / f"{record.record_id}.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        target = envelope["record"] if field == "schema_version" else envelope["record"]["payload"]
+        target[field] = value
+        envelope["content_sha256"] = hashlib.sha256(canonical_json(envelope["record"])).hexdigest()
+        path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    loaded = load_resumable_workflow_state(
+        driver.state_file, repository_root=tmp_path, allowed_roots=(tmp_path,),
+        expected_task_file=task, expected_task_digest=projected.task_digest,
+    )
+    assert loaded == projected
+    assert "Skipping unsupported record run old-schema" in caplog.text
+    assert "Skipping unsupported record run old-reducer" in caplog.text
+    assert "repair or restore" not in caplog.text
+
+
+def test_foreign_schema_diagnostic_precedes_typed_record_validation(
+    tmp_path: Path,
+) -> None:
+    locator, _projected, _driver = _record_run(tmp_path)
+    store = ArtifactStore(tmp_path, locator.run_id)
+    record = store.load_chain()[0]
+    path = store.records_dir / f"{record.record_id}.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["record"]["schema_version"] = "2"
+    envelope["content_sha256"] = hashlib.sha256(canonical_json(envelope["record"])).hexdigest()
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(ArtifactResumeError, match="UNSUPPORTED-PROTOCOL.*schema_version.*matching older orchestrator release"):
+        resolve_resume_state(tmp_path, locator.run_id)
+
+
 @pytest.mark.parametrize(
     "changes",
     (

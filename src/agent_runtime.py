@@ -945,7 +945,7 @@ def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = 
     try:
         current = capture_provider_identity(
             entry, adapter.capability.version_args, run_local_command,
-            path=search_path,
+            path=search_path, expected=bound,
         )
     except ValueError as exc:
         raise AgentCompatibilityError(
@@ -1237,6 +1237,37 @@ def _detach_provider_pipe(stream: TextIO, flags: int) -> None:
         pass
 
 
+def _signal_unidentified_child(
+    process: subprocess.Popen[str], sig: signal.Signals,
+) -> None:
+    """Use the owned, live Popen handle when /proc identity is unavailable."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.getsid(process.pid) == process.pid and os.getpgid(process.pid) == process.pid:
+            os.killpg(process.pid, sig)
+            return
+    except OSError:
+        pass
+    try:
+        if sig is signal.SIGKILL:
+            process.kill()
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+
+
+def _write_provider_input(
+    stream: TextIO, prompt: str, errors: queue.Queue[BaseException],
+) -> None:
+    try:
+        stream.write(prompt)
+        stream.close()
+    except BaseException as exc:
+        errors.put(exc)
+
+
 def _stop_provider_group(
     process: subprocess.Popen[str], identity: ProcessIdentity | None,
     *, drain_seconds: float = 2.0, drained: bool = False,
@@ -1244,13 +1275,19 @@ def _stop_provider_group(
     """Bound TERM, KILL, pipe drain and leader reap after every exit path."""
     if identity is not None:
         signal_process_group(identity, signal.SIGTERM)
+    else:
+        _signal_unidentified_child(process, signal.SIGTERM)
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
-        if identity is None or observe_identity(identity).status is not ProcessStatus.RUNNING:
+        if (identity is None and process.poll() is not None) or (
+            identity is not None and observe_identity(identity).status is not ProcessStatus.RUNNING
+        ):
             break
         time.sleep(0.05)
     if identity is not None:
         signal_process_group(identity, signal.SIGKILL)
+    else:
+        _signal_unidentified_child(process, signal.SIGKILL)
     if drained:
         return
     if process.stdin is not None:
@@ -1424,7 +1461,17 @@ def _run_agent_process(
                 "".join(stdout_chunks), "".join(stderr_chunks),
             )
         else:
-            first_input = stdin_text
+            writer_errors: queue.Queue[BaseException] = queue.Queue()
+            writer: threading.Thread | None = None
+            if stdin_text is not None:
+                assert process.stdin is not None
+                input_stream = process.stdin
+                process.stdin = None
+                writer = threading.Thread(
+                    target=_write_provider_input,
+                    args=(input_stream, stdin_text, writer_errors), daemon=True,
+                )
+                writer.start()
             leader_exit_at = None
             drain_deadline = None
             while True:
@@ -1437,17 +1484,24 @@ def _run_agent_process(
                         f"{agent_key} output pipes remained open after group cleanup.",
                         kind_hint=AgentFailureKind.PROCESS,
                     )
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
                 try:
-                    stdout, stderr = process.communicate(input=first_input, timeout=min(0.2, remaining) if remaining is not None else 0.2)
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining) if remaining is not None else 0.2)
                     break
                 except subprocess.TimeoutExpired:
-                    first_input = None
                     if process.poll() is not None:
                         leader_exit_at = leader_exit_at or time.monotonic()
                         if time.monotonic() - leader_exit_at > 1.0 and not group_cleanup_done:
                             _finish_exited_leader_group(process, identity, agent_key)
                             group_cleanup_done = True
                             drain_deadline = time.monotonic() + 2.0
+            if writer is not None:
+                writer.join(timeout=1)
+                if writer.is_alive():
+                    raise AgentProcessError(f"{agent_key} stdin writer did not finish.", kind_hint=AgentFailureKind.PROCESS)
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
             result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
         finished = True
         return result
