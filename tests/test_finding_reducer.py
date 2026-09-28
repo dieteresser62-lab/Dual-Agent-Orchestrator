@@ -28,13 +28,31 @@ from artifact_replay import (
     ArtifactReplayResult,
     replay_artifacts as replay_artifacts_checked,
 )
-from finding_reducer import reduce_findings
+from finding_reducer import apply_finding_responses, reduce_findings
+from contracts import AgentRole, FindingClass, FindingOrigin, FindingRecord, FindingStatus
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS_PATH = ROOT / "tests" / "fixtures" / "finding-reducer-corpus.json"
 RUN_ID = "finding-reducer-corpus"
 FINGERPRINT = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
+
+
+def test_missing_dispositions_report_every_id_in_natural_order() -> None:
+    findings = tuple(
+        FindingRecord(
+            finding_id=finding_id,
+            finding_class=FindingClass.FINDING,
+            status=FindingStatus.OPEN,
+            summary="Check the result.",
+            acceptance_test="The result is correct.",
+            origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
+        )
+        for finding_id in ("C-01", "C-02", "C-10")
+    )
+    with pytest.raises(ValueError) as raised:
+        apply_finding_responses(findings, ())
+    assert str(raised.value) == "missing disposition for C-01, C-02, C-10"
 HISTORICAL_COMMITS = {
     "f09ed8b",
     "47b4ddc",

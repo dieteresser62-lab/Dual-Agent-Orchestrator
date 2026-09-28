@@ -1475,6 +1475,34 @@ def test_native_result_rejects_wrong_request_or_result_kind(mutate, code) -> Non
     assert raised.value.code is code
 
 
+def test_native_result_reports_all_missing_dispositions_in_natural_order() -> None:
+    findings = tuple(
+        replace(_finding(), finding_id=finding_id)
+        for finding_id in ("C-01", "C-02", "C-10")
+    )
+    bound = _bound(
+        NativeImplementerRequestKind.CORRECTION,
+        findings=findings,
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [],
+    }
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "missing disposition for C-01, C-02, C-10 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.IMPLEMENTER_FINDING_REFERENCE_INVALID
+    )
+
+
 def test_native_result_rejects_missing_and_foreign_dispositions() -> None:
     bound = _bound(
         NativeImplementerRequestKind.CORRECTION,

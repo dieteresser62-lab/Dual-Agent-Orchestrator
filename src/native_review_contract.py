@@ -50,6 +50,7 @@ from finding_identity import (
     FINDING_ID_PATTERN_TEXT,
     FINDING_ID_PREFIX,
     format_finding_id,
+    parse_finding_number,
 )
 from finding_signature import (
     finding_record_signature,
@@ -1212,9 +1213,8 @@ def _native_finding_id_window(
     context: NativeReviewContext, *, size: int
 ) -> tuple[str, ...]:
     first = next_native_finding_id(context)
-    prefix, raw_number = first.split("-", 1)
-    start = int(raw_number)
-    return tuple(f"{prefix}-{number:02d}" for number in range(start, start + size))
+    start = parse_finding_number(first)
+    return tuple(format_finding_id(number) for number in range(start, start + size))
 
 
 def _bind_approved_status_changes(
@@ -1661,7 +1661,7 @@ def next_native_finding_id(context: NativeReviewContext) -> str:
     )
     number = max(
         (
-            int(finding_id.split("-", 1)[1])
+            parse_finding_number(finding_id)
             for finding_id in finding_ids
             if finding_id.startswith(prefix)
         ),
@@ -1927,9 +1927,9 @@ def _validate_response_events(
             )
     expected_prefix = FINDING_ID_PREFIX
     first_id = next_native_finding_id(context)
-    first_number = int(first_id.split("-", 1)[1])
+    first_number = parse_finding_number(first_id)
     expected_new_ids = [
-        f"{expected_prefix}{first_number + index:02d}"
+        format_finding_id(first_number + index)
         for index in range(len(response.new_findings))
     ]
     if new_ids != expected_new_ids:
@@ -2139,7 +2139,7 @@ def _coalesce_known_finding_occurrences(
 
     if not response.new_findings:
         return response
-    first_number = int(next_native_finding_id(context).split("-", 1)[1])
+    first_number = parse_finding_number(next_native_finding_id(context))
     raw_ids = tuple(item.finding_id for item in response.new_findings)
     expected_raw_ids = tuple(
         format_finding_id(first_number + index)
@@ -2458,7 +2458,7 @@ def _slice_decision_retry_guidance(
     if new_count is None:
         return None
     if include_new_findings:
-        first_number = int(next_native_finding_id(context).split("-", 1)[1])
+        first_number = parse_finding_number(next_native_finding_id(context))
         new_ids = tuple(
             format_finding_id(first_number + offset) for offset in range(new_count)
         )

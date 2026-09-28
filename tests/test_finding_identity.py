@@ -14,6 +14,7 @@ from finding_identity import (
     FINDING_ID_PATTERN_TEXT,
     FINDING_ID_PREFIX,
     format_finding_id,
+    parse_finding_number,
 )
 from native_review_contract import (
     NativeReviewContext,
@@ -58,6 +59,12 @@ def test_finding_id_producers_and_validators_share_one_definition() -> None:
     for invalid in (0, -1, True, 1.0):
         with pytest.raises(ValueError):
             format_finding_id(invalid)
+    for number in (1, 2, 10, 100):
+        assert parse_finding_number(format_finding_id(number)) == number
+    assert parse_finding_number("C-1") == 1  # Existing domain pattern accepts unpadded IDs.
+    for invalid_id in ("C-00", "C-001", "R-01", "C-01\n", "C-01x", 1):
+        with pytest.raises(ValueError, match="invalid finding id"):
+            parse_finding_number(invalid_id)
 
 
 def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -> None:
