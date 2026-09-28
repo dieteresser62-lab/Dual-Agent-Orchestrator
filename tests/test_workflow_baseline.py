@@ -129,7 +129,7 @@ def _state(tmp_path: Path) -> WorkflowState:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             updated_at="2026-09-02T00:00:00+00:00",
         )
         .bind_current_slice_git_boundary(
@@ -339,12 +339,12 @@ def test_incomplete_profile_prefix_preserves_persisted_code_version(
     profile = bridge.append(
         RunProfilePayload(
             implementer=RoleProfilePayload(
-                binding.codex_profile.model,
-                binding.codex_profile.effort,
+                binding.implementer_profile.model,
+                binding.implementer_profile.effort,
             ),
             reviewer=RoleProfilePayload(
-                binding.claude_profile.model,
-                binding.claude_profile.effort,
+                binding.reviewer_profile.model,
+                binding.reviewer_profile.effort,
             ),
             orchestrator_code_version=persisted_version,
             merge_completed_branch=False,

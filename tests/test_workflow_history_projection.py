@@ -500,8 +500,8 @@ def _journey(
     bridge.append(
         FindingTransitionPayload(
             "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -534,7 +534,7 @@ def _journey(
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "4",
             "approved",
             (),
@@ -652,7 +652,7 @@ def _append_projection_invocation_failure(bridge: ArtifactBridge) -> None:
         InvocationFailurePayload(
             invocation_id,
             "invoke:projection-quota:attempt-1",
-            Role.CODEX,
+            Role.IMPLEMENTER,
             "quota",
             "transient",
             "AGENT-INVOCATION",
@@ -734,7 +734,7 @@ def _append_projection_denied_slice_review(bridge: ArtifactBridge) -> None:
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "5",
             "denied",
             ("C-01",),
@@ -1013,8 +1013,8 @@ def _independent_mirror_snapshots(
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
         "2",
-        codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-        claude_profile=AgentProfileBinding("opus", "max"),
+        implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
+        reviewer_profile=AgentProfileBinding("opus", "max"),
     )
     state = init_workflow_state(
         run_id=RUN_ID,
@@ -1042,7 +1042,7 @@ def _independent_mirror_snapshots(
     state = state.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         updated_at="2026-08-31T10:00:02+00:00",
     )
     slice_one_history = WorkflowHistory(2)
@@ -1074,13 +1074,13 @@ def _independent_mirror_snapshots(
         2,
         WorkUnitKind.SLICE,
         WorkUnitStatus.IN_PROGRESS,
-        WorkflowStep.CODEX_IMPLEMENTATION,
+        WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     state = replace(
         state,
         current_slice_id=2,
         current_work_unit_id=3,
-        current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slices=(*state.slices, slice_two),
         work_units=(*state.work_units, slice_two_unit),
         updated_at="2026-08-31T10:00:06+00:00",
@@ -1090,7 +1090,7 @@ def _independent_mirror_snapshots(
     for end in (21, 22):
         snapshots[end] = _history_mirror(state, slice_two_history, archive)
     state = state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW,
+        WorkflowStep.REVIEWER_SLICE_REVIEW,
         updated_at="2026-08-31T10:00:07+00:00",
     ).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
@@ -1116,14 +1116,14 @@ def _independent_mirror_snapshots(
         3,
         WorkUnitKind.SLICE,
         WorkUnitStatus.IN_PROGRESS,
-        WorkflowStep.CODEX_CORRECTION,
+        WorkflowStep.IMPLEMENTER_CORRECTION,
         open_findings=(),
     )
     state = replace(
         state,
         current_slice_id=3,
         current_work_unit_id=4,
-        current_step=WorkflowStep.CODEX_CORRECTION,
+        current_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         slices=(*state.slices, correction_slice),
         work_units=(*state.work_units, provisional_unit),
         updated_at="2026-08-31T10:00:11+00:00",
@@ -1224,8 +1224,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     bridge.append(
         FindingTransitionPayload(
             "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "status_changed",
             FindingSeverity.BLOCKER,
             "closed",
@@ -1261,8 +1261,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     bridge.append(
         FindingTransitionPayload(
             "C-02",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.FINDING,
             "open",
@@ -1281,7 +1281,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "5",
             "approved",
             ("C-02",),
@@ -1331,8 +1331,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     bridge.append(
         FindingTransitionPayload(
             "C-02",
-            Role.CLAUDE,
-            Role.CODEX,
+            Role.REVIEWER,
+            Role.IMPLEMENTER,
             "responded",
             FindingSeverity.FINDING,
             "open",
@@ -1348,8 +1348,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     bridge.append(
         FindingTransitionPayload(
             "C-02",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "status_changed",
             FindingSeverity.FINDING,
             "closed",
@@ -1364,8 +1364,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     bridge.append(
         FindingTransitionPayload(
             "C-03",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.FINDING,
             "open",
@@ -1384,7 +1384,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "6",
             "approved",
             ("C-02", "C-03"),
@@ -1791,7 +1791,7 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
     slice_review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "5",
             "approved",
             (),
@@ -1903,8 +1903,8 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
     bridge.append(
         FindingTransitionPayload(
             "C-98",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -1942,7 +1942,7 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "4",
             "denied",
             ("C-98",),

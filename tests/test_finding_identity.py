@@ -72,7 +72,7 @@ def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -
         (ApprovalMarker.FINAL_REVIEW, "claude_final_review", "FINAL"),
     ):
         context = NativeReviewContext(
-            "test-run", "1", operation, "a" * 64, AgentRole.CLAUDE,
+            "test-run", "1", operation, "a" * 64, AgentRole.REVIEWER,
             marker, slice_id, 1,
         )
         documents.append(native_review_provider_response_schema(context))

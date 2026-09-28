@@ -342,7 +342,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
                 attestation_record.payload.content_record_id,
             )
             or not review_payload_matches_complete_result(
-                current_review.payload, request.claude_review  # allowlist:provider
+                current_review.payload, request.reviewer_review
             )
         ):
             raise CrashHarnessError("scripted commit lacks its record-bound approval")
@@ -547,7 +547,7 @@ def _production_state(root: Path, run_id: str) -> WorkflowState:
     ).complete_current_work_unit(updated_at=FIXED_TIME).start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- persisted step
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,  # allowlist:provider -- persisted step
         updated_at=FIXED_TIME,
     ).bind_current_slice_git_boundary(
         start_commit=FIRST_SLICE_START_COMMIT,
@@ -589,7 +589,7 @@ def _production_baseline(
     driver.bind_work_unit(state)
     resolution = resolve_resume_state(root, run_id)
     _require_measured_first_slice_start_commit(resolution.state)
-    if resolution.state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION:  # allowlist:provider
+    if resolution.state.current_step is not WorkflowStep.IMPLEMENTER_IMPLEMENTATION:  # allowlist:provider
         raise CrashHarnessError("production baseline projected a foreign cursor")
     return ArtifactBridge(
         ArtifactStore(root, run_id), now=lambda: FIXED_TIME
@@ -1199,7 +1199,7 @@ def _run_post_merge_case(
                     )
                 return _native_review_approval(invocation)
 
-            ProductionWorkflowDriver.invoke_codex = codex  # allowlist:provider -- scripted adapter
+            ProductionWorkflowDriver.invoke_implementer = codex  # allowlist:provider -- scripted adapter
             ProductionWorkflowDriver.invoke_reviewer = review
             if phase == "after_process_start":
                 real_popen = workflow_completion.subprocess.Popen
@@ -1954,7 +1954,7 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
             failure_kind=kind,
             provider_text=f"redacted {kind.value} diagnostic",
             received_at=FIXED_TIME,
-            step=WorkflowStep.CODEX_PLAN,  # allowlist:provider -- typed workflow step
+            step=WorkflowStep.IMPLEMENTER_PLAN,  # allowlist:provider -- typed workflow step
             slice_id=1,
             work_unit_id=1,
             diagnostic_exit_code=2 if kind is AgentFailureKind.QUOTA else 3,
@@ -1987,7 +1987,7 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
         resumed = halted.resume_after_invocation_halt(updated_at=FIXED_TIME)
         if (
             resumed.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS
-            or resumed.current_step is not WorkflowStep.CODEX_PLAN  # allowlist:provider
+            or resumed.current_step is not WorkflowStep.IMPLEMENTER_PLAN  # allowlist:provider
             or resumed.current_work_unit.invocation_failures != (failure,)
         ):
             raise CrashHarnessError(f"typed {kind.value} continuation lost evidence")

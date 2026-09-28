@@ -181,7 +181,7 @@ def scope_extension_source_request_id(
         record
         for record in chain
         if isinstance(record.payload, AgentResultPayload)
-        and record.payload.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: canonical role
+        and record.payload.role is Role.IMPLEMENTER
         and record.payload.work_unit_id == str(work_unit_id)
         and record.payload.outcome == "stopped"
         and record.fingerprint.sha256 == fingerprint
@@ -902,7 +902,7 @@ class WorkflowPersistence:
     def _recompose_failed_correction_request(
         self, invocation: object, previous: str, current: str
     ) -> None:
-        if invocation.step is not WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- wire until slice 8/9: fixed implementer step
+        if invocation.step is not WorkflowStep.IMPLEMENTER_CORRECTION:
             return
         previous_binding = self._request_binding(previous)
         current_binding = self._request_binding(current)
@@ -919,7 +919,7 @@ class WorkflowPersistence:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == Role.CODEX.value  # allowlist:provider -- wire until slice 8/9: fixed implementer role
+            and item.operation[0] == Role.IMPLEMENTER.value
             and item.operation[1] == invocation.step.value
             and item.operation[4] in {
                 f"request:{invocation.request_sequence}",
@@ -937,7 +937,7 @@ class WorkflowPersistence:
             if not any(
                 isinstance(record.payload, ProviderAttemptPayload)
                 and record.payload.phase == "failed"
-                and record.payload.provider is Role.CODEX  # allowlist:provider -- wire until slice 8/9: fixed implementer role
+                and record.payload.provider is Role.IMPLEMENTER
                 and record.payload.work_unit_id == str(invocation.work_unit_id)
                 and record.payload.operation == invocation.step.value
                 and record.payload.input_digest == item.operation[2]
@@ -1076,7 +1076,7 @@ class WorkflowPersistence:
         )
         payload = agent_result_payload(
             output.result,
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=unit.work_unit_id,
             transport_schema=NATIVE_IMPLEMENTER_TRANSPORT,
             request_id=output.request_id,
@@ -1116,7 +1116,7 @@ class WorkflowPersistence:
             else FingerprintKind.IMPLEMENTATION
         )
         content_record = self._persist_provider_content(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=unit.work_unit_id,
             request_sequence=request_sequence,
             operation=state.current_step.value,
@@ -1152,7 +1152,7 @@ class WorkflowPersistence:
             bridge.append(
                 finding_payload(
                     finding,
-                    actor=AgentRole.CODEX,
+                    actor=AgentRole.IMPLEMENTER,
                     action="responded",
                     rationale=response.rationale,
                     work_unit_id=unit.work_unit_id,
@@ -1312,7 +1312,7 @@ class WorkflowPersistence:
             state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_REVIEW_TRANSPORT
-            or output.result.reviewer is not AgentRole.CLAUDE
+            or output.result.reviewer is not AgentRole.REVIEWER
         ):
             raise WorkflowExecutionError(
                 "native review persistence lacks its immutable Claude binding"
@@ -1320,7 +1320,7 @@ class WorkflowPersistence:
         unit = state.current_work_unit
         review_type = (
             "final review"
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
             else "slice review"
         )
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"

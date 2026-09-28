@@ -165,7 +165,7 @@ class NativeReviewRequestSpec:
                 NativeReviewRequestErrorCode.CONTEXT_INVALID,
                 "request spec requires NativeReviewContext",
             )
-        if self.context.reviewer is not AgentRole.CLAUDE:
+        if self.context.reviewer is not AgentRole.REVIEWER:
             raise NativeReviewRequestError(
                 NativeReviewRequestErrorCode.CONTEXT_INVALID,
                 "native Claude request requires reviewer=claude",

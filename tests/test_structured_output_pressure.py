@@ -62,7 +62,7 @@ def _finding() -> FindingRecord:
         FindingStatus.OPEN,
         "Bound convergence finding.",
         "The focused regression passes.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -73,7 +73,7 @@ def _observation(finding_id: str = "C-02") -> FindingRecord:
         FindingStatus.OPEN,
         "Bound open observation.",
         "The focused regression passes.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -93,7 +93,7 @@ def _context(form: str) -> NativeReviewContext:
             ApprovalMarker.FINAL_REVIEW: "claude_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=marker,
         slice_id=(
             "discovery"
@@ -176,7 +176,7 @@ def _writer_schemas() -> dict[str, dict[str, object]]:
 def _context_scope(context: NativeReviewContext) -> set[str]:
     marker = context.approval_marker
     own_open = any(
-        finding.origin.reporter is AgentRole.CLAUDE
+        finding.origin.reporter is AgentRole.REVIEWER
         and finding.status is FindingStatus.OPEN
         for finding in context.previous_findings
     )

@@ -110,8 +110,8 @@ def _opening_payload(event: dict[str, Any]) -> FindingTransitionPayload:
     summary = event.get("summary", f"Regression {finding_id}")
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=FindingSeverity(finding_class),
         finding_status="open",
@@ -146,8 +146,8 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.FINDING,
             finding_status="open",
@@ -158,8 +158,8 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
     )
     escalation = FindingTransitionPayload(
         finding_id="C-01",
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="escalated",
         severity=FindingSeverity.BLOCKER,
         finding_status="open",
@@ -244,7 +244,7 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                 revisions,
                 f"review-claude-{event['work_unit']}-{round_number}",
                 ReviewPayload(
-                    reviewer=Role.CLAUDE,
+                    reviewer=Role.REVIEWER,
                     work_unit_id=event["work_unit"],
                     verdict=event["verdict"],
                     finding_ids=tuple(event.get("finding_ids", ())),
@@ -265,8 +265,8 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                 f"finding-{finding_id}",
                 FindingTransitionPayload(
                     finding_id=finding_id,
-                    reporter=Role.CLAUDE,
-                    actor=Role.CODEX,
+                    reporter=Role.REVIEWER,
+                    actor=Role.IMPLEMENTER,
                     action="responded",
                     severity=classes[finding_id],
                     finding_status="open",
@@ -283,8 +283,8 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                 f"finding-{finding_id}",
                 FindingTransitionPayload(
                     finding_id=finding_id,
-                    reporter=Role.CLAUDE,
-                    actor=Role.CLAUDE,
+                    reporter=Role.REVIEWER,
+                    actor=Role.REVIEWER,
                     action="status_changed",
                     severity=severity,
                     finding_status="closed",

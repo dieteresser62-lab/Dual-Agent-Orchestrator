@@ -522,7 +522,7 @@ class WorkflowContext:
 
 
 @dataclass(frozen=True)
-class CodexInvocation:
+class ImplementerInvocation:
     work_unit_id: int
     step: WorkflowStep
     round_number: int
@@ -588,7 +588,7 @@ class ReviewerInvocation:
             object.__setattr__(self, "request_sequence", self.round_number)
         elif self.request_sequence < 1:
             raise ValueError("review request sequence must be 1-based")
-        if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
+        if self.native_request is not None and self.reviewer is not AgentRole.REVIEWER:
             raise ValueError("native review requests are supported only for Claude")
 
 
@@ -612,7 +612,7 @@ class WorkflowCommitRequest:
     slice_id: int
     fingerprint: str
     attestation: ValidationAttestation
-    claude_review: ContractResult
+    reviewer_review: ContractResult
     findings: tuple[FindingRecord, ...]
     red_state_followup_slice: str | None = None
 
@@ -641,13 +641,13 @@ class WorkflowDriver(Protocol):
         _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
-    def invoke_codex(
-        self, invocation: CodexInvocation
+    def invoke_implementer(
+        self, invocation: ImplementerInvocation
     ) -> str | NativeAgentImplementerOutput: ...
 
     def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        invocation: ImplementerInvocation,
         contract: ImplementerStepContract,
         history: WorkflowHistory,
     ) -> NativeAgentImplementerOutput | None: ...
@@ -771,7 +771,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "commit_slice",
         "detect_test_changes",
         "evaluate_slice_finding_convergence",
-        "invoke_codex",  # allowlist:provider -- transport: canonical capability
+        "invoke_implementer",
         "invoke_reviewer",
         "persist_gate_decision",
         "close_unknown_provider_attempt",
@@ -1337,7 +1337,7 @@ class WorkflowRunResult:
         remaining = project_open_set(self.history.findings).finding_ids
         round_limit_reached = (
             self.state.current_work_unit.round_number
-            >= self.state.current_work_unit.max_codex_returns
+            >= self.state.current_work_unit.max_implementer_returns
         )
         return (
             "SLICE-REVIEW-DENIED | "
@@ -1436,7 +1436,7 @@ def _uses_correction_finding_authority(state: WorkflowState) -> bool:
     """Return whether this round must resolve Findings from records."""
 
     return (
-        state.current_step is WorkflowStep.CODEX_CORRECTION
+        state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION
         or state.current_work_unit.round_number > 1
     )
 
@@ -1700,24 +1700,24 @@ class WorkflowEngine:
             context = self._bind_context_to_current_unit(state, context, active_history)
             step = state.current_step
             if step in (
-                WorkflowStep.CODEX_PLAN,
-                WorkflowStep.CODEX_PLAN_REVISION,
-                WorkflowStep.CODEX_IMPLEMENTATION,
-                WorkflowStep.CODEX_CORRECTION,
+                WorkflowStep.IMPLEMENTER_PLAN,
+                WorkflowStep.IMPLEMENTER_PLAN_REVISION,
+                WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+                WorkflowStep.IMPLEMENTER_CORRECTION,
             ):
-                state, active_history = self._run_codex(
+                state, active_history = self._run_implementer(
                     state, context, active_history
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
                 continue
             if step in (
-                WorkflowStep.CLAUDE_PLAN_REVIEW,
-                WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.REVIEWER_PLAN_REVIEW,
+                WorkflowStep.REVIEWER_SLICE_REVIEW,
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
             ):
                 state, active_history = self._run_review(
-                    state, context, active_history, AgentRole.CLAUDE
+                    state, context, active_history, AgentRole.REVIEWER
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
@@ -1760,8 +1760,8 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "pre-policy native reviewer recovery returned an invalid contract"
             )
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_plan_review = state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
         request_result = pending.output.result
         result = request_result
         finding_ledger = self._authoritative_finding_ledger(
@@ -1811,7 +1811,7 @@ class WorkflowEngine:
             state=state,
             context=context,
             history=history,
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             result=result,
             fingerprint=pending.fingerprint,
             round_number=pending.round_number,
@@ -1979,7 +1979,7 @@ class WorkflowEngine:
         if not unexpected:
             return resumed
         next_step = (
-            WorkflowStep.CLAUDE_PLAN_REVIEW
+            WorkflowStep.REVIEWER_PLAN_REVIEW
             if plan_validation_scope_stop
             else current.current_step
         )
@@ -2003,7 +2003,7 @@ class WorkflowEngine:
     ) -> tuple[
         bool,
         ImplementerStepContract,
-        CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        ImplementerInvocation,
         NativeAgentImplementerOutput | None,
         WorkflowHistory,
     ]:
@@ -2012,8 +2012,8 @@ class WorkflowEngine:
             self._context_with_scope_approval(state, context),
         )
         is_plan = state.current_step in (
-            WorkflowStep.CODEX_PLAN,
-            WorkflowStep.CODEX_PLAN_REVISION,
+            WorkflowStep.IMPLEMENTER_PLAN,
+            WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         )
         readiness = ReadinessMarker.PLAN if is_plan else ReadinessMarker.IMPLEMENTATION
         contract = ImplementerStepContract(
@@ -2037,7 +2037,7 @@ class WorkflowEngine:
             workflow_requests.NativeImplementerRequestKind.PLAN
             if is_plan
             else workflow_requests.NativeImplementerRequestKind.CORRECTION
-            if state.current_step is WorkflowStep.CODEX_CORRECTION
+            if state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION
             else workflow_requests.NativeImplementerRequestKind.IMPLEMENTATION
         )
         is_correction_request = (
@@ -2076,7 +2076,7 @@ class WorkflowEngine:
             correction_fingerprint=correction_fingerprint,
             correction_findings=history.findings if is_correction_request else None,
         )
-        invocation = CodexInvocation(
+        invocation = ImplementerInvocation(
             unit.work_unit_id,
             state.current_step,
             unit.round_number,
@@ -2110,7 +2110,7 @@ class WorkflowEngine:
                     correction_fingerprint=correction_fingerprint,
                     correction_findings=history.findings,
                 )
-                invocation = CodexInvocation(
+                invocation = ImplementerInvocation(
                     unit.work_unit_id,
                     state.current_step,
                     unit.round_number,
@@ -2177,7 +2177,7 @@ class WorkflowEngine:
             )
         return context
 
-    def _run_codex(
+    def _run_implementer(
         self,
         state: WorkflowState,
         context: WorkflowContext,
@@ -2190,8 +2190,8 @@ class WorkflowEngine:
             state,
             history,
             context,
-            AgentRole.CODEX,
-            lambda: recovered or self.driver.invoke_codex(invocation),
+            AgentRole.IMPLEMENTER,
+            lambda: recovered or self.driver.invoke_implementer(invocation),
         )
         return self._apply_agent_output(
             state,
@@ -2208,7 +2208,7 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory,
         is_plan: bool,
-        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        invocation: ImplementerInvocation,
         output: NativeAgentImplementerOutput | None,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         if output is None:
@@ -2308,9 +2308,9 @@ class WorkflowEngine:
             if halted:
                 return state, history
         next_step = (
-            WorkflowStep.CLAUDE_PLAN_REVIEW
+            WorkflowStep.REVIEWER_PLAN_REVIEW
             if is_plan
-            else WorkflowStep.CLAUDE_SLICE_REVIEW
+            else WorkflowStep.REVIEWER_SLICE_REVIEW
         )
         state = state.with_current_step(next_step)
         self.driver.checkpoint(state, history)
@@ -2368,7 +2368,7 @@ class WorkflowEngine:
                     "for a genuine implementation blocker or product decision."
                 ),
             )
-            return self._run_codex(validation_handoff, handoff_context, history)
+            return self._run_implementer(validation_handoff, handoff_context, history)
         state = self._halt_for_stop_request(state, context, stop_request)
         self.driver.checkpoint(state, history)
         return state, history
@@ -2455,13 +2455,13 @@ class WorkflowEngine:
                 f"{remediation_instruction}"
             ),
         )
-        return self._run_codex(expanded, expanded_context, history)
+        return self._run_implementer(expanded, expanded_context, history)
 
     def _merge_implementer_output_findings(
         self,
         state: WorkflowState,
         history: WorkflowHistory,
-        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        invocation: ImplementerInvocation,
         output: NativeAgentImplementerOutput,
     ) -> WorkflowHistory:
         """Merge fresh or recovered output without mixing its ledger cuts."""
@@ -2503,7 +2503,7 @@ class WorkflowEngine:
                 context=context,
             )
             if unexpected:
-                next_step = WorkflowStep.CLAUDE_PLAN_REVIEW
+                next_step = WorkflowStep.REVIEWER_PLAN_REVIEW
                 state = state.await_user_gate(
                     reason=GateReason.UNEXPECTED_FILE,
                     detail=(
@@ -2547,7 +2547,7 @@ class WorkflowEngine:
                     detail,
                 )
                 state = state.mark_side_effect_completed(repair_key)
-                state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+                state = state.with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
                 self.driver.checkpoint(state, history)
                 assert failure_policy is not None
                 if (
@@ -2586,7 +2586,7 @@ class WorkflowEngine:
                         "single PLAN_ONLY SLICE_PLAN records; do not request user input."
                     ),
                 )
-                repaired_state, repaired_history = self._run_codex(
+                repaired_state, repaired_history = self._run_implementer(
                     state, repair_context, history
                 )
                 return repaired_state, repaired_history, True
@@ -2981,10 +2981,10 @@ class WorkflowEngine:
         history: WorkflowHistory, reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
-        if reviewer is not AgentRole.CLAUDE:
+        if reviewer is not AgentRole.REVIEWER:
             raise WorkflowExecutionError("only Claude may execute review steps")
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_plan_review = state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
         history = self._bind_correction_request_history(state, history)
         start_commit = state.branch_review_base_commit if is_final_review else (
             state.current_slice.start_commit or state.branch_base
@@ -3224,12 +3224,12 @@ class WorkflowEngine:
             )
             own_ids = tuple(item.finding_id for item in result.own_open_findings)
             return_step = (
-                WorkflowStep.CODEX_PLAN_REVISION
+                WorkflowStep.IMPLEMENTER_PLAN_REVISION
                 if unit.kind is WorkUnitKind.PLAN
-                else WorkflowStep.CODEX_CORRECTION
+                else WorkflowStep.IMPLEMENTER_CORRECTION
             )
             state = state.record_review_denial(
-                reviewer=Reviewer.CLAUDE,
+                reviewer=Reviewer.REVIEWER,
                 open_findings=own_ids,
                 return_step=return_step,
                 progress_made=correction_progress,
@@ -3640,7 +3640,7 @@ class WorkflowEngine:
             "findings": result.findings,
             "events": (*history.events, event),
         }
-        if result.reviewer is not AgentRole.CLAUDE:
+        if result.reviewer is not AgentRole.REVIEWER:
             raise WorkflowExecutionError("review history accepts only Claude results")
         if track_slice_approval:
             updates["last_reviewer_fingerprint"] = fingerprint
@@ -3721,9 +3721,9 @@ class WorkflowEngine:
         )
         if not reviews_current:
             review_step = (
-                WorkflowStep.CLAUDE_PLAN_REVIEW
+                WorkflowStep.REVIEWER_PLAN_REVIEW
                 if state.current_work_unit.kind is WorkUnitKind.PLAN
-                else WorkflowStep.CLAUDE_SLICE_REVIEW
+                else WorkflowStep.REVIEWER_SLICE_REVIEW
             )
             state = state.with_current_step(review_step)
             history = replace(
@@ -3760,7 +3760,7 @@ class WorkflowEngine:
                     slice_id=state.current_slice_id,
                     fingerprint=changes.fingerprint,
                     attestation=attestation,
-                    claude_review=review,
+                    reviewer_review=review,
                     findings=history.findings,
                     red_state_followup_slice=context.red_state_followup_slice,
                 )
@@ -3806,7 +3806,7 @@ class WorkflowEngine:
             if unit.has_completed_side_effect(reset_key):
                 return state, history, False
             state = state.mark_side_effect_completed(reset_key)
-            state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+            state = state.with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
             history = replace(
                 history,
                 last_reviewer_fingerprint=None,
@@ -3816,9 +3816,9 @@ class WorkflowEngine:
             return state, history, False
         original_step = state.current_step
         resume_step = (
-            WorkflowStep.CODEX_CORRECTION
-            if original_step is WorkflowStep.CODEX_CORRECTION
-            else WorkflowStep.CODEX_IMPLEMENTATION
+            WorkflowStep.IMPLEMENTER_CORRECTION
+            if original_step is WorkflowStep.IMPLEMENTER_CORRECTION
+            else WorkflowStep.IMPLEMENTER_IMPLEMENTATION
         )
         state = state.await_user_gate(
             reason=GateReason.ANCHOR_CHANGE,

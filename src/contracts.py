@@ -29,8 +29,8 @@ VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
 
 
 class AgentRole(str, Enum):
-    CODEX = "codex"
-    CLAUDE = "claude"
+    IMPLEMENTER = "codex"
+    REVIEWER = "claude"
 
 
 class ApprovalMarker(str, Enum):
@@ -120,7 +120,7 @@ class FindingOrigin:
             raise ValueError("finding origin requires a slice id")
         if self.round_number < 1:
             raise ValueError("finding origin round must be 1-based")
-        if self.reporter is not AgentRole.CLAUDE:
+        if self.reporter is not AgentRole.REVIEWER:
             raise ValueError("finding reporter must be claude")
 
 
@@ -462,7 +462,7 @@ class StepContract:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("step contract requires a name")
-        if self.reviewer is not AgentRole.CLAUDE:
+        if self.reviewer is not AgentRole.REVIEWER:
             raise ValueError("review step requires claude")
         if not self.slice_id.strip():
             raise ValueError("step contract requires a slice id")
@@ -726,7 +726,7 @@ def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:
     match = SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id)
     if not match:
         raise ValueError(f"invalid finding id '{finding_id}' (expected {FINDING_ID_EXAMPLE})")
-    if reporter is not AgentRole.CLAUDE:
+    if reporter is not AgentRole.REVIEWER:
         raise ValueError(
             f"finding id '{finding_id}' does not match reporter {reporter.value}"
         )

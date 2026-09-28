@@ -62,7 +62,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
             scope_paths=("docs/internal/plan.md", "src/first.py", "src/second.py"),
         ),
         agent_events=(
-            ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN,
+            ScriptedAgentEvent(AgentRole.IMPLEMENTER, 1, 1, WorkflowStep.IMPLEMENTER_PLAN,
                                codex_result("plan_result", slice_plan=[
                                    {
                                        "slice_id": 1,
@@ -83,21 +83,21 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                        }],
                                    },
                                ])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
+            ScriptedAgentEvent(AgentRole.REVIEWER, 1, 1, WorkflowStep.REVIEWER_PLAN_REVIEW,
                                review()),
-            ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+            ScriptedAgentEvent(AgentRole.IMPLEMENTER, 2, 1, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                                codex_result("implementation_result", test_files=[])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+            ScriptedAgentEvent(AgentRole.REVIEWER, 2, 1, WorkflowStep.REVIEWER_SLICE_REVIEW,
                                review()),
-            ScriptedAgentEvent(AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+            ScriptedAgentEvent(AgentRole.IMPLEMENTER, 3, 1, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                                codex_result("implementation_result", test_files=[])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+            ScriptedAgentEvent(AgentRole.REVIEWER, 3, 1, WorkflowStep.REVIEWER_SLICE_REVIEW,
                                review()),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
                 4,
                 1,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
@@ -144,13 +144,13 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
         state = replace(state, run_id=run_id)
     plan = session.run(state, context)
     state = plan.result.state.start_work_unit(
-        slice_id=1, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION
+        slice_id=1, kind=WorkUnitKind.SLICE, step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION
     ).bind_current_slice_git_boundary(
         start_commit=base, scope_paths=("src/first.py",), start_fingerprint="0" * 64
     )
     first = session.run(state, context)
     state = first.result.state.start_work_unit(
-        slice_id=2, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_id=2, kind=WorkUnitKind.SLICE, step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_start_commit=commit1,
     ).bind_current_slice_git_boundary(
         start_commit=commit1, scope_paths=("src/second.py",), start_fingerprint="0" * 64

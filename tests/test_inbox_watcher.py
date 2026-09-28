@@ -79,7 +79,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="a" * 40,
         scope_paths=("src/engine.py",),
@@ -87,7 +87,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
     ).complete_current_slice(commit_ref="b" * 40).start_work_unit(
         slice_id=2,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_start_commit="b" * 40,
     ).bind_current_slice_git_boundary(
         start_commit="b" * 40,
@@ -887,7 +887,7 @@ def test_legacy_bootstrap_denial_maps_to_resumable_watch_halt() -> None:
     assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
     assert halted.exit_code == 4
     assert halted.status == "awaiting_resume"
-    assert halted.step == WorkflowStep.CODEX_PLAN.value
+    assert halted.step == WorkflowStep.IMPLEMENTER_PLAN.value
     assert halted.gate_reason == GateReason.BOOTSTRAP_CHECK.value
     assert halted.failure_detail == "PROVIDER-INPUT-BUDGET | chars=101/100"
 

@@ -97,7 +97,7 @@ from side_effects import (
 )
 from state_io import atomic_write_file
 from workflow import (
-    CodexInvocation as ImplementerInvocation,
+    ImplementerInvocation,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     WorkflowContext,
@@ -105,6 +105,7 @@ from workflow import (
     WorkflowHistory,
 )
 from workflow_state import (
+    AgentFailureKind,
     GateReason,
     NATIVE_CLAUDE_REVIEW_TRANSPORT as NATIVE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT as NATIVE_IMPLEMENTER_TRANSPORT,
@@ -119,7 +120,7 @@ logger = logging.getLogger(__name__)
 
 
 ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
-_IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
+_IMPLEMENTER_ARTIFACT_ROLE = Role.IMPLEMENTER
 
 
 def _completed_implementer_responses(
@@ -142,7 +143,7 @@ def _completed_implementer_responses(
         for item in effects
     ) or any(
         re.fullmatch(
-            r"failed:(?:quota|network|timeout|permission|auth|binary|output|process|runtime)",
+            "failed:(?:" + "|".join(kind.value for kind in AgentFailureKind) + ")",
             item.result,
         ) is None
         for item in failures
@@ -562,7 +563,7 @@ class WorkflowRecovery:
         attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
+            role=Role.REVIEWER,
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -674,7 +675,7 @@ class WorkflowRecovery:
         request_attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
+            role=Role.REVIEWER,
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -1497,7 +1498,7 @@ class WorkflowRecovery:
         )
         candidate = self._dependencies.canonical_agent_result(candidates, logical)
         persisted_content = self._dependencies.content_text(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=invocation.work_unit_id,
             request_sequence=invocation.request_sequence,
             operation=invocation.step.value,
@@ -1621,7 +1622,7 @@ class WorkflowRecovery:
         record = candidate
         payload = record.payload
         if (
-            payload.role is not Role.CODEX
+            payload.role is not Role.IMPLEMENTER
             or payload.work_unit_id != str(invocation.work_unit_id)
             or payload.transport_schema != NATIVE_IMPLEMENTER_TRANSPORT
             or payload.request_id != recovery_bound.request_id
@@ -1632,7 +1633,7 @@ class WorkflowRecovery:
             )
         expected_payload = agent_result_payload(
             result,
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=invocation.work_unit_id,
             transport_schema=NATIVE_IMPLEMENTER_TRANSPORT,
             request_id=recovery_bound.request_id,
@@ -1693,14 +1694,14 @@ class WorkflowRecovery:
             and history.active_review_packet.fingerprint
             == record.fingerprint.sha256
             else ()
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
             else context.expected_test_files
         )
         approval_marker = (
             ApprovalMarker.PLAN
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
             else ApprovalMarker.FINAL_REVIEW
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
             else ApprovalMarker.SLICE
         )
         payload = record.payload
@@ -1727,7 +1728,7 @@ class WorkflowRecovery:
             work_unit_id=str(unit.work_unit_id),
             operation=state.current_step.value,
             diff_fingerprint=record.fingerprint.sha256,
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval_marker=approval_marker,
             slice_id=(
                 "DISCOVERY"
@@ -1792,9 +1793,9 @@ class WorkflowRecovery:
             != NATIVE_REVIEW_TRANSPORT
             or state.current_step
             not in {
-                WorkflowStep.CLAUDE_PLAN_REVIEW,
-                WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.REVIEWER_PLAN_REVIEW,
+                WorkflowStep.REVIEWER_SLICE_REVIEW,
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
             }
             or self._dependencies.active_state().run_id != state.run_id
             or self._dependencies.active_state().current_work_unit_id != unit.work_unit_id
@@ -1843,7 +1844,7 @@ class WorkflowRecovery:
                 record.payload,
                 (ReviewPayload, FinalReviewCompletedPayload),
             )
-            or record.payload.reviewer is not Role.CLAUDE
+            or record.payload.reviewer is not Role.REVIEWER
             or record.payload.work_unit_id != str(unit.work_unit_id)
             or record.payload.transport_schema != NATIVE_REVIEW_TRANSPORT
             or not record.logical_id.startswith(logical_prefix)
@@ -1985,7 +1986,7 @@ class WorkflowRecovery:
             state is None
             or bridge is None
             or bundle is None
-            or invocation.reviewer is not AgentRole.CLAUDE
+            or invocation.reviewer is not AgentRole.REVIEWER
             or state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_REVIEW_TRANSPORT
@@ -2015,7 +2016,7 @@ class WorkflowRecovery:
         if record is not None:
             assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
             if (
-                payload.reviewer is not Role.CLAUDE
+                payload.reviewer is not Role.REVIEWER
                 or payload.work_unit_id != str(invocation.work_unit_id)
                 or payload.transport_schema != NATIVE_REVIEW_TRANSPORT
                 or payload.response_sha256 is None

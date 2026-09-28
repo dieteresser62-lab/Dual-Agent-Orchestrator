@@ -41,7 +41,7 @@ from validation_matrix import (
     validation_attestation_id,
 )
 from workflow import (
-    CodexInvocation,
+    ImplementerInvocation,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     ValidationExecutionError,
@@ -277,7 +277,7 @@ class ScriptedAgentEvent:
     failure: ScriptedFailure | None = None
 
     def __post_init__(self) -> None:
-        if self.role not in {AgentRole.CODEX, AgentRole.CLAUDE}:
+        if self.role not in {AgentRole.IMPLEMENTER, AgentRole.REVIEWER}:
             raise ValueError("scripted event requires a workflow role")
         if self.work_unit_id < 1 or self.request_sequence < 1:
             raise ValueError("scripted event identity must be 1-based")
@@ -430,7 +430,7 @@ class ScriptedInitialState:
     kind: WorkUnitKind = WorkUnitKind.SLICE
     branch: str = "feature/dry-run"
     slice_count: int = 1
-    max_codex_returns: int = 6
+    max_implementer_returns: int = 6
     scope_paths: tuple[str, ...] = ()
     execution_mode: str = "IMPLEMENT"
     work_plan_path: str | None = None
@@ -503,7 +503,7 @@ class ScriptedInitialState:
             kind=kind,
             branch=_string(raw.get("branch", "feature/dry-run"), "scenario.initial.branch"),
             slice_count=_positive_int(raw.get("slice_count", 1), "scenario.initial.slice_count"),
-            max_codex_returns=_positive_int(
+            max_implementer_returns=_positive_int(
                 raw.get("max_codex_returns", 6),
                 "scenario.initial.max_codex_returns",
             ),
@@ -924,7 +924,7 @@ class ScriptedWorkflowDriver:
     checkpoint_histories: list[WorkflowHistory] = field(default_factory=list)
     validation_counts: dict[str, int] = field(default_factory=dict)
     commit_requests: list[WorkflowCommitRequest] = field(default_factory=list)
-    codex_invocations: list[CodexInvocation] = field(default_factory=list)
+    implementer_invocations: list[ImplementerInvocation] = field(default_factory=list)
     reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
     agent_invocations: list[object] = field(default_factory=list)
     durable_findings: tuple[FindingRecord, ...] = ()
@@ -1077,7 +1077,7 @@ class ScriptedWorkflowDriver:
                 f"{event.request_sequence}/{event.step.value}"
             )
         self._agent_index += 1
-        if role is AgentRole.CODEX:
+        if role is AgentRole.IMPLEMENTER:
             self._active_identity = (work_unit_id, request_sequence)
         self.calls.append(
             f"agent:{role.value}:work-unit-{work_unit_id}:"
@@ -1090,11 +1090,11 @@ class ScriptedWorkflowDriver:
         assert event.output is not None
         return event.output
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
-        self.codex_invocations.append(invocation)
+    def invoke_implementer(self, invocation: ImplementerInvocation) -> NativeAgentImplementerOutput:
+        self.implementer_invocations.append(invocation)
         self.agent_invocations.append(invocation)
         document = self._consume_agent(
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=invocation.work_unit_id,
             request_sequence=invocation.request_sequence,
             step=invocation.step,
@@ -1118,7 +1118,7 @@ class ScriptedWorkflowDriver:
 
     def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        invocation: ImplementerInvocation,
         contract: ImplementerStepContract,
         history: WorkflowHistory,
     ) -> NativeAgentImplementerOutput | None:
@@ -1632,7 +1632,7 @@ def build_scenario_state(
     state = state.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         updated_at=scenario.clock_start.isoformat(),
     )
     if first.work_unit_id != state.current_work_unit_id:
@@ -1654,10 +1654,10 @@ def build_scenario_state(
         start_fingerprint="0" * 64,
         updated_at=scenario.clock_start.isoformat(),
     )
-    if scenario.initial.max_codex_returns != state.current_work_unit.max_codex_returns:
+    if scenario.initial.max_implementer_returns != state.current_work_unit.max_implementer_returns:
         current = replace(
             state.current_work_unit,
-            max_codex_returns=scenario.initial.max_codex_returns,
+            max_implementer_returns=scenario.initial.max_implementer_returns,
         )
         state = replace(
             state,
@@ -1911,7 +1911,7 @@ def _run_scripted_workflow(
         state = state.start_work_unit(
             slice_id=planned.slice_id,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             slice_start_commit=None if planned.slice_id == 1 else change.start_commit,
         ).bind_current_slice_git_boundary(
             start_commit=change.start_commit,
@@ -1993,10 +1993,10 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
         ),
         agent_events=(
             ScriptedAgentEvent(
-                AgentRole.CODEX,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.IMPLEMENTER,
                 1,
                 1,
-                WorkflowStep.CODEX_PLAN,  # allowlist:provider -- wire until slice 8/9
+                WorkflowStep.IMPLEMENTER_PLAN,
                 {
                     "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
                     "request_id": "$BOUND_REQUEST_ID",
@@ -2022,10 +2022,10 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                 },
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.REVIEWER,
                 1,
                 1,
-                WorkflowStep.CLAUDE_PLAN_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                WorkflowStep.REVIEWER_PLAN_REVIEW,
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "review_result",
@@ -2160,40 +2160,40 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         ),
         agent_events=(
             ScriptedAgentEvent(
-                AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.IMPLEMENTER, 2, 1, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                 _s5_implementer_result("implementation_result", test_files=[]),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.REVIEWER, 2, 1, WorkflowStep.REVIEWER_SLICE_REVIEW,
                 _s5_review_result(approved=True),
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.IMPLEMENTER, 3, 1, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                 failure=quota_failure,
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.IMPLEMENTER, 3, 2, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                 output=_s5_implementer_result(
                     "implementation_result", test_files=[]
                 ),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.REVIEWER, 3, 2, WorkflowStep.REVIEWER_SLICE_REVIEW,
                 _s5_review_result(approved=False, blockers=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.IMPLEMENTER, 3, 3, WorkflowStep.IMPLEMENTER_CORRECTION,
                 _s5_implementer_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                AgentRole.REVIEWER, 3, 3, WorkflowStep.REVIEWER_SLICE_REVIEW,
                 _s5_review_result(approved=True, closed=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
                 4,
                 1,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
@@ -2300,11 +2300,11 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
 
     base, slice_commit = "a" * 40, "b" * 40
     scope = ("src/runtime.py",)
-    implementer_role = AgentRole.CODEX  # allowlist:provider -- wire until slice 8/9: scripted role boundary
-    reviewer_role = AgentRole.CLAUDE  # allowlist:provider -- wire until slice 8/9: scripted role boundary
-    implementation_step = WorkflowStep.CODEX_IMPLEMENTATION  # allowlist:provider -- wire until slice 8/9: scripted step boundary
-    slice_review_step = WorkflowStep.CLAUDE_SLICE_REVIEW  # allowlist:provider -- wire until slice 8/9: scripted step boundary
-    correction_step = WorkflowStep.CODEX_CORRECTION  # allowlist:provider -- wire until slice 8/9: scripted step boundary
+    implementer_role = AgentRole.IMPLEMENTER
+    reviewer_role = AgentRole.REVIEWER
+    implementation_step = WorkflowStep.IMPLEMENTER_IMPLEMENTATION
+    slice_review_step = WorkflowStep.REVIEWER_SLICE_REVIEW
+    correction_step = WorkflowStep.IMPLEMENTER_CORRECTION
 
     def implementer_result(
         result_type: str, findings: tuple[str, ...] = ()
@@ -2423,7 +2423,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                 reviewer_role,
                 3,
                 1,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- wire until slice 8/9
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",

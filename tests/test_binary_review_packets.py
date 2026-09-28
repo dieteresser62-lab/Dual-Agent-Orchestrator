@@ -330,7 +330,7 @@ def test_correction_packet_uses_same_binary_metadata_path() -> None:
     finding = FindingRecord(
         "C-01", FindingClass.FINDING, FindingStatus.OPEN,
         "Asset needs review", "Metadata is complete",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     packet = build_review_packet(
         purpose="correction", fingerprint="a" * 64,

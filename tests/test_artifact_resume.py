@@ -85,7 +85,7 @@ def _record_run(
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="b" * 40,
         scope_paths=("src/cutover.py",),

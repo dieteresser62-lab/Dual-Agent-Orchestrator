@@ -164,7 +164,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
         status=FindingStatus.CLOSED,
         summary="Closed imported finding",
         acceptance_test="The closed lifecycle remains review authority.",
-        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
         status_rationale="Closed in the source run.",
     )
     open_finding = FindingRecord(
@@ -173,7 +173,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
         status=FindingStatus.OPEN,
         summary="Open imported finding",
         acceptance_test="Codex receives the exact imported acceptance test.",
-        origin=FindingOrigin("PLAN", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 2, AgentRole.REVIEWER),
     )
 
     package = build_slice_execution_package(
@@ -202,7 +202,7 @@ def test_slice_package_rejects_duplicate_finding_identity() -> None:
         status=FindingStatus.OPEN,
         summary="Duplicated imported finding",
         acceptance_test="Reject before provider construction.",
-        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
     )
 
     with pytest.raises(ValueError, match="slice findings must be unique"):
@@ -222,7 +222,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
         status=FindingStatus.OPEN,
         summary="Synthetic affected finding",
         acceptance_test="The compact correction stays bound.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     fingerprint = hashlib.sha256(f"fingerprint:{operation}".encode()).hexdigest()
     request_kind = (
@@ -313,7 +313,7 @@ def test_correction_package_contains_only_affected_open_finding_and_current_delt
         status=FindingStatus.OPEN,
         summary="AFFECTED-SENTINEL",
         acceptance_test="CURRENT-ACCEPTANCE-SENTINEL",
-        origin=FindingOrigin("02", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("02", 2, AgentRole.REVIEWER),
     )
     package = build_correction_execution_package(
         current_fingerprint="d" * 64,

@@ -138,8 +138,8 @@ class FingerprintKind(StrEnum):
 
 
 class Role(StrEnum):
-    CODEX = "codex"
-    CLAUDE = "claude"
+    IMPLEMENTER = "codex"
+    REVIEWER = "claude"
     ORCHESTRATOR = "orchestrator"
     USER = "user"
 
@@ -628,7 +628,7 @@ class AgentResultPayload:
         _require_paths(self.test_files, allow_empty=True)
         if self.transport_schema != "native-codex-v2":
             raise ArtifactValidationError("agent result transport_schema is unsupported")
-        if self.role is not Role.CODEX:
+        if self.role is not Role.IMPLEMENTER:
             raise ArtifactValidationError(
                 "native Codex result transport requires role=codex"
             )
@@ -711,7 +711,7 @@ class ReviewPayload:
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
     def __post_init__(self) -> None:
-        if self.reviewer is not Role.CLAUDE:
+        if self.reviewer is not Role.REVIEWER:
             raise ArtifactValidationError("reviewer must be claude")
         _require_identifier(self.work_unit_id, "work_unit_id")
         if self.verdict not in {"approved", "denied", "stop"}:
@@ -862,7 +862,7 @@ class FinalReviewCompletedPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_COMPLETED
 
     def __post_init__(self) -> None:
-        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- wire until slice 8/9: reviewer authority
+        if self.reviewer is not Role.REVIEWER:
             raise ArtifactValidationError(
                 "final review completion reviewer must be claude"  # allowlist:provider -- schema-bound diagnostic: diagnostic role
             )
@@ -995,7 +995,7 @@ class FindingTransitionPayload:
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "finding_id")
-        if self.reporter is not Role.CLAUDE:
+        if self.reporter is not Role.REVIEWER:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {
             "opened", "responded", "status_changed", "escalated",
@@ -1014,7 +1014,7 @@ class FindingTransitionPayload:
             raise ArtifactValidationError(
                 "finding escalation requires an open BLOCKER transition"
             )
-        if self.action == "responded" and self.actor is not Role.CODEX:
+        if self.action == "responded" and self.actor is not Role.IMPLEMENTER:
             raise ArtifactValidationError("only codex may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
             raise ArtifactValidationError("a codex response cannot close a finding")
@@ -1342,7 +1342,7 @@ class ProviderInputMeasurementPayload:
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_INPUT_MEASUREMENT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
             raise ArtifactValidationError("measurement provider and role must identify one agent")
         _require_identifier(self.operation, "measurement operation")
         _require_identifier(self.work_unit_id, "measurement work_unit_id")
@@ -1451,7 +1451,7 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
             raise ArtifactValidationError("attempt provider and role must identify one agent")
         _require_identifier(self.operation, "attempt operation")
         _require_identifier(self.work_unit_id, "attempt work_unit_id")
@@ -1669,7 +1669,7 @@ class FinalReviewPreflightPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_PREFLIGHT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
             raise ArtifactValidationError("preflight provider and role must identify one agent")
         _require_identifier(self.operation, "preflight operation")
         _require_identifier(self.work_unit_id, "preflight work_unit_id")
@@ -2106,7 +2106,7 @@ class InvocationFailurePayload:
             )
         automatic_review_form = (
             self.failure_kind == "output"
-            and self.role is Role.CLAUDE  # allowlist:provider -- wire until slice 8/9: bound reviewer role
+            and self.role is Role.REVIEWER
             and self.diagnostic_code in {
                 "NATIVE-REVIEW-FORM",
                 STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -2116,7 +2116,7 @@ class InvocationFailurePayload:
         )
         automatic_implementer_form = (
             self.failure_kind == "output"
-            and self.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: implementer role
+            and self.role is Role.IMPLEMENTER
             and self.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and self.step.startswith(f"{self.role.value}_")
         )
@@ -2199,7 +2199,7 @@ def _validate_native_response_failure_feedback(
                 "invocation failure native implementer rejection is invalid"
             )
         if not (
-            payload.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: implementer role
+            payload.role is Role.IMPLEMENTER
             and payload.failure_kind == "output"
             and payload.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and payload.step.startswith(f"{payload.role.value}_")

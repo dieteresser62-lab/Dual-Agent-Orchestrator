@@ -550,7 +550,7 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "request_sequence must be 1-based",
             )
-        if self.reviewer is not AgentRole.CLAUDE:
+        if self.reviewer is not AgentRole.REVIEWER:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "reviewer must be claude",
@@ -982,7 +982,7 @@ def native_review_provider_response_schema(
             NativeReviewErrorCode.CONTEXT_INVALID,
             "provider schema projection requires NativeReviewContext",
         )
-    if context.reviewer is not AgentRole.CLAUDE:
+    if context.reviewer is not AgentRole.REVIEWER:
         raise NativeReviewContractError(
             NativeReviewErrorCode.CONTEXT_INVALID,
             "native Claude writer schema requires reviewer=claude",

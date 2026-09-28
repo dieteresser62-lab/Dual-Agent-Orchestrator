@@ -1406,7 +1406,7 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
             return _native_final_review_output(driver, invocation, finding_id=None)
         return _native_review_approval(invocation)
 
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
     monkeypatch.chdir(root)
     real_hook = workflow_completion._run_hook

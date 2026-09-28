@@ -271,7 +271,7 @@ def test_diagnostic_exception_escape_mutation_is_killed() -> None:
         StubState(),
         None,
         None,
-        AgentRole.CODEX,
+        AgentRole.IMPLEMENTER,
         error,
     )
 

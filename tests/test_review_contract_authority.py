@@ -100,8 +100,8 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     bridge.append(
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.FINDING,
             finding_status="open",
@@ -119,7 +119,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="7",
             verdict="approved",
             finding_ids=("C-01",),
@@ -164,7 +164,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     assert contract.record_id == review.record_id
     assert contract.work_unit_id == "7"
     assert contract.round_number == 3
-    assert contract.result.reviewer is AgentRole.CLAUDE
+    assert contract.result.reviewer is AgentRole.REVIEWER
     assert contract.result.approval is True
     assert contract.result.test_files == ("tests/test_review_contract_authority.py",)
     assert contract.result.pre_mortem == (
@@ -195,7 +195,7 @@ def test_review_contract_preserves_specific_finding_reducer_diagnostic(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="7",
             verdict="approved",
             finding_ids=(),
@@ -247,7 +247,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="8",
             verdict="stop",
             finding_ids=(),
@@ -324,7 +324,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
         created_at="2026-08-31T12:00:00+00:00",
         idempotency_key="post-review-diagnostic",
         payload=DiagnosticPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "8",
             1,
             "0" * 64,

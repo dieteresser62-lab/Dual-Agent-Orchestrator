@@ -121,7 +121,7 @@ from state_io import (
 )
 from task_contract import TaskMode
 from workflow import (
-    CodexInvocation,
+    ImplementerInvocation,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
@@ -1166,7 +1166,7 @@ class ProductionWorkflowDriver:
         self._replace_existing_run_id = None
         self.active_state = projected
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentImplementerOutput:
+    def invoke_implementer(self, invocation: ImplementerInvocation) -> NativeAgentImplementerOutput:
         state = self.active_state
         if (
             state is None
@@ -1181,7 +1181,7 @@ class ProductionWorkflowDriver:
                 "native Codex invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.CODEX.value]
+        native_adapter = self.agents[AgentRole.IMPLEMENTER.value]
         if not isinstance(native_adapter, NativeCodexAdapter):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
@@ -1317,7 +1317,7 @@ class ProductionWorkflowDriver:
             ) from exc
         return projected
 
-    def _native_implementer_response_path(self, invocation: CodexInvocation) -> Path:
+    def _native_implementer_response_path(self, invocation: ImplementerInvocation) -> Path:
         state = self.active_state
         if state is None:
             raise WorkflowExecutionError("native Codex response has no active state")
@@ -1585,7 +1585,7 @@ class ProductionWorkflowDriver:
         self._write_native_agent_raw_response(path, content)
 
     def _native_agent_response_files(
-        self, invocation: CodexInvocation
+        self, invocation: ImplementerInvocation
     ) -> tuple[Path, ...]:
         base = self._native_implementer_response_path(invocation)
         candidates = [base] if base.is_file() else []
@@ -1607,7 +1607,7 @@ class ProductionWorkflowDriver:
         if (
             state is None
             or invocation.native_request is None
-            or invocation.reviewer is not AgentRole.CLAUDE
+            or invocation.reviewer is not AgentRole.REVIEWER
             or state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_CLAUDE_REVIEW_TRANSPORT
@@ -1616,7 +1616,7 @@ class ProductionWorkflowDriver:
                 "native Claude invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.CLAUDE.value]
+        native_adapter = self.agents[AgentRole.REVIEWER.value]
         if not isinstance(native_adapter, NativeClaudeReviewAdapter):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
@@ -1807,7 +1807,7 @@ class ProductionWorkflowDriver:
 
     def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,
+        invocation: ImplementerInvocation,
         contract: ImplementerStepContract,
         history: WorkflowHistory,
     ) -> NativeAgentImplementerOutput | None:
@@ -1873,7 +1873,7 @@ class ProductionWorkflowDriver:
         recovery_fingerprint: str | None = None,
     ) -> None:
         state = self.active_state
-        if state is not None and state.current_step is WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- wire until slice 8/9: canonical step
+        if state is not None and state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION:
             if output.context is None:
                 raise WorkflowExecutionError(
                     "native Codex correction persistence lacks its request context"  # allowlist:provider -- schema-bound diagnostic

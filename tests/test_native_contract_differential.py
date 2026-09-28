@@ -231,7 +231,7 @@ def _finding(
         FindingStatus.OPEN,
         "Close the bound contract.",
         "A focused regression passes.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -358,7 +358,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
             ApprovalMarker.FINAL_REVIEW: "claude_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=marker,
         slice_id="FINAL" if form == "final_review" else "01",
         round_number=2 if convergence else 1,
@@ -548,7 +548,7 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
         FindingStatus.CLOSED,
         "Already resolved.",
         "Keep it closed.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Resolved earlier.",
     )
     open_finding = FindingRecord(
@@ -557,7 +557,7 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
         FindingStatus.OPEN,
         "Current blocker.",
         "Close the current blocker.",
-        FindingOrigin("01", 2, AgentRole.CLAUDE),
+        FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
     context = replace(
         template.context,
@@ -606,7 +606,7 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
         FindingStatus.CLOSED,
         "Already resolved.",
         "Keep it closed.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Resolved earlier.",
     )
     open_finding = FindingRecord(
@@ -615,7 +615,7 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
         FindingStatus.OPEN,
         "Current blocker.",
         "Close the current blocker.",
-        FindingOrigin("01", 2, AgentRole.CLAUDE),
+        FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
     context = replace(template.context, previous_findings=(closed, open_finding))
     bound = BoundNativeReviewContext(

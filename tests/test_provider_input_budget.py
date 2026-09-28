@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from contracts import AgentRole
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
     PreparedProviderInput,
@@ -14,6 +15,13 @@ from provider_input_budget import (
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow_state import WorkflowStep
+
+
+IMPLEMENTER_RULE = (
+    "codex",
+    AgentRole.IMPLEMENTER.value,
+    WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
+)
 
 
 def _prepared(text: str) -> PreparedProviderInput:
@@ -30,8 +38,8 @@ def _policy(chars: int, bytes_: int) -> ProviderInputBudgetPolicy:
                 rule.provider,
                 rule.role,
                 rule.operation,
-                chars if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
-                bytes_ if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+                chars if rule.key == IMPLEMENTER_RULE else rule.max_chars,
+                bytes_ if rule.key == IMPLEMENTER_RULE else rule.max_bytes,
             )
             for rule in defaults.rules
         )
@@ -40,12 +48,12 @@ def _policy(chars: int, bytes_: int) -> ProviderInputBudgetPolicy:
 
 def test_budget_table_covers_every_reachable_provider_operation() -> None:
     reachable = {
-        provider: {
-            step.value
-            for step in WorkflowStep
-            if step.value.startswith(f"{provider}_")
-        }
-        for provider in ("codex", "claude")
+        "codex": {
+            step.value for step in WorkflowStep if step.name.startswith("IMPLEMENTER_")
+        },
+        "claude": {
+            step.value for step in WorkflowStep if step.name.startswith("REVIEWER_")
+        },
     }
 
     assert PROVIDER_OPERATIONS == {
@@ -60,8 +68,8 @@ def test_final_review_uses_the_slice_review_input_ceiling() -> None:
         if rule.provider == "claude"
     }
 
-    final_review = rules["claude_final_review"]
-    slice_review = rules["claude_slice_review"]
+    final_review = rules[WorkflowStep.REVIEWER_FINAL_REVIEW.value]
+    slice_review = rules[WorkflowStep.REVIEWER_SLICE_REVIEW.value]
     assert (final_review.max_chars, final_review.max_bytes) == (4_000_000, 16_000_000)
     assert (final_review.max_chars, final_review.max_bytes) == (
         slice_review.max_chars,
@@ -94,8 +102,8 @@ def test_measurement_enforces_independent_inclusive_char_and_byte_limits(
     result = measure_provider_input(
         _prepared(text),
         provider="codex",
-        role="codex",
-        operation="codex_implementation",
+        role=AgentRole.IMPLEMENTER.value,
+        operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         binding_fingerprint="f" * 64,
         policy=_policy(chars, bytes_),
     )
@@ -121,8 +129,8 @@ def test_measurement_sums_named_components_and_technical_limit_only_tightens() -
     result = measure_provider_input(
         prepared,
         provider="codex",
-        role="codex",
-        operation="codex_implementation",
+        role=AgentRole.IMPLEMENTER.value,
+        operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         binding_fingerprint="binding",
         policy=_policy(20, 20),
         technical_limit_chars=3,
@@ -154,8 +162,8 @@ def test_technical_limit_pair_rejection_names_the_complete_three_field_rule(
         measure_provider_input(
             _prepared("abc"),
             provider="codex",
-            role="codex",
-            operation="codex_implementation",
+            role=AgentRole.IMPLEMENTER.value,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             binding_fingerprint="binding",
             policy=_policy(20, 20),
             **technical_fields,
@@ -169,12 +177,23 @@ def test_technical_limit_pair_rejection_names_the_complete_three_field_rule(
 
 def test_policy_rejects_duplicates_and_incomplete_tables() -> None:
     rule = ProviderInputBudgetRule(
-        "codex", "codex", "codex_implementation", 10, 10
+        *IMPLEMENTER_RULE, 10, 10
     )
     with pytest.raises(ProviderInputBudgetError, match="unique"):
         ProviderInputBudgetPolicy((rule, rule))
     with pytest.raises(ProviderInputBudgetError, match="complete"):
         ProviderInputBudgetPolicy((rule,))
+
+
+def test_budget_rule_rejects_provider_with_the_other_role() -> None:
+    with pytest.raises(ProviderInputBudgetError, match="provider/role combination"):
+        ProviderInputBudgetRule(
+            "codex",
+            AgentRole.REVIEWER.value,
+            WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
+            10,
+            10,
+        )
 
 
 @pytest.mark.parametrize(

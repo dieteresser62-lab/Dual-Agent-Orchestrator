@@ -195,8 +195,8 @@ def _chain_after_discovery() -> list[ArtifactRecord]:
 def _opening(finding_id: str, *, round_number: int) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=FindingSeverity.FINDING,
         finding_status="open",
@@ -214,8 +214,8 @@ def _opening_with_severity(
 ) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=severity,
         finding_status="open",
@@ -233,8 +233,8 @@ def _opening_with_severity(
 def _closure(finding_id: str, *, kind: str) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="status_changed",
         severity=FindingSeverity.FINDING,
         finding_status="closed",
@@ -285,7 +285,7 @@ def _append_review_round(
     review = _append(
         chain,
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             WORK_UNIT_ID,
             "denied",
             finding_ids,

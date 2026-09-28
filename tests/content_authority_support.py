@@ -261,7 +261,7 @@ def append_provider_decision_authority(
             prior_operation,
             payload.request_id,
             blob.sha256,
-            "review_result" if role is Role.CLAUDE else "agent_result",
+            "review_result" if role is Role.REVIEWER else "agent_result",
             blob.bytes,
             blob,
         ),

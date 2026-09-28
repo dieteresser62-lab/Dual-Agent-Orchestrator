@@ -1563,7 +1563,7 @@ def _slice_state() -> WorkflowState:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             updated_at="2026-08-27T10:00:03+00:00",
         )
         .bind_current_slice_git_boundary(
@@ -1588,7 +1588,7 @@ def _finding(
         status=status,
         summary=f"Summary for {finding_id}",
         acceptance_test=f"Acceptance for {finding_id}",
-        origin=FindingOrigin("FINAL", round_number, AgentRole.CLAUDE),
+        origin=FindingOrigin("FINAL", round_number, AgentRole.REVIEWER),
         status_rationale=("Verified closed." if status is FindingStatus.CLOSED else None),
     )
 
@@ -1693,11 +1693,11 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         )
 
     plan_round_two = _state().with_current_step(
-        WorkflowStep.CLAUDE_PLAN_REVIEW
+        WorkflowStep.REVIEWER_PLAN_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
+        reviewer=Reviewer.REVIEWER,
         open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
         updated_at="2026-08-27T10:00:01+00:00",
     )
@@ -1719,11 +1719,11 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
     )
 
     slice_round_two = slice_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
+        reviewer=Reviewer.REVIEWER,
         open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_CORRECTION,
+        return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         progress_made=True,
         updated_at="2026-08-27T10:00:05+00:00",
     )
@@ -1785,7 +1785,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
     assert boundary_gate.current_work_unit.gate.resume_step is None
 
     scope_gate = slice_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
         detail="UNEXPECTED-PATH | canonical changes contain src/extra.py",
@@ -2165,7 +2165,7 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
         fingerprint="5" * 64,
     ) is bootstrap
     restored = bootstrap.resume_after_invocation_halt()
-    assert restored.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert restored.current_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
     assert restored.current_work_unit.round_number == 1
 
 
@@ -2304,7 +2304,7 @@ def _bind_record_authoritative_fixture(
         review = append_provider_decision_authority(
             bridge,
             ReviewPayload(
-                Role.CLAUDE,
+                Role.REVIEWER,
                 str(slice_unit.work_unit_id),
                 "approved",
                 (),
@@ -2324,7 +2324,7 @@ def _bind_record_authoritative_fixture(
             logical_id=f"matrix-review-{slice_record.slice_id}",
             idempotency_key=f"matrix-review:{slice_record.slice_id}",
             fingerprint_sha256=fingerprint,
-            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         )
         bridge.append(
             BindingPayload(
@@ -2360,7 +2360,7 @@ def _bind_record_authoritative_fixture(
                 finding,
                 work_unit_id=state.current_work_unit_id,
                 action="status_changed",
-                actor=AgentRole.CLAUDE,
+                actor=AgentRole.REVIEWER,
                 rationale=finding.status_rationale,
             )
     projected = resolve_resume_state(driver.root, state.run_id).state
@@ -2397,7 +2397,7 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -2455,8 +2455,8 @@ def _append_completed_provider_attempt(
 
     measurement = bridge.append(
         ProviderInputMeasurementPayload(
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "claude_transition_matrix_review",
             str(work_unit_id),
             "9" * 64,
@@ -2622,7 +2622,7 @@ def _ledger_case(
         c02_closed,
         work_unit_id=final_state.current_work_unit_id,
         action="status_changed",
-        actor=AgentRole.CLAUDE,
+        actor=AgentRole.REVIEWER,
         rationale="Verified closed.",
     )
 
@@ -2635,11 +2635,11 @@ def _ledger_case(
         work_unit_id=final_state.current_work_unit_id,
     )
     round_two = final_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
+        reviewer=Reviewer.REVIEWER,
         open_findings=("C-01", "C-03"),
-        return_step=WorkflowStep.CODEX_CORRECTION,
+        return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         progress_made=True,
     )
     round_two = _bind_record_authoritative_fixture(driver, round_two)
@@ -2740,7 +2740,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         orphan_finding,
         work_unit_id=state.current_work_unit_id,
         action="status_changed",
-        actor=AgentRole.CLAUDE,
+        actor=AgentRole.REVIEWER,
         rationale="Closed without an opening record.",
     )
     with pytest.raises(ArtifactReplayError, match="RECORD-REFERENCE-MISSING"):

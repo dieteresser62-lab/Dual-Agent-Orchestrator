@@ -144,7 +144,7 @@ def _active_slice_state():
     state = state.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         updated_at="2026-08-27T12:00:02+00:00",
     ).bind_current_slice_git_boundary(
         start_commit="a" * 40,
@@ -225,8 +225,8 @@ def test_provider_free_correction_uses_all_six_rounds(tmp_path: Path) -> None:
     corrected_slice = report.result.state.work_units[-2]
     assert corrected_slice.kind is WorkUnitKind.SLICE
     assert corrected_slice.round_number == 6
-    assert corrected_slice.codex_return_count == 5
-    assert corrected_slice.max_codex_returns == 6
+    assert corrected_slice.implementer_return_count == 5
+    assert corrected_slice.max_implementer_returns == 6
     assert correction.gate.status is GateStatus.CLEAR
     assert sum(call.startswith("commit:") for call in report.calls) == 1
     assert all(
@@ -515,20 +515,20 @@ def test_gate_kind_uses_iteration_limit_state_semantics_not_fingerprint() -> Non
     current = replace(
         state.current_work_unit,
         status=WorkUnitStatus.AWAITING_USER_DECISION,
-        current_step=WorkflowStep.CODEX_CORRECTION,
-        codex_return_count=1,
-        max_codex_returns=1,
+        current_step=WorkflowStep.IMPLEMENTER_CORRECTION,
+        implementer_return_count=1,
+        max_implementer_returns=1,
         gate=GateRecord(
             status=GateStatus.AWAITING_USER_DECISION,
             reason=GateReason.ITERATION_LIMIT,
             detail="review denied by claude after 1 Codex returns",
         ),
-        reviewer=Reviewer.CLAUDE,
+        reviewer=Reviewer.REVIEWER,
         open_findings=("C-01",),
     )
     state = replace(
         state,
-        current_step=WorkflowStep.CODEX_CORRECTION,
+        current_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         work_units=tuple(
             current if item.work_unit_id == current.work_unit_id else item
             for item in state.work_units
@@ -579,7 +579,7 @@ def test_gate_kind_uses_automatic_wait_status_as_resume(
         failure_kind=failure_kind,
         provider_text="scripted provider wait",
         received_at="2026-08-27T12:01:00+00:00",
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_id=1,
         work_unit_id=2,
         diagnostic_exit_code=2 if quota else 3,
@@ -597,7 +597,7 @@ def test_gate_kind_uses_automatic_wait_status_as_resume(
         GateReason.QUOTA if quota else GateReason.INSTANCE_FAILURE,
         "PREFIXLESS:INVOCATION-FAILURE",
         "resume",
-        resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        resume_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     verify_scenario_expectations(
         _state_report(state),
@@ -618,7 +618,7 @@ def test_gate_kind_covers_bootstrap_resume_source_semantics() -> None:
         "resume",
         fingerprint="5" * 64,
         paths=("src/runtime.py",),
-        resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        resume_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     verify_scenario_expectations(
         _state_report(state), ScenarioExpectations(exit_code=1, gate=expectation)
@@ -642,7 +642,7 @@ def test_gate_kind_covers_reopened_legacy_quota_revalidation() -> None:
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at="2026-08-27T12:01:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
@@ -674,7 +674,7 @@ def test_gate_kind_covers_reopened_legacy_quota_revalidation() -> None:
         "PREFIXLESS:LEGACY-QUOTA-REVALIDATION",
         "resume",
         fingerprint="1" * 64,
-        resume_step=WorkflowStep.CODEX_PLAN,
+        resume_step=WorkflowStep.IMPLEMENTER_PLAN,
     )
     verify_scenario_expectations(
         _state_report(reopened),

@@ -80,7 +80,7 @@ def _facts(*, slices: int = 2, red: bool = False, hostile: bool = False, plan_on
         add(WorkUnitPayload(key, 1, specs[index - 1].paths), f"work-unit-{key}")
         prose = "Marker:\n<!-- audit:findings:end -->\n## false heading\n```\n| < & `" if hostile and index == 1 else f"Befund nur in Slice {index}."
         add(FindingTransitionPayload(
-            f"C-{index:02d}", Role.CLAUDE, Role.CLAUDE, "opened",
+            f"C-{index:02d}", Role.REVIEWER, Role.REVIEWER, "opened",
             FindingSeverity.FINDING, "open", prose, key,
             prose, "Prüfe < und & | ` mit &&.", f"{index:02d}", 1,
         ), f"finding-{index}")
@@ -96,7 +96,7 @@ def _facts(*, slices: int = 2, red: bool = False, hostile: bool = False, plan_on
         ), f"validation-{key}")
         add(WorkflowEventPayload("validation", key, key, 1, (att.record_id,)), f"validation-event-{key}")
         review = add(ReviewPayload(
-            Role.CLAUDE, key, "denied" if red else "approved", (f"C-{index:02d}",),
+            Role.REVIEWER, key, "denied" if red else "approved", (f"C-{index:02d}",),
             None, "native-claude-review-v2", "native-review-request-" + "1" * 64,
             "2" * 64, ReviewEvidencePayload("Scope < checked.", "Risk & fallback.", "Break | condition."),
             pre_mortem="A later change could break this.",
@@ -145,7 +145,7 @@ def test_readable_documents_preserve_plan_and_slice_ownership() -> None:
 def test_final_review_uses_german_labels_for_new_findings_and_risk() -> None:
     facts = _facts()
     facts.final_review = FinalReviewCompletedPayload(
-        reviewer=Role.CLAUDE,
+        reviewer=Role.REVIEWER,
         work_unit_id="1",
         new_findings=(FinalReviewFindingPayload(
             "C-03", FindingSeverity.FINDING, "Neue Abweichung.", "Prüfe den Pfad."
@@ -241,7 +241,7 @@ def _round_facts(*, correction: bool = False, scope_extension: bool = False) -> 
         records.append(record)
         return record
 
-    call_1 = ProviderContentPayload(Role.CODEX, "1", 1, "implementation", "request-1", "0" * 64, "agent_result", 0, BlobReference("0" * 64, 0))
+    call_1 = ProviderContentPayload(Role.IMPLEMENTER, "1", 1, "implementation", "request-1", "0" * 64, "agent_result", 0, BlobReference("0" * 64, 0))
     call_2 = replace(call_1, round_number=2, request_id="request-2")
     inserted = [
         ArtifactRecord.create(run_id=RUN, logical_id="content-call-1", revision=1, fingerprint=fingerprint,
@@ -271,11 +271,11 @@ def _round_facts(*, correction: bool = False, scope_extension: bool = False) -> 
         add(WorkflowEventPayload("review", "1", "1", 1, (review.record_id,)), "review-event-denied")
         add(CorrectionWorkUnitPayload("1", 2, ("src/1.py",), ("C-01",)), "work-unit-2")
         add(FindingTransitionPayload(
-            "C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.FINDING,
+            "C-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.FINDING,
             "open", "Korrektur umgesetzt.", "2", response_decision="accepted",
         ), "finding-response")
         add(FindingTransitionPayload(
-            "C-01", Role.CLAUDE, Role.CLAUDE, "status_changed", FindingSeverity.FINDING,
+            "C-01", Role.REVIEWER, Role.REVIEWER, "status_changed", FindingSeverity.FINDING,
             "closed", "Korrektur geprüft.", "2", closure_kind="fixed",
         ), "finding-closed")
         attestation = add(ValidationAttestationPayload(

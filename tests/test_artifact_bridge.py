@@ -71,7 +71,7 @@ def test_finding_payload_preserves_legacy_shape_and_native_authority() -> None:
         status=FindingStatus.OPEN,
         summary="Persist the complete native finding snapshot.",
         acceptance_test="Replay rebuilds the request without state or Markdown.",
-        origin=FindingOrigin("01", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
 
     legacy = finding_payload(finding)
@@ -380,7 +380,7 @@ def test_validation_request_mapping_keeps_matrix_argv() -> None:
 
 def test_native_review_mapping_preserves_request_and_response_binding() -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -409,7 +409,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
     tmp_path: Path,
 ) -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -462,7 +462,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
 
 def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=False,
         stopped=False,
         stop_request=None,
@@ -478,7 +478,7 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
         anchors=(),
     )
     legacy = ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         "1",
         "denied",
         (),
@@ -509,7 +509,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
         status=FindingStatus.CLOSED,
         summary="A prior finding remains in the complete ledger.",
         acceptance_test="The compact review need not receive it again.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Closed before this review.",
     )
     reviewed = FindingRecord(
@@ -518,10 +518,10 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
         status=FindingStatus.OPEN,
         summary="The compact request includes this finding.",
         acceptance_test="The request-bound payload names C-79.",
-        origin=FindingOrigin("35", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("35", 1, AgentRole.REVIEWER),
     )
     request_result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -564,14 +564,14 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
         status=FindingStatus.OPEN,
         summary="Historical finding.",
         acceptance_test="The chain remains replayable.",
-        origin=FindingOrigin("42", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("42", 1, AgentRole.REVIEWER),
     )
     findings = tuple(
         replace(base, finding_id=finding_id)
         for finding_id in ("C-62", "C-71", "C-101", "C-105")
     )
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=False,
         stopped=False,
         stop_request=None,
@@ -604,7 +604,7 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
 
 def _measurement() -> ProviderInputMeasurementPayload:
     return ProviderInputMeasurementPayload(
-        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", DIGEST,
+        Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1", DIGEST,
         "b" * 64, "c" * 64, "d" * 64,
         (ProviderInputComponentPayload("prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",

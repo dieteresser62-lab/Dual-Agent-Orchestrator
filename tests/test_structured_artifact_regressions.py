@@ -242,14 +242,14 @@ def test_resume_compares_only_latest_review_packet_per_work_unit(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="0" * 64,
         )
-        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+        .with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     )
     driver = _driver(repository)
     history = WorkflowHistory(state.current_work_unit_id)
@@ -411,7 +411,7 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     raw_technical_text = "stderr sentinel: provider worker was killed"
     raw_provider_text = "provider process rejected the request"
     error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        AgentRole.REVIEWER.value,
         AgentOutputError(
             "review invocation failed",
             provider_text=raw_provider_text,
@@ -426,7 +426,7 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -498,7 +498,7 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     model_text = "MODEL_OUTPUT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error_text = "PROVIDER_ERROR_TEXT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error = AgentInvocationError(
-        agent_key=AgentRole.CLAUDE.value,
+        agent_key=AgentRole.REVIEWER.value,
         kind=AgentFailureKind.OUTPUT,
         invocation_id="structured-output-diagnostic-1",
         received_at=now,
@@ -522,7 +522,7 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -665,7 +665,7 @@ def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
     monkeypatch.setattr(Path, "mkdir", reject_diagnostic_directory)
     now = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
     error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        AgentRole.REVIEWER.value,
         AgentOutputError(
             "native Claude error",
             exit_code=1,
@@ -683,7 +683,7 @@ def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -758,7 +758,7 @@ def test_code_version_change_is_warned_and_recorded_before_provider_start(
             "protocol_binding": ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
                 "2",
-                codex_profile=AgentProfileBinding("foreign-codex", "medium"),
+                implementer_profile=AgentProfileBinding("foreign-codex", "medium"),
             )
         },
     ),
@@ -836,7 +836,7 @@ def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="1",
             verdict="approved",
             finding_ids=(),
@@ -883,7 +883,7 @@ def _legacy_final_denial_recovery_case(
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -953,10 +953,10 @@ def _legacy_final_denial_recovery_case(
     bridge.append(
         RunProfilePayload(
             RoleProfilePayload(
-                binding.codex_profile.model, binding.codex_profile.effort
+                binding.implementer_profile.model, binding.implementer_profile.effort
             ),
             RoleProfilePayload(
-                binding.claude_profile.model, binding.claude_profile.effort
+                binding.reviewer_profile.model, binding.reviewer_profile.effort
             ),
         ),
         logical_id="run-profile",
@@ -981,8 +981,8 @@ def _legacy_final_denial_recovery_case(
         bridge.append(
             FindingTransitionPayload(
                 finding_id=finding_id,
-                reporter=Role.CLAUDE,
-                actor=Role.CLAUDE,
+                reporter=Role.REVIEWER,
+                actor=Role.REVIEWER,
                 action="opened",
                 severity=FindingSeverity.BLOCKER,
                 finding_status="open",
@@ -1007,7 +1007,7 @@ def _legacy_final_denial_recovery_case(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id=signature[0],
             verdict="denied",
             finding_ids=signature[4],
@@ -1067,7 +1067,7 @@ def test_external_side_effect_guard_rejects_near_miss_final_denial_recovery(
 def _pending_reviewer_recovery_case(
     repository: Path,
     *,
-    reviewer: Role = Role.CLAUDE,
+    reviewer: Role = Role.REVIEWER,
     verdict: str = "denied",
     output_verdict: str = "denied",
     logical_round: int = 1,
@@ -1086,7 +1086,7 @@ def _pending_reviewer_recovery_case(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -1102,7 +1102,7 @@ def _pending_reviewer_recovery_case(
             start_fingerprint="c" * 64,
             finding_ids=("C-07",),
         )
-        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+        .with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     )
     fingerprint = "d" * 64
     attestation = ValidationAttestation(
@@ -1128,7 +1128,7 @@ def _pending_reviewer_recovery_case(
         status=FindingStatus.OPEN,
         summary="pre-existing observation",
         acceptance_test="Carry the observation through review.",
-        origin=FindingOrigin("1", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("1", 1, AgentRole.REVIEWER),
     )
     events: tuple[object, ...] = (
         ValidationAuditEvent(1, state.current_slice_id, attestation),
@@ -1143,11 +1143,11 @@ def _pending_reviewer_recovery_case(
             origin=FindingOrigin(
                 f"{state.current_slice_id:02d}",
                 1,
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
             ),
         )
         partial = ContractResult(
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval=False,
             stopped=False,
             stop_request=None,
@@ -1273,7 +1273,7 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1317,13 +1317,13 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
         raise ProviderInputBudgetExceeded(measurement)
 
     halted, output = engine._invoke_role(
-        state, history, context, AgentRole.CODEX, denied_provider_start
+        state, history, context, AgentRole.IMPLEMENTER, denied_provider_start
     )
 
     assert output is None
     assert halted.current_work_unit.status is WorkUnitStatus.COMPLETED
     assert halted.current_work_unit.gate.status is GateStatus.CLEAR
-    assert halted.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.current_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
     assert WorkflowRunResult(halted, history).rejection_code == "PROVIDER-INPUT-BUDGET"
     assert driver.state_file.exists()
     checkpoint_path = next((driver.checkpoint_dir / halted.run_id).iterdir())
@@ -1375,7 +1375,7 @@ def test_final_review_preflight_missing_prerequisite_halts_for_resume(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -1417,12 +1417,12 @@ def test_final_review_preflight_missing_prerequisite_halts_for_resume(
         state,
         history,
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         denied_provider_start,
     )
 
     assert output is None
-    assert halted.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert halted.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.detail is not None
@@ -1438,7 +1438,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1488,7 +1488,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
     )
     assert chain.index(failure_record) < chain.index(quota_records[0])
     assert quota_records[0].payload == QuotaPausePayload(
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         repository_fingerprint="c" * 64,
         retry_at=failure.resume_at_utc,
     )
@@ -1517,7 +1517,7 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1635,7 +1635,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1681,7 +1681,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     )
     assert chain.index(failure_record) < chain.index(retry_records[0])
     assert retry_records[0].payload == TransientRetryPayload(
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         repository_fingerprint="c" * 64,
         retry_at=failure.resume_at_utc,
         attempt=1,
@@ -1712,7 +1712,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1739,7 +1739,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     )
     output_error.__cause__ = contract_error
     failure_error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        AgentRole.REVIEWER.value,
         output_error,
         invocation_id="review-form-retry-1",
         received_at=now,
@@ -1752,7 +1752,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         failure_error,
     )
     driver.checkpoint(waiting, WorkflowHistory(waiting.current_work_unit_id))
@@ -1812,7 +1812,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
         ),
     )
     stopped = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=None,
         stopped=True,
         stop_request=StopRequest("CONTRACT-UNCLEAR", "owner decision required"),
@@ -1834,7 +1834,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="1",
             verdict="stop",
             finding_ids=(),
@@ -1909,7 +1909,7 @@ def test_pre_r1_failure_artifact_chain_is_rejected_without_synthesized_facts(
     )
     measurement = bridge.append(
         ProviderInputMeasurementPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
             "a" * 64, "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt_file", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,

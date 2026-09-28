@@ -291,8 +291,8 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
-    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high"),
-    claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high"),
+    implementer_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high"),
+    reviewer_profile: AgentProfileBinding = AgentProfileBinding("opus", "high"),
     max_rounds_per_loop: int = 6,
     base_branch: str | None = None,
 ) -> WorkflowState:
@@ -329,8 +329,8 @@ def _fresh_state(
             schema_version="2",
             claude_review_transport=NATIVE_CLAUDE_REVIEW_TRANSPORT,
             codex_result_transport=NATIVE_CODEX_RESULT_TRANSPORT,
-            codex_profile=codex_profile,
-            claude_profile=claude_profile,
+            implementer_profile=implementer_profile,
+            reviewer_profile=reviewer_profile,
         ),
         max_rounds_per_loop=max_rounds_per_loop,
     )
@@ -348,7 +348,7 @@ def _fresh_state(
         state = state.start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
     return state
 
@@ -364,8 +364,8 @@ def _apply_resumed_agent_profiles(
     explicit = set(getattr(args, "agent_profile_overrides", ()))
     settings = dict(args.agent_settings)
     for role, profile in (
-        ("codex", binding.codex_profile),
-        ("claude", binding.claude_profile),
+        ("codex", binding.implementer_profile),
+        ("claude", binding.reviewer_profile),
     ):
         current = settings[role]
         for field in ("model", "effort"):
@@ -412,7 +412,7 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
     if (
         state.execution_mode != TaskMode.PLAN_ONLY.value
         or state.current_work_unit.kind is not WorkUnitKind.SLICE
-        or state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION
+        or state.current_step is not WorkflowStep.IMPLEMENTER_IMPLEMENTATION
         or state.current_work_unit_id != 2
         or len(state.work_units) != 2
     ):

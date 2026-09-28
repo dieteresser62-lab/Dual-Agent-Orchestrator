@@ -178,7 +178,7 @@ def test_mutation_u10_git_commit_rejects_an_open_ordinary_finding(
     original = git_service._validate_authorization
 
     def reject_every_open_finding(authorization, current_fingerprint):  # type: ignore[no-untyped-def]
-        if authorization.claude_review.own_open_findings:
+        if authorization.reviewer_review.own_open_findings:
             raise git_service.GitTransactionError(
                 "mutation rejects every open Finding at the commit boundary"
             )

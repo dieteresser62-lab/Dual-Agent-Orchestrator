@@ -135,7 +135,7 @@ def _review_bundle(
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-09-02T10:00:00+00:00",
-    ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    ).with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     if bound_open_finding_ids:
         state = replace(
             state,
@@ -167,7 +167,7 @@ def _review_bundle(
     )
     contract = StepContract(
         name="b31-slice-review",
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=approval_marker,
         slice_id="01",
         round_number=1,
@@ -288,7 +288,7 @@ def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
         status=FindingStatus.OPEN,
         summary="Current Slice finding",
         acceptance_test="The finding receives a valid exit decision.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
     empty = _review_bundle()
@@ -458,7 +458,7 @@ Bring the six explicitly scoped documents to one consistent end state.
             execution_mode=execution_mode.value,
             work_plan_path=work_plan_path,
             timestamp="2026-09-06T10:00:00+00:00",
-        ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+        ).with_current_step(WorkflowStep.REVIEWER_PLAN_REVIEW)
         context = replace(
             _context(),
             assignment=assignment,
@@ -475,7 +475,7 @@ Bring the six explicitly scoped documents to one consistent end state.
         )
         contract = StepContract(
             name="b72-plan-review",
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval_marker=ApprovalMarker.PLAN,
             slice_id="01",
             round_number=1,

@@ -61,7 +61,7 @@ def replay_artifacts(records, expected_run_id, **kwargs):  # type: ignore[no-unt
 
 def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         "ready",
         test_files,
@@ -73,7 +73,7 @@ def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentR
 
 def _review(work_unit_id: str, evidence: str) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         "approved",
         (),
@@ -309,8 +309,8 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         "finding-C-01",
         FindingTransitionPayload(
             "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -326,7 +326,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "review-2",
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "2",
             "denied",
             ("C-01",),
@@ -379,7 +379,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
     assert canonical_json(projected) == canonical_json(mirror)
     assert project_work_unit_reviewers(tuple(records)) == (
         ("1", None),
-        ("2", Role.CLAUDE),
+        ("2", Role.REVIEWER),
     )
 
 
@@ -489,16 +489,16 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
     assert project_work_unit_reviewers(tuple(records)) == state_reviewers()
 
     state = state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,  # allowlist:provider -- wire until slice 8/9: reviewer projection fixture
+        reviewer=Reviewer.REVIEWER,
         open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
     )
     _append(
         records,
         "review-1",
         ReviewPayload(
-            Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: reviewer projection fixture
+            Role.REVIEWER,
             "1",
             "denied",
             ("C-01",),
@@ -519,8 +519,8 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -537,8 +537,8 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -553,8 +553,8 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="status_changed",
             severity=FindingSeverity.BLOCKER,
             finding_status="closed",
@@ -582,8 +582,8 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
                 f"finding-C-{number:02d}",
                 FindingTransitionPayload(
                     finding_id=f"C-{number:02d}",
-                    reporter=Role.CLAUDE,
-                    actor=Role.CLAUDE,
+                    reporter=Role.REVIEWER,
+                    actor=Role.REVIEWER,
                     action="opened",
                     severity=FindingSeverity.FINDING,
                     finding_status="open",
@@ -600,8 +600,8 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.FINDING,
             finding_status="open",
@@ -634,8 +634,8 @@ def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> No
         "finding-C-01",
         FindingTransitionPayload(
             "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -658,8 +658,8 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -677,8 +677,8 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
         "finding-C-01",
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -781,14 +781,14 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
         records,
         "measurement-1",
         ProviderInputMeasurementPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", "a" * 64,
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1", "a" * 64,
             "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
         ),
     )
     started_payload = ProviderAttemptPayload(
-        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
         "provider-operation-01", "a" * 64, measurement.record_id, "c" * 64, 1,
         "started", "2026-08-21T10:00:01+00:00", None, None, None, None,
     )

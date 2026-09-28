@@ -25,7 +25,7 @@ from native_review_contract import (
     parse_bound_native_contract_result,
 )
 from orchestrator import ProductionWorkflowDriver, run_production_workflow
-from workflow import CodexInvocation, ReviewerInvocation
+from workflow import ImplementerInvocation, ReviewerInvocation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,7 +308,7 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _native_plan_output(invocation: CodexInvocation) -> NativeAgentImplementerOutput:
+def _native_plan_output(invocation: ImplementerInvocation) -> NativeAgentImplementerOutput:
     bundle = invocation.native_request
     assert bundle is not None
     document = {
@@ -418,7 +418,7 @@ def provider_free_record_types(
     patch = pytest.MonkeyPatch()
 
     def codex(
-        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+        _driver: ProductionWorkflowDriver, invocation: ImplementerInvocation
     ) -> NativeAgentImplementerOutput:
         plan = repository / "docs/internal/work-plan.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
@@ -432,7 +432,7 @@ def provider_free_record_types(
         _driver.last_codex_output = output.canonical_json
         return output
 
-    patch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    patch.setattr(ProductionWorkflowDriver, "invoke_implementer", codex)
     patch.setattr(
         ProductionWorkflowDriver,
         "invoke_reviewer",

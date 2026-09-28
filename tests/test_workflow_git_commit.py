@@ -404,7 +404,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         output_digest=stored_attestation.payload.output_digest,
     )
     request_bound_review = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -439,7 +439,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         status=FindingStatus.CLOSED,
         summary="A finding outside the compact request remains in the ledger.",
         acceptance_test="The request-bound review still authorizes the commit.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Closed before this compact review.",
     )
     complete_review = replace(
@@ -450,7 +450,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         slice_id=1,
         fingerprint=changes.fingerprint,
         attestation=attestation,
-        claude_review=complete_review,
+        reviewer_review=complete_review,
         findings=(carried_finding,),
     )
 

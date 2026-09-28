@@ -389,7 +389,7 @@ def test_fresh_approved_plan_run_uses_merge_base_and_starts_implementation(
     assert state.branch_review_base_commit == merge_base
     assert state.current_slice.start_commit == head
     assert state.current_work_unit.kind is WorkUnitKind.SLICE
-    assert state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert state.current_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
 
 
 @pytest.mark.parametrize("mode", (TaskMode.PLAN_ONLY, TaskMode.IMPLEMENT))

@@ -137,7 +137,7 @@ def _authorization(
         slice_id=9,
         diff_fingerprint=fingerprint,
         attestation=attestation,
-        claude_review=review(AgentRole.CLAUDE, claude_approval),
+        reviewer_review=review(AgentRole.REVIEWER, claude_approval),
     )
 
 
@@ -788,8 +788,8 @@ def test_active_cutover_rejects_commit_for_exit_violation(
     append(
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -1062,8 +1062,8 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
     authorized = replace(
         authorization,
         attestation=failing,
-        claude_review=replace(
-            authorization.claude_review,
+        reviewer_review=replace(
+            authorization.reviewer_review,
             validation=failing,
             red_state_followup_slice="Slice 10",
         ),
@@ -1093,7 +1093,7 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
         created_at="2026-08-30T10:00:00+00:00",
         idempotency_key="review-red-state",
         payload=review_payload(
-            authorized.claude_review,
+            authorized.reviewer_review,
             work_unit_id="1",
             transport_schema="native-claude-review-v2",
             request_id=f"native-review-request-{'b' * 64}",

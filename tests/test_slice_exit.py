@@ -128,7 +128,7 @@ def test_completion_blocks_open_finding_and_accepts_recorded_closure() -> None:
 def _review(*status_changes: NativeStatusChange) -> NativeReviewResult:
     return NativeReviewResult(
         request_id="native-review-request-" + "d" * 64,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approved=False,
         new_findings=(),
         status_changes=status_changes,
@@ -145,7 +145,7 @@ def _finding() -> FindingRecord:
         FindingStatus.OPEN,
         "Repair src/fix.py",
         "src/fix.py passes its regression test",
-        FindingOrigin("6", 1, AgentRole.CLAUDE),
+        FindingOrigin("6", 1, AgentRole.REVIEWER),
         affected_paths=("src/fix.py",),
     )
 
@@ -193,8 +193,8 @@ def _opening(
 ) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=severity,
         finding_status="open",
@@ -211,8 +211,8 @@ def _opening(
 def _closure(finding_id: str, kind: str) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="status_changed",
         severity=FindingSeverity.BLOCKER,
         finding_status="closed",

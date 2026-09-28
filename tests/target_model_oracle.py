@@ -627,7 +627,7 @@ def _finding(
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
         acceptance_test="The reported behavior is corrected.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- wire until slice 8/9: current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         affected_paths=("src/native_review_contract.py",),
     )
     if decision is None:
@@ -657,7 +657,7 @@ def _context(
         work_unit_id=WORK_UNIT_ID,
         operation=operation,
         diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+        reviewer=AgentRole.REVIEWER,
         approval_marker=approval,
         slice_id="PLAN" if approval is ApprovalMarker.PLAN else "01",
         round_number=round_number,
@@ -697,7 +697,7 @@ def _typed_response(
 ) -> NativeReviewResult:
     return NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+        reviewer=AgentRole.REVIEWER,
         approved=approved,
         new_findings=new_findings,
         status_changes=status_changes,
@@ -1018,7 +1018,7 @@ def _finding_record_prefix(
                 f"finding-{prior.finding_id}",
                 finding_payload(
                     prior,
-                    actor=AgentRole.CODEX,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+                    actor=AgentRole.IMPLEMENTER,
                     action="responded",
                     rationale=response.rationale,
                     work_unit_id=WORK_UNIT_ID,
@@ -1035,7 +1035,7 @@ def _native_opening_record(finding: NativeFinding) -> FindingRecord:
         status=FindingStatus.OPEN,
         summary=finding.summary,
         acceptance_test=finding.acceptance_test.text,
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- wire until slice 8/9: current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         affected_paths=finding.affected_paths,
     )
 
@@ -1066,7 +1066,7 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
     try:
         current = apply_reviewer_events(
             probe.context.previous_findings,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+            reviewer=AgentRole.REVIEWER,
             opened=opened,
             status_changes=statuses,
             escalate_unclosed_findings=not probe.typed_response.approved,
@@ -1152,7 +1152,7 @@ def _audit_probe(
             )
         )
         projection = AuditEventSequence(slice_id=slice_id, events=tuple(events))
-        review = projection.latest_review(AgentRole.CLAUDE)
+        review = projection.latest_review(AgentRole.REVIEWER)
         matched = review is not None and _semantic_match(review.result.findings, probe)
         return matched, (
             "audit projection reached the requested semantic state"
@@ -1173,7 +1173,7 @@ def _commit_probe(
         slice_id=1,
         diff_fingerprint=FINGERPRINT,
         attestation=result.validation or _attestation(),
-        claude_review=result,
+        reviewer_review=result,
         findings=result.findings,
     )
     try:
@@ -1304,7 +1304,7 @@ def _workflow_probe(
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     )
     history = WorkflowHistory(
         state.current_work_unit_id,
@@ -1317,7 +1317,7 @@ def _workflow_probe(
             state=state,
             context=SimpleNamespace(),  # only stop/plan branches inspect context
             history=history,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+            reviewer=AgentRole.REVIEWER,
             result=result,
             fingerprint=FINGERPRINT,
             round_number=probe.context.round_number,
@@ -1330,7 +1330,7 @@ def _workflow_probe(
     expected_step = (
         WorkflowStep.SLICE_COMMIT
         if result.approval is True
-        else WorkflowStep.CODEX_CORRECTION
+        else WorkflowStep.IMPLEMENTER_CORRECTION
     )
     expected_open_ids = (
         ()
@@ -1594,9 +1594,9 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     )
     for index in range(DEFAULT_LOOP_ROUND_LIMIT):
         state = state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+            reviewer=Reviewer.REVIEWER,
             open_findings=("C-01",),
-            return_step=WorkflowStep.CODEX_PLAN_REVISION,  # allowlist:provider -- wire until slice 8/9: persisted step vocabulary
+            return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
             progress_made=True,
             updated_at=f"oracle-round-{index + 1}",
         )
@@ -1640,7 +1640,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         SimpleNamespace(current_slice=SimpleNamespace(start_fingerprint=slice_start)),
         SimpleNamespace(approved_plan_text=None),
         WorkflowHistory(1, last_reviewer_fingerprint=previous),
-        AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
+        AgentRole.REVIEWER,
         SimpleNamespace(),
         SimpleNamespace(fingerprint=POST_FINGERPRINT, full_diff="full diff"),
         False,

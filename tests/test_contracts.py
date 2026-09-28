@@ -40,7 +40,7 @@ def _finding(*, status: FindingStatus = FindingStatus.OPEN) -> FindingRecord:
         status=status,
         summary="Native contract gap",
         acceptance_test="The native result is request-bound.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -55,7 +55,7 @@ def _generation_finding(
         status=FindingStatus.OPEN,
         summary="Rediscovered defect",
         acceptance_test="The generation identity is complete.",
-        origin=FindingOrigin("07", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("07", 1, AgentRole.REVIEWER),
         predecessor_finding_ref=predecessor_finding_ref,
         evidence_anchor_sha256=evidence_anchor_sha256,
     )
@@ -179,7 +179,7 @@ def test_codex_can_answer_only_an_open_finding() -> None:
 def test_only_reporting_reviewer_can_update_a_finding() -> None:
     closed = apply_reviewer_finding_update(
         _finding(),
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         status=FindingStatus.CLOSED,
         rationale="Verified against the bound JSON result.",
     )
@@ -187,7 +187,7 @@ def test_only_reporting_reviewer_can_update_a_finding() -> None:
     with pytest.raises(ValueError, match="reporting reviewer"):
         apply_reviewer_finding_update(
             _finding(),
-            reviewer=AgentRole.CODEX,
+            reviewer=AgentRole.IMPLEMENTER,
             status=FindingStatus.CLOSED,
             rationale="Foreign closure.",
         )

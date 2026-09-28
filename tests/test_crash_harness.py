@@ -629,7 +629,7 @@ def test_every_exact_canonical_baseline_record_cut_converges(tmp_path: Path) -> 
         assert store.load_chain() == canonical
         assert crash_harness.resolve_resume_state(
             case_root, run_id
-        ).state.current_step is crash_harness.WorkflowStep.CODEX_IMPLEMENTATION
+        ).state.current_step is crash_harness.WorkflowStep.IMPLEMENTER_IMPLEMENTATION
 
 
 def test_baseline_prefix_completion_rejects_later_workflow_fact(

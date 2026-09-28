@@ -6,7 +6,7 @@ from workflow_state import WorkflowStep, WorkUnitKind
 
 def test_preflight_dispatch_is_final_review_only() -> None:
     assert FINAL_REVIEW_OPERATIONS == frozenset(
-        {WorkflowStep.CLAUDE_FINAL_REVIEW.value}
+        {WorkflowStep.REVIEWER_FINAL_REVIEW.value}
     )
     assert WorkUnitKind.FINAL_REVIEW.value == "final_review"
 
@@ -15,7 +15,7 @@ def test_transition_fingerprint_binds_every_dispatch_dimension() -> None:
     common = dict(
         provider="claude",
         role="reviewer",
-        operation=WorkflowStep.CLAUDE_FINAL_REVIEW.value,
+        operation=WorkflowStep.REVIEWER_FINAL_REVIEW.value,
         work_unit_id="1",
         record_head="a" * 64,
         repository_fingerprint="b" * 64,

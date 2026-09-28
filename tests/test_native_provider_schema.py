@@ -10,6 +10,7 @@ import pytest
 
 import native_provider_schema
 from agent_config import MODEL_FAMILIES, add_agent_arguments, resolve_agent_settings
+from contracts import AgentRole
 from native_provider_schema import (
     NativeProviderSchemaError,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
@@ -145,11 +146,12 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     setup_defaults = inspect.signature(_fresh_state).parameters
     expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
     for role in ("codex", "claude"):
+        role_field = AgentRole(role).name.lower() + "_profile"
         assert expected[role][0] in MODEL_FAMILIES[role].values()
         assert (settings[role].model, settings[role].effort) == expected[role]
         for default in (
-            binding_defaults[f"{role}_profile"],
-            setup_defaults[f"{role}_profile"].default,
+            binding_defaults[role_field],
+            setup_defaults[role_field].default,
         ):
             assert (default.model, default.effort) == expected[role]
 

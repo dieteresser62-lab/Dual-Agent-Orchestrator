@@ -638,7 +638,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         work_unit_id="work-unit-1",
         operation="claude_slice_review",
         diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,

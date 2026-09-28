@@ -214,7 +214,7 @@ def _attestation() -> ValidationAttestation:
 
 def _context(
     *,
-    reviewer: AgentRole = AgentRole.CLAUDE,
+    reviewer: AgentRole = AgentRole.REVIEWER,
     approval: ApprovalMarker = ApprovalMarker.SLICE,
     previous: tuple[FindingRecord, ...] = (),
     test_files: tuple[str, ...] = (),
@@ -309,7 +309,7 @@ def _assert_canary_30_review_paths() -> None:
     finding = apply_finding_response(
         _finding(
             "C-03",
-            AgentRole.CLAUDE,
+            AgentRole.REVIEWER,
             finding_class=FindingClass.FINDING,
         ),
         FindingResponseDecision.REJECTED,
@@ -403,7 +403,7 @@ def _assert_canary_31_review_paths() -> None:
     assert accepted.own_open_findings
     assert accepted.own_open_blockers == ()
     assert _project_canary_31_audit(accepted).latest_review(
-        AgentRole.CLAUDE
+        AgentRole.REVIEWER
     ) is not None
 
     empty_document = _review(context, approved=False)
@@ -491,7 +491,7 @@ def test_final_review_completion_is_not_an_approval_and_keeps_open_findings(
 ) -> None:
     existing = _finding(
         "C-01",
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         finding_class=FindingClass.FINDING,
     )
     context = replace(
@@ -651,8 +651,8 @@ def test_finding_event_collisions_have_precise_diagnostics(
 ) -> None:
     context = _context(
         previous=(
-            _finding("C-01", AgentRole.CLAUDE),
-            _finding("C-02", AgentRole.CLAUDE),
+            _finding("C-01", AgentRole.REVIEWER),
+            _finding("C-02", AgentRole.REVIEWER),
         )
     )
     base = parse_native_review_response(_review(context, approved=False), context)
@@ -705,7 +705,7 @@ def test_approval_retry_guidance_labels_existing_and_same_response_findings() ->
         previous=(
             _finding(
                 "C-01",
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
                 finding_class=FindingClass.FINDING,
             ),
         )
@@ -872,7 +872,7 @@ def test_slice_denial_allows_new_undecided_finding(
 def test_closed_status_requires_a_typed_closure(
     active_finding_decisions: None,
 ) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = _context(previous=(_finding("C-01", AgentRole.REVIEWER),))
     document = _review(context, approved=False)
     document["status_changes"] = [
         {
@@ -901,7 +901,7 @@ def test_closed_status_accepts_fixed_or_evidenced_rejection(
     active_finding_decisions: None,
     closure: dict[str, str],
 ) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = _context(previous=(_finding("C-01", AgentRole.REVIEWER),))
     document = _review(context, approved=True)
     document["status_changes"] = [
         {
@@ -920,7 +920,7 @@ def test_closed_status_accepts_fixed_or_evidenced_rejection(
 
 
 def test_fixed_closure_uses_reviewer_judgement() -> None:
-    finding = _finding("C-01", AgentRole.CLAUDE)
+    finding = _finding("C-01", AgentRole.REVIEWER)
     context = _context(previous=(finding,))
 
     result = parse_native_contract_result(_fixed_document(context), context)
@@ -951,7 +951,7 @@ def test_rejected_closure_requires_named_evidence_and_a_known_reason(
     closure: dict[str, str],
     diagnostic: str,
 ) -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = _context(previous=(_finding("C-01", AgentRole.REVIEWER),))
     document = _review(context, approved=False)
     document["status_changes"] = [
         {
@@ -970,7 +970,7 @@ def test_review_budget_counts_status_changes_before_effects(
     active_finding_decisions: None,
 ) -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 34)
     )
     context = _context(approval=ApprovalMarker.SLICE, previous=previous)
@@ -987,7 +987,7 @@ def test_review_budget_counts_status_changes_before_effects(
 
 
 def test_active_review_contract_accepts_typed_closure() -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = _context(previous=(_finding("C-01", AgentRole.REVIEWER),))
     document = _review(context, approved=False)
     document["status_changes"] = [
         {
@@ -1061,11 +1061,11 @@ def test_new_blocker_uses_exact_context_origin_and_denies() -> None:
     result = parse_native_contract_result(document, context)
     assert result.approval is False
     assert len(result.findings) == 1
-    assert result.findings[0].origin == FindingOrigin("1", 2, AgentRole.CLAUDE)
+    assert result.findings[0].origin == FindingOrigin("1", 2, AgentRole.REVIEWER)
 
 
 def test_new_findings_must_start_at_next_reviewer_id_and_remain_contiguous() -> None:
-    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    context = _context(previous=(_finding("C-01", AgentRole.REVIEWER),))
     document = _review(context, approved=False)
     document["status_changes"] = [
         {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed", "closure": {"kind": "fixed"}}
@@ -1098,7 +1098,7 @@ def test_new_finding_id_must_belong_to_claude() -> None:
 
 
 def test_slice_denial_preserves_omitted_open_finding_but_approval_rejects_it() -> None:
-    blocker = _finding("C-01", AgentRole.CLAUDE)
+    blocker = _finding("C-01", AgentRole.REVIEWER)
     denied_context = _context(previous=(blocker,))
 
     denied = _review(denied_context, approved=False)
@@ -1108,7 +1108,7 @@ def test_slice_denial_preserves_omitted_open_finding_but_approval_rejects_it() -
 
     observation = _finding(
         "C-01",
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         finding_class=FindingClass.FINDING,
     )
     context = _context(previous=(observation,))
@@ -1131,7 +1131,7 @@ def test_slice_denial_preserves_omitted_open_finding_but_approval_rejects_it() -
 
 def test_repeated_finding_becomes_an_occurrence_of_the_existing_identifier() -> None:
     existing = replace(
-        _finding("C-01", AgentRole.CLAUDE),
+        _finding("C-01", AgentRole.REVIEWER),
         summary="src/cache.py can retain stale entries.",
         acceptance_test="Reject stale entries in src/cache.py.",
     )
@@ -1171,7 +1171,7 @@ def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
     existing = replace(
         _finding(
             "C-01",
-            AgentRole.CLAUDE,
+            AgentRole.REVIEWER,
             finding_class=FindingClass.FINDING,
         ),
         summary="src/old.py has executable file mode 100755.",
@@ -1227,7 +1227,7 @@ def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
 
 def test_contradictory_repeated_finding_is_still_rejected() -> None:
     existing = replace(
-        _finding("C-01", AgentRole.CLAUDE),
+        _finding("C-01", AgentRole.REVIEWER),
         summary="src/cache.py can retain stale entries.",
         acceptance_test="Reject stale entries in src/cache.py.",
     )
@@ -1254,7 +1254,7 @@ def test_contradictory_repeated_finding_is_still_rejected() -> None:
 
 def test_genuine_new_problem_on_the_same_path_is_opened() -> None:
     existing = replace(
-        _finding("C-01", AgentRole.CLAUDE),
+        _finding("C-01", AgentRole.REVIEWER),
         summary="src/cache.py can retain stale entries.",
         acceptance_test="Reject stale entries in src/cache.py.",
     )
@@ -1280,7 +1280,7 @@ def test_genuine_new_problem_on_the_same_path_is_opened() -> None:
 
 def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
     existing = replace(
-        _finding("C-01", AgentRole.CLAUDE),
+        _finding("C-01", AgentRole.REVIEWER),
         finding_class=FindingClass.FINDING,
     )
     context = _context(previous=(existing,))
@@ -1325,7 +1325,7 @@ def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
 
 def test_existing_id_rejects_an_invisible_open_to_open_noop() -> None:
     existing = replace(
-        _finding("C-01", AgentRole.CLAUDE),
+        _finding("C-01", AgentRole.REVIEWER),
         finding_class=FindingClass.FINDING,
         status_rationale="Already recorded at src/first_site.py.",
     )
@@ -1350,7 +1350,7 @@ def test_slice_writer_exposes_sparse_approval_but_local_contract_rejects_it() ->
     previous = tuple(
         _finding(
             f"C-{number:02d}",
-            AgentRole.CLAUDE,
+            AgentRole.REVIEWER,
             finding_class=FindingClass.FINDING,
         )
         for number in range(1, 11)
@@ -1390,7 +1390,7 @@ def test_plan_approval_defers_complete_open_disposition_to_domain_contract(
 ) -> None:
     prior = _finding(
         "C-01",
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         finding_class=FindingClass.FINDING,
     )
     context = _context(approval=approval, previous=(prior,))
@@ -1408,7 +1408,7 @@ def test_plan_approval_defers_complete_open_disposition_to_domain_contract(
 
 def test_large_plan_approval_rejects_disposition_overflow_in_writer_schema() -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 34)
     )
     context = _context(approval=ApprovalMarker.PLAN, previous=previous)
@@ -1430,7 +1430,7 @@ def test_large_plan_approval_rejects_disposition_overflow_in_writer_schema() -> 
 
 def test_slice_denial_accepts_nonempty_sparse_blocker_delivery() -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 4)
     )
     context = _context(approval=ApprovalMarker.SLICE, previous=previous)
@@ -1460,7 +1460,7 @@ def test_slice_denial_accepts_nonempty_sparse_blocker_delivery() -> None:
 
 def test_slice_denial_preserves_open_blockers_for_no_progress_policy() -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 4)
     )
     context = _context(approval=ApprovalMarker.SLICE, previous=previous)
@@ -1488,7 +1488,7 @@ def test_large_non_slice_approval_names_every_missing_disposition(
     missing_ids: tuple[str, ...],
 ) -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 34)
     )
     context = _context(approval=ApprovalMarker.PLAN, previous=previous)
@@ -1517,7 +1517,7 @@ def test_large_non_slice_approval_names_every_missing_disposition(
 
 def test_seventy_five_finding_plan_approval_names_exact_missing_updates() -> None:
     previous = tuple(
-        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        _finding(f"C-{number:02d}", AgentRole.REVIEWER)
         for number in range(1, 76)
     )
     context = _context(approval=ApprovalMarker.PLAN, previous=previous)
@@ -1557,7 +1557,7 @@ def test_large_non_slice_schema_has_no_retired_reclassification_field(
 ) -> None:
     def approval_schema(finding_count: int) -> dict[str, object]:
         previous = tuple(
-            _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+            _finding(f"C-{number:02d}", AgentRole.REVIEWER)
             for number in range(1, finding_count + 1)
         )
         context = _context(approval=approval, previous=previous)
@@ -1573,8 +1573,8 @@ def test_large_non_slice_schema_has_no_retired_reclassification_field(
 
 
 def test_closed_own_finding_is_neither_writer_offered_nor_locally_mutable() -> None:
-    closed = _finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED)
-    open_finding = _finding("C-02", AgentRole.CLAUDE)
+    closed = _finding("C-01", AgentRole.REVIEWER, status=FindingStatus.CLOSED)
+    open_finding = _finding("C-02", AgentRole.REVIEWER)
     context = _context(previous=(closed, open_finding))
     writer = native_review_provider_response_schema(context)
 
@@ -1610,10 +1610,10 @@ def test_domain_rejects_unknown_or_non_open_disposition(
 ) -> None:
     context = _context(
         previous=(
-            _finding("C-01", AgentRole.CLAUDE),
+            _finding("C-01", AgentRole.REVIEWER),
             _finding(
                 "C-02",
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
                 status=FindingStatus.CLOSED,
             ),
         )
@@ -1638,7 +1638,7 @@ def test_domain_rejects_unknown_or_non_open_disposition(
 
 
 def test_denial_opens_a_new_ordinary_finding_without_reopening_closed_blocker() -> None:
-    closed = _finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED)
+    closed = _finding("C-01", AgentRole.REVIEWER, status=FindingStatus.CLOSED)
     context = _context(previous=(closed,))
     writer = native_review_provider_response_schema(context)
     observation = NativeFinding(
@@ -1669,7 +1669,7 @@ def test_denial_opens_a_new_ordinary_finding_without_reopening_closed_blocker() 
 
     direct = NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approved=False,
         new_findings=(observation,),
         status_changes=(
@@ -1723,7 +1723,7 @@ def test_direct_domain_conversion_rejects_contentless_review() -> None:
     context = _context()
     response = NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approved=True,
         new_findings=(),
         status_changes=(),
@@ -1742,7 +1742,7 @@ def test_direct_domain_conversion_rejects_blank_finding_content() -> None:
     context = _context()
     response = NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approved=False,
         new_findings=(
             NativeFinding(
@@ -1783,7 +1783,7 @@ def test_whitespace_review_evidence_is_a_typed_native_error(field: str) -> None:
 
 
 def test_whitespace_status_rationale_has_a_content_error_not_reference_error() -> None:
-    own = _finding("C-01", AgentRole.CLAUDE)
+    own = _finding("C-01", AgentRole.REVIEWER)
     context = _context(previous=(own,))
     document = _review(context, approved=False)
     document["status_changes"] = [
@@ -1836,7 +1836,7 @@ def test_direct_non_string_stop_field_is_a_typed_native_error() -> None:
     context = _context()
     response = NativeStopResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         rule_id=42,  # type: ignore[arg-type]
         rationale="Cannot continue.",
     )
@@ -1858,7 +1858,7 @@ def test_positive_review_requires_premortem_attestation_and_no_own_blocker() -> 
         _review(no_attestation), no_attestation, NativeReviewErrorCode.APPROVAL_INVALID
     )
 
-    blocker = _finding("C-01", AgentRole.CLAUDE)
+    blocker = _finding("C-01", AgentRole.REVIEWER)
     blocker_context = _context(previous=(blocker,))
     with_open_blocker = _review(blocker_context)
     with_open_blocker["status_changes"] = [

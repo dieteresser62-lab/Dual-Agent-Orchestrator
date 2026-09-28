@@ -64,7 +64,7 @@ class ReviewAuditEvent:
             raise AuditTrailError(
                 "review audit finding origins must be FINAL, DISCOVERY, or 1-based Slice ids"
             )
-        if self.result.reviewer is not AgentRole.CLAUDE:
+        if self.result.reviewer is not AgentRole.REVIEWER:
             raise AuditTrailError("review audit event requires claude")
         expected_slice = f"{self.slice_id:02d}"
         allowed_origins = {expected_slice, *self.allowed_finding_origins}

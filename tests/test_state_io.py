@@ -606,5 +606,5 @@ def test_persisted_side_effect_is_not_repeated_after_resume(tmp_path: Path) -> N
     loaded = load_workflow_state(state_file, allowed_roots=(tmp_path,))
 
     assert isinstance(loaded, WorkflowState)
-    assert loaded.current_step is WorkflowStep.CODEX_PLAN
+    assert loaded.current_step is WorkflowStep.IMPLEMENTER_PLAN
     assert loaded.resume_cursor().should_execute("claude:review:round-1") is False

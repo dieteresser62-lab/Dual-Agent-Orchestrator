@@ -324,11 +324,11 @@ def _create_production_state(
         task_contract=task_contract,
         branch_base_override=prepared_branch_base,
         audit_report_path=managed_audit_path,
-        codex_profile=AgentProfileBinding(
+        implementer_profile=AgentProfileBinding(
             agent_settings["codex"].model,
             agent_settings["codex"].effort,
         ),
-        claude_profile=AgentProfileBinding(
+        reviewer_profile=AgentProfileBinding(
             agent_settings["claude"].model,
             agent_settings["claude"].effort,
         ),
@@ -394,7 +394,7 @@ def _start_first_slice(
     state = state.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     history = WorkflowHistory(
         state.current_work_unit_id,
@@ -417,7 +417,7 @@ def _start_pending_slice(
     state = state.start_work_unit(
         slice_id=pending.slice_id,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_start_commit=identity.head,
     )
     history = WorkflowHistory(

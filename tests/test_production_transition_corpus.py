@@ -438,7 +438,7 @@ def _slice_state(task: Path, *, count: int = 1, bound: bool = True) -> WorkflowS
     state = _planned_state(task, count=count).start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     return (
         state.bind_current_slice_git_boundary(
@@ -514,7 +514,7 @@ def _initial_state(task: Path, kind: str) -> WorkflowState:
             failure_kind=AgentFailureKind.QUOTA,
             provider_text="usage cap reached",
             received_at="2026-09-04T00:00:00+00:00",
-            step=WorkflowStep.CODEX_PLAN,
+            step=WorkflowStep.IMPLEMENTER_PLAN,
             slice_id=1,
             work_unit_id=1,
             diagnostic_exit_code=2,

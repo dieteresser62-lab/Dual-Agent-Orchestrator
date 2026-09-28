@@ -167,8 +167,8 @@ def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
     technical_fields: dict[str, object],
 ) -> None:
     measurement = ProviderInputMeasurementPayload(
-        Role.CODEX,
-        Role.CODEX,
+        Role.IMPLEMENTER,
+        Role.IMPLEMENTER,
         "codex_implementation",
         "work-01",
         DIGEST,
@@ -413,8 +413,8 @@ def test_scope_extension_record_roundtrips_paths_categories_and_reason() -> None
 def test_finding_opening_roundtrips_record_bound_affected_paths() -> None:
     payload = FindingTransitionPayload(
         finding_id="C-01",
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=FindingSeverity.BLOCKER,
         finding_status="open",
@@ -499,7 +499,7 @@ def _agent_result(
     test_files: tuple[str, ...] = (),
 ) -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         outcome,
         test_files,
@@ -516,7 +516,7 @@ def _review(
     evidence: str | None = "contracts checked",
 ) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         verdict,
         finding_ids,
@@ -568,9 +568,9 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     WorkUnitPayload("1", 1, ("src/a.py",)),
     CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("C-01",)),
     _agent_result(test_files=("tests/test_a.py",)),
-    DiagnosticPayload(Role.CLAUDE, "work-01", 1, DIGEST, "malformed verdict"),
+    DiagnosticPayload(Role.REVIEWER, "work-01", 1, DIGEST, "malformed verdict"),
     _review(),
-    FindingTransitionPayload("C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.BLOCKER, "open", "broken"),
+    FindingTransitionPayload("C-01", Role.REVIEWER, Role.REVIEWER, "opened", FindingSeverity.BLOCKER, "open", "broken"),
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload(
         (ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),),
@@ -597,7 +597,7 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
     InvocationFailurePayload(
         "invocation-01", "run-01:work-01:claude_slice_review:claude",
-        Role.CLAUDE, "network", "transient", "AGENT-INVOCATION",
+        Role.REVIEWER, "network", "transient", "AGENT-INVOCATION",
         PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES,
         TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES,
         "2026-08-18T11:30:00+00:00", "2026-08-18T11:30:00+00:00",
@@ -605,23 +605,23 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         None, None, None, "2026-08-18T11:30:05+00:00", 0, 5, 1, True,
         DIGEST,
     ),
-    QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
-    TransientRetryPayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:05Z", 1),
+    QuotaPausePayload(Role.REVIEWER, DIGEST, "2026-08-18T11:30:00Z"),
+    TransientRetryPayload(Role.REVIEWER, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
     ProviderInputMeasurementPayload(
-        Role.CODEX, Role.CODEX, "codex_implementation", "work-01", DIGEST, "b" * 64,
+        Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01", DIGEST, "b" * 64,
         "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
     ),
     ProviderAttemptPayload(
-        Role.CODEX, Role.CODEX, "codex_implementation", "work-01",
+        Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01",
         "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
         "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None,
         ProviderUsagePayload(input_tokens=0, output_tokens=7, turns=1),
     ),
     FinalReviewPreflightPayload(
-        Role.CLAUDE, Role.CLAUDE, "claude_final_review", "work-01", DIGEST, "b" * 64,
+        Role.REVIEWER, Role.REVIEWER, "claude_final_review", "work-01", DIGEST, "b" * 64,
         "measurement-01", "passed", None, None, (), (), None,
     ),
 ])
@@ -683,7 +683,7 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
     payload = InvocationFailurePayload(
         invocation_id="invocation-process-diagnostic",
         idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         failure_kind="process",
         failure_class="transient",
         diagnostic_code="AGENT-PROCESS",
@@ -741,7 +741,7 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     payload = InvocationFailurePayload(
         invocation_id="native-review-form-output",
         idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         failure_kind="output",
         failure_class="transient",
         diagnostic_code="NATIVE-REVIEW-FORM",
@@ -785,14 +785,14 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     with pytest.raises(ArtifactValidationError):
         replace(payload, diagnostic_code="AGENT-OUTPUT")
     with pytest.raises(ArtifactValidationError):
-        replace(payload, role=Role.CODEX, step="codex_implementation")
+        replace(payload, role=Role.IMPLEMENTER, step="codex_implementation")
 
     codex_diagnostic = OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID.text
     codex = replace(
         payload,
         invocation_id="native-codex-form-output",
         idempotency_key="run-01:work-01:codex_implementation:codex",
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         diagnostic_code="NATIVE-IMPLEMENTER-FORM",
         step="codex_implementation",
         orchestrator_diagnostic=codex_diagnostic,
@@ -829,7 +829,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
     payload = InvocationFailurePayload(
         invocation_id="native-review-terminal-output",
         idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         failure_kind="output",
         failure_class="resumable_halt",
         diagnostic_code="NATIVE-REVIEW-FORM",
@@ -897,7 +897,7 @@ def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> 
     payload = InvocationFailurePayload(
         invocation_id="invocation-readable-diagnostic",
         idempotency_key="run-01:work-01:codex_plan:codex",
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         failure_kind="output",
         failure_class="resumable_halt",
         diagnostic_code="NATIVE-IMPLEMENTER-CONTRACT",
@@ -963,7 +963,7 @@ def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:
 
 def test_native_implementer_agent_result_roundtrips_with_closed_transport_binding() -> None:
     payload = AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         "work-01",
         "ready",
         ("tests/test_native_implementer_contract.py",),
@@ -980,7 +980,7 @@ def test_native_implementer_agent_result_roundtrips_with_closed_transport_bindin
 
 def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -> None:
     payload = AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         "work-01",
         "ready",
         (),
@@ -992,7 +992,7 @@ def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -
     with pytest.raises(ArtifactValidationError, match="response_sha256"):
         replace(payload, response_sha256=None)
     with pytest.raises(ArtifactValidationError, match="role=codex"):
-        replace(payload, role=Role.CLAUDE)
+        replace(payload, role=Role.REVIEWER)
     with pytest.raises(ArtifactValidationError, match="request_id"):
         replace(payload, request_id="native-codex-request-invalid")
 
@@ -1093,16 +1093,16 @@ def test_stable_id_binds_run_type_logical_identity_and_positive_revision() -> No
 
 def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> None:
     with pytest.raises(ArtifactValidationError, match="reporting reviewer"):
-        FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("C-01", Role.REVIEWER, Role.IMPLEMENTER, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
     with pytest.raises(ArtifactValidationError, match="cannot close"):
-        FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("C-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
 
 def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     escalation = FindingTransitionPayload(
         "C-01",
-        Role.CLAUDE,
-        Role.CLAUDE,
+        Role.REVIEWER,
+        Role.REVIEWER,
         "escalated",
         FindingSeverity.BLOCKER,
         "open",
@@ -1111,7 +1111,7 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     assert ArtifactRecord.from_dict(_record(escalation).to_dict()).payload == escalation
 
     for mutation in (
-        lambda: replace(escalation, actor=Role.CODEX),
+        lambda: replace(escalation, actor=Role.IMPLEMENTER),
         lambda: replace(escalation, severity=FindingSeverity.FINDING),
         lambda: replace(escalation, finding_status="closed"),
     ):
@@ -1124,8 +1124,8 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     (
         lambda: FindingTransitionPayload(
             "A-01",  # retirement-negative-control
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -1156,8 +1156,8 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
             _record(
                 FindingTransitionPayload(
                     "C-01",
-                    Role.CLAUDE,
-                    Role.CLAUDE,
+                    Role.REVIEWER,
+                    Role.REVIEWER,
                     "opened",
                     FindingSeverity.BLOCKER,
                     "open",
@@ -1210,8 +1210,8 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
             _record(
                 FindingTransitionPayload(
                     "C-01",
-                    Role.CLAUDE,
-                    Role.CLAUDE,
+                    Role.REVIEWER,
+                    Role.REVIEWER,
                     "opened",
                     FindingSeverity.BLOCKER,
                     "open",
@@ -1260,8 +1260,8 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
     structured = _record(
         FindingTransitionPayload(
             finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -1278,8 +1278,8 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
     historical = _record(
         FindingTransitionPayload(
             "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -1317,7 +1317,7 @@ def test_approval_requires_fingerprint_and_positive_evidence() -> None:
 
 def test_native_review_transport_fields_roundtrip_together() -> None:
     payload = ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         "work-01",
         "approved",
         (),
@@ -1348,7 +1348,7 @@ def test_pre_s4a_review_evidence_is_read_as_opaque_legacy_data() -> None:
 def test_review_approval_requires_one_evidence_form_in_schema_and_domain() -> None:
     with pytest.raises(ArtifactValidationError, match="requires findings or review evidence"):
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "work-01",
             "approved",
             (),
@@ -1388,7 +1388,7 @@ def test_review_schema_rejects_simultaneous_legacy_and_structured_evidence() -> 
 
 def test_native_review_transport_rejects_foreign_reviewer() -> None:
     with pytest.raises(ArtifactValidationError, match="reviewer must be claude"):
-        replace(_review(), reviewer=Role.CODEX)
+        replace(_review(), reviewer=Role.IMPLEMENTER)
 
 
 def test_review_record_without_native_fields_is_rejected() -> None:
@@ -1415,7 +1415,7 @@ def test_native_review_transport_rejects_partial_binding(
         match="unsupported|request_id",
     ):
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "work-01",
             "approved",
             (),
@@ -1433,14 +1433,14 @@ def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
 def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     with pytest.raises(ArtifactValidationError, match="started provider attempt"):
         ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "started", CREATED_AT, None, None, None,
             ProviderUsagePayload(input_tokens=0),
         )
     with pytest.raises(ArtifactValidationError, match="failure_kind"):
         ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None, None,
         )
@@ -1449,7 +1449,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
 
     failed = _record(
         ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
             "provider-operation-failed", DIGEST, "measurement-failed", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             "network",
@@ -1463,7 +1463,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     assert failed_without_usage.usage is None
     succeeded = _record(
         ProviderAttemptPayload(
-            Role.CODEX, Role.CODEX, "codex_implementation", "work-01",
+            Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01",
             "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
             "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             None, ProviderUsagePayload(output_tokens=1),
@@ -1477,7 +1477,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
 def test_failed_network_attempt_with_usage_roundtrips_model_and_schema() -> None:
     failed = _record(
         ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
             "provider-operation-network", DIGEST, "measurement-network",
             "b" * 64, 1, "failed", CREATED_AT,
             "2026-08-18T10:30:01+00:00", 1.0, "network",

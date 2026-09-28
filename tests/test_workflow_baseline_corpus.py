@@ -359,8 +359,8 @@ def _state(
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
             "2",
-            codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-            claude_profile=AgentProfileBinding("sonnet", "high"),
+            implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
+            reviewer_profile=AgentProfileBinding("sonnet", "high"),
         ),
         timestamp=STAMP,
     )
@@ -375,7 +375,7 @@ def _state(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             updated_at=STAMP,
         )
         .bind_current_slice_git_boundary(
@@ -455,12 +455,12 @@ def _state_binding(state: WorkflowState) -> dict[str, object]:
             else {
                 "mode": binding.mode.value,
                 "codex_profile": {
-                    "model": binding.codex_profile.model,
-                    "effort": binding.codex_profile.effort,
+                    "model": binding.implementer_profile.model,
+                    "effort": binding.implementer_profile.effort,
                 },
                 "claude_profile": {
-                    "model": binding.claude_profile.model,
-                    "effort": binding.claude_profile.effort,
+                    "model": binding.reviewer_profile.model,
+                    "effort": binding.reviewer_profile.effort,
                 },
             }
         ),

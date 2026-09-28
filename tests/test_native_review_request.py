@@ -84,7 +84,7 @@ def _context() -> NativeReviewContext:
         work_unit_id="work-unit-1",
         operation="claude_slice_review",
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -367,7 +367,7 @@ def _prior_finding(
         status=FindingStatus.OPEN,
         summary="Existing Claude finding",
         acceptance_test="Focused regression",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -1156,7 +1156,7 @@ def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
         status=FindingStatus.OPEN,
         summary="The native loop must carry the response.",
         acceptance_test="Claude sees the durable Codex disposition.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         responses=(
             FindingResponse(
                 FindingResponseDecision.ACCEPTED,

@@ -163,7 +163,7 @@ def _event(
 
 def _agent(work_unit_id: str = "1") -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         "ready",
         (),
@@ -177,7 +177,7 @@ def _review(
     work_unit_id: str = "1", *, finding_ids: tuple[str, ...] = ()
 ) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         "approved",
         finding_ids,
@@ -203,7 +203,7 @@ def _failure(
     return InvocationFailurePayload(
         invocation_id,
         f"invoke:{invocation_id}",
-        Role.CODEX,
+        Role.IMPLEMENTER,
         failure_kind,
         "transient",
         "AGENT-INVOCATION",
@@ -323,8 +323,8 @@ def _measurement(
     *, operation: str = "codex_implementation", input_digest: str = "1" * 64
 ) -> ProviderInputMeasurementPayload:
     return ProviderInputMeasurementPayload(
-        Role.CODEX,
-        Role.CODEX,
+        Role.IMPLEMENTER,
+        Role.IMPLEMENTER,
         operation,
         "1",
         "a" * 64,
@@ -360,8 +360,8 @@ def _attempt(
     assert isinstance(measurement.payload, ProviderInputMeasurementPayload)
     terminal = phase != "started"
     return ProviderAttemptPayload(
-        Role.CODEX,
-        Role.CODEX,
+        Role.IMPLEMENTER,
+        Role.IMPLEMENTER,
         operation,
         "1",
         logical_operation_id,
@@ -385,7 +385,7 @@ def _provider_pair(
     content = _append(
         records,
         ProviderContentPayload(
-            Role.CODEX,
+            Role.IMPLEMENTER,
             "1",
             1,
             "codex_implementation",
@@ -522,7 +522,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         _append(
             records,
             FinalReviewCompletedPayload(
-                reviewer=Role.CLAUDE,
+                reviewer=Role.REVIEWER,
                 work_unit_id="1",
                 new_findings=(),
                 occurrences=(),
@@ -596,13 +596,13 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         _append_failure(records, failure)
         _append_failure(records, failure, revision=2)
     elif case_id == "quota-transition-has-a-malformed-logical-identity":
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="malformed")
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="malformed")
     elif case_id == "quota-transition-has-no-earlier-invocation-failure":
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="quota-pause-missing")
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="quota-pause-missing")
     elif case_id == "quota-transition-retry-time-differs-from-invocation-decision":
         _append(records, _transition())
         _append_failure(records, _failure())
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:02:00+00:00"), logical_id="quota-pause-invocation-1")
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:02:00+00:00"), logical_id="quota-pause-invocation-1")
     elif case_id in {
         "gate-transition-logical-identity-differs-from-its-work-unit",
         "gate-transition-carries-paths-without-active-test-fingerprint",
@@ -694,7 +694,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         _provider_pair(records, content_kind="final_report")
     elif case_id == "non-tail-provider-content-has-no-native-decision":
         blob = BlobReference(RESPONSE_SHA, 3)
-        _append(records, ProviderContentPayload(Role.CODEX, "1", 1, "codex_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
+        _append(records, ProviderContentPayload(Role.IMPLEMENTER, "1", 1, "codex_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
         _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
     elif case_id == "review-anchor-references-a-missing-review":
         _append(records, ReviewAnchorPayload("ar1-" + "4" * 64, ()), logical_id="review-anchors-missing")
@@ -756,7 +756,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     elif case_id == "diagnostic-after-first-work-unit-references-work-unit-404":
         _append(records, WorkUnitPayload("1", 1, ("src/a.py",)), logical_id="work-unit-1")
         from artifact_models import DiagnosticPayload
-        _append(records, DiagnosticPayload(Role.CODEX, "404", 1, "a" * 64, "missing work unit"))
+        _append(records, DiagnosticPayload(Role.IMPLEMENTER, "404", 1, "a" * 64, "missing work unit"))
     elif case_id == "commit-binding-references-a-missing-validation-attestation":
         _append(records, BindingPayload("commit", "deadbeef", "ar1-" + "4" * 64, ("ar1-" + "5" * 64,)))
     elif case_id == "commit-binding-fingerprint-differs-from-validation-attestation":
@@ -805,14 +805,14 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             fingerprint=FP_B,
         )
     elif case_id == "final-preflight-references-a-missing-measurement":
-        _append(records, FinalReviewPreflightPayload(Role.CLAUDE, Role.CLAUDE, "claude_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
+        _append(records, FinalReviewPreflightPayload(Role.REVIEWER, Role.REVIEWER, "claude_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
     elif case_id == "final-preflight-fingerprint-differs-from-its-measurement":
         measurement = _append(records, _measurement())
         _append(
             records,
             FinalReviewPreflightPayload(
-                Role.CLAUDE,
-                Role.CLAUDE,
+                Role.REVIEWER,
+                Role.REVIEWER,
                 "claude_final_review",
                 "1",
                 "a" * 64,

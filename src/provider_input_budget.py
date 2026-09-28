@@ -6,23 +6,29 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 
+from contracts import AgentRole
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from workflow_state import WorkflowStep
 
 
+PROVIDER_ROLES: Mapping[str, str] = {
+    "codex": AgentRole.IMPLEMENTER.value,
+    "claude": AgentRole.REVIEWER.value,
+}
 PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
     "codex": frozenset(
         {
-            "codex_plan",
-            "codex_plan_revision",
-            "codex_implementation",
-            "codex_correction",
+            WorkflowStep.IMPLEMENTER_PLAN.value,
+            WorkflowStep.IMPLEMENTER_PLAN_REVISION.value,
+            WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
+            WorkflowStep.IMPLEMENTER_CORRECTION.value,
         }
     ),
     "claude": frozenset(
         {
-            "claude_final_review",
-            "claude_plan_review",
-            "claude_slice_review",
+            WorkflowStep.REVIEWER_FINAL_REVIEW.value,
+            WorkflowStep.REVIEWER_PLAN_REVIEW.value,
+            WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         }
     ),
 }
@@ -119,7 +125,7 @@ class ProviderInputBudgetRule:
     def __post_init__(self) -> None:
         if self.provider not in PROVIDER_OPERATIONS:
             raise ProviderInputBudgetError(f"unknown provider: {self.provider}")
-        if self.role != self.provider:
+        if self.role != PROVIDER_ROLES[self.provider]:
             raise ProviderInputBudgetError(
                 f"unsupported provider/role combination: {self.provider}/{self.role}"
             )
@@ -145,7 +151,7 @@ class ProviderInputBudgetPolicy:
         if len(keys) != len(set(keys)):
             raise ProviderInputBudgetError("provider input budget rules must be unique")
         expected = {
-            (provider, provider, operation)
+            (provider, PROVIDER_ROLES[provider], operation)
             for provider, operations in PROVIDER_OPERATIONS.items()
             for operation in operations
         }
@@ -190,7 +196,13 @@ def default_provider_input_budget_policy() -> ProviderInputBudgetPolicy:
     # safety ceiling remains appropriate for both operations.
     return ProviderInputBudgetPolicy(
         tuple(
-            ProviderInputBudgetRule(provider, provider, operation, 4_000_000, 16_000_000)
+            ProviderInputBudgetRule(
+                provider,
+                PROVIDER_ROLES[provider],
+                operation,
+                4_000_000,
+                16_000_000,
+            )
             for provider, operations in sorted(PROVIDER_OPERATIONS.items())
             for operation in sorted(operations)
         )

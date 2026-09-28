@@ -75,7 +75,7 @@ from native_review_request import (
     build_native_review_request,
 )
 from workflow import (
-    CodexInvocation,
+    ImplementerInvocation,
     EvidenceKind,
     ReviewerInvocation,
     WorkflowContext,
@@ -504,7 +504,7 @@ def _implementer_base() -> dict[str, object]:
     native_context = NativeImplementerContext(
         run_id=RUN_ID,
         work_unit_id="1",
-        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         current_fingerprint=FINGERPRINT,
         request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
         contract=contract,
@@ -539,7 +539,7 @@ def _implementer_base() -> dict[str, object]:
     assert digest == IMPLEMENTER_RESPONSE_SHA256
     payload = agent_result_payload(
         result,
-        role=AgentRole.CODEX,
+        role=AgentRole.IMPLEMENTER,
         work_unit_id=1,
         transport_schema=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT,
         request_id=bundle.bound_context.request_id,
@@ -553,16 +553,16 @@ def _implementer_base() -> dict[str, object]:
     )
     content = _content_record(
         "ar1-" + "3" * 64,
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         canonical=canonical,
         request_id=bundle.bound_context.request_id,
-        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         content_kind="agent_result",
     )
     state = SimpleNamespace(
         run_id=RUN_ID,
         current_work_unit_id=1,
-        current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         current_work_unit=SimpleNamespace(open_findings=()),
         protocol_binding=SimpleNamespace(
             codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT
@@ -585,9 +585,9 @@ def _attempt_record() -> _Record:
         "attempt-b53",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.CODEX,
-            role=Role.CODEX,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            provider=Role.IMPLEMENTER,
+            role=Role.IMPLEMENTER,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             work_unit_id="1",
             logical_operation_id="provider-operation-" + "5" * 64,
             binding_fingerprint=FINGERPRINT,
@@ -820,8 +820,8 @@ def _run_implementer_scenario(
             chain = (
                 request_prefix,
                 _measurement_record(
-                    role=Role.CODEX,
-                    operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+                    role=Role.IMPLEMENTER,
+                    operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
                     work_unit_id="1",
                 ),
                 _attempt_record(),
@@ -849,10 +849,10 @@ def _run_implementer_scenario(
         )
         content = _content_record(
             "ar1-" + "3" * 64,
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             canonical=canonical,
             request_id=divergent_request_id,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             content_kind="agent_result",
         )
         chain = (content, candidate)
@@ -868,10 +868,10 @@ def _run_implementer_scenario(
         )
         content = _content_record(
             "ar1-" + "3" * 64,
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             canonical=canonical,
             request_id=base["bundle"].bound_context.request_id,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             content_kind="agent_result",
         )
         candidate = replace(
@@ -889,10 +889,10 @@ def _run_implementer_scenario(
         canonical = canonical_native_implementer_json(document)
         content = _content_record(
             "ar1-" + "3" * 64,
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             canonical=canonical,
             request_id=base["bundle"].bound_context.request_id,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             content_kind="agent_result",
         )
         chain = (content,)
@@ -921,9 +921,9 @@ def _run_implementer_scenario(
         recovery_bundle=recovery_bundle,
     )
     recovery = module.WorkflowRecovery(dependencies)
-    invocation = CodexInvocation(
+    invocation = ImplementerInvocation(
         1,
-        WorkflowStep.CODEX_IMPLEMENTATION,
+        WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         1,
         "",
         native_request=bundle,
@@ -938,7 +938,7 @@ def _run_implementer_scenario(
                 lambda _replay: SimpleNamespace(
                     state=SimpleNamespace(
                         current_work_unit_id=1,
-                        current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+                        current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                         current_work_unit=SimpleNamespace(open_findings=("C-01",)),
                     )
                 ),
@@ -994,7 +994,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         status=FindingStatus.OPEN,
         summary="A finding opened in an earlier work unit remains open.",
         acceptance_test="Recovery accepts its request-bound disposition.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     contract = ImplementerStepContract(
         "b97-implementer",
@@ -1012,7 +1012,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
                 context=NativeImplementerContext(
                     run_id=RUN_ID,
                     work_unit_id="17",
-                    operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+                    operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
                     current_fingerprint=FINGERPRINT,
                     request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
                     contract=contract,
@@ -1059,10 +1059,10 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         "content-b97",
         _FingerprintRef(FINGERPRINT),
         ProviderContentPayload(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id="17",
             round_number=2,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             request_id=original_bundle.bound_context.request_id,
             response_sha256=digest,
             content_kind="agent_result",
@@ -1076,7 +1076,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         _FingerprintRef(FINGERPRINT),
         agent_result_payload(
             parsed,
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=17,
             transport_schema=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT,
             request_id=original_bundle.bound_context.request_id,
@@ -1089,8 +1089,8 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         payload=replace(base_attempt.payload, work_unit_id="17"),
     )
     measurement = _measurement_record(
-        role=Role.CODEX,
-        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        role=Role.IMPLEMENTER,
+        operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         work_unit_id="17",
     )
     request_prefix = _Record(
@@ -1102,7 +1102,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
     state = SimpleNamespace(
         run_id=RUN_ID,
         current_work_unit_id=17,
-        current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         current_work_unit=SimpleNamespace(
             kind=WorkUnitKind.SLICE,
             open_findings=(),
@@ -1146,14 +1146,14 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
         lambda _replay: SimpleNamespace(
             state=SimpleNamespace(
                 current_work_unit_id=17,
-                current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+                current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
                 current_work_unit=SimpleNamespace(open_findings=("C-02",)),
             )
         ),
     )
-    invocation = CodexInvocation(
+    invocation = ImplementerInvocation(
         17,
-        WorkflowStep.CODEX_IMPLEMENTATION,
+        WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         2,
         "",
         native_request=rebuilt_bundle,
@@ -1191,7 +1191,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
         status=FindingStatus.CLOSED,
         summary="The finding was already closed before this request.",
         acceptance_test="A stale disposition remains invalid.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Closed before the recorded Codex request.",
     )
     contract = ImplementerStepContract(
@@ -1208,7 +1208,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
             context=NativeImplementerContext(
                 run_id=RUN_ID,
                 work_unit_id="17",
-                operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+                operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
                 current_fingerprint=FINGERPRINT,
                 request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
                 contract=contract,
@@ -1291,9 +1291,9 @@ def _reviewer_base() -> dict[str, object]:
     native_context = NativeReviewContext(
         run_id=RUN_ID,
         work_unit_id="1",
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -1350,10 +1350,10 @@ def _reviewer_base() -> dict[str, object]:
     )
     content = _content_record(
         "ar1-" + "5" * 64,
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         canonical=canonical,
         request_id=bundle.bound_context.request_id,
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         content_kind="review_result",
     )
     validation_payload = ValidationAttestationPayload(
@@ -1382,13 +1382,13 @@ def _reviewer_base() -> dict[str, object]:
         slice_id=1,
         kind=WorkUnitKind.SLICE,
         open_findings=(),
-        codex_return_count=0,
+        implementer_return_count=0,
     )
     state = SimpleNamespace(
         run_id=RUN_ID,
         current_work_unit=unit,
         current_work_unit_id=1,
-        current_step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        current_step=WorkflowStep.REVIEWER_SLICE_REVIEW,
         protocol_binding=SimpleNamespace(
             claude_review_transport=recovery_module.NATIVE_REVIEW_TRANSPORT
         ),
@@ -1413,14 +1413,14 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         status=FindingStatus.OPEN,
         summary="The request-time reviewer finding remains actionable.",
         acceptance_test="The reviewer may close it at its own ledger head.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     native_context = NativeReviewContext(
         run_id=RUN_ID,
         work_unit_id="1",
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -1526,8 +1526,8 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     assert current_bundle.bound_context.request_id != bundle.bound_context.request_id
     measurement = _measurement_record(
-        role=Role.CLAUDE,
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        role=Role.REVIEWER,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         work_unit_id="1",
     )
     attempt = _Record(
@@ -1535,15 +1535,15 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         "attempt-reviewer-b123",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.CLAUDE,
-            role=Role.CLAUDE,
-            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            provider=Role.REVIEWER,
+            role=Role.REVIEWER,
+            operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             work_unit_id="1",
             logical_operation_id=logical_provider_operation_id(
                 run_id=RUN_ID,
                 work_unit_id="1",
-                provider=Role.CLAUDE,
-                operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+                provider=Role.REVIEWER,
+                operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
                 binding_fingerprint=FINGERPRINT,
                 operation_instance="round:1",
             ),
@@ -1562,10 +1562,10 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     canonical = canonical_native_review_json(document)
     content = _content_record(
         "ar1-" + "5" * 64,
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         canonical=canonical,
         request_id=bundle.bound_context.request_id,
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         content_kind="review_result",
     )
     persisted_payload = replace(
@@ -1598,8 +1598,8 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     invocation = ReviewerInvocation(
         work_unit_id=1,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        reviewer=AgentRole.CLAUDE,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
+        reviewer=AgentRole.REVIEWER,
         round_number=1,
         evidence_kind=EvidenceKind.FULL_SLICE,
         fingerprint=FINGERPRINT,
@@ -1609,7 +1609,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     contract = StepContract(
         "b123-reviewer-recovery",
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         ApprovalMarker.SLICE,
         "01",
         1,
@@ -1618,7 +1618,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     request_state = SimpleNamespace(
         current_work_unit_id=1,
-        current_step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        current_step=WorkflowStep.REVIEWER_SLICE_REVIEW,
         current_work_unit=SimpleNamespace(open_findings=("C-02",)),
     )
     with pytest.MonkeyPatch.context() as patch:
@@ -1686,8 +1686,8 @@ def _run_reviewer_scenario(
     assert isinstance(content, _Record)
     assert isinstance(canonical, str)
     measurement = _measurement_record(
-        role=Role.CLAUDE,
-        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        role=Role.REVIEWER,
+        operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         work_unit_id="1",
     )
     attempt = _Record(
@@ -1695,15 +1695,15 @@ def _run_reviewer_scenario(
         "attempt-reviewer-b53",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.CLAUDE,
-            role=Role.CLAUDE,
-            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            provider=Role.REVIEWER,
+            role=Role.REVIEWER,
+            operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             work_unit_id="1",
             logical_operation_id=logical_provider_operation_id(
                 run_id=RUN_ID,
                 work_unit_id="1",
-                provider=Role.CLAUDE,
-                operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+                provider=Role.REVIEWER,
+                operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
                 binding_fingerprint=FINGERPRINT,
                 operation_instance="round:1",
             ),
@@ -1769,10 +1769,10 @@ def _run_reviewer_scenario(
         record = replace(record, payload=replace(record.payload, response_sha256=digest))
         content = _content_record(
             "ar1-" + "5" * 64,
-            role=Role.CLAUDE,
+            role=Role.REVIEWER,
             canonical=canonical,
             request_id=record.payload.request_id,
-            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             content_kind="review_result",
         )
         chain = (base["validation_record"], measurement, attempt, content, record)
@@ -2046,7 +2046,17 @@ def _load_mutant(transform: Callable[[ast.Module], None]) -> ModuleType:
 
 def test_static_recovery_corpus_is_cleartext_complete_and_source_bound() -> None:
     baseline = json.loads(STATIC_BASELINE.read_text("utf-8"))
-    assert _static_document() == baseline
+    current = _static_document()
+    for key in ("schema_version", "source_commit", "source_blob", "unreachable_aborts"):
+        assert current[key] == baseline[key]
+    historical = json.dumps(baseline["layers"], sort_keys=True)
+    for old, new in (
+        ("Role.CODEX", "Role.IMPLEMENTER"),
+        ("Role.CLAUDE", "Role.REVIEWER"),
+        ("WorkflowStep.CLAUDE_", "WorkflowStep.REVIEWER_"),
+    ):
+        historical = historical.replace(old, new)
+    assert current["layers"] == json.loads(historical)
     implementer, reviewer = baseline["layers"]
     assert (len(implementer["conditions"]), len(implementer["aborts"])) == (18, 12)
     assert (len(reviewer["conditions"]), len(reviewer["aborts"])) == (11, 10)

@@ -295,7 +295,7 @@ def test_missing_provider_content_authority_fails_closed() -> None:
         match="provider content has no artifact authority",
     ):
         persistence._persist_provider_content(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=1,
             request_sequence=1,
             operation="implementation",
@@ -335,7 +335,7 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     canonical = '{"result":"ok"}'
 
     record = persistence._persist_provider_content(
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=2,
         request_sequence=3,
         operation="review",
@@ -356,7 +356,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
     tmp_path: Path,
 ) -> None:
     fields = {
-        "role": Role.CODEX,
+        "role": Role.IMPLEMENTER,
         "work_unit_id": 4500,
         "request_sequence": 1,
         "operation": "codex_implementation",
@@ -373,7 +373,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
     second = provider_content_idempotency_key(**fields)
     distinct_inputs = (
         fields,
-        {**fields, "role": Role.CLAUDE},
+        {**fields, "role": Role.REVIEWER},
         {**fields, "work_unit_id": 4600},
         {**fields, "request_sequence": 2},
         {**fields, "operation": "claude_slice_review"},

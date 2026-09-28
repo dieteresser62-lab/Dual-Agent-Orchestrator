@@ -192,7 +192,7 @@ def _append_implementer_pair(
     for index in range(content_count):
         bridge.append(
             ProviderContentPayload(
-                Role.CODEX,
+                Role.IMPLEMENTER,
                 "1",
                 content_round or invocation_round,
                 "codex_implementation",
@@ -208,7 +208,7 @@ def _append_implementer_pair(
         )
     bridge.append(
         AgentResultPayload(
-            Role.CODEX,
+            Role.IMPLEMENTER,
             "1",
             "ready",
             (),
@@ -299,7 +299,7 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
     driver = object.__new__(ProductionWorkflowDriver)
     driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
     record = driver._persist_provider_content(  # noqa: SLF001
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=1,
         request_sequence=1,
         operation="codex_implementation",
@@ -438,7 +438,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
     canonical = '{"request_id":"' + request_id + '","ready":true}'
     for request_sequence in (1, 2):
         driver._persist_provider_content(  # noqa: SLF001
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=7,
             request_sequence=request_sequence,
             operation="codex_implementation",
@@ -449,7 +449,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
         )
 
     recovered = driver._provider_content_text(  # noqa: SLF001
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=7,
         request_sequence=2,
         operation="codex_implementation",
@@ -528,7 +528,7 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
     blob = store.put_blob(b'{"approved":true}')
     bridge.append(
         ProviderContentPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "1",
             2,
             "claude_slice_review",
@@ -544,7 +544,7 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
     )
     bridge.append(
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "1",
             "approved",
             (),

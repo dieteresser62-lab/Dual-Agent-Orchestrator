@@ -191,8 +191,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "schema_version",
         "claude_review_transport",
         "codex_result_transport",
-        "codex_profile",
-        "claude_profile",
+        "implementer_profile",
+        "reviewer_profile",
     },
     "InvocationFailureRecord": {
         "invocation_id",
@@ -248,8 +248,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "current_step",
         "round_number",
         "request_sequence",
-        "codex_return_count",
-        "max_codex_returns",
+        "implementer_return_count",
+        "max_implementer_returns",
         "gate",
         "reviewer",
         "open_findings",
@@ -649,12 +649,12 @@ EXPECTED_STRICT_BODY_DIGESTS = {'src/artifact_resume.py:require_workflow_status_
  'src/artifact_bridge.py:review_payload_matches_result': '4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506',
  'src/final_review_preflight.py:run_final_review_preflight': '7e1a2614db9219f279147e7aed442b0f4965de90bc27eb5cb39ed2df77be7f1e',
  'src/workflow_audit_projection.py:_persisted_histories': '46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86',
- 'src/workflow_audit_projection.py:_attach_record_events': '3df0831131bfc555e44b578597d17247a45f468b2ec102898d99a498a3ac1c96',
+ 'src/workflow_audit_projection.py:_attach_record_events': '621ad1dcffcc12953fe1d2b69e2c683106ec32a521b492de123dbbba289922ae',
  'src/workflow_audit.py:WorkflowAudit.finalize_audit': '60ecf8b15bc913fec75e34aa8006d0e65110218afea19ac34956d01e93c8b593',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context': '4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation': 'b8623a4c7006d06638f9f703c489494c770ba9ec4f75ad76fc56672538b81bb5',
  'src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding': '7c7ab0e20733005877e51a1a4f86e847456fc6fe5e230c0b57f601bbb036f833',
- 'src/workflow_git_commit.py:WorkflowGitCommit.commit_slice': '530fcd5f1229e0e46d35d8e0ca8a665898468ffb2c555e42bdfcf9a2f4a28b59',
+ 'src/workflow_git_commit.py:WorkflowGitCommit.commit_slice': 'd0f8eff6c4b92b9ac3082fad5f8c23184388d3175e69a63d92d18ab6a488dfaa',
  'src/git_service.py:commit_managed_audit_report': 'ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717'}
 
 

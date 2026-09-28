@@ -142,7 +142,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         created_at="2026-08-29T10:00:00+00:00",
         idempotency_key="provider-content:invalid-recovery",
         payload=ProviderContentPayload(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=str(state.current_work_unit_id),
             round_number=1,
             operation=state.current_step.value,
@@ -190,7 +190,7 @@ def _divergent_recovery_records() -> BaseException:
         created_at="2026-08-29T10:00:00+00:00",
         idempotency_key="native:divergent-recovery",
         payload=AgentResultPayload(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id="1",
             outcome="ready",
             test_files=(),

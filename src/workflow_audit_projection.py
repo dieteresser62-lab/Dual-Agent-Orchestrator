@@ -160,7 +160,7 @@ def _attach_record_events(
         is_final_review = (
             prior_steps
             and prior_steps[-1]
-            == WorkflowStep.CLAUDE_FINAL_REVIEW.value
+            == WorkflowStep.REVIEWER_FINAL_REVIEW.value
         )
         allowed_origins = allowed_review_finding_origins(
             finding_ledger,

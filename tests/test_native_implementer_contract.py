@@ -87,7 +87,7 @@ def _finding() -> FindingRecord:
         status=FindingStatus.OPEN,
         summary="Close the native boundary.",
         acceptance_test="The native result round-trips.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 

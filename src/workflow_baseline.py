@@ -118,10 +118,10 @@ def _append_baseline_identity_expectations(
     )
     expected_profile = RunProfilePayload(
         implementer=RoleProfilePayload(
-            binding.codex_profile.model, binding.codex_profile.effort  # allowlist:provider -- wire until slice 8/9
+            binding.implementer_profile.model, binding.implementer_profile.effort
         ),
         reviewer=RoleProfilePayload(
-            binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider -- wire until slice 8/9
+            binding.reviewer_profile.model, binding.reviewer_profile.effort
         ),
         orchestrator_code_version=code_version or orchestrator_code_version(),
         merge_completed_branch=(
@@ -530,10 +530,10 @@ class WorkflowBaseline:
         bridge.append(
             RunProfilePayload(
                 implementer=RoleProfilePayload(
-                    binding.codex_profile.model, binding.codex_profile.effort
+                    binding.implementer_profile.model, binding.implementer_profile.effort
                 ),
                 reviewer=RoleProfilePayload(
-                    binding.claude_profile.model, binding.claude_profile.effort
+                    binding.reviewer_profile.model, binding.reviewer_profile.effort
                 ),
                 orchestrator_code_version=_resume_code_version(existing_replay),
                 merge_completed_branch=completion_policy[0],

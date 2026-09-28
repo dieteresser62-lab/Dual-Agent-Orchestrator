@@ -450,7 +450,7 @@ def test_closed_findings_are_record_authority_not_codex_request_fields() -> None
         FindingStatus.CLOSED,
         "Closed finding",
         "Already fixed",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Verified closed",
     )
     changed_closed = replace(closed, summary="Mirror-only tampering")

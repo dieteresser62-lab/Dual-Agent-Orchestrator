@@ -94,7 +94,7 @@ def _review_bundle():
         work_unit_id="1",
         operation="claude_slice_review",
         diff_fingerprint="c" * 64,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
