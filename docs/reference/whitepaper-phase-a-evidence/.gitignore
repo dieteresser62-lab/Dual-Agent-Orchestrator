@@ -1,0 +1,4 @@
+# Published historical test evidence; exception to the repository-wide log rule.
+!task-a-default.log
+!task-a-crash.log
+!ruhestandsapp-npm-test.log

@@ -1,0 +1,3380 @@
+
+> ruhestand-app-final@1.0.0 test
+> node tests/run-tests.mjs
+
+🚀 Starting Test Runner...
+Found 183 test files.
+
+📂 Running 3bucket-config.test.mjs in process...
+--- 3-Bucket Config Tests ---
+✅ 3-Bucket config tests passed
+✅ 3bucket-config.test.mjs completed.
+📊 FILE RESULT: 3bucket-config.test.mjs | mode=in-process | assertions=17 | passed=17 | failedAssertions=0 | failedFiles=0
+
+📂 Running 3bucket-refill.test.mjs in process...
+--- 3-Bucket Refill Tests ---
+✅ 3-Bucket refill tests passed
+✅ 3bucket-refill.test.mjs completed.
+📊 FILE RESULT: 3bucket-refill.test.mjs | mode=in-process | assertions=32 | passed=32 | failedAssertions=0 | failedFiles=0
+
+📂 Running architecture-evidence.test.mjs in process...
+--- Architecture Evidence Contract Tests ---
+✅ Architecture evidence contract tests passed
+✅ architecture-evidence.test.mjs completed.
+📊 FILE RESULT: architecture-evidence.test.mjs | mode=in-process | assertions=24 | passed=24 | failedAssertions=0 | failedFiles=0
+
+📂 Running auto-optimize-fidelity.test.mjs in process...
+--- Auto-Optimize Fidelity Tests ---
+Test 1: every interactive parameter perturbs its canonical request key
+Test 2: gold uses canonical request key and zero caps stay zero
+Test 3: direct horizon is mode-gated and uses 15/55 exactly
+Test 4: apply roundtrip preserves the evaluated fingerprint
+Test 5: every interactive parameter has a deterministic causal witness
+Test 6: UI copy states horizon and MC-assumption limits
+Test 6b: real ruin years remain part of D-14
+Test 7: registry domains and range preflight match canonical input contracts
+Test 8: Slice-15 model matrix and backlog links remain complete
+--- Auto-Optimize Fidelity Tests Completed ---
+✅ auto-optimize-fidelity.test.mjs completed.
+📊 FILE RESULT: auto-optimize-fidelity.test.mjs | mode=in-process | assertions=184 | passed=184 | failedAssertions=0 | failedFiles=0
+
+📂 Running auto-optimize-metrics-contract.test.mjs in process...
+--- Auto-Optimize Metrics Contract Tests ---
+--- Auto-Optimize Metrics Contract Tests Completed ---
+✅ auto-optimize-metrics-contract.test.mjs completed.
+📊 FILE RESULT: auto-optimize-metrics-contract.test.mjs | mode=in-process | assertions=30 | passed=30 | failedAssertions=0 | failedFiles=0
+
+📂 Running auto-optimize-worker-contract.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/auto-optimize-worker-contract.test.mjs...
+--- Auto-Optimize Worker Contract Tests ---
+✅ PASS: Auto-Optimize worker failCount should match serial
+✅ PASS: Auto-Optimize worker should return aggregatedResults
+✅ PASS: Auto-Optimize worker p10 should match serial
+✅ PASS: Auto-Optimize worker p25 should match serial
+✅ PASS: Auto-Optimize worker p50 should match serial
+✅ PASS: Auto-Optimize worker p90 should match serial
+✅ PASS: Auto-Optimize worker depletion should match serial
+✅ PASS: Auto-Optimize worker timeShare should match serial
+✅ PASS: Auto-Optimize worker volatility should match serial exactly
+✅ PASS: Auto-Optimize worker cut-year share should match serial exactly
+✅ PASS: Auto-Optimize worker cut-year sample size should match serial
+✅ PASS: Auto-Optimize worker D-14 median withdrawal rate should match serial
+✅ PASS: Auto-Optimize worker D-14 sample size should match serial
+✅ PASS: Auto-Optimize worker D-14 missingness should match serial
+✅ PASS: Auto-Optimize rejects the same suffixed run-count fixture before scheduling
+✅ Auto-Optimize worker MC merge contract passed
+--- Auto-Optimize Worker Contract Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 15
+Passed: 15
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: auto-optimize-worker-contract.test.mjs | mode=isolated | assertions=15 | passed=15 | failedAssertions=0 | failedFiles=0
+
+📂 Running auto-optimizer.test.mjs in process...
+--- Auto-Optimizer Tests ---
+Test 0a: UI presets importierbar
+✓ UI presets OK
+Test 0b: UI config reader
+✓ UI config reader OK
+Test 0c: UI renderer/apply helpers
+✓ UI renderer/apply helpers OK
+Test 0d: UI renderer domain defaults
+✓ UI renderer domain defaults OK
+Test 1: LHS - Grundfunktionalität
+✓ LHS Grundfunktionalität OK
+Test 2: LHS - Multi-Parameter
+✓ LHS Multi-Parameter OK
+Test 3: LHS - Step-Rounding
+✓ LHS Step-Rounding OK
+Test 4: generateNeighborsReduced - Basis
+✓ generateNeighborsReduced Basis OK
+Test 5: generateNeighborsReduced - Respektiert Grenzen
+✓ generateNeighborsReduced Grenzen OK
+Test 6: isValidCandidate - Gültiger Kandidat
+✓ isValidCandidate Gültiger Kandidat OK
+Test 7: isValidCandidate - Runway-Domain
+✓ isValidCandidate Runway-Domain OK
+Test 8: isValidCandidate - Gold-Cap
+✓ isValidCandidate Gold-Cap OK
+Test 9: isValidCandidate - Negative Werte
+✓ isValidCandidate Negative Werte OK
+Test 10: isValidCandidate - Grenzen überschritten
+✓ isValidCandidate Grenzen OK
+Test 11: checkConstraints - Alle erfüllt
+✓ checkConstraints Alle erfüllt OK
+Test 12: checkConstraints - Success Rate verletzt
+✓ checkConstraints Success Rate OK
+Test 13: checkConstraints - Drawdown verletzt
+✓ checkConstraints Drawdown OK
+Test 14: checkConstraints - Leere Constraints
+✓ checkConstraints Leere Constraints OK
+Test 15: getObjectiveValue - EndWealth_P50
+✓ getObjectiveValue EndWealth_P50 OK
+Test 16: getObjectiveValue - Minimierung
+✓ getObjectiveValue Minimierung OK
+Test 17: getObjectiveValue - Unbekannte Metrik
+✓ getObjectiveValue Unbekannte Metrik OK
+Test 18: CandidateCache - Basis-Operationen
+✓ CandidateCache Basis-Operationen OK
+Test 19: CandidateCache - Key-Generierung
+✓ CandidateCache Key-Generierung OK
+Test 20: tieBreaker - Höhere Success Rate
+✓ tieBreaker Höhere Success Rate OK
+Test 21: tieBreaker - Niedrigerer Drawdown
+✓ tieBreaker Niedrigerer Drawdown OK
+Test 22: tieBreaker - Gleiche Werte
+✓ tieBreaker Gleiche Werte OK
+Test 23: runAutoOptimize - Champion nahe Optimum
+✓ runAutoOptimize Champion nahe Optimum OK
+Test 23b: runAutoOptimize - Current-Config Preflight
+✓ runAutoOptimize Current-Config Preflight OK
+Test 24: runAutoOptimize - Multi-Parameter
+✓ runAutoOptimize Multi-Parameter OK
+Test 25: runAutoOptimize - Stability-Metrik
+✓ runAutoOptimize Stability-Metrik OK
+Test 26: runAutoOptimize - Delta vs Current
+✓ runAutoOptimize Delta vs Current OK
+Test 27: runAutoOptimize - Dynamic-Flex Modus (Stufe A)
+✓ runAutoOptimize Dynamic-Flex Modus (Stufe A) OK
+Test 28: runAutoOptimize - Safety-Guards bremsen aggressive Dynamic-Flex Loesungen
+✓ runAutoOptimize Safety-Guards bremsen aggressive Dynamic-Flex Loesungen OK
+Test 28b: runAutoOptimize - Safety-Penalty Missingness
+✓ runAutoOptimize Safety-Penalty Missingness OK
+✅ Auto-Optimizer objective search works
+--- Auto-Optimizer Tests Completed ---
+✅ auto-optimizer.test.mjs completed.
+📊 FILE RESULT: auto-optimizer.test.mjs | mode=in-process | assertions=108 | passed=108 | failedAssertions=0 | failedFiles=0
+
+📂 Running backtest-data-validation-slice-14.test.mjs in process...
+--- Backtest Data Validation Slice 14 Tests ---
+✅ Backtest data validation Slice 14 tests passed
+✅ backtest-data-validation-slice-14.test.mjs completed.
+📊 FILE RESULT: backtest-data-validation-slice-14.test.mjs | mode=in-process | assertions=144 | passed=144 | failedAssertions=0 | failedFiles=0
+
+📂 Running backtest-data-validation-slice-15.test.mjs in process...
+--- Backtest Data Validation Slice 15 Tests ---
+✅ Backtest data validation Slice 15 tests passed
+✅ backtest-data-validation-slice-15.test.mjs completed.
+📊 FILE RESULT: backtest-data-validation-slice-15.test.mjs | mode=in-process | assertions=155 | passed=155 | failedAssertions=0 | failedFiles=0
+
+📂 Running backtest-data-validation-slice-16.test.mjs in process...
+--- Backtest Data Validation Slice 16 Tests ---
+✅ Backtest data validation Slice 16 tests passed
+✅ backtest-data-validation-slice-16.test.mjs completed.
+📊 FILE RESULT: backtest-data-validation-slice-16.test.mjs | mode=in-process | assertions=137 | passed=137 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-annual-cape.test.mjs in process...
+--- Balance Annual CAPE Tests ---
+[CAPE] Resolved with fallback path {
+  fetchStatus: 'ok_fallback_mirror',
+  resolvedSource: 'shillerdata_mirror',
+  nonFatalErrors: [ 'Primary fehlgeschlagen: primary down' ]
+}
+[CAPE] Resolved with fallback path {
+  fetchStatus: 'ok_fallback_stored',
+  resolvedSource: 'stored_last_value',
+  nonFatalErrors: [
+    'Primary fehlgeschlagen: primary down',
+    'Mirror fehlgeschlagen: mirror down'
+  ]
+}
+✅ Balance annual CAPE tests passed
+--- Balance Annual CAPE Tests Completed ---
+✅ balance-annual-cape.test.mjs completed.
+📊 FILE RESULT: balance-annual-cape.test.mjs | mode=in-process | assertions=13 | passed=13 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-annual-inflation.test.mjs in process...
+--- Balance Annual Inflation Tests ---
+Test 1: positive inflation compounds over ten annual applications
+Test 2: direct need adjustment applies the same multiplicative formula
+Test 3: deflation reduces both needs and the cumulative factor
+Test 3b: live inflation boundaries are inclusive and reject values outside them
+Test 4: ECB returns the exact annual-average contract before financial mutation
+Test 5: wrong ECB year is rejected and World Bank fallback preserves deflation
+Test 6: incompatible responses fall through to the current OECD SDMX contract
+Test 7: unavailable, out-of-range, and incompatible data never partially mutate inputs
+Test 8: timeout aborts one source, cleans up, and permits the next source
+Test 9: need mutations request explicit input-only persistence
+Balance annual inflation tests passed
+--- Balance Annual Inflation Tests Completed ---
+✅ balance-annual-inflation.test.mjs completed.
+📊 FILE RESULT: balance-annual-inflation.test.mjs | mode=in-process | assertions=40 | passed=40 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-annual-marketdata.test.mjs in process...
+--- Balance Annual Marketdata Tests ---
+Test 1: period id creates a stable UTC year-end request window
+Test 2: malformed or unsupported period ids are rejected
+Test 3: latest valid target-year close wins independently of response order
+Test 4: 27 December through 31 December are inclusive
+Test 5: weekend and holiday gaps keep the last available close
+Test 6: stale, wrong-year, empty and implausible quotes fail closed
+Test 7: handler persists complete as-of metadata and consistent ATH evaluation
+Test 8: equal ATH resets years without claiming a new high
+Test 9: invalid annual coverage rejects before DOM and metadata mutation
+Test 10: missing active period rejects before fetch
+Test 11: malformed or future pending commits reject before fetch
+Test 12: post-mutation failure rolls DOM and persistent marketdata back
+Test 13: manual source-less rollover invalidates and undo restores CSV provenance
+Balance annual marketdata tests passed
+--- Balance Annual Marketdata Tests Completed ---
+✅ balance-annual-marketdata.test.mjs completed.
+📊 FILE RESULT: balance-annual-marketdata.test.mjs | mode=in-process | assertions=74 | passed=74 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-annual-period.test.mjs in process...
+--- Balance Annual Period Contract Tests ---
+Test 1: target year and period id stay stable across execution dates
+Test 2: ready preflight and plan describe one coherent annual transition
+Test 3: invalid inputs return stable error objects
+Test 4: legacy state requires explicit confirmation without heuristics
+Test 5: legacy not-committed confirmation creates a ready baseline
+Test 6: legacy already-committed confirmation blocks duplicate work
+Test 7: cancelled legacy confirmation leaves metadata absent and remains blocked
+Test 8: partially present new metadata is invalid, not legacy
+Test 9: commit transitions require a snapshot and expose recovery state
+Test 10: completed period cannot be committed twice
+Test 11: older periods and mismatched completion fail closed
+Test 12: tampered derived plan fields cannot pass the commit check
+--- Balance Annual Period Contract Tests Completed ---
+✅ balance-annual-period.test.mjs completed.
+📊 FILE RESULT: balance-annual-period.test.mjs | mode=in-process | assertions=52 | passed=52 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-annual-workflow-contract.test.mjs in process...
+--- Balance Annual Workflow Contract Tests ---
+Test 1: Jahresupdate returns a stable result and reports step errors
+Test 2: successful commit follows preflight, snapshot, writes, validation and completion
+Test 3: failed preflight aborts before snapshot and annual writes
+Test 4: snapshot quota failure aborts without fachliche mutation
+Test 5: post-snapshot failure keeps snapshot id and recovery phase
+Test 6: in-flight guard rejects a double click
+Balance annual workflow contract tests passed
+--- Balance Annual Workflow Contract Tests Completed ---
+✅ balance-annual-workflow-contract.test.mjs completed.
+📊 FILE RESULT: balance-annual-workflow-contract.test.mjs | mode=in-process | assertions=33 | passed=33 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-binder-snapshots.test.mjs in process...
+--- Balance Binder Snapshots Tests ---
+✅ Balance binder snapshots tests passed
+--- Balance Binder Snapshots Tests Completed ---
+✅ balance-binder-snapshots.test.mjs completed.
+📊 FILE RESULT: balance-binder-snapshots.test.mjs | mode=in-process | assertions=23 | passed=23 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-decumulation.test.mjs in process...
+--- Balance Decumulation Tests ---
+Test 1: readAllInputs liefert flache Decumulation-Felder
+Test 2: applyStoredInputs bleibt kompatibel zu altem nested Shape
+Test 3: applyStoredInputs lädt auch den neuen flachen Shape
+Test 4: Balance-Update-Pipeline-Helfer bauen Payloads ohne Seiteneffekte
+Test 5: Mindest-Flex Validierung blockiert Werte oberhalb Flex-Bedarf
+Test 6: Action-Postprocessor merged Profilverbund ohne 3-Bucket
+Test 7: Profilverbund übernimmt einmalige Haushalts-3-Bucket-Diagnose ohne zweite Ausführung
+--- Balance Decumulation Tests Completed ---
+✅ balance-decumulation.test.mjs completed.
+📊 FILE RESULT: balance-decumulation.test.mjs | mode=in-process | assertions=41 | passed=41 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-chips.test.mjs in process...
+--- Balance Diagnosis Chips Tests ---
+✅ Balance diagnosis chips tests passed
+--- Balance Diagnosis Chips Tests Completed ---
+✅ balance-diagnosis-chips.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-chips.test.mjs | mode=in-process | assertions=16 | passed=16 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-copy-contract.test.mjs in process...
+--- Balance Diagnosis Copy Contract Tests ---
+Balance diagnosis copy contract tests passed
+--- Balance Diagnosis Copy Contract Tests Completed ---
+✅ balance-diagnosis-copy-contract.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-copy-contract.test.mjs | mode=in-process | assertions=28 | passed=28 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-decision-tree.test.mjs in process...
+--- Balance Diagnosis Decision Tree Tests ---
+✅ Balance diagnosis decision tree tests passed
+--- Balance Diagnosis Decision Tree Tests Completed ---
+✅ balance-diagnosis-decision-tree.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-decision-tree.test.mjs | mode=in-process | assertions=7 | passed=7 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-format.test.mjs in process...
+--- Balance Diagnosis Format Tests ---
+✅ Balance diagnosis format tests passed
+--- Balance Diagnosis Format Tests Completed ---
+✅ balance-diagnosis-format.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-format.test.mjs | mode=in-process | assertions=4 | passed=4 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-guardrails.test.mjs in process...
+--- Balance Diagnosis Guardrails Tests ---
+✅ Balance diagnosis guardrails tests passed
+--- Balance Diagnosis Guardrails Tests Completed ---
+✅ balance-diagnosis-guardrails.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-guardrails.test.mjs | mode=in-process | assertions=12 | passed=12 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-keyparams.test.mjs in process...
+--- Balance Diagnosis KeyParams Tests ---
+✅ Balance diagnosis keyparams tests passed
+✅ balance-diagnosis-keyparams.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-keyparams.test.mjs | mode=in-process | assertions=38 | passed=38 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-diagnosis-transaction.test.mjs in process...
+--- Balance Diagnosis Transaction Tests ---
+✅ Balance diagnosis transaction tests passed
+--- Balance Diagnosis Transaction Tests Completed ---
+✅ balance-diagnosis-transaction.test.mjs completed.
+📊 FILE RESULT: balance-diagnosis-transaction.test.mjs | mode=in-process | assertions=13 | passed=13 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-dynamic-flex-gate.test.mjs in process...
+--- Balance Dynamic Flex Gate Tests ---
+✅ Balance dynamic flex gate tests passed
+--- Balance Dynamic Flex Gate Tests Completed ---
+✅ balance-dynamic-flex-gate.test.mjs completed.
+📊 FILE RESULT: balance-dynamic-flex-gate.test.mjs | mode=in-process | assertions=5 | passed=5 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-expenses.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/balance-expenses.test.mjs...
+--- Balance Expenses Tests ---
+✅ PASS: DE-Betragsformat sollte korrekt parsen
+✅ PASS: EN-Betragsformat sollte korrekt parsen
+✅ PASS: CSV-Parser sollte Kategorien aggregieren
+✅ PASS: Kategorienmap verwendet ein Null-Prototyp-Objekt
+✅ PASS: Erfolgreicher Import liefert eine Zeilenzusammenfassung
+✅ PASS: Zusammenfassung nennt alle importierten Zeilen
+✅ PASS: Reservierter Key __proto__ bleibt eine normale Kategorie
+✅ PASS: Reservierter Key constructor bleibt eine normale Kategorie
+✅ PASS: Reservierter Key toString bleibt eine normale Kategorie
+✅ PASS: Kategorie importSummary kollidiert nicht mit Parsermetadaten
+✅ PASS: Reservierte Keys erzeugen keine Prototyp-Seiteneffekte
+✅ PASS: Zeilenfehler hat einen stabilen Fehlercode
+✅ PASS: Fehlerzusammenfassung nennt die Gesamtzeilen
+✅ PASS: Fehlerzusammenfassung nennt vorab valide Zeilen
+✅ PASS: Fehlerzusammenfassung nennt alle verworfenen Zeilen
+✅ PASS: Nicht quotierter Dezimalseparator darf keine Zusatzspalte erzeugen
+✅ PASS: computeSpent sollte Vorzeichen-symmetrisch summieren
+✅ PASS: Metriken sollten Datenmonate zählen
+✅ PASS: YTD-Budget sollte nur Datenmonate berücksichtigen
+✅ PASS: Forecast sollte ab 2 Monaten den Median nutzen
+✅ PASS: Parsefehler liefert strukturierten Korruptionsstatus
+✅ PASS: Korruptionsstatus nennt einen stabilen Fehlercode
+✅ PASS: Korruptionsstatus bewahrt den bytegleichen Rohinhalt
+✅ PASS: Ein syntaktisch gueltiger, aber unbrauchbarer Store wird ebenfalls als korrupt gemeldet
+✅ PASS: Storage-Lesefehler werden strukturiert und ohne erfundenen Leerzustand gemeldet
+✅ PASS: Gesperrter Schreibpfad laesst Rohinhalt unveraendert
+✅ PASS: Recovery-Dokument nennt den betroffenen Datenbereich
+✅ PASS: Recovery-Dokument nennt das Backend
+✅ PASS: Recovery-Dokument enthaelt den unveraenderten Rohinhalt
+✅ PASS: Expliziter Reset erzeugt erst nach Recovery-Freigabe einen leeren Store
+✅ PASS: refreshTableValues-Zyklus sollte STORAGE nur einmal laden
+✅ PASS: Import-Klick sollte CSV-Input öffnen
+✅ PASS: CSV-Import sollte Kategorien aggregieren
+✅ PASS: CSV-Import sollte DE-Format korrekt parsen
+✅ PASS: Delete-Button sollte bei vorhandenen Daten sichtbar sein
+✅ PASS: Sichtbarer Delete-Button sollte per Tastatur erreichbar sein
+✅ PASS: Sichtbarer Delete-Button darf nicht aria-hidden sein
+✅ PASS: Delete-Confirm sollte den Monatstext exakt anzeigen
+✅ PASS: Delete sollte den Profileintrag entfernen
+✅ PASS: Delete sollte die Tabellenzelle neu rendern
+✅ PASS: Delete-Button sollte ohne Daten unsichtbar bleiben
+✅ PASS: Unsichtbarer Delete-Button darf nicht per Tastatur erreichbar sein
+✅ PASS: Unsichtbarer Delete-Button sollte für Assistive Tech verborgen sein
+✅ PASS: Delete ohne vorhandenen Eintrag muss No-Op sein
+✅ PASS: rollExpensesYear sollte auf Folgejahr wechseln
+✅ PASS: Aktives Jahr sollte nach Roll auf Folgejahr stehen
+✅ PASS: Folgejahr sollte ohne Monatsdaten starten
+✅ PASS: Jahr-Select sollte nach Roll auf Folgejahr springen
+✅ PASS: YTD-Soll sollte im leeren Folgejahr nicht auf Kalender, sondern Datenmonate basieren
+✅ PASS: Expenses-Init gibt Korruptionsstatus an den Aufrufer zurueck
+✅ PASS: Abbrechen veraendert den korrupten Rohinhalt nicht
+✅ PASS: Reset bleibt vor einem Recovery-Export sichtbar, aber gesperrt
+✅ PASS: Gesperrter Reset fragt nicht nach Bestaetigung
+✅ PASS: Gesperrter Reset ueberschreibt keine Daten
+✅ PASS: UI-Recovery exportiert den bytegleichen Rohinhalt
+✅ PASS: Erfolgreicher Recovery-Export schaltet Reset frei
+✅ PASS: Reset verlangt eine explizite Bestaetigung
+✅ PASS: Abgelehnter Reset laesst Rohinhalt unveraendert
+✅ PASS: Quota-/Flush-Fehler stellt den korrupten Rohinhalt im aktiven Store wieder her
+✅ PASS: Jeder Reset-Versuch nutzt einen eigenen Bestaetigungsschritt
+✅ PASS: Bestaetigter Reset erzeugt einen gueltigen Ausgabenstore
+✅ PASS: Bestaetigter Reset startet ohne erfundene Finanzdaten
+✅ PASS: Nach bestaetigtem Reset wird der gesperrte Recovery-Bereich verlassen
+✅ Balance expenses tests passed
+--- Balance Expenses Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 91
+Passed: 91
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: balance-expenses.test.mjs | mode=isolated | assertions=91 | passed=91 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-health-bucket.test.mjs in process...
+--- Balance Health Bucket Tests ---
+✅ Balance health bucket tests passed
+✅ balance-health-bucket.test.mjs completed.
+📊 FILE RESULT: balance-health-bucket.test.mjs | mode=in-process | assertions=14 | passed=14 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-preview-commit-contract.test.mjs in process...
+--- Balance Preview/Commit Contract Tests ---
+Test 1: update modes are explicit and every implicit or legacy request fails write-closed
+Test 2: engine candidates receive an isolated copy of fachlichen State
+Test 3: preview and input persistence never replace lastState
+Test 4: a valid period commit advances state exactly once
+Test 5: stale candidates and invalid annual metadata fail closed
+Test 6: multi-profile modes dispatch inputs and fachlichen State separately
+Balance preview/commit contract tests passed
+✅ balance-preview-commit-contract.test.mjs completed.
+📊 FILE RESULT: balance-preview-commit-contract.test.mjs | mode=in-process | assertions=68 | passed=68 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-reader.test.mjs in process...
+--- Balance Reader Tests ---
+Test 0: Striktes Zahlen- und Markt-CSV-Parsing
+✓ Striktes Zahlen- und Markt-CSV-Parsing OK
+Test 1: readAllInputs - Basis mit DOM-Werten
+✓ readAllInputs Basis OK
+Test 2: Profile-Override hat Vorrang vor DOM
+✓ Profile-Override OK
+Test 3: Gold-Modul Nullgrenzen und Defaults
+✓ Gold-Modul Nullgrenzen und Defaults OK
+Test 4: Profile-Gold-Werte überschreiben Defaults
+✓ Profile-Gold-Werte OK
+Test 5: Tranchen-Aggregation
+✓ Tranchen-Aggregation OK
+Test 6: Sonstige Einkünfte werden zu Rente addiert
+✓ Sonstige Einkünfte OK
+Test 7: applyStoredInputs - Checkbox
+✓ applyStoredInputs Checkbox OK
+Test 8: applyStoredInputs - Currency-Formatierung
+✓ applyStoredInputs Currency OK
+Test 9: applyStoredInputs - renteAktiv Boolean
+✓ applyStoredInputs renteAktiv Boolean OK
+Test 10: applySideEffectsFromInputs - Gold-Panel
+✓ applySideEffectsFromInputs Gold-Panel OK
+Test 11: applySideEffectsFromInputs - Rente disabled
+✓ applySideEffectsFromInputs Rente disabled OK
+Test 12: Leere Tranchen werden ignoriert
+✓ Leere Tranchen OK
+Test 13: Produktionsreader für Tranchenstatus und Aggregation
+✓ Produktionsreader für Tranchenstatus und Aggregation OK
+Test 14: Produktionsreader für Gold-Nullgrenzen
+✓ Produktionsreader für Gold-Nullgrenzen OK
+Test 15: Strikte Boolean-Anwendung und Marktdaten-Provenienz
+✓ Strikte Boolean-Anwendung und Marktdaten-Provenienz OK
+--- Balance Reader Tests Abgeschlossen ---
+✅ balance-reader.test.mjs completed.
+📊 FILE RESULT: balance-reader.test.mjs | mode=in-process | assertions=149 | passed=149 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-renderer-action.test.mjs in process...
+--- Balance Renderer Action Tests ---
+✅ Balance renderer action tests passed
+✅ balance-renderer-action.test.mjs completed.
+📊 FILE RESULT: balance-renderer-action.test.mjs | mode=in-process | assertions=14 | passed=14 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-renderer-summary.test.mjs in process...
+--- Balance Renderer Summary Tests ---
+✅ Balance renderer summary tests passed
+--- Balance Renderer Summary Tests Completed ---
+✅ balance-renderer-summary.test.mjs completed.
+📊 FILE RESULT: balance-renderer-summary.test.mjs | mode=in-process | assertions=10 | passed=10 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-smoke.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/balance-smoke.test.mjs...
+--- Balance App Smoke Test (No JSDOM) ---
+Triggering Application Init via DOMContentLoaded...
+✅ PASS: EngineAPI.simulateSingleYear should run exactly once during init
+✅ PASS: Footer should expose Engine 31.0, got 'UI: v22.0 ES6 Modules (Engine v31) | Engine: 31.0'
+✅ PASS: Engine script source should remain stable after handshake
+Testing Input Change Trigger...
+✅ PASS: Debounced input should trigger exactly one additional engine call
+Testing machine-readable update results and fail-closed persistence...
+✅ PASS: Invalid minimum flex -1 should return validation_error
+✅ PASS: Invalid minimum flex -1 should not call the engine
+✅ PASS: Invalid minimum flex -1 should not persist data
+✅ PASS: Invalid minimum flex -1 should remain visible without clamping
+✅ PASS: Invalid minimum flex -1 should include message: Mindest-Flex p.a. darf nicht negativ sein.
+✅ PASS: Validation error should use the normal UI error path
+✅ PASS: Invalid minimum flex <leer> should return validation_error
+✅ PASS: Invalid minimum flex <leer> should not call the engine
+✅ PASS: Invalid minimum flex <leer> should not persist data
+✅ PASS: Invalid minimum flex <leer> should remain visible without clamping
+✅ PASS: Invalid minimum flex <leer> should include message: Mindest-Flex p.a. darf nicht leer sein.
+✅ PASS: Validation error should use the normal UI error path
+✅ PASS: Invalid minimum flex Infinity should return validation_error
+✅ PASS: Invalid minimum flex Infinity should not call the engine
+✅ PASS: Invalid minimum flex Infinity should not persist data
+✅ PASS: Invalid minimum flex Infinity should remain visible without clamping
+✅ PASS: Invalid minimum flex Infinity should include message: Mindest-Flex p.a. muss eine endliche Zahl sein.
+✅ PASS: Validation error should use the normal UI error path
+✅ PASS: Invalid minimum flex 24001 should return validation_error
+✅ PASS: Invalid minimum flex 24001 should not call the engine
+✅ PASS: Invalid minimum flex 24001 should not persist data
+✅ PASS: Invalid minimum flex 24001 should remain visible without clamping
+✅ PASS: Invalid minimum flex 24001 should include message: Mindest-Flex p.a. darf nicht größer als Flex-Bedarf p.a. sein.
+✅ PASS: Invalid minimum flex 24001 should include message: Flex-Bedarf p.a. ist die Obergrenze für Mindest-Flex.
+✅ PASS: Validation error should use the normal UI error path
+✅ PASS: Engine failures should return engine_error
+✅ PASS: Engine error should use the normal UI error path
+✅ PASS: Incompatible engine should return the contract_changed block reason
+✅ PASS: Incompatible EngineAPI should not execute simulateSingleYear
+✅ PASS: Blocked engine update should not persist Balance or profile state
+✅ PASS: Missing engine should block the update
+✅ PASS: Missing engine update should not persist Balance or profile state
+✅ Balance App Smoke Test Completed Successfully.
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 36
+Passed: 36
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: balance-smoke.test.mjs | mode=isolated | assertions=36 | passed=36 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-storage-contract.test.mjs in process...
+--- Balance Storage Contract Tests ---
+Test 1: real migration preserves valid inflation state and creates taxState
+Test 2: taxState is repaired even when migration flag already exists
+Test 2b: invalid inflation factors fail closed before migration or save
+Test 3: valid taxState.lossCarry is preserved
+Test 4: invalid storage JSON throws StorageError
+Test 5: snapshot restore uses archive and keeps unrelated keys plus snapshot history
+Test 6: real createSnapshot stores canonical archive snapshot
+Test 7: import replace creates confirmed recovery and rollback restores all captured live data
+Test 8: failed recovery snapshot blocks replace without changing Balance live state
+Test 9: recovery without profile context restores the full allowlisted snapshot
+Test 9b: full-backup recovery restores registry and all authorized records
+Test 10: legacy directory handle migrates to a dedicated IndexedDB and releases snapshotDB
+Balance storage contract tests passed
+--- Balance Storage Contract Tests Completed ---
+✅ balance-storage-contract.test.mjs completed.
+📊 FILE RESULT: balance-storage-contract.test.mjs | mode=in-process | assertions=79 | passed=79 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-storage.test.mjs in process...
+--- Balance Storage Tests ---
+Test 1: saveState und loadState - Basis
+✓ saveState und loadState Basis OK
+Test 2: loadState - Leerer Storage
+✓ loadState Leerer Storage OK
+Test 3: Inflationsfaktor-Domain blockiert korrupte Rohdaten
+✓ Inflationsfaktor-Domain und Raw-Erhalt OK
+Test 4: Migration - NaN lastInflationAppliedAtAge
+✓ Migration NaN lastInflationAppliedAtAge OK
+Test 5: Migration - Wird nur einmal ausgeführt
+✓ Migration Wird nur einmal ausgeführt OK
+Test 6: resetState
+✓ resetState OK
+Test 7: createSnapshot - Basis
+✓ createSnapshot Basis OK
+Test 8: createSnapshot - Mit Label
+✓ createSnapshot Mit Label OK
+Test 9: createSnapshot - Leerer Storage
+✓ createSnapshot Leerer Storage OK
+Test 10: restoreSnapshot
+✓ restoreSnapshot OK
+Test 11: deleteSnapshot
+✓ deleteSnapshot OK
+Test 12: Komplexer State
+✓ Komplexer State OK
+Test 13: Ungültiges JSON im Storage
+✓ Ungültiges JSON im Storage OK
+Test 14: restoreSnapshot mit ungültigen Daten
+✓ restoreSnapshot mit ungültigen Daten OK
+Test 15: Mehrere Snapshots
+✓ Mehrere Snapshots OK
+--- Balance Storage Tests Abgeschlossen ---
+✅ balance-storage.test.mjs completed.
+📊 FILE RESULT: balance-storage.test.mjs | mode=in-process | assertions=57 | passed=57 | failedAssertions=0 | failedFiles=0
+
+📂 Running balance-ui-orchestration.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/balance-ui-orchestration.test.mjs...
+--- Balance UI Orchestration Tests ---
+Test 1: UIBinder binds controls only once and tolerates optional import/export controls
+✅ PASS: Keyboard shortcut listener wird nur einmal gebunden
+✅ PASS: Form-Input listener wird nur einmal gebunden
+✅ PASS: Jahresupdate listener wird nur einmal gebunden
+✅ PASS: Import-Button listener bleibt trotz optionalem Export eindeutig
+✅ PASS: Ein Input-Event loest genau einen debounced Update aus
+✅ PASS: Input-Event loest keinen direkten Update-Pfad aus
+✅ PASS: Depot-Input schreibt keinen State ausserhalb der Update-Pipeline
+✅ PASS: Depot-Zeitstempel wird bis zum expliziten persist_inputs-Lauf vorgemerkt
+✅ PASS: Dateiauswahl wird nur vom Import-Handler verarbeitet und plant keinen parallelen Persistenzlauf
+Test 2: Profilverbund init preserves membership and excludes opted-out profiles
+✅ PASS: Profilverbund-Modus wird nur einmal gebunden
+✅ PASS: Profilverbund-Profilliste wird nur einmal gebunden
+✅ PASS: Initialisierung erhaelt den gespeicherten Opt-out-Zustand
+✅ PASS: Ausgeschlossenes Profil wird im Selektor dargestellt
+✅ PASS: Checkbox spiegelt den gespeicherten Opt-out-Zustand
+✅ PASS: Nur ausgewaehlte Profile werden fuer den Profilverbund geladen
+✅ PASS: Opt-out-Profil wird nicht in Aggregate uebernommen
+✅ PASS: Zweites Haushaltsprofil bleibt im Profilverbund
+✅ PASS: Opt-out-Vermoegen beeinflusst das Haushaltsaggregat nicht
+✅ PASS: Opt-out-Einkommen beeinflusst das Haushaltsaggregat nicht
+✅ PASS: Engine laeuft im Profilverbund ausschliesslich fuer den Haushalt
+✅ PASS: Opt-out-Profil erzeugt keinen Profil-Run
+✅ PASS: Haushalt ohne Handlungsbedarf erhaelt keine erfundene Profilquelle
+✅ PASS: Haushaltslauf erhaelt synthetische Tranchen der zwei ausgewaehlten Profile
+✅ PASS: Opt-out-Profil gelangt nicht in den Haushaltstranchenpool
+✅ PASS: Erstes ausgewaehltes Profil besitzt eindeutige Quellenprovenienz
+✅ PASS: Zweites ausgewaehltes Profil besitzt eindeutige Quellenprovenienz
+✅ PASS: Input-only Persistenz speichert geaenderte Profileingaben
+✅ PASS: Input-only Persistenz erhaelt den ersten Profil-Guardrail-State
+✅ PASS: Input-only Persistenz erhaelt den ersten Verlustvortrag
+✅ PASS: Input-only Persistenz erhaelt den zweiten Verlustvortrag
+✅ PASS: Input-only Persistenz erhaelt den Household-Guardrail-State
+✅ PASS: Profil-State uebernimmt keine haushaltsweite Pending-Periode
+✅ PASS: Profil-State uebernimmt keine ausschliesslich im Haupt-State gefuehrte Inflationsmetadaten
+✅ PASS: Profilverbund persistiert den vorgemerkten Depot-Zeitstempel im aktiven Profil
+✅ PASS: Input-only Profilverbund-Write loescht die Pending-Periode nicht aus dem Haupt-State
+✅ PASS: Input-only Profilverbund-Write erhaelt die Inflationsmetadaten im Haupt-State
+✅ PASS: Profilverbund persistiert den Depot-Zeitstempel auch im Haupt-State
+✅ PASS: Input-only Write erhaelt einen plausiblen kumulierten Inflationsfaktor bytegetreu
+✅ PASS: Aktiver Profilverbund-Write liest seine Merge-Basis ueber den migrierenden StorageManager
+✅ PASS: Persistenz erhaelt Profil-Guardrails statt eines technischen Profil-Engine-State
+✅ PASS: Persistenz schreibt den attribuierten No-Sale-Steuerzustand des ersten Profils
+✅ PASS: Persistenz schreibt den attribuierten No-Sale-Steuerzustand des zweiten Profils
+✅ PASS: Gemeinsamer Haushalts-Guardrail-State bleibt separat erhalten
+✅ PASS: Nicht autoritativer Haushalts-Steuerzustand wird vor der Persistenz neutralisiert
+✅ PASS: Profil-State uebernimmt keinen haushaltsweiten Lifecycle
+✅ PASS: Profilverbund-Commit haelt Perioden-Metadaten aus den Profildaten heraus
+✅ PASS: Realer Profilverbund-Commit erhaelt die Perioden-Metadaten im Haupt-State
+✅ PASS: Profilverbund-Commit speichert die gemeinsame Perioden-ID nur im Haupt-State
+✅ PASS: Spaeterer Input-Write kann ein abgeschlossenes Haushaltsjahr nicht zuruecksetzen
+✅ PASS: Spaeterer Input-Write kann keinen Phantom-Pending-Commit wiederbeleben
+✅ PASS: Auch der zweite reale Write haelt Haushaltsmetadaten aus dem Profil-State heraus
+Test 3: Balance import schema, legacy migration and fail-safe orchestration
+✅ PASS: Export nutzt die stabile Balance-App-ID
+✅ PASS: Export benennt das Balance-State-Schema
+✅ PASS: Export nutzt die aktuelle Schema-Version
+✅ PASS: Export enthaelt einen gueltigen ISO-Zeitpunkt
+✅ PASS: Aktuelles Exportformat wird eindeutig erkannt
+✅ PASS: Aktuelles Exportformat wird nicht als Legacy markiert
+✅ PASS: Validierung erhaelt gueltige Kernwerte
+✅ PASS: Ein fehlendes optionales Booleanfeld bleibt fehlend und wird nicht aktiviert
+✅ PASS: Der vollständige Eingabevertrag ist explizit versioniert
+✅ PASS: Bestehende Version-1-Sicherungen laufen über den benannten Aufwärtsmigrator
+✅ PASS: Version-1-Sicherungen werden sichtbar als migriert markiert
+✅ PASS: Der Version-1-Migrator übernimmt das frühere Runway-Ziel in Jahre
+✅ PASS: Der Version-1-Migrator entfernt die nicht mehr wirksame Aktien-Zielquote
+✅ PASS: Der Version-1-Migrator emittiert kein altes Runway-Zielfeld
+✅ PASS: Der Version-1-Migrator entfernt das mehrdeutige alte Aktien-Rebalancing-Band
+✅ PASS: Eindeutige historische Prozentschreibweise wird symmetrisch in die Dezimalrate migriert
+✅ PASS: Der bereits versionierte Kirchensteuer-Enum bleibt ohne unbelegte Prozentheuristik erhalten
+✅ PASS: Ein alter 25-Monats-Wert bleibt importierbar und wird sicherheitsorientiert auf das naechste Halbjahr aufgerundet
+✅ PASS: Erreichbarer Livewert rebalancingBand verhindert den Recovery-Export nicht
+✅ PASS: rebalancingBand wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: Erreichbarer Livewert aktuellesAlter verhindert den Recovery-Export nicht
+✅ PASS: aktuellesAlter wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: Erreichbarer Livewert inflation verhindert den Recovery-Export nicht
+✅ PASS: inflation wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: inflation bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert horizonYears verhindert den Recovery-Export nicht
+✅ PASS: horizonYears wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: horizonYears bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert profilName verhindert den Recovery-Export nicht
+✅ PASS: profilName wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: profilName bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert flexBudgetYears verhindert den Recovery-Export nicht
+✅ PASS: flexBudgetYears wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: flexBudgetYears bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert tqfAlt verhindert den Recovery-Export nicht
+✅ PASS: tqfAlt wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: tqfAlt bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert liquidityRunwayYears verhindert den Recovery-Export nicht
+✅ PASS: liquidityRunwayYears wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: liquidityRunwayYears bleibt im Exporthinweis konkret benannt
+✅ PASS: Erreichbarer Livewert liquidityRunwayYears verhindert den Recovery-Export nicht
+✅ PASS: liquidityRunwayYears wird entsprechend dem aktuellen Importvertrag als Hinweis inventarisiert
+✅ PASS: liquidityRunwayYears bleibt im Exporthinweis konkret benannt
+✅ PASS: Aktueller Export-/Import-Roundtrip entfernt die wirkungslose Aktien-Zielquote
+✅ PASS: Aktueller Export-/Import-Roundtrip materialisiert den kanonischen Runway-Default
+✅ PASS: Aktueller Export-/Import-Roundtrip entfernt das alte Rebalancing-Feld
+✅ PASS: Aktueller Export-/Import-Roundtrip erhält das kanonische Gold-Rebalancing-Band 0
+✅ PASS: Inflationsgrenze -10 bleibt im Export-/Importvertrag inklusive
+✅ PASS: Inflationsgrenze -10 bleibt im Roundtrip erhalten
+✅ PASS: Inflationsgrenze 50 bleibt im Export-/Importvertrag inklusive
+✅ PASS: Inflationsgrenze 50 bleibt im Roundtrip erhalten
+✅ PASS: Balance export marks an inflation value below the live application boundary
+✅ PASS: Balance import rejects values that the annual live application path cannot consume
+✅ PASS: Balance import names the same lower boundary as the annual live application path
+✅ PASS: Profilverbund-Golddiagnostik ist Teil des vollständigen persistierten Inputvertrags
+✅ PASS: Inkonsistente Profilverbund-Golddiagnostik wird vor DOM und Persistenz blockiert
+✅ PASS: Unterstuetztes Legacy-Format laeuft ueber explizite Migration
+✅ PASS: Legacy-Import wird als migriert markiert
+✅ PASS: Legacy-Migration erhaelt einen plausiblen kumulierten Inflationsfaktor
+✅ PASS: Legacy-Migration repariert das historische Inflationsalter
+✅ PASS: Legacy-Migration repariert den historischen Verlustvortrag
+✅ PASS: Version-1-Import blockiert unbekannte Zusatzfelder nach der Migration am vollständigen V2-Vertrag
+✅ PASS: Version-1-Import blockiert Bereichsverletzungen nach der Migration am vollständigen V2-Vertrag
+✅ PASS: Version-1-Import blockiert freie Enums nach der Migration am vollständigen V2-Vertrag
+✅ PASS: Version-1-Import blockiert ueberlange Strings nach der Migration am vollständigen V2-Vertrag
+✅ PASS: Version-1-Import blockiert unbelegte Kirchensteuer-Prozentschreibweisen nach der Migration am vollständigen V2-Vertrag
+✅ PASS: Falsche App-ID liefert einen kontrollierten Importfehler
+✅ PASS: Falsche App-ID ist maschinenlesbar
+✅ PASS: Nicht unterstuetzte Schema-Version wird blockiert
+✅ PASS: Nicht unterstuetzte Eingabevertragsversion wird blockiert
+✅ PASS: Unversionierter Rohzustand wird nicht als Legacy erraten
+✅ PASS: Ungueltige finanzielle Kernwerte werden vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor 0 wird vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor -1 wird vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor 20.0001 wird vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor 99 wird vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor NaN wird vor der Mutation blockiert
+✅ PASS: Ungueltiger kumulierter Inflationsfaktor Infinity wird vor der Mutation blockiert
+✅ PASS: Aktuelles Schema blockiert den Nicht-Boolean "false"
+✅ PASS: Aktuelles Schema blockiert den Nicht-Boolean "0"
+✅ PASS: Aktuelles Schema blockiert den Nicht-Boolean 0
+✅ PASS: Aktuelles Schema blockiert den Nicht-Boolean 1
+✅ PASS: Aktuelles Schema blockiert den Nicht-Boolean null
+✅ PASS: Nicht inventarisierte Eingabefelder werden fail-closed blockiert
+✅ PASS: Komplexe Eingabefelder werden gegen ihren kanonischen Detailvertrag validiert
+✅ PASS: Nicht explizit migrierbare Legacy-Version wird blockiert
+✅ PASS: Auch der Legacy-V0-Pfad endet nach der Migration am vollständigen Eingabevertrag
+✅ PASS: Legacy-String false wird explizit migriert
+✅ PASS: Legacy-String 0 wird explizit migriert
+✅ PASS: Legacy-Zahl 0 wird explizit migriert
+✅ PASS: Legacy-String true wird explizit migriert
+✅ PASS: Legacy-String 1 wird explizit migriert
+✅ PASS: Legacy-String ja wird explizit migriert
+✅ PASS: Legacy-Refill-Alias wird im benannten Legacy-Pfad kanonisiert
+✅ PASS: Legacy-Refill-Alias bleibt nicht parallel zum kanonischen Feld erhalten
+✅ PASS: Export erzeugt keine formal aktuelle, aber fachlich ungueltige Datei
+✅ PASS: Ein strukturell unmöglicher Export reicht den maschinenlesbaren Fehlercode durch
+✅ PASS: Ein strukturell unmöglicher Export nennt den konkreten fehlenden Bereich
+✅ PASS: Import- und CSV-Fehler werden ueber handleError gemeldet
+✅ PASS: JSON-Import nennt sichere Ursache und Handlungsoption
+✅ PASS: CSV-Import meldet nutzerfaehigen Fehlertext
+✅ PASS: JSON-Dateiauswahl wird nach Fehler zurueckgesetzt
+✅ PASS: CSV-Dateiauswahl wird nach Fehler zurueckgesetzt
+✅ PASS: Syntaxfehler veraendern keine Live-Daten
+✅ PASS: Syntaxfehler erreichen weder Dry-Run noch persistentes Update
+✅ PASS: Falsche App-ID erreicht den Replace-Pfad nicht
+✅ PASS: Falsche App-ID erreicht den Engine-Dry-Run nicht
+✅ PASS: Abgewiesener Import laesst die sichtbaren Eingaben unveraendert
+✅ PASS: App-ID-Fehler enthaelt Ursache ohne Payload-Leak
+✅ PASS: Fehlgeschlagener Dry-Run fuehrt keinen zweiten Update-Lauf aus
+✅ PASS: Erste Engine-Pruefung ist explizit nicht persistent
+✅ PASS: Fehlgeschlagener Dry-Run schreibt keine Live-Daten
+✅ PASS: Fehlgeschlagener Dry-Run stellt die sichtbaren Eingaben wieder her
+✅ PASS: Dry-Run-Fehler nennt den unveraenderten Zustand
+✅ PASS: Replace erhaelt nur den validierten Payload
+✅ PASS: Gueltiger Import durchlaeuft Dry-Run und persistentes Abschluss-Update
+✅ PASS: Gueltiger Import prueft zuerst ohne Persistenz
+✅ PASS: Erst nach Recovery und Replace folgt ein explizites persist_inputs-Update
+✅ PASS: Gueltiger Import ersetzt den Balance-State genau einmal
+✅ PASS: Erfolgreicher Import benoetigt keinen Rollback
+✅ PASS: Erfolgsmeldung bestaetigt den Recovery-Punkt
+✅ PASS: CSV-Import durchlaeuft Preview und persistente Bestaetigung
+✅ PASS: CSV prueft vor dem Replace ohne Persistenz
+✅ PASS: CSV persistiert erst nach erfolgreichem Replace
+✅ PASS: Gueltige CSV ersetzt den State atomar genau einmal
+✅ PASS: Erfolgreiche CSV benoetigt keinen Rollback
+✅ PASS: Ein Fensterhoch am letzten Kurs wird nicht als Allzeithoch gespeichert
+✅ PASS: Ohne gerichteten Fensterabstand bleibt die ATH-Referenz neutral
+✅ PASS: CSV-Dateiname bleibt als persistierte Quellenangabe erhalten
+✅ PASS: CSV-Provenienz bleibt an die explizite Zielperiode gebunden
+✅ PASS: CSV-Provenienz kennzeichnet das lokale Fensterhoch
+✅ PASS: CSV-Provenienz trennt die Engine-Untergrenze maschinenlesbar von einem echten ATH
+✅ PASS: Die steigende CSV dokumentiert, dass ihre Untergrenze nicht als Engine-ATH angewendet wurde
+✅ PASS: JSON-Export erhält die persistierte CSV-Provenienz vollständig
+✅ PASS: Version-1-CSV-Provenienz ohne positiven Fensterabstand bleibt nach Migration ATH-neutral
+✅ PASS: Der Version-1-Migrator ergänzt die neue Engine-Referenz nachvollziehbar
+✅ PASS: Der Version-1-Migrator leitet die gerichtete Anwendung aus Fensterhoch und Schlusskurs ab
+✅ PASS: Eine manuelle Marktdatenkorrektur verhindert den Recovery-Export nicht
+✅ PASS: Eine manuelle Marktdatenkorrektur bleibt im Export als Provenienzabweichung sichtbar
+✅ PASS: Der Exporthinweis benennt die abweichende Provenienz statt den Zustand pauschal als beschädigt
+✅ PASS: Ein Export kann windowHigh nicht durch manipulierte Metadaten zum ATH hochstufen
+✅ PASS: Erfolgreiche CSV rendert die persistierte Provenienz sichtbar
+✅ PASS: Die sichtbare Provenienz exponiert die konservative Engine-Policy maschinenlesbar
+✅ PASS: Die sichtbare Provenienz zeigt die nicht angewendete Engine-Referenz maschinenlesbar
+✅ PASS: Stichtagsabweichung erreicht keinen weiteren Replace
+✅ PASS: Abgewiesene CSV veraendert den persistierten State nicht
+✅ PASS: CSV-Stichtagsfehler bleibt fuer Nutzende handlungsfaehig
+✅ PASS: Replace erhaelt nur den validierten Payload
+✅ PASS: Rollback nutzt den bestaetigten Recovery-Receipt
+✅ PASS: Spaeter Fehler tritt nach genau einem weiteren Replace auf
+✅ PASS: Spaeter Abschlussfehler rollt den Import automatisch zurueck
+✅ PASS: Rollback stellt auch die sichtbaren Eingaben wieder her
+✅ PASS: Rollback-Erfolg nennt Ursache und Wiederherstellung
+Test 4: Balance startup renders persistence migration warnings with backend and recovery guidance
+✅ PASS: MigrationWarning wird als sichtbarer Startup-Status behandelt
+✅ PASS: Startup-Warnung wird sichtbar geschaltet
+✅ PASS: Startup-Warnung ist maschinenlesbar typisiert
+✅ PASS: Startup-Warnung nennt den betroffenen Datenbereich
+✅ PASS: Startup-Warnung nennt das aktive Backend
+✅ PASS: Startup-Warnung verweist auf die vorhandene Adapterquarantaene
+✅ PASS: Startup-Warnung nennt den sicheren Nutzerentscheid
+✅ PASS: Startup-Warnung leakt keinen lokalen Quarantaenepfad
+✅ PASS: Ohne MigrationWarning wird kein falscher Warnzustand erzeugt
+Test 5: Profilverbund globals are set and cleared without stale data
+✅ PASS: Profilverbund schreibt aggregiertes Tagesgeld in Inputdaten
+✅ PASS: Profilverbund aktiviert Rente bei positiver Profilrente
+✅ PASS: Profilverbund-Verteilung wird gesetzt
+✅ PASS: Profilverbund-Profilzusammenfassung wird gesetzt
+✅ PASS: Balance globals should use the selected profiles absolute gold target
+✅ PASS: Balance globals should replace the active DOM profile quote with the household quote
+✅ PASS: Balance globals should expose one gold diagnostic per selected profile
+✅ PASS: Leerer Profilverbund loescht alte Distribution
+✅ PASS: Leerer Profilverbund loescht alte Profilzusammenfassung
+Test 6: Profilverbund decides household spending once and finances only allocated shares
+✅ PASS: Engine runs exactly once for the household
+✅ PASS: Household run receives household guardrail state
+✅ PASS: Household result remains available to the main orchestrator
+✅ PASS: Final household spending drives allocation
+✅ PASS: Profile A receives only a display attribution of household spending
+✅ PASS: Profile B receives only a display attribution of household spending
+✅ PASS: Profile persistence is not replaced by an artificial funding floor
+✅ PASS: Second profile persistence is not replaced by an artificial funding floor
+✅ PASS: No technical profile input disables household Dynamic Flex
+✅ PASS: No technical profile input clears the minimum flex contract
+✅ PASS: Profile without sale preserves its own loss carry
+✅ PASS: Second profile without sale preserves its own loss carry
+✅ PASS: Original profile income remains in persisted inputs
+✅ PASS: Second profile income remains in persisted inputs
+Test 6b: Profilverbund applies bad-year 3-bucket replacement once at household level
+✅ PASS: Household Engine input requests pre-settlement 3-bucket finalization
+✅ PASS: Household Engine input defers tax until profile attribution
+✅ PASS: 3-bucket Profilverbund performs no profile-engine reruns
+✅ PASS: Household diagnosis records the bad-year replacement
+✅ PASS: Household replacement produces one final source
+✅ PASS: Bond sale keeps exact profile ownership
+✅ PASS: Final action replaces the equity sale with a bond sale
+✅ PASS: No second profile action reintroduces the blocked equity sale
+Test 7: Engine handshake and update result contracts fail closed
+✅ PASS: Kompatible Engine-Major-Version besteht den Handshake
+✅ PASS: Aktiver Handshake liefert exakt die gebundene Engine zurueck
+✅ PASS: Fehlende Engine wird fail-closed abgewiesen
+✅ PASS: Unvollstaendige Versionsantwort wird abgewiesen
+✅ PASS: Inkompatible Engine-Major-Version wird abgewiesen
+✅ PASS: Engine-Austausch nach dem Handshake blockiert das Update
+✅ PASS: Eingabefehler liefern validation_error
+✅ PASS: Engine-Ausfuehrungsfehler liefern engine_error
+✅ PASS: Engine-Gate-Fehler liefern blocked
+✅ PASS: Blocked-Ergebnis behaelt den maschinenlesbaren Gate-Grund
+✅ PASS: Erfolgreiches Update liefert success
+✅ PASS: Success-Status bleibt mit bestehendem ok-Contract kompatibel
+Balance UI orchestration tests passed
+--- Balance UI Orchestration Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 256
+Passed: 256
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: balance-ui-orchestration.test.mjs | mode=isolated | assertions=256 | passed=256 | failedAssertions=0 | failedFiles=0
+
+⏭️  browser-smoke.test.mjs is covered by separate gate: npm run test:browser
+   Reason: Requires Playwright and its managed local HTTP server.
+📊 FILE RESULT: browser-smoke.test.mjs | mode=separate-gate | assertions=0 | passed=0 | failedAssertions=0 | failedFiles=0
+
+📂 Running canonical-number-boundary.test.mjs in process...
+--- Canonical Number Boundary Tests ---
+Test 1: canonical numbers bypass display separator heuristics
+Test 2: O-05 fractional lot stays canonical through portfolio initialization
+Test 3: ambiguous legacy strings fail at the canonical tranche boundary
+Test 4: strategy reader preserves zero and decimal values
+Test 5: canonical runway and Gold-band boundaries are visible in the engine contract
+Test 6: Simulator HTML exposes the existing engine bounds
+Test 7: MC, Sweep and Optimizer share the canonical fractional-lot initialization
+✅ Canonical number boundary tests passed
+✅ canonical-number-boundary.test.mjs completed.
+📊 FILE RESULT: canonical-number-boundary.test.mjs | mode=in-process | assertions=49 | passed=49 | failedAssertions=0 | failedFiles=0
+
+📂 Running cape-utils.test.mjs in process...
+--- CAPE Sampling Decision-Year Contract Tests ---
+Test 1: sampling consumes the supplied decision-year CAPE field
+✓ explicit decision-year input contract OK
+Test 2: Slice 06 candidate-set changes are exact and documented
+✓ exact sampling delta evidence OK
+Test 3: missing CAPE data follows the explicit fallback switch
+✓ explicit fallback boundary OK
+Test 4: estimated-history exclusion removes every interpolation-affected CAPE year
+✓ estimated-history exclusion covers CAPE interpolation vintage OK
+✅ CAPE sampling decision-year contract tests passed
+✅ cape-utils.test.mjs completed.
+📊 FILE RESULT: cape-utils.test.mjs | mode=in-process | assertions=17 | passed=17 | failedAssertions=0 | failedFiles=0
+
+📂 Running care-meta.test.mjs in process...
+--- Care Logic Meta Tests ---
+✅ Initial Sampling Triggered (Grade: 1)
+✅ Cost Ramp-Up Verification Passed
+✅ Care-cost drift ratio contract passed
+✅ Household Flex Logic (Dual) Passed
+✅ Deterministic grade progression passed
+✅ Monte-Carlo life event mortality works
+✅ Partner existence and mortality are independent from care metadata
+--- Care Logic Tests Completed ---
+✅ care-meta.test.mjs completed.
+📊 FILE RESULT: care-meta.test.mjs | mode=in-process | assertions=30 | passed=30 | failedAssertions=0 | failedFiles=0
+
+📂 Running core-engine.test.mjs in process...
+--- Core Engine Tests ---
+   Detailed Regime detected: side_long
+✅ optimizeSpending structure valid
+✅ Spending logic basic check passed
+   Forced Regime: bear_deep
+✅ Regime Detection (Bear) passed
+   Detailed Regime: bear_deep
+   Spending Yearly: 38400 (Floor Goal: 30000)
+   Cut Source: Guardrail (Alarm)
+✅ Guardrail / Budget Floor passed
+✅ T01 contract (CAPE alias + ui.vpw schema) passed
+--- Core Engine Tests Completed ---
+✅ core-engine.test.mjs completed.
+📊 FILE RESULT: core-engine.test.mjs | mode=in-process | assertions=20 | passed=20 | failedAssertions=0 | failedFiles=0
+
+📂 Running core-negative-contracts.test.mjs in process...
+--- Core Negative Contract Tests ---
+--- Core Negative Contract Tests Completed ---
+✅ core-negative-contracts.test.mjs completed.
+📊 FILE RESULT: core-negative-contracts.test.mjs | mode=in-process | assertions=192 | passed=192 | failedAssertions=0 | failedFiles=0
+
+📂 Running core-tax-settlement.test.mjs in process...
+--- Core Tax Settlement Integration Tests ---
+--- Core Tax Settlement Integration Tests Completed ---
+✅ core-tax-settlement.test.mjs completed.
+📊 FILE RESULT: core-tax-settlement.test.mjs | mode=in-process | assertions=88 | passed=88 | failedAssertions=0 | failedFiles=0
+
+📂 Running coverage-inventory.test.mjs in process...
+--- Coverage Inventory Contract Tests ---
+Coverage inventory contract tests passed
+✅ coverage-inventory.test.mjs completed.
+📊 FILE RESULT: coverage-inventory.test.mjs | mode=in-process | assertions=29 | passed=29 | failedAssertions=0 | failedFiles=0
+
+📂 Running coverage-report.test.mjs in process...
+--- Coverage Report Contract Tests ---
+Coverage report contract tests passed
+✅ coverage-report.test.mjs completed.
+📊 FILE RESULT: coverage-report.test.mjs | mode=in-process | assertions=24 | passed=24 | failedAssertions=0 | failedFiles=0
+
+⏭️  demography-care-survivor-runtime-measurement.test.mjs is covered by separate gate: node tests/run-single.mjs tests/demography-care-survivor-runtime-measurement.test.mjs
+   Reason: Byte-exact demography evidence is pinned to its recorded Windows x64 and Node v25.2.1 runtime.
+📊 FILE RESULT: demography-care-survivor-runtime-measurement.test.mjs | mode=separate-gate | assertions=0 | passed=0 | failedAssertions=0 | failedFiles=0
+
+📂 Running depot-tranchen-status.test.mjs in process...
+--- Depot Tranchen Status Tests ---
+Test 1: explicit status states
+Test 2: badge distinguishes empty, valid and malformed without sign duplication
+Test 3: canonical classification prevents gold and money-market double counting
+Test 4: empty household override wins over current-profile storage
+Test 5: input synchronization keeps hidden fields canonical and replaces money market
+Test 6: suite-wide cash status counts pending sales and fails closed on corrupt audit
+✓ suite-wide cash-status contract OK
+--- Depot Tranchen Status Tests Completed ---
+✅ depot-tranchen-status.test.mjs completed.
+📊 FILE RESULT: depot-tranchen-status.test.mjs | mode=in-process | assertions=40 | passed=40 | failedAssertions=0 | failedFiles=0
+
+📂 Running depot-tranches.test.mjs in process...
+--- Depot Tranchen Tests ---
+--- Depot Tranchen Tests Completed ---
+✅ depot-tranches.test.mjs completed.
+📊 FILE RESULT: depot-tranches.test.mjs | mode=in-process | assertions=22 | passed=22 | failedAssertions=0 | failedFiles=0
+
+📂 Running dist-runtime-inventory.test.mjs in process...
+--- Dist Runtime Inventory Tests ---
+✅ Dist runtime inventory tests passed
+✅ dist-runtime-inventory.test.mjs completed.
+📊 FILE RESULT: dist-runtime-inventory.test.mjs | mode=in-process | assertions=25 | passed=25 | failedAssertions=0 | failedFiles=0
+
+📂 Running dynamic-flex-horizon.test.mjs in process...
+--- Dynamic Flex Horizon Tests ---
+--- Dynamic Flex Horizon Tests Completed ---
+✅ dynamic-flex-horizon.test.mjs completed.
+📊 FILE RESULT: dynamic-flex-horizon.test.mjs | mode=in-process | assertions=10 | passed=10 | failedAssertions=0 | failedFiles=0
+
+📂 Running engine-robustness.test.mjs in process...
+--- Engine Robustness Tests ---
+--- Engine Robustness Tests Completed ---
+✅ engine-robustness.test.mjs completed.
+📊 FILE RESULT: engine-robustness.test.mjs | mode=in-process | assertions=39 | passed=39 | failedAssertions=0 | failedFiles=0
+
+📂 Running feature-flags.test.mjs in process...
+--- Feature Flags Tests ---
+✅ Feature flags tests passed
+--- Feature Flags Tests Completed ---
+✅ feature-flags.test.mjs completed.
+📊 FILE RESULT: feature-flags.test.mjs | mode=in-process | assertions=9 | passed=9 | failedAssertions=0 | failedFiles=0
+
+📂 Running formatting.test.mjs in process...
+✅ formatting.test.mjs completed.
+📊 FILE RESULT: formatting.test.mjs | mode=in-process | assertions=19 | passed=19 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-cash-money-market-backtest-delta.test.mjs in process...
+--- German Cash/Money-Market Backtest Delta Tests ---
+Test 1: before/after fixtures and the sole intended cause are pinned
+✓ evidence fixtures and cause OK
+Test 2: reference cases retain identity, outcome and explained metrics
+✓ identities, outcomes, metrics and FlowDelta OK
+Test 3: marker-year application uses the current-year rate exactly once
+✓ marker-year accrual and tax/cost boundary OK
+✅ German cash/money-market backtest delta tests passed
+✅ german-cash-money-market-backtest-delta.test.mjs completed.
+📊 FILE RESULT: german-cash-money-market-backtest-delta.test.mjs | mode=in-process | assertions=339 | passed=339 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-cash-money-market-chain.test.mjs in process...
+--- German Cash/Money-Market Chain Tests ---
+Test 1: identity, sources, convention and applicability are pinned
+✓ identity, convention and applicability OK
+Test 2: all pinned source bytes retain their identities and licences
+✓ source identities and terms OK
+Test 3: the 101-year chain is contiguous and is the sole runtime projection
+✓ contiguous generated-only runtime projection OK
+Test 4: seams, negative rates and gap policy remain explicit
+✓ seams, negative rates and fail-closed gap policy OK
+Test 5: generated hashes, manifest and inventory remain aligned
+✓ hashes and metadata alignment OK
+✅ German cash/money-market chain tests passed
+✅ german-cash-money-market-chain.test.mjs completed.
+📊 FILE RESULT: german-cash-money-market-chain.test.mjs | mode=in-process | assertions=362 | passed=362 | failedAssertions=0 | failedFiles=0
+
+⏭️  german-cash-money-market-source-reconstruction.test.mjs is covered by separate gate: node tests/run-single.mjs tests/german-cash-money-market-source-reconstruction.test.mjs
+   Reason: The pinned Poppler 25.07.0 PDF oracle is a Windows development gate.
+📊 FILE RESULT: german-cash-money-market-source-reconstruction.test.mjs | mode=separate-gate | assertions=0 | passed=0 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-cpi-backtest-delta.test.mjs in process...
+--- German CPI Backtest Delta Tests ---
+Test 1: before/after fixtures and the sole intended cause are pinned
+✓ evidence fixtures and cause OK
+Test 2: reference cases match by ID and period and expose explained deltas
+✓ reference identities, metrics and FlowDelta OK
+Test 3: the recorded D-20 final-year isolation is mathematically explained
+✓ D-20 nominal/real isolation OK
+✅ German CPI backtest delta tests passed
+✅ german-cpi-backtest-delta.test.mjs completed.
+📊 FILE RESULT: german-cpi-backtest-delta.test.mjs | mode=in-process | assertions=403 | passed=403 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-cpi-chain.test.mjs in process...
+--- German CPI Research Chain Tests ---
+Test 1: identity, period, source files and licences are pinned
+✓ identity, inputs and licences OK
+Test 2: all 101 rates and synthetic levels are contiguous and projected at runtime
+✓ contiguous chain and runtime projection OK
+Test 3: source and territory seams are exact, gap-free and stable
+✓ seams and official reference years OK
+Test 4: generated hashes, manifest and inventory remain aligned
+✓ hashes and metadata alignment OK
+Test 5: runtime source has no remaining hand-maintained inflation literals
+✓ generated-only runtime projection and licence notices OK
+✅ German CPI research chain tests passed
+✅ german-cpi-chain.test.mjs completed.
+📊 FILE RESULT: german-cpi-chain.test.mjs | mode=in-process | assertions=546 | passed=546 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-cpi-source-reconstruction.test.mjs in process...
+--- German CPI Independent Source Reconstruction Tests ---
+Test 1: all pinned source bytes retain their declared identities
+✓ source identities OK
+Test 2: an independent reader reconstructs all 101 annual rates
+✓ independent 101-year oracle and one-tick-discriminating 0.05 pp guard OK
+Test 3: proxy quantization and the 1949 currency-reform splice are explicit
+✓ proxy limitations and 1949 splice OK
+Test 4: production verification remains read-only
+✓ production read-only gate OK
+✅ German CPI independent source reconstruction tests passed
+✅ german-cpi-source-reconstruction.test.mjs completed.
+📊 FILE RESULT: german-cpi-source-reconstruction.test.mjs | mode=in-process | assertions=848 | passed=848 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-demography-care-survivor-contract.test.mjs in process...
+--- German Demography/Care/Survivor Contract Tests ---
+Test 1: pinned source identities and generated contract are immutable
+✓ source identity and immutability OK
+Test 2: period mortality semantics, age, sex and tail assumptions are explicit
+✓ mortality semantics and marker profiles OK
+Test 3: care prevalence observations never become transition probabilities
+✓ observed care data and model transitions remain separated
+Test 4: survivor reference and simplified runtime boundary are explicit
+✓ survivor model boundary OK
+Test 5: runtime exports and Monte Carlo diagnostics retain contract identity
+✓ runtime projection and diagnostics OK
+Test 6: read-only generator reconstruction is byte-identical
+✓ byte-identical generator verification OK
+✅ German demography/care/survivor contract tests passed
+✅ german-demography-care-survivor-contract.test.mjs completed.
+📊 FILE RESULT: german-demography-care-survivor-contract.test.mjs | mode=in-process | assertions=67 | passed=67 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-demography-care-survivor-source-reconstruction.test.mjs in process...
+--- German Demography/Care Independent Source Reconstruction Tests ---
+Test 1: independent raw hashes match the generated source contract
+✓ independent raw hashes OK
+Test 2: all 166 official runtime qx values reconstruct independently
+✓ all official runtime qx values reconstruct independently
+Test 3: independent care stock and prevalence markers match the contract
+✓ independent care stock and prevalence markers OK
+✅ German demography/care independent source reconstruction tests passed
+✅ german-demography-care-survivor-source-reconstruction.test.mjs completed.
+📊 FILE RESULT: german-demography-care-survivor-source-reconstruction.test.mjs | mode=in-process | assertions=696 | passed=696 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-gross-wage-growth-chain.test.mjs in process...
+--- German Gross-Wage Growth Chain Tests ---
+Test 1: source identity, proxy boundary and period are pinned
+✓ identity, source and proxy boundary OK
+Test 2: source boundaries, method breaks, territory and precision are explicit
+✓ source boundaries and discontinuities OK
+Test 3: JST proxy and runtime projection are explicit and complete
+✓ explicit early model segment and generated-only runtime projection OK
+Test 4: hashes, manifest and inventory align without upgrading external validation
+✓ hashes and metadata alignment OK
+Test 5: read-only generator reconstruction is byte-identical
+✓ byte-identical generator verification OK
+✅ German gross-wage growth chain tests passed
+✅ german-gross-wage-growth-chain.test.mjs completed.
+📊 FILE RESULT: german-gross-wage-growth-chain.test.mjs | mode=in-process | assertions=382 | passed=382 | failedAssertions=0 | failedFiles=0
+
+📂 Running german-gross-wage-independent-oracle.test.mjs in process...
+--- German Gross-Wage Independent Full Oracle Tests ---
+Test 1: independent JST level oracle covers every proxy year
+✓ independent JST proxy oracle OK
+Test 2: state-machine HTML oracle covers all 79 published changes
+✓ independent 79-year Destatis oracle OK
+✅ German gross-wage independent full oracle tests passed
+✅ german-gross-wage-independent-oracle.test.mjs completed.
+📊 FILE RESULT: german-gross-wage-independent-oracle.test.mjs | mode=in-process | assertions=184 | passed=184 | failedAssertions=0 | failedFiles=0
+
+📂 Running global-equity-backtest-delta.test.mjs in process...
+--- Global Equity Backtest Delta Tests ---
+✅ Global equity backtest delta tests passed
+✅ global-equity-backtest-delta.test.mjs completed.
+📊 FILE RESULT: global-equity-backtest-delta.test.mjs | mode=in-process | assertions=360 | passed=360 | failedAssertions=0 | failedFiles=0
+
+📂 Running global-equity-research-chain.test.mjs in process...
+--- Global Equity Research Chain Tests ---
+Test 1: generated chain identity, period and source inputs are pinned
+✓ identity and pinned inputs OK
+Test 2: every annual return and level is contiguous and linked exactly once
+✓ contiguous chain and runtime projection OK
+Test 3: documented country gaps and evidence segments stay explicit
+✓ gaps and evidence segmentation OK
+Test 4: generated value hashes and modern reference years are stable
+✓ hashes and modern reference years OK
+Test 5: all 101 annual returns are independently recalculated from the filtered inputs
+✓ independent full-chain recalculation OK
+Test 6: generated artifact does not claim an MSCI identity
+✓ neutral identity and data-license notice OK
+✅ Global equity research chain tests passed
+✅ global-equity-research-chain.test.mjs completed.
+📊 FILE RESULT: global-equity-research-chain.test.mjs | mode=in-process | assertions=749 | passed=749 | failedAssertions=0 | failedFiles=0
+
+📂 Running global-equity-source-reconstruction.test.mjs in process...
+--- Global Equity Source Reconstruction Gate ---
+✅ Global equity source reconstruction gate passed
+✅ global-equity-source-reconstruction.test.mjs completed.
+📊 FILE RESULT: global-equity-source-reconstruction.test.mjs | mode=in-process | assertions=3 | passed=3 | failedAssertions=0 | failedFiles=0
+
+📂 Running gold-german-investor-backtest-delta.test.mjs in process...
+--- Gold German-Investor Backtest Delta Tests ---
+Test 1: before/after artifacts and the sole intended cause are pinned
+✓ evidence artifacts and cause OK
+Test 2: gold-free backtests retain every financial result and outcome
+✓ gold-free financial invariance, outcomes and FlowDelta OK
+Test 3: a real multi-year gold-holding backtest exposes the explained data delta
+✓ real multi-year gold-holding effectiveness and FlowDelta OK
+✅ Gold German-investor backtest delta tests passed
+✅ gold-german-investor-backtest-delta.test.mjs completed.
+📊 FILE RESULT: gold-german-investor-backtest-delta.test.mjs | mode=in-process | assertions=246 | passed=246 | failedAssertions=0 | failedFiles=0
+
+📂 Running gold-german-investor-chain.test.mjs in process...
+--- Gold German-Investor Chain Tests ---
+Test 1: chain identity, convention and source bytes are pinned
+✓ identity, convention and source hashes OK
+Test 2: all 101 runtime observations come only from the generated chain
+✓ contiguous generated-only projection OK
+Test 3: independent marker formulas lock policy, source and currency seams
+✓ source and currency marker formulas OK
+Test 4: zero values and evidence seams are explicit
+✓ explicit zero and evidence policy OK
+Test 5: runtime application, hashes, manifest and inventory align
+✓ runtime and metadata alignment OK
+Test 6: read-only generator reconstruction is byte-identical
+✓ byte-identical generator verification OK
+✅ Gold German-investor chain tests passed
+✅ gold-german-investor-chain.test.mjs completed.
+📊 FILE RESULT: gold-german-investor-chain.test.mjs | mode=in-process | assertions=491 | passed=491 | failedAssertions=0 | failedFiles=0
+
+📂 Running gold-german-investor-independent-oracle.test.mjs in process...
+--- Gold German-Investor Independent Full Oracle Tests ---
+Test 1: a second source parser reconstructs every annual gold return
+✓ independent 101-year content oracle OK
+✅ Gold German-investor independent full oracle tests passed
+✅ gold-german-investor-independent-oracle.test.mjs completed.
+📊 FILE RESULT: gold-german-investor-independent-oracle.test.mjs | mode=in-process | assertions=203 | passed=203 | failedAssertions=0 | failedFiles=0
+
+📂 Running health-bucket.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/health-bucket.test.mjs...
+--- Health Bucket Tests ---
+✅ PASS: P1 care should be read from householdContext.care
+✅ PASS: P1 grade should be read
+✅ PASS: P2 inactive care should be preserved
+✅ Health bucket care state resolution passed
+✅ PASS: OR trigger should fire if one person reaches min grade
+✅ PASS: OR trigger should expose qualifying person
+✅ PASS: AND trigger should require both active persons at min grade
+✅ Health bucket trigger modes passed
+✅ PASS: Care-only coverage should cap at qualifying care need
+✅ PASS: Floor coverage should cover full shortfall while care trigger is active
+✅ Health bucket eligible need modes passed
+✅ PASS: Coverage should use care-only eligible amount
+✅ PASS: Coverage should reduce bucket amount
+✅ PASS: Coverage should reduce bucket tranche FIFO
+✅ PASS: Coverage should track raw gain from money-market tranche
+✅ Health bucket coverage passed
+✅ PASS: Interest should follow rC
+✅ PASS: Interest should increase bucket amount
+✅ PASS: Interest should be distributed to tranche source
+✅ PASS: Interest should be distributed to cash source
+✅ PASS: Diagnostics should index target by inflation
+✅ PASS: Diagnostics should compute real coverage percent
+✅ PASS: Diagnostics should compute target gap
+✅ PASS: Negative health-bucket cash return should remain signed
+✅ PASS: Negative health-bucket cash return should reduce the bucket
+✅ PASS: Negative interest should reduce tranche valuation proportionally
+✅ PASS: Negative interest should reduce cash valuation proportionally
+✅ Health bucket interest and diagnostics passed
+--- Health Bucket Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 23
+Passed: 23
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: health-bucket.test.mjs | mode=isolated | assertions=23 | passed=23 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-backtest-cohorts.test.mjs in process...
+--- Historical Backtest Cohorts Tests ---
+✅ Historical backtest cohorts tests passed
+✅ historical-backtest-cohorts.test.mjs completed.
+📊 FILE RESULT: historical-backtest-cohorts.test.mjs | mode=in-process | assertions=59 | passed=59 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-backtest-contract.test.mjs in process...
+--- Historical Backtest Contract Tests ---
+Test 1: provider derives immutable bounds and records without mutating raw history
+✓ immutable provider and derived bounds OK
+Test 2: HistoricalYearRecordV1 separates realized and decision-as-of observations
+✓ realized/as-of split OK
+Test 3: one-year periods are valid and invalid year shapes fail structurally
+✓ D-02 period contract OK
+Test 4: first missing lookback or requested year yields incomplete without silent skip
+✓ period preflight fails closed OK
+Test 5: missing, non-finite and invalid index values fail with structured errors
+✓ structured data failures OK
+Test 6: fallback_zero is visible and only valid inside manifested segments
+✓ explicit fallback-zero policy OK
+Test 7: dataset validation is cached and preflight is once per request or batch
+✓ validation/preflight instrumentation OK
+Test 8: pension adjustment marker mapping preserves 1950/2000/2001 offsets
+✓ pension marker mapping OK
+Test 9: assignment inventory keeps active builders and the approved D-01 contract distinct
+Test 10: approved realized fields align with active Monte Carlo annualData while CAPE remains pre-decision
+✓ approved D-01 versus active MC alignment OK
+✓ assignment inventory OK
+✅ Historical backtest contract tests passed
+✅ historical-backtest-contract.test.mjs completed.
+📊 FILE RESULT: historical-backtest-contract.test.mjs | mode=in-process | assertions=172 | passed=172 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-backtest-export.test.mjs in process...
+--- Historical Backtest Export Tests ---
+✅ Historical backtest export tests passed
+✅ historical-backtest-export.test.mjs completed.
+📊 FILE RESULT: historical-backtest-export.test.mjs | mode=in-process | assertions=107 | passed=107 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-backtest-metrics.test.mjs in process...
+--- Historical Backtest Metrics Tests ---
+✅ Historical backtest metrics tests passed
+✅ historical-backtest-metrics.test.mjs completed.
+📊 FILE RESULT: historical-backtest-metrics.test.mjs | mode=in-process | assertions=374 | passed=374 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-backtest-runner.test.mjs in process...
+--- Historical Backtest Runner Tests ---
+✅ Historical backtest runner tests passed
+--- Historical Backtest Runner Tests Completed ---
+✅ historical-backtest-runner.test.mjs completed.
+📊 FILE RESULT: historical-backtest-runner.test.mjs | mode=in-process | assertions=136 | passed=136 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-data-manifest.test.mjs in process...
+--- Historical Data Manifest Tests ---
+Test 1: manifest contains all required reproducibility fields
+✓ required manifest fields OK
+Test 2: all historical research chains expose their resolved identity and evidence boundary
+✓ resolved chains and explicit evidence boundaries OK
+Test 3: canonical browser-compatible SHA-256 matches Node SHA-256
+✓ canonical SHA-256 OK
+Test 4: manifested dataset is contiguous, valid and exposed through immutable lookup
+✓ contiguous immutable lookup OK
+Test 5: empty or fabricated resolution fields are rejected
+✓ manifest resolution validation OK
+Test 6: revision/hash mismatch fails before a provider can be consumed
+✓ revision/hash mismatch OK
+Test 7: legacy DATASET_META points to the canonical manifest identity
+✓ metadata bridge OK
+Test 8: the V1 runtime manifest is covered by the wider simulation-data inventory
+✓ wider inventory bridge OK
+✅ Historical data manifest tests passed
+✅ historical-data-manifest.test.mjs completed.
+📊 FILE RESULT: historical-data-manifest.test.mjs | mode=in-process | assertions=309 | passed=309 | failedAssertions=0 | failedFiles=0
+
+📂 Running historical-data-robustness.test.mjs in process...
+--- Historical Data Robustness Tests ---
+✅ Empty historical data fails closed
+--- Historical Data Robustness Tests Completed ---
+✅ historical-data-robustness.test.mjs completed.
+📊 FILE RESULT: historical-data-robustness.test.mjs | mode=in-process | assertions=2 | passed=2 | failedAssertions=0 | failedFiles=0
+
+📂 Running liquidity-guardrail.test.mjs in process...
+--- Liquidity Guardrail Tests ---
+   Result Type: TRANSACTION
+   Title: Runway-Notfüllung (neutral) (Cap aktiv)
+   Liq Allocated: 42087.5
+✅ Fail-Safe Trigger (Normal Market) passed
+✅ Fail-Safe Trigger (Guardrail) passed
+   Refill: 8417.5 (Std Cap Gross: 10000, Net: 8417.5)
+✅ Bear Refill Cap passed
+✅ Bear standard/emergency cap boundary passed
+✅ Coverage Gap Trigger passed
+✅ Pension-covered floor suppresses optional flex crisis refill passed
+✅ Effective spending need and legacy fallback passed
+--- Liquidity Guardrail Tests Completed ---
+✅ liquidity-guardrail.test.mjs completed.
+📊 FILE RESULT: liquidity-guardrail.test.mjs | mode=in-process | assertions=26 | passed=26 | failedAssertions=0 | failedFiles=0
+
+📂 Running liquidity-runway-contract.test.mjs in process...
+--- Liquidity Runway Contract Tests ---
+✅ Liquidity runway contract tests passed
+✅ liquidity-runway-contract.test.mjs completed.
+📊 FILE RESULT: liquidity-runway-contract.test.mjs | mode=in-process | assertions=364 | passed=364 | failedAssertions=0 | failedFiles=0
+
+📂 Running longevity-contract.test.mjs in process...
+--- Longevity Contract Tests ---
+--- Longevity Contract Tests Completed ---
+✅ longevity-contract.test.mjs completed.
+📊 FILE RESULT: longevity-contract.test.mjs | mode=in-process | assertions=33 | passed=33 | failedAssertions=0 | failedFiles=0
+
+📂 Running longevity-engine-runner.test.mjs in process...
+--- Longevity Engine/Runner Integration Tests ---
+--- Longevity Engine/Runner Integration Tests Completed ---
+✅ longevity-engine-runner.test.mjs completed.
+📊 FILE RESULT: longevity-engine-runner.test.mjs | mode=in-process | assertions=23 | passed=23 | failedAssertions=0 | failedFiles=0
+
+📂 Running longevity-horizon.test.mjs in process...
+--- Longevity Horizon Tests ---
+--- Longevity Horizon Tests Completed ---
+✅ longevity-horizon.test.mjs completed.
+📊 FILE RESULT: longevity-horizon.test.mjs | mode=in-process | assertions=22 | passed=22 | failedAssertions=0 | failedFiles=0
+
+📂 Running longevity-optimizer-docs.test.mjs in process...
+--- Longevity Optimizer/Docs Contract Tests ---
+--- Longevity Optimizer/Docs Contract Tests Completed ---
+✅ longevity-optimizer-docs.test.mjs completed.
+📊 FILE RESULT: longevity-optimizer-docs.test.mjs | mode=in-process | assertions=27 | passed=27 | failedAssertions=0 | failedFiles=0
+
+📂 Running longevity-ui-persistence.test.mjs in process...
+--- Longevity UI Persistence Tests ---
+Test 1: Dynamic-Flex UI persists longevity fields and disables inactive detail inputs
+✓ UI persistence OK
+Test 2: Simulator reader forwards longevity fields without silent clamp
+✓ Simulator reader OK
+Test 3: Simulator profile import and aggregation preserve primary longevity contract
+✓ Profile import and aggregation OK
+Test 4: Balance reader forwards longevity fields
+✓ Balance reader OK
+Longevity UI persistence tests passed
+--- Longevity UI Persistence Tests Completed ---
+✅ longevity-ui-persistence.test.mjs completed.
+📊 FILE RESULT: longevity-ui-persistence.test.mjs | mode=in-process | assertions=18 | passed=18 | failedAssertions=0 | failedFiles=0
+
+📂 Running market-analyzer.test.mjs in process...
+--- Market Analyzer Tests ---
+✅ Scenario Detection Logic Passed
+✅ Missing and Partial Market Data Contract Passed
+✅ CAPE Valuation Logic Passed
+✅ CAPE Utils Filtering Passed
+--- Market Analyzer Tests Completed ---
+✅ market-analyzer.test.mjs completed.
+📊 FILE RESULT: market-analyzer.test.mjs | mode=in-process | assertions=41 | passed=41 | failedAssertions=0 | failedFiles=0
+
+📂 Running mc-result-cockpit.test.mjs in process...
+Test 1: cockpit initialization is idempotent and projects raw setup values
+Test 2: recalculate delegates once and mirrors the canonical start state
+Test 3: only successful completion closes setup and refreshes its summary
+Test 4: Simulator DOM keeps cockpit contracts and ordering
+Test 5: result tabs use one activation path for view ids and contained targets
+Test 6: replay variant badge reports alternatives only
+Test 7: cross-panel scenario navigation focuses only targets in the activated panel
+Test 8: delegated comparison tabs survive rerender and keep an independent roving focus
+✅ mc-result-cockpit.test.mjs completed.
+📊 FILE RESULT: mc-result-cockpit.test.mjs | mode=in-process | assertions=80 | passed=80 | failedAssertions=0 | failedFiles=0
+
+📂 Running mc-worker-contract.test.mjs in process...
+--- MC Worker Entrypoint Contract Tests ---
+Test 1: init/dispose lifecycle
+✓ init/dispose lifecycle OK
+Test 2: unknown message type
+✓ unknown message type OK
+Test 3: missing scenario cache
+✓ missing scenario cache OK
+Test 4: valid Monte-Carlo job
+✓ valid Monte-Carlo job OK
+Test 5: stationary bootstrap Monte-Carlo job
+✓ stationary bootstrap Monte-Carlo job OK
+Test 6: bounded scenario cache and dataVersion invalidation
+✓ bounded scenario cache and dataVersion invalidation OK
+Test 7: invalid dataVersion fails closed
+✓ invalid dataVersion fails closed OK
+Test 8: invalid Monte-Carlo parameters fail closed in worker
+✓ invalid Monte-Carlo parameters fail closed in worker OK
+Test 9: versioned Sweep request worker parity
+✓ versioned Sweep request worker parity OK
+--- MC Worker Entrypoint Contract Tests Completed ---
+✅ mc-worker-contract.test.mjs completed.
+📊 FILE RESULT: mc-worker-contract.test.mjs | mode=in-process | assertions=69 | passed=69 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-care-kpi.test.mjs in process...
+--- Monte Carlo Care KPI Golden Tests ---
+--- Monte Carlo Care KPI Golden Tests Completed ---
+✅ monte-carlo-care-kpi.test.mjs completed.
+📊 FILE RESULT: monte-carlo-care-kpi.test.mjs | mode=in-process | assertions=28 | passed=28 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-chunk-result.test.mjs in process...
+--- Monte Carlo Chunk Result Contract Tests ---
+--- Monte Carlo Chunk Result Contract Tests Completed ---
+✅ monte-carlo-chunk-result.test.mjs completed.
+📊 FILE RESULT: monte-carlo-chunk-result.test.mjs | mode=in-process | assertions=40 | passed=40 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-export-contract.test.mjs in process...
+--- Monte Carlo Export Contract Tests ---
+✅ Monte Carlo export contract tests passed
+✅ monte-carlo-export-contract.test.mjs completed.
+📊 FILE RESULT: monte-carlo-export-contract.test.mjs | mode=in-process | assertions=266 | passed=266 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-measurement-contract.test.mjs in process...
+--- Monte Carlo Measurement Contract Tests ---
+--- Monte Carlo Measurement Contract Tests Completed ---
+✅ monte-carlo-measurement-contract.test.mjs completed.
+📊 FILE RESULT: monte-carlo-measurement-contract.test.mjs | mode=in-process | assertions=799 | passed=799 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-outcome-horizon.test.mjs in process...
+--- Monte Carlo Outcome/Horizon Contract Tests ---
+--- Monte Carlo Outcome/Horizon Contract Tests Completed ---
+✅ monte-carlo-outcome-horizon.test.mjs completed.
+📊 FILE RESULT: monte-carlo-outcome-horizon.test.mjs | mode=in-process | assertions=33 | passed=33 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-parameters.test.mjs in process...
+--- MonteCarloParametersV1 Contract Tests ---
+--- MonteCarloParametersV1 Contract Tests Completed ---
+✅ monte-carlo-parameters.test.mjs completed.
+📊 FILE RESULT: monte-carlo-parameters.test.mjs | mode=in-process | assertions=91 | passed=91 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-sampling-contract.test.mjs in process...
+--- Monte Carlo Sampling Contract Tests ---
+--- Monte Carlo Sampling Contract Tests Completed ---
+✅ monte-carlo-sampling-contract.test.mjs completed.
+📊 FILE RESULT: monte-carlo-sampling-contract.test.mjs | mode=in-process | assertions=70 | passed=70 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-sampling.test.mjs in process...
+--- Monte-Carlo Sampling Tests ---
+✅ Conditional Bootstrap logic execution works
+✅ Regime Transition works (Transitioned to BULL)
+✅ Determinism works
+--- Monte-Carlo Sampling Tests Completed ---
+✅ monte-carlo-sampling.test.mjs completed.
+📊 FILE RESULT: monte-carlo-sampling.test.mjs | mode=in-process | assertions=6 | passed=6 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-startyear.test.mjs in process...
+--- Monte-Carlo Start-Year Sampling Tests ---
+✅ Filtered start years respected
+✅ Recency weights prefer recent years
+✅ Uniform mode fallback works
+✅ Estimated years can be excluded from start-year sampling
+✅ CAPE sampling returns valid candidate index
+✅ CAPE sampling fallback without CAPE works
+--- Monte-Carlo Start-Year Sampling Tests Completed ---
+✅ monte-carlo-startyear.test.mjs completed.
+📊 FILE RESULT: monte-carlo-startyear.test.mjs | mode=in-process | assertions=112 | passed=112 | failedAssertions=0 | failedFiles=0
+
+📂 Running monte-carlo-statistics.test.mjs in process...
+--- Monte Carlo Statistics Tests ---
+--- Monte Carlo Statistics Tests Completed ---
+✅ monte-carlo-statistics.test.mjs completed.
+📊 FILE RESULT: monte-carlo-statistics.test.mjs | mode=in-process | assertions=20 | passed=20 | failedAssertions=0 | failedFiles=0
+
+📂 Running persistence.test.mjs in process...
+--- Persistence Tests ---
+Test 1: runtime detection
+Test 2: persistence key policy
+Test 3: uninitialized facade delegates to localStorage adapter
+Test 4: initialized facade reads/writes synchronously from cache and flushes batch
+Test 5: failed flush keeps dirty keys queued
+Test 6: export/import bundle and runtime writes are not allowlist-blocked
+Test 7: persistenceStorage exposes storage-like API
+Test 8: flush calls are serialized to preserve write order
+Test 9: reset unregisters lifecycle listeners
+Test 10: Tauri close event flushes cache before confirming close
+Test 11: full persistence backup contains all records and runtime metadata
+Test 11: full persistence backup import replaces current records
+Test 11b: full backup import UI creates recovery backup before replacing records
+Test 11c: full backup fault injection restores every allowed live key
+Test 11c2: backend verification rejects acknowledged but unapplied writes
+Test 11c3: transactional replacement requires backend readback support
+Test 11c4: transactional readback mismatch retains stable failure metadata
+Test 11d: recovery and post-load fault injection remain fail-closed
+Test 11e: unverifiable rollback is surfaced explicitly
+Test 12: IndexedDB adapter stores kv records and metadata
+Test 12b: IndexedDB adapter handles versionchange as outdated
+Test 12c: IndexedDB adapter rejects blocked upgrades
+Test 12d: IndexedDB adapter migrates legacy full-localstorage snapshots and cleans snapshotDB
+Test 12e: IndexedDB legacy migration is idempotent and supports direct readSnapshot
+Test 12f: blocked legacy snapshotDB cleanup remains bounded and retryable
+Test 13: Tauri JSON adapter stores records via Rust commands
+Test 13b: Tauri JSON adapter migrates legacy full-localstorage snapshots out of live state
+Test 13c: Tauri JSON adapter supports direct readSnapshot for legacy ids
+Test 13d: Tauri JSON adapter keeps legacy keys when snapshot archive persistence fails
+Test 14: Tauri JSON adapter quarantines corrupt state
+Test 15: Tauri runtime uses JSON file adapter and migrates allowed legacy localStorage records
+Test 16: Tauri corrupt state starts with recovery warning instead of failing init
+Test 17: browser migration copies allowed legacy localStorage records to IndexedDB
+Test 17b: tranche legacy migration matrix is deterministic and raw-preserving
+Test 18: browser migration blocks silent reversion when IndexedDB is empty after migration
+Test 19: runtime cache accepts prototype-like keys without prototype pollution
+Test 20: failed flush does not override concurrent delete/write changes on same key
+Test 21: failed flush does not override concurrent write changes on deleted key
+Test 22: snapshot facade methods delegate to adapter contract
+Test 23: localStorage facade fallback stores snapshots outside normal records
+Test 24: replaceLiveRecords applies allowKey and rolls back cache on failure
+Test 25: replaceLiveRecords writes filtered live records all-or-nothing on success
+Test 26: browser runtime falls back to localStorage when IndexedDB is unavailable
+Test 27: reconciliation persists live lot and audit in one facade batch
+Persistence tests passed
+--- Persistence Tests Completed ---
+✅ persistence.test.mjs completed.
+📊 FILE RESULT: persistence.test.mjs | mode=in-process | assertions=324 | passed=324 | failedAssertions=0 | failedFiles=0
+
+📂 Running poppler-toolchain.test.mjs in process...
+--- Poppler Toolchain Contract Tests ---
+Test 1: version parsing and compatibility are monotonic
+✓ monotonic version contract OK
+Test 2: resolution uses explicit portable overrides and PATH
+✓ portable resolution OK
+Test 3: developer-specific package paths are absent
+✓ no developer-specific path contract OK
+✅ Poppler toolchain contract tests passed
+✅ poppler-toolchain.test.mjs completed.
+📊 FILE RESULT: poppler-toolchain.test.mjs | mode=in-process | assertions=12 | passed=12 | failedAssertions=0 | failedFiles=0
+
+📂 Running portfolio.test.mjs in process...
+--- Portfolio Logic Tests ---
+✅ sumDepot works
+✅ buyGold works
+✅ buyStocksNeu works
+✅ DOM Parsing & Initialization works
+✅ Dynamic Flex parsing bounds work
+✅ Health bucket aggregate carve-out works
+✅ Health bucket detailed FIFO carve-out works
+✅ Health bucket capped carve-out works
+✅ Health bucket invalid-date FIFO fallback works
+✅ Bond tranches stay out of equity sales
+✅ Bond category/type mismatch is rejected
+--- Portfolio Logic Tests Completed ---
+✅ portfolio.test.mjs completed.
+📊 FILE RESULT: portfolio.test.mjs | mode=in-process | assertions=63 | passed=63 | failedAssertions=0 | failedFiles=0
+
+📂 Running profile-asset-values.test.mjs in process...
+--- Profile Asset Values Tests ---
+Test 1: normalize derives renteAktiv from incomes
+✓ normalize derives renteAktiv OK
+Test 2: load falls back to stored balance inputs
+✓ load falls back to stored balance inputs OK
+Test 3: save writes normalized profile keys
+✓ save writes normalized profile keys OK
+Test 4: strict validation rejects negative, blank and non-finite inputs
+✓ strict profile validation OK
+Test 5: DOM reader rejects an intermediate blank without producing NaN defaults
+✓ intermediate DOM input validation OK
+Test 6: profile gold strategy sums euro targets and excludes care reserves
+✓ profile gold strategy euro aggregation OK
+✅ profile-asset-values.test.mjs completed.
+📊 FILE RESULT: profile-asset-values.test.mjs | mode=in-process | assertions=31 | passed=31 | failedAssertions=0 | failedFiles=0
+
+📂 Running profile-navigation.test.mjs in process...
+--- Profile Navigation Tests ---
+Test 1: shouldHandleProfileHandoff respects explicit opt-in
+✓ shouldHandleProfileHandoff OK
+Test 2: bindProfileNavigationHandoff exports on eligible link clicks
+✓ bindProfileNavigationHandoff OK
+Test 2b: manager handoff skips raw bundle export and blocks failed navigation
+✓ manager handoff ordering and failure contract OK
+Test 3: installProfilePersistenceHooks only installs once
+✓ installProfilePersistenceHooks OK
+Test 4: installProfileBfcacheRefresh reloads stale browser cache
+✓ installProfileBfcacheRefresh OK
+✅ Profile navigation lifecycle validated
+✅ profile-navigation.test.mjs completed.
+📊 FILE RESULT: profile-navigation.test.mjs | mode=in-process | assertions=25 | passed=25 | failedAssertions=0 | failedFiles=0
+
+📂 Running profile-state.test.mjs in process...
+--- Profile State Tests ---
+Test 1: Shared storage keys
+✓ Shared storage keys OK
+Test 2: Primitive parsing
+✓ Primitive parsing OK
+Test 3: Override parsing from data
+✓ Override parsing from data OK
+Test 4: Read overrides from storage
+✓ Read overrides from storage OK
+Test 5: Health bucket parsing
+✓ Health bucket parsing OK
+Test 6: Parse tranches and balance inputs
+✓ Parse tranches and balance inputs OK
+Test 7: Typed health-bucket and balance-state load results fail closed
+✓ Typed profile-state load results OK
+✅ Profile state contract validated
+✅ profile-state.test.mjs completed.
+📊 FILE RESULT: profile-state.test.mjs | mode=in-process | assertions=48 | passed=48 | failedAssertions=0 | failedFiles=0
+
+📂 Running profile-storage.test.mjs in process...
+--- Profile Storage Tests ---
+Test 1: Default profile creation
+✓ Default profile creation OK
+Test 2: ensureProfileRegistry idempotent
+✓ ensureProfileRegistry idempotent OK
+Test 2b: Profile key policy
+✓ Profile key policy OK
+Test 2c: Profile registry module
+✓ Profile registry module OK
+Test 2d: Profile live storage module
+✓ Profile live storage module OK
+Test 2e: Profile bundle IO module
+✓ Profile bundle IO module OK
+Test 3: Slug conflicts
+✓ Slug conflicts OK
+Test 4: Slug-Normalisierung
+✓ Slug-Normalisierung OK
+Test 5: Leerer Name
+✓ Leerer Name OK
+Test 6: Rename profile
+✓ Rename profile OK
+Test 7: Rename non-existent profile
+✓ Rename non-existent profile OK
+Test 8: Delete profile
+✓ Delete profile OK
+Test 9: Cannot delete last default profile
+✓ Cannot delete last default profile OK
+Test 10: Delete current profile switches
+✓ Delete current profile switches OK
+Test 10b: Delete last custom profile reconciles fallback context
+✓ Delete last custom profile fallback context OK
+Test 11: Save and switch profiles
+✓ Save and switch profiles OK
+Test 12: Switch to same profile
+✓ Switch to same profile OK
+Test 13: Switch to non-existent profile
+✓ Switch to non-existent profile OK
+Test 14: getProfileMeta
+✓ getProfileMeta OK
+Test 15: getProfileMeta non-existent
+✓ getProfileMeta non-existent OK
+Test 16: getProfileData
+✓ getProfileData OK
+Test 17: updateProfileData merges
+✓ updateProfileData merges OK
+Test 17b: immediate persistence of profile-scoped keys
+✓ immediate persistence of profile-scoped keys OK
+Test 17bb: reconciliation history survives profile saves
+✓ reconciliation history preservation OK
+Test 17c: detect live profile-scoped data
+✓ detect live profile-scoped data OK
+Test 17d: bootstrap loads current profile by default
+✓ bootstrap loads current profile by default OK
+Test 17e: bootstrap preserves live data when requested
+✓ bootstrap preserves live data when requested OK
+Test 17f: explicit empty tranche override
+✓ explicit empty tranche override OK
+Test 17g: profile-bound tranche migration remains raw-preserving
+✓ profile-bound raw-preserving migration OK
+Test 18: setProfileVerbundMembership
+✓ setProfileVerbundMembership OK
+Test 18b: Legacy membership default
+✓ Legacy membership default OK
+Test 19: listProfiles includes belongsToHousehold
+✓ listProfiles includes belongsToHousehold OK
+Test 20: Export/Import bundle
+✓ Export/Import bundle OK
+Test 21: Import with globals
+✓ Import with globals OK
+Test 21b: Import via window.name
+✓ Import via window.name OK
+Test 21c: Export/Import preserves current profile tranches
+✓ Export/Import preserves current profile tranches OK
+Test 22: Import invalid registry
+✓ Import invalid registry OK
+Test 22b: Import preflight and rollback are mutation-safe
+✓ Import preflight and rollback mutation safety OK
+Test 23: Corrupt registry JSON recovery
+✓ Corrupt registry JSON recovery OK
+Test 24: Registry with missing profiles recovery
+✓ Registry with missing profiles recovery OK
+Test 25: Registry null/unavailable distinction
+✓ Registry null/unavailable distinction OK
+Test 25b: Ghost current/active IDs enter context recovery
+✓ Ghost profile context recovery OK
+Test 25c: Corrupt health and balance fields require field-specific recovery
+✓ Profile field recovery contract OK
+Test 25d: Corrupt live profile fields block save-before-load without registry mutation
+✓ Live profile field recovery contract OK
+Test 26: getActiveProfileId
+✓ getActiveProfileId OK
+Test 27: setCurrentProfileId
+✓ setCurrentProfileId OK
+Test 28: Profile-scoped keys cleared
+✓ Profile-scoped keys cleared OK
+Test 29: Non-profile-scoped keys preserved
+✓ Non-profile-scoped keys preserved OK
+Test 30: Multiple profile data isolation
+✓ Multiple profile data isolation OK
+Test 30a: Profile switches preserve each profile age
+✓ Per-profile age switching OK
+Test 30b: Household metadata ownership survives contaminated legacy profile switch
+✓ Contaminated legacy profile ownership migration OK
+✅ Profile storage behaviors validated
+--- Profile Storage Tests Completed ---
+✅ profile-storage.test.mjs completed.
+📊 FILE RESULT: profile-storage.test.mjs | mode=in-process | assertions=255 | passed=255 | failedAssertions=0 | failedFiles=0
+
+📂 Running profile-ui-contract.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/profile-ui-contract.test.mjs...
+--- Profile UI Contract Tests ---
+Test 1: Profilverbund selector renders one row per profile and toggles targets
+✅ PASS: Selector should render exactly one row per profile
+✅ PASS: Household profiles should be checked by default
+✅ PASS: Opted-out profiles should be unchecked
+✅ PASS: Toggle target should be visible in Profilverbund mode
+✅ PASS: Toggle target should be hidden outside Profilverbund mode
+✓ Profilverbund selector UI OK
+Test 2: Profilverbund summaries prefer detailed tranches over aggregate fields
+✅ PASS: Asset summary should use detailed alt tranches
+✅ PASS: Asset summary should use detailed neu tranches
+✅ PASS: Asset summary should use detailed gold tranches
+✅ PASS: Asset summary should use detailed money-market tranches
+✅ PASS: Profile summary should not double-count aggregate fallback fields
+✅ PASS: Explicit empty tranches must suppress aggregate equity fallback
+✅ PASS: Explicit empty tranches must suppress aggregate money-market fallback
+✅ PASS: Explicit empty tranches must not synthesize household lots
+✅ PASS: Explicit empty tranches should retain only non-tranche cash
+✓ Profilverbund asset double-count guard OK
+Test 3: profile-manager handles missing profiles without throwing
+✅ PASS: Missing profile switch should render controlled error
+✅ PASS: Missing profile switch should mark error status
+✓ profile-manager missing profile handling OK
+Test 4: profile-bridge tolerates invalid handoff data and installs lifecycle hooks
+✅ PASS: Profile bridge should install persistence hooks
+✅ PASS: Profile bridge should install BFCache refresh hook
+✓ profile-bridge invalid handoff handling OK
+✅ Profile UI contracts validated
+--- Profile UI Contract Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 18
+Passed: 18
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: profile-ui-contract.test.mjs | mode=isolated | assertions=18 | passed=18 | failedAssertions=0 | failedFiles=0
+
+📂 Running profilverbund-balance.test.mjs in process...
+--- Profilverbund Balance Tests ---
+
+📋 Test 1: aggregateProfilverbundInputs
+
+📋 Test 2: calculateTaxPerEuro
+
+📋 Test 3: proportional distribution
+
+📋 Test 4: tax optimized distribution
+
+📋 Test 4b: runway-first distribution
+
+📋 Test 4c: tax optimized cash first and tranche sale
+
+📋 Test 5: selectTranchesForSale
+
+📋 Test 6: selectTranchesForSale mixed categories
+
+📋 Test 6b: TQF-aware tranche selection
+
+📋 Test 7: loadProfilverbundProfiles per-profile overrides
+
+📋 Test 7b: explicit empty profile tranche override
+
+📋 Test 7c: corrupt selected profile blocks household aggregation
+
+📋 Test 8: asset summaries avoid double counting tranches
+
+📋 Test 8g: profile gold strategy is order-independent
+
+📋 Test 8a: household tranche IDs are profile-scoped
+
+📋 Test 8b: synthetic household tranches retain profile ownership
+
+📋 Test 9: household withdrawal need is calculated once
+
+📋 Test 12: household purposes remain authoritative
+
+📋 Test 13: per-profile tax settlement and loss carry
+
+📋 Test 14: cash purchase attribution
+
+📋 Test 15: provenance and liquidity KPI contracts
+
+📋 Test 16: global tax-optimized source selection
+
+📋 Test 16b: explicit tax exemption in household attribution
+
+📋 Test 17: money-market liquidity is not an equity source
+
+📋 Test 10: proportional cent rounding
+
+📋 Test 11: zero assets fail closed
+✅ profilverbund-balance.test.mjs completed.
+📊 FILE RESULT: profilverbund-balance.test.mjs | mode=in-process | assertions=134 | passed=134 | failedAssertions=0 | failedFiles=0
+
+📂 Running profilverbund-profile-gold-overrides.test.mjs in process...
+--- Profilverbund Profile Gold Overrides ---
+✅ profilverbund-profile-gold-overrides.test.mjs completed.
+📊 FILE RESULT: profilverbund-profile-gold-overrides.test.mjs | mode=in-process | assertions=19 | passed=19 | failedAssertions=0 | failedFiles=0
+
+📂 Running project-license-metadata.test.mjs in process...
+--- Project License Metadata Contract Tests ---
+✅ Project license metadata contract tests passed
+✅ project-license-metadata.test.mjs completed.
+📊 FILE RESULT: project-license-metadata.test.mjs | mode=in-process | assertions=14 | passed=14 | failedAssertions=0 | failedFiles=0
+
+📂 Running regime-signals.test.mjs in process...
+--- Regime Signals Contract Tests ---
+--- Regime Signals Contract Tests Completed ---
+✅ regime-signals.test.mjs completed.
+📊 FILE RESULT: regime-signals.test.mjs | mode=in-process | assertions=77 | passed=77 | failedAssertions=0 | failedFiles=0
+
+📂 Running results-metrics.test.mjs in process...
+--- Results Metrics UI Contract Tests ---
+--- Results Metrics UI Contract Tests Completed ---
+✅ results-metrics.test.mjs completed.
+📊 FILE RESULT: results-metrics.test.mjs | mode=in-process | assertions=95 | passed=95 | failedAssertions=0 | failedFiles=0
+
+📂 Running results-renderers.test.mjs in process...
+--- Results Renderers Tests ---
+--- Results Renderers Tests Completed ---
+✅ results-renderers.test.mjs completed.
+📊 FILE RESULT: results-renderers.test.mjs | mode=in-process | assertions=31 | passed=31 | failedAssertions=0 | failedFiles=0
+
+📂 Running runner-contract.test.mjs in process...
+--- Runner Contract Tests ---
+Runner contract tests passed
+✅ runner-contract.test.mjs completed.
+📊 FILE RESULT: runner-contract.test.mjs | mode=in-process | assertions=54 | passed=54 | failedAssertions=0 | failedFiles=0
+
+📂 Running runtime-build-provenance.test.mjs in process...
+--- Runtime Build Provenance Tests ---
+✅ Runtime build provenance tests passed
+✅ runtime-build-provenance.test.mjs completed.
+📊 FILE RESULT: runtime-build-provenance.test.mjs | mode=in-process | assertions=83 | passed=83 | failedAssertions=0 | failedFiles=0
+
+📂 Running scenario-analyzer.test.mjs in process...
+--- Scenario Analyzer Tests ---
+✅ Scenario analyzer tests passed
+--- Scenario Analyzer Tests Completed ---
+✅ scenario-analyzer.test.mjs completed.
+📊 FILE RESULT: scenario-analyzer.test.mjs | mode=in-process | assertions=27 | passed=27 | failedAssertions=0 | failedFiles=0
+
+📂 Running scenarios.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/scenarios.test.mjs...
+--- Advanced Scenario Tests ---
+✅ PASS: Care case should not be ruin with enough assets
+Care Spending: 48000, Base Spending: 12600
+✅ PASS: Spending should increase in care case
+✅ Care Scenario Passed
+✅ PASS: Widow scenario should be solvable
+Widow Pension Used: 12000
+✅ PASS: Should use the reduced widow pension (12000)
+✅ Widow Scenario Passed (Strict Check)
+Crash End Stocks: 246000 (Start: 500k -> Market: 250k)
+Crash Action: Notfall-Verkauf (Puffer-Sicherung)
+Sales: {"vkAkt":4000,"vkGld":0,"vkBnd":0,"stAkt":0,"stGld":0,"stBnd":0,"vkGes":4000,"stGes":0}
+✅ PASS: Should retain significant stock value after crash (>= 200k)
+✅ PASS: Crash should trigger emergency sale or rebalancing action
+✅ PASS: Should sell *some* assets to cover liquidity gap
+✅ PASS: Crash should not cause ruin immediately
+✅ Crash Scenario Passed (Strict Check)
+--- Advanced Scenario Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 8
+Passed: 8
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: scenarios.test.mjs | mode=isolated | assertions=8 | passed=8 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulation-data-inventory.test.mjs in process...
+--- Simulation Data Inventory Tests ---
+Test 1: V1 inventory validates and is deeply immutable
+✓ V1 shape and immutability OK
+Test 2: historical series own complete, series-specific quality segments
+✓ series-specific quality segmentation OK
+Test 3: mandatory provenance fields and evidence vocabulary are explicit
+✓ mandatory fields and evidence separation OK
+Test 4: every required static data class has implementation coverage
+✓ static class coverage OK
+Test 5: all six embedded historical series match their own SHA-256
+✓ historical series hashes OK
+Test 6: exported static data values match their inventory SHA-256
+✓ exported static-data hashes OK
+Test 7: source-local user/tax defaults match their inventoried contracts
+✓ source-local default contracts OK
+Test 8: source gates resolve evidence without claiming external validation
+✓ source gates OK
+Test 9: fabricated provenance and false validation claims fail closed
+✓ negative provenance and hash gates OK
+✅ Simulation data inventory tests passed
+✅ simulation-data-inventory.test.mjs completed.
+📊 FILE RESULT: simulation-data-inventory.test.mjs | mode=in-process | assertions=373 | passed=373 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulation.test.mjs in process...
+--- Simulation Loop Tests ---
+✅ Extracted portfolio progression helpers passed
+✅ Extracted household pension helper passed
+✅ Widow percentage derivation and indexation passed
+✅ Survivor pension offset gates passed
+✅ Extracted EngineAPI input mapping passed
+✅ Extracted accumulation year helper passed
+✅ Extracted year result builder passed
+✅ Simulation run-through passed
+✅ Engine withdrawal-shape technical outcome passed
+✅ Engine action-shape technical outcome passed
+✅ Engine pre-3-bucket action boundary passed
+✅ Engine annual-tax-settlement boundary passed
+✅ Engine Direct inventory-capacity boundary passed
+✅ Engine Direct missing-inventory boundary passed
+✅ Engine Direct-use technical outcome passed
+✅ Engine read-only adapter action boundary passed
+✅ Engine hostile-accessor boundary passed
+✅ Engine hostile-tax-aggregate boundary passed
+✅ Health bucket annual integration passed
+✅ Ruin detection passed
+--- Simulation Loop Tests Completed ---
+✅ simulation.test.mjs completed.
+📊 FILE RESULT: simulation.test.mjs | mode=in-process | assertions=94 | passed=94 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-3bucket-ui-e2e.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/simulator-3bucket-ui-e2e.test.mjs...
+--- Simulator 3-Bucket UI E2E Tests ---
+✅ PASS: bondTargetFactor default should only be set when empty
+✅ PASS: drawdownTrigger default should only be set when empty
+✅ PASS: 3-bucket fields should be visible in 3-bucket mode
+✅ PASS: existing bondTargetFactor must not be overwritten
+✅ PASS: existing drawdownTrigger must not be overwritten
+✅ PASS: legacy mode should normalize to standard
+✅ PASS: 3-bucket fields should hide in standard mode
+✅ PASS: standard mode must not expose 3-bucket columns
+✅ PASS: 3-bucket mode should expose ETF column
+✅ PASS: 3-bucket mode should expose Bonds/Puffer column
+✅ PASS: 3-bucket mode should expose Handl.Bd column
+✅ PASS: CSV should include Bonds/Puffer header in 3-bucket mode
+✅ PASS: CSV should include Handl.Bd header in 3-bucket mode
+✅ PASS: chart render should append chart nodes
+✅ PASS: chart rerender must clear container before drawing
+✅ PASS: Portfolio chart should retain the terminal zero point on the original three-point time axis
+✅ Simulator 3-bucket UI E2E tests passed
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 16
+Passed: 16
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: simulator-3bucket-ui-e2e.test.mjs | mode=isolated | assertions=16 | passed=16 | failedAssertions=0 | failedFiles=0
+
+⏭️  simulator-backtest-characterization.test.mjs is covered by separate gate: node tests/run-single.mjs tests/simulator-backtest-characterization.test.mjs
+   Reason: Byte-exact historical evidence is pinned to its recorded Windows x64 and Node v25.2.1 runtime.
+📊 FILE RESULT: simulator-backtest-characterization.test.mjs | mode=separate-gate | assertions=0 | passed=0 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-backtest-ui.test.mjs in process...
+--- Simulator Backtest UI Contract Tests ---
+Test 1: dataset bounds are projected into controls and visible guidance
+Test 2: empty, NaN, fractional, reversed and out-of-bounds periods fail per field
+Test 3: cohort horizon validation and focus are deterministic
+Test 4: technical status exposes a stable code without stack or local path
+Test 5: data-quality projection counts canonical observation statuses
+Test 6: accessible table has caption, scoped headers and escaped cell data
+Test 7: trade cells keep plain text, sign semantics and whitelisted colors
+Test 8: zero-eligible cohort inventory renders without division artifacts and is immutable
+Simulator Backtest UI contract tests passed
+✅ simulator-backtest-ui.test.mjs completed.
+📊 FILE RESULT: simulator-backtest-ui.test.mjs | mode=in-process | assertions=45 | passed=45 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-backtest.test.mjs in process...
+--- Simulator Backtest Tests ---
+✅ Simulator backtest tests passed
+--- Simulator Backtest Tests Completed ---
+✅ simulator-backtest.test.mjs completed.
+📊 FILE RESULT: simulator-backtest.test.mjs | mode=in-process | assertions=79 | passed=79 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-dynamic-flex-persistence.test.mjs in process...
+--- Simulator Dynamic-Flex Persistence ---
+✅ Simulator Dynamic-Flex persistence test passed
+✅ simulator-dynamic-flex-persistence.test.mjs completed.
+📊 FILE RESULT: simulator-dynamic-flex-persistence.test.mjs | mode=in-process | assertions=10 | passed=10 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-headless.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/simulator-headless.test.mjs...
+--- Headless Full Backtest Reproduction (Direct Mode) ---
+Starting Simulation. Initial Liq: 0
+✅ PASS: Simulation year 2000 should return a portfolio
+✅ Year 2000 done. Liq: 37356€, Stocks Buy: 0
+✅ PASS: Simulation year 2001 should return a portfolio
+✅ Year 2001 done. Liq: 50474€, Stocks Buy: 0
+✅ PASS: Simulation year 2002 should return a portfolio
+✅ Year 2002 done. Liq: 27342€, Stocks Buy: 0
+✅ PASS: Simulation year 2003 should return a portfolio
+✅ Year 2003 done. Liq: 34116€, Stocks Buy: 0
+✅ PASS: Simulation year 2004 should return a portfolio
+✅ Year 2004 done. Liq: 30733€, Stocks Buy: 0
+✅ PASS: Simulation year 2005 should return a portfolio
+✅ Year 2005 done. Liq: 52814€, Stocks Buy: 0
+✅ PASS: Simulation year 2006 should return a portfolio
+✅ Year 2006 done. Liq: 51370€, Stocks Buy: 0
+✅ PASS: Simulation year 2007 should return a portfolio
+✅ Year 2007 done. Liq: 54391€, Stocks Buy: 0
+✅ PASS: Simulation year 2008 should return a portfolio
+✅ Year 2008 done. Liq: 31519€, Stocks Buy: 0
+✅ PASS: Simulation year 2009 should return a portfolio
+✅ Year 2009 done. Liq: 6762€, Stocks Buy: 0
+✅ PASS: Simulation year 2010 should return a portfolio
+✅ Year 2010 done. Liq: 31700€, Stocks Buy: 0
+✅ PASS: Simulation year 2011 should return a portfolio
+✅ Year 2011 done. Liq: 56178€, Stocks Buy: 0
+✅ PASS: Simulation year 2012 should return a portfolio
+✅ Year 2012 done. Liq: 64394€, Stocks Buy: 0
+✅ PASS: Simulation year 2013 should return a portfolio
+✅ Year 2013 done. Liq: 67178€, Stocks Buy: 0
+✅ PASS: Simulation year 2014 should return a portfolio
+✅ Year 2014 done. Liq: 74008€, Stocks Buy: 0
+✅ PASS: Simulation year 2015 should return a portfolio
+✅ Year 2015 done. Liq: 63066€, Stocks Buy: 0
+✅ PASS: Simulation year 2016 should return a portfolio
+✅ Year 2016 done. Liq: 60615€, Stocks Buy: 0
+✅ PASS: Simulation year 2017 should return a portfolio
+✅ Year 2017 done. Liq: 62112€, Stocks Buy: 0
+✅ PASS: Simulation year 2018 should return a portfolio
+✅ Year 2018 done. Liq: 73802€, Stocks Buy: 0
+✅ PASS: Simulation year 2019 should return a portfolio
+✅ Year 2019 done. Liq: 63688€, Stocks Buy: 0
+✅ PASS: Simulation year 2020 should return a portfolio
+✅ Year 2020 done. Liq: 73014€, Stocks Buy: 0
+✅ PASS: Simulation year 2021 should return a portfolio
+✅ Year 2021 done. Liq: 70553€, Stocks Buy: 0
+✅ PASS: Simulation year 2022 should return a portfolio
+✅ Year 2022 done. Liq: 72867€, Stocks Buy: 0
+✅ PASS: Simulation year 2023 should return a portfolio
+✅ Year 2023 done. Liq: 81749€, Stocks Buy: 0
+✅ PASS: Simulation year 2024 should return a portfolio
+✅ Year 2024 done. Liq: 89552€, Stocks Buy: 0
+✅ PASS: Simulation year 2025 should return a portfolio
+✅ Year 2025 done. Liq: 106634€, Stocks Buy: 0
+✅ Simulation completed successfully.
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 26
+Passed: 26
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: simulator-headless.test.mjs | mode=isolated | assertions=26 | passed=26 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-heatmap.test.mjs in process...
+--- Simulator Heatmap Tests ---
+✅ Simulator heatmap tests passed
+--- Simulator Heatmap Tests Completed ---
+✅ simulator-heatmap.test.mjs completed.
+📊 FILE RESULT: simulator-heatmap.test.mjs | mode=in-process | assertions=22 | passed=22 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-household-needs-persistence.test.mjs in process...
+Test 1: legacy migration is deterministic across the active household
+Test 2: each edited field persists independently and invalid edits are visible
+Test 3: only explicitly edited fields override profile defaults
+Test 4: corruption heals once while unsupported future schemas remain untouched
+Test 5: reset prevents legacy values from being re-imported
+Simulator household needs persistence tests passed
+✅ simulator-household-needs-persistence.test.mjs completed.
+📊 FILE RESULT: simulator-household-needs-persistence.test.mjs | mode=in-process | assertions=73 | passed=73 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-input-readers.test.mjs in process...
+--- Simulator Input Reader Tests ---
+Test 1: bounded parser handles comma and clamps
+✓ bounded parser OK
+Test 2: pension readers preserve legacy fallbacks
+✓ pension legacy fallbacks OK
+Test 2b: missing widow fields use the documented contract defaults
+✓ widow contract defaults OK
+Test 3: tranche reader prioritizes profile override
+✓ tranche priority OK
+Test 4: strategy readers preserve bounds and normalization
+✓ strategy readers OK
+Test 4b: strategy reader exposes only the canonical runway input
+✓ canonical runway reader OK
+Test 5: care reader tolerates missing DOM fields
+✓ care reader missing DOM defaults OK
+Test 6: base reader and validator handle minimum flex
+✓ minimum flex reader/validator OK
+Test 7: getCommonInputs preserves profilverbund minimum-flex split
+✓ profilverbund minimum-flex split preserved OK
+Test 8: getCommonInputs and validator enforce tail-risk UI contract
+✓ tail-risk UI contract validation OK
+✅ Simulator input reader tests passed
+✅ simulator-input-readers.test.mjs completed.
+📊 FILE RESULT: simulator-input-readers.test.mjs | mode=in-process | assertions=61 | passed=61 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-log-columns.test.mjs in process...
+--- Simulator Log Columns Tests ---
+✅ Simulator log columns tests passed
+✅ simulator-log-columns.test.mjs completed.
+📊 FILE RESULT: simulator-log-columns.test.mjs | mode=in-process | assertions=100 | passed=100 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-monte-carlo.test.mjs in process...
+--- Simulator Monte Carlo Tests ---
+--- Simulator Monte Carlo Tests Completed ---
+✅ simulator-monte-carlo.test.mjs completed.
+📊 FILE RESULT: simulator-monte-carlo.test.mjs | mode=in-process | assertions=166 | passed=166 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-multiprofile-aggregation.test.mjs in process...
+--- Simulator Multi-Profile Aggregation ---
+
+📋 Test 0: Persisted care drift keeps percent storage and one runtime normalization
+
+📋 Test 0b: Balance needs are authoritative over read-only legacy simulator values
+
+📋 Test 1: Two profiles
+
+📋 Test 1b: Household minimum flex is additive and fails closed above household flex
+
+📋 Test 2: Health bucket remains primary household setting
+
+📋 Test 3: More than two profiles warning
+
+📋 Test 4: Dynamic-Flex profile differences should not produce household warning
+
+📋 Test 5: Detailed tranches merge with unique profile-scoped ids
+
+📋 Test 6: Zero-market tranches remain explicit and do not fall back
+
+📋 Test 6b: Cent-identical detail assets do not trigger a rounding warning
+
+📋 Test 7: Explicit empty and corrupt profile inputs fail closed
+
+📋 Test 8: O-06 hybrid detail and aggregate profiles fail closed
+
+📋 Test 9: Detail plus explicit empty or cash-only missing profile remains lossless
+
+📋 Test 10: O-07 profile gold targets aggregate as euros, independent of primary profile
+
+📋 Test 11: Care bucket is excluded from each profile gold base
+✅ simulator-multiprofile-aggregation.test.mjs completed.
+📊 FILE RESULT: simulator-multiprofile-aggregation.test.mjs | mode=in-process | assertions=88 | passed=88 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-portfolio-tranches.test.mjs in process...
+--- Simulator Portfolio Tranche Invariants ---
+--- Simulator Portfolio Tranche Invariants Completed ---
+✅ simulator-portfolio-tranches.test.mjs completed.
+📊 FILE RESULT: simulator-portfolio-tranches.test.mjs | mode=in-process | assertions=32 | passed=32 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-real-withdrawal-contract.test.mjs in process...
+--- Simulator Real Withdrawal Contract Tests ---
+--- Simulator Real Withdrawal Contract Tests Completed ---
+✅ simulator-real-withdrawal-contract.test.mjs completed.
+📊 FILE RESULT: simulator-real-withdrawal-contract.test.mjs | mode=in-process | assertions=78 | passed=78 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-sweep-consumers.test.mjs in process...
+--- Sweep Metric Consumer Contract Tests ---
+--- Sweep Metric Consumer Contract Tests Completed ---
+✅ simulator-sweep-consumers.test.mjs completed.
+📊 FILE RESULT: simulator-sweep-consumers.test.mjs | mode=in-process | assertions=12 | passed=12 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-sweep.test.mjs in process...
+--- Simulator Sweep Tests ---
+Test 1: parseRangeInput - Einzelwert
+✓ parseRangeInput Einzelwert OK
+Test 2: parseRangeInput - Kommaliste
+✓ parseRangeInput Kommaliste OK
+Test 3: parseRangeInput - Range-Format
+✓ parseRangeInput Range-Format OK
+Test 4: parseRangeInput - Dezimalwerte
+✓ parseRangeInput Dezimalwerte OK
+Test 5: parseRangeInput - Leere Eingabe
+✓ parseRangeInput Leere Eingabe OK
+Test 6: parseRangeInput - Fehlerhafte Eingabe
+✓ parseRangeInput Fehlerhafte Eingabe OK
+Test 7: parseRangeInput - Negativer Step
+✓ parseRangeInput Negativer Step OK
+Test 8: cartesianProductLimited - Basis
+✓ cartesianProductLimited Basis OK
+Test 9: cartesianProductLimited - Limit überschritten
+✓ cartesianProductLimited Limit OK
+Test 10: cartesianProductLimited - Leeres Array
+✓ cartesianProductLimited Leeres Array OK
+Test 11: isBlockedKey - Partner-Keys
+✓ isBlockedKey Partner-Keys OK
+Test 12: isBlockedKey - r2/p2-Keys
+✓ isBlockedKey r2/p2-Keys OK
+Test 13: SWEEP_ALLOWED_KEYS - Whitelist
+✓ SWEEP_ALLOWED_KEYS Whitelist OK
+Test 14: extractP2Invariants - Basis
+✓ extractP2Invariants Basis OK
+Test 15: extractP2Invariants - Ohne Partner
+✓ extractP2Invariants Ohne Partner OK
+Test 16: areP2InvariantsEqual - Gleiche Werte
+✓ areP2InvariantsEqual Gleiche Werte OK
+Test 17: areP2InvariantsEqual - Unterschiedliche Werte
+✓ areP2InvariantsEqual Unterschiedliche Werte OK
+Test 18: deepClone - Tiefe Kopie
+✓ deepClone Tiefe Kopie OK
+Test 19: normalizeWidowOptions - Defaults
+✓ normalizeWidowOptions Defaults OK
+Test 20: normalizeWidowOptions - Werte-Normalisierung
+✓ normalizeWidowOptions Werte-Normalisierung OK
+Test 21: buildSweepInputs - Parameter-Überschreibung
+✓ buildSweepInputs Parameter-Überschreibung OK
+Test 22: runSweepChunk - Basis-Ausführung
+✓ runSweepChunk Basis-Ausführung OK
+Test 23: runSweepChunk - Determinismus
+✓ runSweepChunk Determinismus OK
+Test 24: runSweepChunk - Invalid Dynamic-Flex Kombination
+✓ runSweepChunk Invalid Dynamic-Flex Kombination OK
+Test 25: runSweepChunk - Invalid Quantile-Bereich
+✓ runSweepChunk Invalid Quantile-Bereich OK
+Test 26: runSweepChunk - Invalid Go-Go Multiplikator wenn Go-Go inaktiv
+✓ runSweepChunk Invalid Go-Go Multiplikator wenn Go-Go inaktiv OK
+Test 27: runSweepChunk - Gueltige Dynamic-Flex Grenzwerte
+✓ runSweepChunk Gueltige Dynamic-Flex Grenzwerte OK
+Test 28: runSweepChunk - Mindest-Flex wird in Sweep-Laeufen akzeptiert
+✓ runSweepChunk Mindest-Flex akzeptiert OK
+Test 29: O-11 - expliziter Stationary-/Markov-Dispatch mit Indexfingerprint
+✓ O-11 expliziter Stationary-/Markov-Dispatch OK
+Test 30: Sweep Seed 0 Reproduzierbarkeit
+✓ Sweep Seed 0 Reproduzierbarkeit OK
+Test 31: Sweep Startjahrfilter und Estimated-History-Ausschluss
+✓ Sweep Startjahrfilter und Estimated-History-Ausschluss OK
+Test 32: Single-Combination-Sweep/MC Samplingparitaet
+✓ Single-Combination-Sweep/MC Samplingparitaet OK
+Test 33: Unbekannte Sweep-Methode
+✓ Unbekannte Sweep-Methode OK
+Test 34: Fehlender Sweep-Request
+✓ Fehlender Sweep-Request OK
+Test 35: Sweep Kombinationsindex-Provenienz
+✓ Sweep Kombinationsindex-Provenienz OK
+Test 36: Sweep Regime-Pool Fail-Closed
+✓ Sweep Regime-Pool Fail-Closed OK
+Test 37: O-12 Sweep Partner-/Witwenpfad
+✓ O-12 Sweep Partner-/Witwenpfad OK
+Test 38: Sweep Pflege-Flex-/Floor-Paritaet
+✓ Sweep Pflege-Flex-/Floor-Paritaet OK
+Test 39: O-20 Sweep Survival-Horizon-/VPW-Paritaet
+✓ O-20 Sweep Survival-Horizon-/VPW-Paritaet OK
+Test 40: O-13 Sweep Tail-Risk-Overlay
+✓ O-13 Sweep Tail-Risk-Overlay OK
+Test 41: Single-Profile Sweep/MC Ergebnisparitaet
+✓ Single-Profile Sweep/MC Ergebnisparitaet OK
+Test 42: A08-1 Sweep Witwenrenten-Offset
+✓ A08-1 Sweep Witwenrenten-Offset OK
+Test 43: A08-5 Sweep Todesjahr-Diagnostik
+✓ A08-5 Sweep Todesjahr-Diagnostik OK
+Test 44: A08-8 Sweep Paar-Flex ohne Pflegelogik
+✓ A08-8 Sweep Paar-Flex ohne Pflegelogik OK
+Test 45: D-07 Common Random Numbers
+✓ D-07 Common Random Numbers OK
+Test 46: O-14 Terminaler Ruin-Drawdown
+✓ O-14 Terminaler Ruin-Drawdown OK
+--- Simulator Sweep Tests Abgeschlossen ---
+✅ simulator-sweep.test.mjs completed.
+📊 FILE RESULT: simulator-sweep.test.mjs | mode=in-process | assertions=289 | passed=289 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-tab-layout.test.mjs in process...
+✅ simulator-tab-layout.test.mjs completed.
+📊 FILE RESULT: simulator-tab-layout.test.mjs | mode=in-process | assertions=28 | passed=28 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-tax-settlement.test.mjs in process...
+--- Simulator Tax Settlement Tests ---
+✅ Simulator tax settlement tests passed
+✅ simulator-tax-settlement.test.mjs completed.
+📊 FILE RESULT: simulator-tax-settlement.test.mjs | mode=in-process | assertions=77 | passed=77 | failedAssertions=0 | failedFiles=0
+
+📂 Running simulator-ui-orchestration.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/simulator-ui-orchestration.test.mjs...
+--- Simulator UI Orchestration Tests ---
+Test 1: simulator-main exposes legacy browser entry points
+✅ PASS: Simulator onload handler wird registriert
+✅ PASS: Monte-Carlo Handler wird global verdrahtet
+✅ PASS: Backtest Handler wird global verdrahtet
+✅ PASS: Sweep Handler wird global verdrahtet
+✅ PASS: Legacy simulateOneYear Handler bleibt verfuegbar
+Test 2: tab buttons activate exactly one target panel
+✅ PASS: Vorheriger Tab-Button wird deaktiviert
+✅ PASS: Geklickter Tab-Button wird aktiviert
+✅ PASS: Vorheriges Panel wird deaktiviert
+✅ PASS: Ziel-Panel wird aktiviert
+Test 3: reset button removes only simulator persistence keys
+✅ PASS: Reset entfernt sim_-Keys
+✅ PASS: Reset deaktiviert den Haushaltsbedarf-Override
+✅ PASS: Reset hinterlaesst keine wirksamen Haushaltswerte
+✅ PASS: Reset laesst fremde Keys unveraendert
+✅ PASS: Reset loest genau einen Reload aus
+✅ PASS: Fehlgeschlagener Reset-Flush wird sichtbar gemeldet
+✅ PASS: Fehlgeschlagener Reset-Flush laedt die Seite nicht neu
+✅ PASS: Reset bleibt nach Flush-Fehler erneut ausfuehrbar
+Test 4: central simulator controls persist and update visible state
+✅ PASS: Partner-Sektion wird sichtbar geschaltet
+✅ PASS: Partner-Aktiv-Flag wird persistiert
+✅ PASS: Partner-Toggle fragt nicht unnoetig nach Bestaetigung
+✅ PASS: Persistierter Haushalts-Floor wird wiederhergestellt
+✅ PASS: Persistierter Haushalts-Flex wird wiederhergestellt
+✅ PASS: Persistierter Haushalts-Mindest-Flex wird wiederhergestellt
+✅ PASS: new/empty persistence uses the central 10,000-run default
+✅ PASS: an explicit persisted valid run count is not overwritten
+✅ PASS: Input-Persistenz speichert geaenderten Haushalts-Floor
+✅ PASS: Input-Persistenz behaelt den Haushalts-Flex
+✅ PASS: Input-Persistenz behaelt den Haushalts-Mindest-Flex
+✅ PASS: Legacy-Profilwert wird nicht mit dem Haushaltswert ueberschrieben
+✅ PASS: Ungueltige bearbeitete Bedarfseingabe wird direkt am Feld gemeldet
+✅ PASS: Laufende Tastatureingabe wird nicht durch reportValidity unterbrochen
+✅ PASS: Feldnahe Browsermeldung wird beim Abschluss ausgeloest
+✅ PASS: Eine gueltige Korrektur entfernt die Feldwarnung
+✅ PASS: Gueltiger Flex wird trotz leerem Mindest-Flex gegen dessen letzten wirksamen Wert gespeichert
+✅ PASS: Korrektur des Nachbarfelds behaelt die zuvor gespeicherte Flex-Aenderung
+✅ PASS: Korrigierter Mindest-Flex wird ebenfalls gespeichert
+✅ PASS: Defekter Haushalts-Override faellt kontrolliert aus
+✅ PASS: Defekter Haushalts-Override erzeugt ein sichtbares Warnsignal
+Test 5: stress and sweep UI render visible state for valid and invalid combinations
+✅ PASS: Stress-Presets werden in das Select geschrieben
+✅ PASS: Simulator.html enthaelt das erwartete Sweep-Ranges-Fieldset
+✅ PASS: Sweep Mock-DOM bleibt exakt mit Simulator.html synchron
+✅ PASS: Entferntes Direkt-Horizon-Feld laesst keinen verwaisten Persistenzwert zurueck
+✅ PASS: Initialer Zaehler erfasst den vor seiner Initialisierung geladenen Gold-Bereich
+✅ PASS: HTML-Vorgaben ergeben 50 Kombinationen
+✅ PASS: Inaktive VPW-Felder werden nicht an den Runner uebergeben
+✅ PASS: Gold-Target-Range wird gezaehlt
+✅ PASS: Persistierter Bereich wird geladen
+✅ PASS: Persistierter Bereich wird gezaehlt
+✅ PASS: Aktives Quantil verdoppelt die Matrix
+✅ PASS: Ungueltige aktive VPW-Range wird blockiert
+✅ PASS: Aktives Go-Go verdoppelt die Matrix
+✅ PASS: Aktive VPW-Felder werden an den Runner uebergeben
+✅ PASS: Andere Horizontmethode entfernt Quantil
+✅ PASS: Presetwechsel aktualisiert den Zaehler
+✅ PASS: Ungueltige Sweep-Range wird sichtbar blockiert
+✅ PASS: Zu grosse Sweep-Kombination zeigt Max-Hinweis
+✅ PASS: Zu grosse Sweep-Kombination wird als Fehler markiert
+✅ PASS: Lesbarer kanonischer Metrikwert erzeugt SVG-Zelle
+✅ PASS: Explizit ungueltige Kombination erzeugt die Leermeldung
+Test 6: optimizer applies selected parameters without running Monte-Carlo jobs
+✅ PASS: Optimizer uebernimmt kanonischen Runway
+✅ PASS: Optimizer uebernimmt Gold-Rebalancing-Band
+✅ PASS: Optimizer uebernimmt Gold-Zielquote
+✅ PASS: Gold wird bei Zielquote > 0 aktiviert
+Test 7: Monte-Carlo controls expose method semantics and CAPE precedence
+✅ PASS: Regime-Methoden deaktivieren Blocklaengenfeld
+✅ PASS: Regime-Methoden behalten neutrales Blockgroessenlabel
+✅ PASS: FILTER zeigt das Startjahrfeld
+✅ PASS: FILTER blendet die Recency-Halbwertszeit aus
+✅ PASS: FILTER-Ausgabewert wird synchronisiert
+✅ PASS: Recency-Ausgabewert wird synchronisiert
+✅ PASS: CAPE plus Gewichtung zeigt den sichtbaren Vorranghinweis
+✅ PASS: Der Vorranghinweis verschwindet ohne CAPE-Sampling
+✅ PASS: Stationary Bootstrap aktiviert Blocklaengenfeld
+✅ PASS: Stationary Bootstrap zeigt erwartete Blocklaenge
+✅ PASS: Stationary Tooltip nennt erlaubten Parameterbereich
+✅ PASS: MC-Methode wird persistiert
+Test 8: Monte-Carlo cancel UI exposes running and cancelling states
+✅ PASS: MC start remains disabled while a run is active
+✅ PASS: MC cancel is enabled for the active run
+✅ PASS: MC cancel is visible for the active run
+✅ PASS: MC cancel dispatches exactly one bound action per click
+✅ PASS: MC start remains disabled while cancellation completes
+✅ PASS: duplicate MC cancel is disabled while cancellation completes
+✅ PASS: cancelling state is visible on the cancel button
+✅ PASS: cancelled status is visibly rendered
+✅ PASS: MC start is restored after lifecycle completion
+✅ PASS: MC cancel is hidden after lifecycle completion
+✅ PASS: lifecycle state does not mutate progress visibility directly
+Test 9: Backtest controls receive bounds and exactly one module handler
+✅ PASS: Backtest start input receives provider minimum
+✅ PASS: Backtest end input receives provider maximum
+✅ PASS: Backtest dataset hint is visible
+✅ PASS: Backtest start button has exactly one module click handler
+✅ PASS: Cohort toggle has exactly one module change handler
+✅ PASS: Cohort horizon remains disabled until explicitly selected
+Test 10: missing profile selection fails closed while migration remains pending
+✅ PASS: Fehlender Profilverbund setzt einen expliziten Recovery-Blocker
+✅ PASS: Fehlender Profilverbund blockiert Monte-Carlo
+✅ PASS: Fehlender Profilverbund blockiert Backtest
+✅ PASS: Fehlender Profilverbund wird sichtbar gemeldet
+Simulator UI orchestration tests passed
+--- Simulator UI Orchestration Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 96
+Passed: 96
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: simulator-ui-orchestration.test.mjs | mode=isolated | assertions=96 | passed=96 | failedAssertions=0 | failedFiles=0
+
+📂 Running slice-02-risk-display-copy-contract.test.mjs in process...
+--- Slice 02 Risk Display Copy Contract Tests ---
+--- Slice 02 Risk Display Copy Contract Tests Completed ---
+✅ slice-02-risk-display-copy-contract.test.mjs completed.
+📊 FILE RESULT: slice-02-risk-display-copy-contract.test.mjs | mode=in-process | assertions=15 | passed=15 | failedAssertions=0 | failedFiles=0
+
+📂 Running slice09-d17-reconstruction.test.mjs in process...
+--- Slice-09 D-17 Reconstruction Contract Tests ---
+✅ Slice-09 D-17 reconstruction contract tests passed
+✅ slice09-d17-reconstruction.test.mjs completed.
+📊 FILE RESULT: slice09-d17-reconstruction.test.mjs | mode=in-process | assertions=6 | passed=6 | failedAssertions=0 | failedFiles=0
+
+📂 Running snapshot-archive.test.mjs in process...
+Test 1: buildSnapshot normalisiert Schema und erzeugt stabile ID
+Test 2: captureCurrentRecords nutzt Snapshot-Key-Policy
+Test 3: validateSnapshot lehnt unpassenden recordCount ab
+Test 4: SnapshotArchive delegiert an In-Memory-Fake-Storage
+Test 5: toSnapshotIndexEntry markiert fehlende activeProfileId als nicht standard-restorable
+Snapshot archive tests passed.
+✅ snapshot-archive.test.mjs completed.
+📊 FILE RESULT: snapshot-archive.test.mjs | mode=in-process | assertions=26 | passed=26 | failedAssertions=0 | failedFiles=0
+
+📂 Running snapshot-key-policy.test.mjs in process...
+--- Snapshot Key Policy Tests ---
+Test 1: capture includes fachliche Live-Daten and excludes snapshot archive data
+Test 2: key categories are explicit and non-overlapping for important keys
+Test 3: standard restore preserves profile registry and requires existing profile id
+Test 4: restore keeps technical keys and legacy snapshot history untouched
+Test 5: full restore is explicit and still excludes technical keys
+--- Snapshot Key Policy Tests Completed ---
+✅ snapshot-key-policy.test.mjs completed.
+📊 FILE RESULT: snapshot-key-policy.test.mjs | mode=in-process | assertions=32 | passed=32 | failedAssertions=0 | failedFiles=0
+
+📂 Running spending-planner.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/spending-planner.test.mjs...
+--- SpendingPlanner Logic Tests ---
+✅ PASS: Alarm should activate on critical metrics in Bear market
+✅ PASS: Cutting source should be Alarm/Guardrail
+✅ PASS: Flex rate should be cut
+✅ Alarm Activation Logic works
+✅ PASS: Alarm should de-escalate in healthy recovery
+✅ Alarm De-escalation Logic works
+✅ PASS: Peak de-escalation should allow alarm reset on safe withdrawal rate
+✅ PASS: Planner peak delegate should match alarm policy
+✅ Alarm policy: peak de-escalation works
+✅ PASS: Recovery de-escalation should allow alarm reset with runway and rising closes
+✅ PASS: Planner recovery delegate should match alarm policy
+✅ Alarm policy: recovery de-escalation works
+✅ PASS: Wealth-sufficient bear market should suppress alarm
+✅ PASS: Wealth-sufficient bear market should not newly trigger alarm
+✅ PASS: Suppression should be logged
+✅ Alarm policy: wealth-sufficient suppression works
+✅ PASS: Diagnosis should retain the decision tree reference
+✅ PASS: Diagnosis should expose alarm state
+✅ PASS: Runway target should use the canonical user contract
+✅ PASS: Diagnosis should include inflation cap diagnostics
+✅ PASS: Diagnosis should include budget floor diagnostics
+✅ PASS: Diagnosis should copy final flex rate
+✅ PASS: Diagnosis should copy final withdrawal
+✅ Spending diagnosis builder preserves public shape
+✅ PASS: Static runway target should use the canonical half-year input target
+✅ PASS: Static runway target should name the canonical input source
+✅ PASS: Planner runway target delegate should match diagnosis module
+✅ PASS: Planner runway source delegate should match diagnosis module
+✅ Spending diagnosis runway target delegate works
+✅ PASS: Flex-share curve should apply when flex share is high
+✅ PASS: Flex-share curve should cap the flex rate
+✅ PASS: Flex-share curve should be logged
+✅ Flex-rate policy: flex share curve works
+✅ PASS: Alarm mode should mark alarm source
+✅ PASS: New alarm should reduce flex rate
+✅ PASS: Alarm flex-rate adjustment should be logged
+✅ PASS: Planner flex-rate delegate should match policy
+✅ Flex-rate policy: alarm mode works
+✅ PASS: Bear policy should not increase flex rate
+✅ PASS: Bear policy should use a bear-compatible source, got Guardrail (Runway-Cap)
+✅ PASS: Flex-rate policy should write wealth factor diagnostics
+✅ Flex-rate policy: bear path works
+   Detailed Result: Rate=84, Source=Glättung (Final-Guardrail)
+✅ PASS: Flex Rate should not increase in Bear test, got 84
+✅ PASS: Flex Rate should be non-negative, got 84
+✅ PASS: Source should be Smoothing/Flex-Anteil/Guardrail/Safety-Cap, but was: Glättung (Final-Guardrail)
+✅ Flex Rate Smoothing/Caps work
+✅ PASS: Recovery guardrail should cap flex rate
+✅ PASS: Recovery guardrail should set guardrail source
+✅ PASS: Recovery guardrail should be logged
+✅ PASS: Planner guardrail delegate should match policy
+✅ Guardrail policy: recovery cap works
+✅ PASS: Caution inflation cap should set caution source
+✅ PASS: Caution inflation cap should expose diagnostics
+✅ PASS: Inflation cap threshold should be normalized
+✅ PASS: Caution inflation cap should be logged
+✅ Guardrail policy: caution inflation cap works
+✅ PASS: Budget floor should become source when it lifts the rate
+✅ PASS: Budget floor should lift a zero flex rate
+✅ PASS: Budget floor should expose diagnostics
+✅ PASS: Budget floor should be logged
+✅ Guardrail policy: budget floor works
+✅ PASS: Flex budget should apply cap in bear regime
+✅ PASS: Flex budget cap should reduce rate
+✅ PASS: Flex budget should consume one bear year
+✅ PASS: Flex budget cap should be logged
+✅ PASS: Planner flex budget delegate should match policy
+✅ Flex-budget policy: cap and delegate work
+✅ PASS: Flex budget should not cap outside active regimes
+✅ PASS: Flex budget should recharge by recharge / annualCap years
+✅ Flex-budget policy: recharge works
+✅ PASS: Missing budget state should initialize at max and consume one bear year
+✅ PASS: Second bear year should exhaust the budget
+✅ PASS: Exhausted explicit zero must stay zero in an active regime
+✅ PASS: Exhausted budget must not apply another annual cap
+✅ PASS: Inactive regime should recharge only recharge / annualCap
+✅ PASS: Legacy explicit zero must also remain exhausted
+✅ Flex-budget policy: missing, exhausted and recharge sequence works
+✅ PASS: Flex budget min-rate should apply in bear regime
+✅ PASS: Flex budget min-rate should lift very low rates
+✅ PASS: Flex budget min-rate should include floor-share slope
+✅ Flex-budget policy: min-rate works
+✅ PASS: Minimum flex should apply when effective flex is below floor
+✅ PASS: Minimum flex should calculate required rate from inflated flex
+✅ PASS: Minimum flex should lift rate to required rate
+✅ PASS: Minimum flex should report applied status
+✅ PASS: Applied minimum flex must retain the nominal annual target
+✅ PASS: Minimum flex should be logged
+✅ PASS: Minimum flex must not mutate inflatedBedarf
+✅ PASS: Minimum flex must not mutate input
+✅ PASS: Planner minimum-flex delegate should match policy
+✅ PASS: Minimum flex zero should leave rate unchanged
+✅ PASS: A positive minimum-flex target without available household flex must remain visibly unfulfilled
+✅ PASS: Pension surplus alone may satisfy the household minimum-flex target
+✅ PASS: Pension surplus is capped at gross household flex and counted in effective minimum flex
+✅ PASS: Only the household minimum not covered by pension surplus is financed from the portfolio
+✅ PASS: Required depot flex rate uses the pension-reconciled household target
+✅ PASS: Effective minimum flex after policy combines pension surplus and depot flex
+✅ PASS: Minimum flex should not lift during alarm mode
+✅ PASS: Low current liquidity alone should not block minimum flex when total wealth is sufficient
+✅ PASS: Minimum flex should block when minimum runway cannot be restored
+✅ PASS: Runway emergency should expose block reason
+✅ PASS: Runway proxy documents floor+minimum-flex plus 24-month reserve
+✅ PASS: Minimum flex should block when floor plus minimum flex is not covered
+✅ PASS: Floor emergency should expose block reason
+✅ PASS: Minimum flex policy must reject a negative target instead of silently clamping it
+✅ PASS: A target above open flex must remain visible and must not be silently limited to available flex
+✅ PASS: The unbounded required rate exposes why the target cannot be reached at full flex
+✅ PASS: The policy marks an unattainable target explicitly
+✅ PASS: Final minimum-flex diagnostics use the actually quantized flex amount
+✅ PASS: Final minimum-flex diagnostics expose the nominal shortfall
+✅ PASS: A quantization shortfall must replace a false applied status
+✅ PASS: Final minimum-flex diagnostics combine pension surplus and quantized depot flex
+✅ PASS: Household minimum-flex shortfall is measured after pension reconciliation
+✅ Minimum-flex policy helper works
+✅ PASS: Must pay at least the nominal floor
+✅ Budget Floor Protection works
+✅ PASS: No reduction at 1% withdrawal rate
+✅ Wealth-adjusted reduction: 1% => 0
+✅ PASS: Midpoint reduction at 2.5% withdrawal rate
+✅ Wealth-adjusted reduction: 2.5% => 0.5
+✅ PASS: Full reduction at 5% withdrawal rate
+✅ Wealth-adjusted reduction: 5% => 1
+✅ PASS: No-pension case should use hand-calculated 2.4% net withdrawal
+✅ PASS: Already-net pension case must not subtract pension a second time
+✅ PASS: No-pension case should match hand-calculated wealth factor
+✅ PASS: Economically identical pension case should match the same wealth factor
+✅ Wealth-adjusted reduction: pension is consumed exactly once
+✅ PASS: S-curve factor at 2% matches smoothstep
+✅ Wealth-adjusted reduction: S-curve matches at 2%
+✅ PASS: Real previous withdrawal should use real depot basis
+✅ PASS: Real previous withdrawal should drive wealth factor
+✅ PASS: Planner delegate should return wealth policy factor
+✅ Wealth-adjusted reduction: real previous withdrawal basis works
+✅ PASS: First year should calculate 24% from 24,000 / 100,000
+✅ PASS: Later year should calculate the same 24% current rate
+✅ PASS: Critical first-year rate should activate the alarm
+✅ PASS: Equivalent later-year rate should activate the alarm
+✅ PASS: First-year warning should use alarm severity
+✅ PASS: Later-year warning should use the same alarm severity
+✅ First-year withdrawal rate and alarm parity works
+✅ PASS: Missing legacy flexRate should use the documented 100% fallback for the current withdrawal quote
+✅ PASS: Missing legacy flexRate must not propagate NaN into the next state
+✅ Incomplete initialized legacy state uses the full-flex fallback contract
+✅ PASS: Planner muss Inflationsfaktor 0 vor der Berechnung blockieren
+✅ PASS: Planner muss Inflationsfaktor -1 vor der Berechnung blockieren
+✅ PASS: Planner muss Inflationsfaktor NaN vor der Berechnung blockieren
+✅ PASS: Planner muss Inflationsfaktor Infinity vor der Berechnung blockieren
+✅ PASS: Planner muss Inflationsfaktor null vor der Berechnung blockieren
+✅ PASS: Planner muss Inflationsfaktor 1 vor der Berechnung blockieren
+✅ PASS: Nur ein fehlender Legacy-Inflationsfaktor darf den Initialwert 1 verwenden
+✅ PASS: Runtime-Zustand darf den Persistenz-Plausibilitaetswert von 20 ueberschreiten
+✅ PASS: Nicht initialisierter Zustand validiert keinen unbenutzten Altwert und startet mit Faktor 1
+✅ Spending planner cumulative inflation domain works
+✅ PASS: Final-rate policy should cap bear drawdown to 10pp
+✅ PASS: Final-rate policy should mark active cap
+✅ PASS: Final-rate cap should be logged
+✅ PASS: Planner final-rate delegate should match policy
+✅ Final-rate policy delegate works
+✅ PASS: Policy pipeline should keep flex rate bounded
+✅ PASS: Policy pipeline should update flex-budget state
+✅ PASS: Policy pipeline should log flex-budget decision
+✅ PASS: Planner policy-pipeline delegate should match module
+✅ PASS: Policy order contract is versioned
+✅ PASS: Policy order contract fixes the complete stage sequence
+✅ PASS: Executed policy stages match the versioned order contract
+✅ PASS: Policy diagnostics expose the executed contract version
+✅ PASS: Active alarm still records the guardrail stage at its contractual position when its rule body is skipped
+✅ Spending policy pipeline delegate works
+✅ PASS: Minimum flex should lift the pipeline rate before final limits when within max-up
+✅ PASS: Minimum flex status should be applied
+✅ PASS: Pipeline should store minimum flex required rate
+✅ PASS: Pipeline should log minimum flex
+✅ PASS: Flex-budget/final limits should be allowed to reduce a minimum-flex lift
+✅ PASS: Minimum flex should report flex-budget limitation
+✅ PASS: Final-rate limits should smooth a large minimum-flex lift
+✅ PASS: Minimum flex should report final smoothing limitation
+✅ PASS: Final smoothing witness must cut a previously satisfied minimum-flex rate below its target
+✅ PASS: Final smoothing must not leave a false not_needed status when the final rate violates minimum flex
+✅ Spending policy pipeline minimum-flex ordering works
+✅ PASS: Minimum flex should lift a low Dynamic-Flex Stage 2 safety rate
+✅ PASS: Stage 2 scenario should compute the minimum-flex rate
+✅ PASS: Stage 2 scenario should expose an applied minimum-flex status
+✅ Dynamic-Flex Stage 2 minimum-flex interaction works
+✅ PASS: Final withdrawal should quantize monthly amount down
+✅ PASS: Final withdrawal should derive effective flex rate after quantization
+✅ PASS: Planner final-withdrawal delegate should match helper
+✅ Final withdrawal helper works
+✅ PASS: Alarm should be active in this scenario
+✅ PASS: Flex-Budget cap should be applied in decision tree
+✅ PASS: Severe bear plus real total-wealth drawdown should name the dedicated safety source
+✅ PASS: Severe flex emergency should override every upward flex floor
+✅ PASS: Severe flex emergency should expose the explicit minimum-flex override status
+✅ PASS: Severe flex emergency must preserve the full planned floor
+✅ Alarm + Flex-Budget + Final-Limits interaction works
+--- SpendingPlanner Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 159
+Passed: 159
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: spending-planner.test.mjs | mode=isolated | assertions=159 | passed=159 | failedAssertions=0 | failedFiles=0
+
+📂 Running spending-quantization.test.mjs in process...
+--- Spending Quantization Tests ---
+✅ Helper Logic Passed
+✅ Integration Logic Passed
+✅ Hard floor survives monthly quantization
+✅ Effective flex rate uses the normalized floor contract
+✅ Engine consumes the exported rounding contract
+✅ Invalid live rounding config degrades safely without a batch-breaking throw
+--- Spending Quantization Tests Completed ---
+✅ spending-quantization.test.mjs completed.
+📊 FILE RESULT: spending-quantization.test.mjs | mode=in-process | assertions=38 | passed=38 | failedAssertions=0 | failedFiles=0
+
+📂 Running spending-safety-cap.test.mjs in process...
+--- Spending Safety Cap Tests ---
+--- Spending Safety Cap Tests Completed ---
+✅ spending-safety-cap.test.mjs completed.
+📊 FILE RESULT: spending-safety-cap.test.mjs | mode=in-process | assertions=307 | passed=307 | failedAssertions=0 | failedFiles=0
+
+📂 Running stationary-bootstrap-contract.test.mjs in process...
+--- Stationary Bootstrap Contract Tests ---
+--- Stationary Bootstrap Contract Tests Completed ---
+✅ stationary-bootstrap-contract.test.mjs completed.
+📊 FILE RESULT: stationary-bootstrap-contract.test.mjs | mode=in-process | assertions=19 | passed=19 | failedAssertions=0 | failedFiles=0
+
+📂 Running stationary-bootstrap-sampler.test.mjs in process...
+--- Stationary Bootstrap Sampler Tests ---
+--- Stationary Bootstrap Sampler Tests Completed ---
+✅ stationary-bootstrap-sampler.test.mjs completed.
+📊 FILE RESULT: stationary-bootstrap-sampler.test.mjs | mode=in-process | assertions=23 | passed=23 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-regime-contract.test.mjs in process...
+--- Stress And Regime Contract Tests ---
+--- Stress And Regime Contract Tests Completed ---
+✅ stress-regime-contract.test.mjs completed.
+📊 FILE RESULT: stress-regime-contract.test.mjs | mode=in-process | assertions=88 | passed=88 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-comparison.test.mjs in process...
+Test 1: comparison is order-independent and emits paired delta markers
+Test 1b: a recomputed fingerprint cannot legitimize a false KPI delta
+Test 2: removing alternatives recomputes the immutable comparison but not the baseline
+Test 3: the one-plus-three variant limit is enforced
+Test 4: missing measurements remain null with field-level missingness
+Test 5: a technical result blocks the aggregate and its financial pair
+Test 5b: asymmetric death horizons retain terminal rows and explicit missing sides
+Test 6: runner orchestration gives every variant an independent cloned start state
+Stress replay comparison tests passed.
+✅ stress-replay-comparison.test.mjs completed.
+📊 FILE RESULT: stress-replay-comparison.test.mjs | mode=in-process | assertions=35 | passed=35 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-contract.test.mjs in process...
+Test 1: whitelist maps exactly the 17 approved getCommonInputs paths
+Test 2: maximal strategy snapshot uses only real, normalized inputs and is immutable
+Test 3: forbidden, unknown and optimizer-alias patches fail closed with field lists
+Test 3b: V2 need values retain explicit zero and reject invalid domains and relations
+Test 4: conditional fields normalize against their controlling modes without clamping
+Test 5: minimal path validates zero/one-based identity, explicit units and initial history
+Test 6: length, index, history, legacy RNG, and non-finite violations are distinct
+Test 7: fingerprints are canonical and exclude timestamps/display labels only
+Test 8: byte limits are exact and expose the persistence error contract
+Test 9: independent source identity is minimal, ordered and fingerprint-bound
+Test 10: V2 source identity preserves bounded reconciliation values and dispatches fail-closed
+Stress replay contract tests passed.
+✅ stress-replay-contract.test.mjs completed.
+📊 FILE RESULT: stress-replay-contract.test.mjs | mode=in-process | assertions=109 | passed=109 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-e2e.test.mjs in process...
+--- Stress Replay End-to-End Tests ---
+Stress replay 60-year performance: {"platform":"linux-x64","node":"v22.23.2","durationsMs":[459.357,474.488,471.172,465.489,455.076],"observedMedianMs":465.489,"maximumMedianMs":1743.432,"exportBytes":109472}
+Stress replay end-to-end tests passed.
+✅ stress-replay-e2e.test.mjs completed.
+📊 FILE RESULT: stress-replay-e2e.test.mjs | mode=in-process | assertions=115 | passed=115 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-export.test.mjs in process...
+Test 1: versioned comparison export roundtrips without reproducible result logs
+Test 2: export timestamps are excluded from the technical fingerprint
+Test 3: tampering and unknown versions fail closed even with a recomputed outer fingerprint
+Test 4: secrets and local filesystem paths are rejected before export
+Test 5: malformed and oversized JSON are rejected before contract use
+Test 6: checked-in V1 golden export roundtrips byte- and fingerprint-identically
+Stress replay export tests passed.
+✅ stress-replay-export.test.mjs completed.
+📊 FILE RESULT: stress-replay-export.test.mjs | mode=in-process | assertions=27 | passed=27 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-path-materializer.test.mjs in process...
+Test 1: capture request normalizes unique absolute indices
+Test 2: shadow seed is position-independent and domain-separated
+Test 3: materialization preserves start state, continuation, source identity and reconciliation
+Test 4: record-type-specific source mismatch fails closed
+Test 5: legacy-stream sources are rejected before persistence
+Test 6: scenario selection ties resolve to the smallest absolute run index
+✅ stress-replay-path-materializer.test.mjs completed.
+📊 FILE RESULT: stress-replay-path-materializer.test.mjs | mode=in-process | assertions=17 | passed=17 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-persistence.test.mjs in process...
+Test 1: a single active workspace roundtrips through the facade-shaped backend
+Test 2: replacement is explicit and idempotent saves do not write
+Test 3: failed backend flush rolls back byte-identically
+Test 4: corruption remains stored and does not block the normal persistence facade
+Test 5: data or engine mismatch opens read-only and blocks exact-execution status
+Test 6: import inspection is non-mutating and replacement requires confirmation
+Test 7: discard is explicit and touches only the replay key
+Test 8: workspace size limit rejects oversized baselines without truncation
+Test 9: default facade path is transactional, verified and isolated
+Test 10: legacy V1 workspaces remain inspectable but never synthesize source evidence
+Test 11: checked-in V1 import remains non-mutating and fingerprint-stable
+Test 12: V1 source evidence stays readable but requires explicit refix
+Stress replay persistence tests passed.
+✅ stress-replay-persistence.test.mjs completed.
+📊 FILE RESULT: stress-replay-persistence.test.mjs | mode=in-process | assertions=67 | passed=67 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-renderer.test.mjs in process...
+Test 1: patch preview distinguishes material, multi-factor and forbidden input feedback
+Test 2: list keeps baseline immutable and exposes keyboard-native recompute/remove actions
+Test 3: complete comparison renders KPI, semantic delta and annual tables without ranking
+Test 4: technical errors suppress financial deltas instead of fabricating zeros
+Test 5: user labels are escaped
+Test 5a: explicit comparison errors replace the idle state and escape diagnostics
+Test 6: controller persists add/remove and recomputes without touching profile state
+Stress replay renderer tests passed.
+✅ stress-replay-renderer.test.mjs completed.
+📊 FILE RESULT: stress-replay-renderer.test.mjs | mode=in-process | assertions=59 | passed=59 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-runner.test.mjs in process...
+Test 1: baseline reconciliation is deterministic, immutable and RNG-free
+Test 1b: direct and persisted source evidence use identical path tolerances
+Test 2: accumulation and materialized care/partner/widow state reach the year engine
+Test 2b: V2 floor, flex and minimum-flex values reach runner dependencies unchanged
+Test 3: ruin, death and technical errors remain distinct
+Test 4: cent-level source mismatch fails closed
+Test 5: real crash-sale capture is additive and deterministic at the runner boundary
+✅ stress-replay-runner.test.mjs completed.
+📊 FILE RESULT: stress-replay-runner.test.mjs | mode=in-process | assertions=68 | passed=68 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-transactions.test.mjs in process...
+Test 1: structured diagnostics isolate every supported transaction class
+Test 2: display text never creates a transaction event
+Test 3: payout fallback exposes observed gross/net and explicit tax missingness
+Test 4: absent or malformed monetary observations fail closed
+Test 4b: forced sale and bond refill expose complete breakdown contracts
+Test 5: collection is deterministic and opt-in capture is explicit
+Test 6: capture changes diagnostics only, not financial results or FlowDelta
+Test 6b: an executed payout fallback adds exactly one trace phase and no other log changes
+✅ Stress replay transaction tests passed
+✅ stress-replay-transactions.test.mjs completed.
+📊 FILE RESULT: stress-replay-transactions.test.mjs | mode=in-process | assertions=47 | passed=47 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-ui.test.mjs in process...
+Test 1: no scenario keeps fixation blocked and reports the prerequisite in the live region
+Test 2: legacy RNG is visibly unsupported and never starts capture
+Test 3: a reconciled source is fixed without mutating its baseline inputs
+Test 4: materialization failures are surfaced and never persisted
+Test 5: banner distinguishes source, horizon, terminal state, continuation and read-only mode
+Test 6: reload, export, import and explicit discard retain session boundaries
+Test 7: user-facing failure labels keep technical terminal states separate
+Test 8: deferred import owns the shared busy contract and rejects competing actions
+Test 9: deferred discard rejects a second discard and fixation, then unlocks after success
+Test 10: rejected import and discard promises always release the UI lock
+Test 11: focused need editor preserves explicit zero and reports the effective relation in German
+Test 12: expert toggle is DOM-local and preserves control values and patch materiality
+Test 13: preview status tracks transitions between different errors and final recovery
+Test 14: direct recompute and the registered DOM action retain the same durable error semantics
+Test 15: empty results fail closed and a later successful recompute clears the error
+Test 16: fixation and import report mutation success separately from comparison failure
+Test 17: add and remove retain successful persistence while reporting failed recomputation
+Stress replay UI tests passed.
+✅ stress-replay-ui.test.mjs completed.
+📊 FILE RESULT: stress-replay-ui.test.mjs | mode=in-process | assertions=140 | passed=140 | failedAssertions=0 | failedFiles=0
+
+📂 Running stress-replay-variant.test.mjs in process...
+Test 1: baseline and alternatives are versioned, immutable and exact
+Test 2: legacy V1 remains exact while V2 allows only the three new need fields
+Test 3: mode-bound fields retain their controller and count as one factor
+Test 4: no-op alternatives fail and independent changes get a multi-factor marker
+Test 5: normalized fingerprints ignore labels but reject content tampering
+Test 6: alternative runner uses normalized inputs without baseline reconciliation
+Stress replay variant tests passed.
+✅ stress-replay-variant.test.mjs completed.
+📊 FILE RESULT: stress-replay-variant.test.mjs | mode=in-process | assertions=55 | passed=55 | failedAssertions=0 | failedFiles=0
+
+📂 Running suite-data-integration-contract.test.mjs in process...
+--- Suite Data Integration Contract Tests ---
+Suite data integration contract tests passed
+✅ suite-data-integration-contract.test.mjs completed.
+📊 FILE RESULT: suite-data-integration-contract.test.mjs | mode=in-process | assertions=1086 | passed=1086 | failedAssertions=0 | failedFiles=0
+
+📂 Running suite-data-three-bucket-final-action.test.mjs in process...
+--- Suite Data Slice 02 Final Action Tests ---
+--- Suite Data Slice 02 Final Action Tests Completed ---
+✅ suite-data-three-bucket-final-action.test.mjs completed.
+📊 FILE RESULT: suite-data-three-bucket-final-action.test.mjs | mode=in-process | assertions=40 | passed=40 | failedAssertions=0 | failedFiles=0
+
+📂 Running sweep-metrics.test.mjs in process...
+--- Sweep Metrics Contract Tests ---
+--- Sweep Metrics Contract Tests Completed ---
+✅ sweep-metrics.test.mjs completed.
+📊 FILE RESULT: sweep-metrics.test.mjs | mode=in-process | assertions=39 | passed=39 | failedAssertions=0 | failedFiles=0
+
+📂 Running tail-risk-contract.test.mjs in process...
+--- Tail Risk Contract Tests ---
+--- Tail Risk Contract Tests Completed ---
+✅ tail-risk-contract.test.mjs completed.
+📊 FILE RESULT: tail-risk-contract.test.mjs | mode=in-process | assertions=53 | passed=53 | failedAssertions=0 | failedFiles=0
+
+📂 Running tail-risk-overlay.test.mjs in process...
+--- Tail Risk Overlay Tests ---
+--- Tail Risk Overlay Tests Completed ---
+✅ tail-risk-overlay.test.mjs completed.
+📊 FILE RESULT: tail-risk-overlay.test.mjs | mode=in-process | assertions=31 | passed=31 | failedAssertions=0 | failedFiles=0
+
+📂 Running tauri-csp.test.mjs in process...
+--- Tauri CSP Tests ---
+✅ Tauri CSP tests passed
+✅ tauri-csp.test.mjs completed.
+📊 FILE RESULT: tauri-csp.test.mjs | mode=in-process | assertions=82 | passed=82 | failedAssertions=0 | failedFiles=0
+
+📂 Running tax-settlement.test.mjs in process...
+--- Tax Settlement Tests ---
+--- Tax Settlement Tests Completed ---
+✅ tax-settlement.test.mjs completed.
+📊 FILE RESULT: tax-settlement.test.mjs | mode=in-process | assertions=18 | passed=18 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranche-contract.test.mjs in process...
+--- Tranche Contract Tests ---
+Test 1: canonical v2 normalization is deterministic and mutation-free
+Test 2: field groups distinguish persistence, derivation, and provenance
+Test 3: supported v0 records migrate by explicit rules
+Test 4: missing legacy ids are deterministic but collection-unique
+Test 5: classification matrix is disjoint and fail-closed
+Test 6: duplicate ids and unknown versions are rejected
+Test 7: financial values and TQF reject non-finite and out-of-range data
+Test 8: dates and current-schema identities are strict
+Test 9: engine records preserve exact values and provenance
+Test 9a: only equity can carry TQF and legacy Gold exemption migrates explicitly
+Test 10: derived-value helper is strict and mutation-free
+--- Tranche Contract Tests Completed ---
+✅ tranche-contract.test.mjs completed.
+📊 FILE RESULT: tranche-contract.test.mjs | mode=in-process | assertions=106 | passed=106 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranche-reconciliation.test.mjs in process...
+--- Tranche Reconciliation Tests ---
+Test 1: partial-sale preview is pure and shows actual and recommended deviations
+✓ pure partial preview OK
+Test 2: full sale removes exactly the selected lot without negative values
+✓ full-sale contract OK
+Test 3: unknown lots, excessive shares and wrong profile fail closed
+✓ fail-closed identity checks OK
+Test 4: the same actionId is idempotent, conflicting reuse is rejected
+✓ actionId idempotency OK
+Test 5: confirmed execution persists live lot, profile lot and minimal audit together
+✓ atomic applied/duplicate persistence OK
+Test 6: flush rejection restores the confirmed state and remains retryable
+✓ flush recovery/retry OK
+Test 7: stale previews and parallel profile context changes write nothing
+✓ stale/two-profile write gate OK
+Test 8: legacy v1 sales remain untouched and project an operational legacy_unknown status
+✓ legacy projection contract OK
+Test 9: pending sale, confirmation and corrections form one append-only linear chain
+✓ append-only confirmation/correction chain OK
+Test 10: initial confirmation, event-specific lengths and corrupt mixed events fail closed
+✓ mixed-event boundary contract OK
+Test 11: cash commits persist without lot mutation and exact retry remains idempotent
+✓ cash persistence and retry contract OK
+Test 12: correction-chain corruption and global ID collisions fail closed
+✓ adversarial correction-chain contract OK
+Test 13: cash flush failure restores the exact audit and remains retryable
+✓ cash flush recovery contract OK
+--- Tranche Reconciliation Tests Completed ---
+✅ tranche-reconciliation.test.mjs completed.
+📊 FILE RESULT: tranche-reconciliation.test.mjs | mode=in-process | assertions=120 | passed=120 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranchen-manager-modal.test.mjs in process...
+--- Tranchen Manager Modal Tests ---
+Test 1: create modal resets form and opens
+✓ create modal resets form and opens OK
+Test 2: edit modal fills fields
+✓ edit modal fills fields OK
+Test 3: readTrancheFromForm computes derived values
+✓ readTrancheFromForm computes derived values OK
+Test 4: close modal removes active class
+✓ close modal removes active class OK
+Test 5: form reader rejects category/type mismatch with field context
+✓ form mismatch validation OK
+Test 6: blank TQF is not converted to zero
+✓ blank TQF validation OK
+Test 7: category selection exposes only canonical types
+✓ canonical type options OK
+Test 8: generated ids retry collisions before returning
+✓ collision-safe id generation OK
+Test 9: non-finite and overflowing financial values are rejected
+✓ finite financial validation OK
+Test 10: Escape closes dialog and focus trap returns to opener
+✓ dialog keyboard lifecycle OK
+Test 11: cash dialog shows immutable evidence and reads explicit confirmation/correction input
+✓ cash dialog evidence contract OK
+✅ tranchen-manager-modal.test.mjs completed.
+📊 FILE RESULT: tranchen-manager-modal.test.mjs | mode=in-process | assertions=39 | passed=39 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranchen-manager-page.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/tranchen-manager-page.test.mjs...
+--- Tranchen Manager Page Tests ---
+Test 1a: legacy tax migration is quantified and visible
+✅ PASS: Migration warning quantifies every affected legacy lot
+✅ PASS: Migration warning quantifies converted Gold exemptions
+✅ PASS: Migration warning quantifies reset non-equity TQF values
+✅ PASS: Migration warning states the active calculation consequence until confirmation
+✅ PASS: Current schema does not display a migration warning
+Test 1: page initializes empty storage without crashing
+✅ PASS: Empty storage should expose empty tranche list
+✅ PASS: Empty state should be rendered
+✅ PASS: Stats container should be rendered
+✅ PASS: Pure empty load must not create a tranche key
+✓ empty storage initialization OK
+Test 2: page initializes valid storage and preserves local data when price service is offline
+✅ PASS: Valid storage should load one tranche
+✅ PASS: Offline price update must preserve existing local price
+✅ PASS: Loaded legacy storage must surface the tax-contract migration before user confirmation
+✅ PASS: Offline update should render a concise failure status
+✅ PASS: Offline update should name the affected tranche and understandable reason
+✅ PASS: Profile values should be applied to DOM
+✅ PASS: Loaded profile label should include actual id
+✓ valid storage and offline price degradation OK
+Test 3: mixed quote batch is single-flight, fail-closed and persisted exactly once
+✅ PASS: Active quote batch should disable repeated UI action
+✅ PASS: Same symbol across lots and double click must remain single-flight
+✅ PASS: First EUR lot should update
+✅ PASS: Second EUR lot should share result
+✅ PASS: Rejected USD lot must retain old price
+✅ PASS: Mixed successful batch should persist tranche state exactly once
+✅ PASS: Persisted rejected lot should retain old price
+✅ PASS: Mixed outcome should remain concise and unambiguous
+✅ PASS: Rejected tranche and understandable reason should remain visible
+✅ PASS: Successful quote metadata should not clutter the status
+✅ PASS: Completed batch should re-enable controls
+✓ quote batch resilience contract OK
+Test 4: late quote response after profile switch is ignored
+✅ PASS: Late result must not repopulate the newly selected empty profile
+✅ PASS: Late result must not persist into the previous profile state
+✅ PASS: Late result must not overwrite the new profile status
+✅ PASS: Profile switch should release quote-batch controls
+✓ late quote invalidation OK
+Test 5: corrupt storage remains untouched until explicit recovery
+✅ PASS: Corrupt profile must not expose processable tranches
+✅ PASS: Corrupt storage must remain byte-for-byte unchanged
+✅ PASS: Corrupt state should expose reviewed recovery actions
+✅ PASS: Corrupt state should not use unavailable retry
+✅ PASS: Corrupt state should block normal processing
+✅ PASS: Raw payload must not be shown automatically
+✅ PASS: Raw payload must not enter DOM before local action
+✅ PASS: Explicit reveal should show unchanged raw payload
+✅ PASS: Explicit confirmed reset should persist an empty override
+✅ PASS: Successful reset should leave recovery mode
+✓ corrupt storage recovery contract OK
+Test 6: unavailable reload preserves last confirmed state and listeners
+✅ PASS: Unavailable reload should retain last confirmed visible state
+✅ PASS: Unavailable reload must not switch profile data
+✅ PASS: Unavailable state should expose retry
+✅ PASS: Unavailable state must not expose reset
+✅ PASS: Repeated init must not duplicate listeners
+✅ PASS: Return from another tab should reload manager context once
+✓ unavailable and lifecycle contract OK
+Test 7: failed flush keeps confirmed state and supports retry
+✅ PASS: Flush rejection should keep confirmed tranche visible
+✅ PASS: Flush rejection must not change confirmed adapter state
+✅ PASS: Flush rejection should expose retry
+✅ PASS: Flush rejection must not report success
+✅ PASS: Successful retry should apply pending delete
+✅ PASS: Successful retry should durably persist empty state
+✅ PASS: Successful retry should clear pending action
+✅ PASS: Profile flush rejection should restore confirmed visible value
+✅ PASS: Profile flush rejection must not change adapter state
+✅ PASS: Profile flush rejection should expose retry
+✅ PASS: Profile retry should durably persist pending value
+✅ PASS: Profile retry should clear pending action
+✓ flush failure recovery OK
+Test 8: profile input gate ignores invalid intermediates and commits only latest valid value
+✅ PASS: Blank intermediate value must not be persisted
+✅ PASS: Invalid intermediate should be announced
+✅ PASS: Rapid input should commit only the latest complete value
+✅ PASS: Valid values should clear validation status
+✅ PASS: Negative input must leave confirmed state unchanged
+✓ profile validation and debounce gate OK
+Test 9: valid input queued during a slow flush is committed automatically
+✅ PASS: Queued profile value should become the confirmed value
+✅ PASS: Successful queued save should not require manual retry
+✓ slow-flush profile queue OK
+Test 10: stale cash-correction dialog is blocked before confirmation and preserves the newer audit
+✅ PASS: Correction dialog should pin the displayed revision
+✅ PASS: Correction dialog should pin the displayed canonical action id
+✅ PASS: Stale correction dialog should be rejected
+✅ PASS: Stale correction must fail before the final confirmation dialog
+✅ PASS: Stale correction must not append a silently re-derived revision
+✅ PASS: Newer effective cash balance must remain unchanged
+✅ PASS: Stale correction should expose an actionable modal error
+✅ PASS: Stale correction error should explain the conflict or request a current reload
+✓ stale cash-dialog gate OK
+Test 11: unreadable cash audit renders an incomplete-list warning instead of an empty history
+✅ PASS: Manager panel should expose its unreadable audit state
+✅ PASS: Unreadable audit must not be rendered as an empty sale history
+✅ PASS: Manager form should keep cash confirmation and correction visibly blocked
+✓ unreadable cash-audit panel contract OK
+Test 12: cash confirmation uses the page orchestrator and appends exactly one audit event
+✅ PASS: Page orchestrator should commit a confirmed cash posting
+✅ PASS: Final confirmation should name the evidence and manual-only effect
+✅ PASS: Page orchestrator should append exactly one confirmation event
+✅ PASS: Page orchestrator must preserve the original sale record exactly
+✅ PASS: Page orchestrator should persist the explicit confirmation event
+✅ PASS: Successful confirmation should close the cash modal
+✓ cash page orchestration contract OK
+✅ Tranchen manager page contract validated
+--- Tranchen Manager Page Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 83
+Passed: 83
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: tranchen-manager-page.test.mjs | mode=isolated | assertions=83 | passed=83 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranchen-manager-renderer.test.mjs in process...
+--- Tranchen Manager Renderer Tests ---
+Test 1: stats renderer returns summary html
+✓ stats renderer returns summary html OK
+Test 2: empty table renderer returns empty state
+✓ empty table renderer returns empty state OK
+Test 3: table renderer returns action markup
+✓ table renderer returns action markup OK
+Test 4: classification, signs and accessibility are unambiguous
+✓ classification and accessible actions OK
+Test 5: empty state does not claim FIFO activity
+✓ empty FIFO semantics OK
+Test 6: cash-status renderer distinguishes pending, corrected and legacy evidence safely
+✓ cash-status rendering contract OK
+✅ tranchen-manager-renderer.test.mjs completed.
+📊 FILE RESULT: tranchen-manager-renderer.test.mjs | mode=in-process | assertions=24 | passed=24 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranchen-manager-state.test.mjs in process...
+--- Tranchen Manager State Tests ---
+Test 1: normalizeTranches migrates stable ids and canonical values
+✓ normalizeTranches canonical migration OK
+Test 2: derived values are recomputed
+✓ derived values are recomputed OK
+Test 3: loadTranchesFromStorage normalizes persisted entries
+✓ loadTranchesFromStorage normalizes persisted entries OK
+Test 3a: historic money-market records from independent selects remain loadable
+✓ historic money-market migration OK
+Test 3b: load reports empty, corrupt and unavailable without mutation
+✓ explicit load-state contract OK
+Test 4: save validates and persists only canonical records
+✓ save persists canonical records OK
+Test 5: invalid and duplicate records fail before storage mutation
+✓ invalid records fail before storage mutation OK
+Test 6: reconciliation registry load is explicit and raw-preserving
+✓ reconciliation registry load contract OK
+✅ tranchen-manager-state.test.mjs completed.
+📊 FILE RESULT: tranchen-manager-state.test.mjs | mode=in-process | assertions=37 | passed=37 | failedAssertions=0 | failedFiles=0
+
+📂 Running tranchen-price-service.test.mjs in process...
+--- Tranchen Price Service Tests ---
+Test 1: fetchProxyPrice returns the normalized EUR quote contract
+✓ normalized quote success OK
+Test 2: foreign and missing currencies fail closed with stable codes
+✓ currency rejection OK
+Test 3: timestamp, symbol and price validation reject ambiguous responses
+✓ strict quote validation OK
+Test 4: HTTP, provider and malformed-response failures retain stable codes
+✓ transport error codes OK
+Test 5: per-request timeout and external batch abort are distinct
+✓ timeout and abort contract OK
+Test 6: symbol search returns provider symbols without proprietary suffixes
+✓ symbol search contract OK
+Test 7: Node proxy pure contract matches browser normalization
+✓ Node/browser parity OK
+Test 8: healthcheck distinguishes an unreachable proxy visibly
+✓ healthcheck error detail OK
+✅ Tranchen price service contract validated
+--- Tranchen Price Service Tests Completed ---
+✅ tranchen-price-service.test.mjs completed.
+📊 FILE RESULT: tranchen-price-service.test.mjs | mode=in-process | assertions=37 | passed=37 | failedAssertions=0 | failedFiles=0
+
+📂 Running transaction-engine-ath.test.mjs in process...
+--- TransactionEngine ATH Tests ---
+✅ TransactionEngine ATH tests passed
+--- TransactionEngine ATH Tests Completed ---
+✅ transaction-engine-ath.test.mjs completed.
+📊 FILE RESULT: transaction-engine-ath.test.mjs | mode=in-process | assertions=10 | passed=10 | failedAssertions=0 | failedFiles=0
+
+📂 Running transaction-engine-rebal.test.mjs in process...
+--- TransactionEngine Rebal Tests ---
+--- Start: Gold Drift Simulation Test ---
+Setup:
+    Total Wealth: 23,776,000 €
+    Gold Wert   : 7,187,000 €
+    Gold Ziel   : 1,771,950 €
+    Upper Limit : 2,214,937.5 €
+    
+SUCCESS: Gold-Verkauf ausgelöst. Netto: 5,400,000 €
+✅ TransactionEngine Rebal tests passed
+--- TransactionEngine Rebal Tests Completed ---
+✅ transaction-engine-rebal.test.mjs completed.
+📊 FILE RESULT: transaction-engine-rebal.test.mjs | mode=in-process | assertions=4 | passed=4 | failedAssertions=0 | failedFiles=0
+
+📂 Running transaction-gold-liquidity.test.mjs in process...
+--- Gold Buy vs Liquidity Gap Tests ---
+✅ Gold buy allowed under non-critical liquidity gap passed
+✅ Gold buy blocked under critical liquidity passed
+✅ Gold buy from surplus passed
+--- Gold Buy vs Liquidity Gap Tests Completed ---
+✅ transaction-gold-liquidity.test.mjs completed.
+📊 FILE RESULT: transaction-gold-liquidity.test.mjs | mode=in-process | assertions=6 | passed=6 | failedAssertions=0 | failedFiles=0
+
+📂 Running transaction-quantization.test.mjs in isolated process...
+Running /home/dieter/repos/RuhestandsApp/tests/transaction-quantization.test.mjs...
+--- Transaction Quantization Tests ---
+✅ PASS: Rounds 1850 -> 2000 (Ceil)
+✅ PASS: Rounds 1850 -> 1000 (Floor)
+✅ PASS: Rounds 12300 -> 15000 (Ceil)
+✅ PASS: Rounds 12300 -> 10000 (Floor)
+✅ PASS: Rounds 86000 -> 90000 (Ceil)
+✅ PASS: Rounds 238234 -> 250000 (Ceil)
+✅ PASS: Rounds 238234 -> 225000 (Floor)
+✅ Core Logic Passed
+✅ PASS: Small gap (200) below hysteresis (2000) should trigger NO action
+✅ Hysteresis Logic Passed
+✅ PASS: Should trigger transaction
+✅ PASS: Refill Gross should use the exact tax-aware quantized budget
+✅ Refill Logic Passed
+✅ PASS: Should trigger surplus transaction
+✅ PASS: Surplus invest should be floored to 4000
+✅ Surplus Logic Passed
+✅ Component Rounding (Gold) Passed (Critical Liquidity Fallback)
+✅ PASS: Gross sale should use the canonical tax-aware quantization. Got: 140000
+✅ PASS: Net Liquidity should be Gross - Tax. Got: 103075
+✅ Standard Opportunistic Refill Passed
+--- Transaction Quantization Tests Completed ---
+
+========================================
+SINGLE TEST SUMMARY:
+Total Assertions: 19
+Passed: 19
+Failed Assertions: 0
+Failed Files: 0
+========================================
+📊 FILE RESULT: transaction-quantization.test.mjs | mode=isolated | assertions=19 | passed=19 | failedAssertions=0 | failedFiles=0
+
+📂 Running transaction-tax.test.mjs in process...
+--- Transaction Tax Tests ---
+✅ KESt Logic works
+✅ Balance UI church-tax decimal unit matches the engine contract
+✅ TQF Logic works
+✅ SPB Logic works
+✅ Gold Tax Logic works
+✅ Sell Order (Efficiency) works
+✅ Detailed tranches (unique IDs) work
+✅ Sale budget caps total across lots
+✅ Signed loss gain data is preserved
+✅ TQF symmetry on loss raw aggregate works
+✅ Mixed gain/loss detailed lots preserve signed raw aggregate
+✅ Detailed gold and equity TQF contracts stay separate
+✅ Detailed tranche sale preserves sourceProfileId
+✅ Invalid mixed classification fails closed before a sale breakdown
+✅ Duplicate detailed ids fail closed
+✅ Malformed detailed collection fails closed
+✅ Explicit tax exemption is independent and sale-bound
+--- Transaction Tax Tests Completed ---
+✅ transaction-tax.test.mjs completed.
+📊 FILE RESULT: transaction-tax.test.mjs | mode=in-process | assertions=44 | passed=44 | failedAssertions=0 | failedFiles=0
+
+📂 Running us-shiller-cape-chain.test.mjs in process...
+--- US Shiller CAPE Decision Chain Tests ---
+Test 1: source identity, CAPE variant and timing are pinned
+✓ identity, source and timing OK
+Test 2: all 101 December decision signals are contiguous and projected once
+✓ contiguous no-double-lag projection OK
+Test 3: independent source markers lock observation month and year mapping
+✓ source markers OK
+Test 4: generated hashes, manifest and inventory align
+✓ hashes and metadata alignment OK
+Test 5: read-only generator reconstruction is byte-identical
+✓ byte-identical generator verification OK
+✅ US Shiller CAPE decision chain tests passed
+✅ us-shiller-cape-chain.test.mjs completed.
+📊 FILE RESULT: us-shiller-cape-chain.test.mjs | mode=in-process | assertions=932 | passed=932 | failedAssertions=0 | failedFiles=0
+
+📂 Running us-shiller-cape-independent-oracle.test.mjs in process...
+--- Independent US Shiller CAPE Source Oracle Tests ---
+Test 1: pinned headers bind the numeric columns without the production parser
+✓ independent raw-source column identity and reconstruction OK
+Test 2: every independent December observation matches the generated runtime chain
+✓ all 101 independently reconstructed CAPE values match
+✅ Independent US Shiller CAPE source oracle tests passed
+✅ us-shiller-cape-independent-oracle.test.mjs completed.
+📊 FILE RESULT: us-shiller-cape-independent-oracle.test.mjs | mode=in-process | assertions=108 | passed=108 | failedAssertions=0 | failedFiles=0
+
+📂 Running utils.test.mjs in process...
+--- Utilities Tests ---
+✅ Formatting Utils Passed
+✅ Math Utils Passed
+✅ RNG Utils Passed
+✅ Range Parsing Passed
+--- Utilities Tests Completed ---
+✅ utils.test.mjs completed.
+📊 FILE RESULT: utils.test.mjs | mode=in-process | assertions=15 | passed=15 | failedAssertions=0 | failedFiles=0
+
+📂 Running vpw-dynamic-flex.test.mjs in process...
+--- VPW Dynamic Flex Tests ---
+--- VPW Dynamic Flex Tests Completed ---
+✅ vpw-dynamic-flex.test.mjs completed.
+📊 FILE RESULT: vpw-dynamic-flex.test.mjs | mode=in-process | assertions=73 | passed=73 | failedAssertions=0 | failedFiles=0
+
+📂 Running vpw-return-policy.test.mjs in process...
+--- VPW Return Policy Tests ---
+--- VPW Return Policy Tests Completed ---
+✅ vpw-return-policy.test.mjs completed.
+📊 FILE RESULT: vpw-return-policy.test.mjs | mode=in-process | assertions=106 | passed=106 | failedAssertions=0 | failedFiles=0
+
+📂 Running worker-lifecycle-isolation.test.mjs in process...
+--- Worker Lifecycle Isolation Tests ---
+Test: Sweep-Zwischenfortschritt bleibt bei parallelen und doppelten Meldungen monoton
+Test 1: abort before start is single-flight and schedules no job
+Test 2: CPU-bound generation cancellation terminates active workers and replaces lazily
+Test 3: abort during a runner batch never merges a late result
+Test 4: late old-generation messages cannot affect a replacement worker job
+Test 5: dispose rejects open work and remains idempotent
+Test 6: one worker rejection produces one observed fallback decision
+Test 7: adaptive stall watchdog is the only timeout and cancels once
+Test 8: direct send failures retire and replace the broken worker
+--- Worker Lifecycle Isolation Tests Completed ---
+✅ worker-lifecycle-isolation.test.mjs completed.
+📊 FILE RESULT: worker-lifecycle-isolation.test.mjs | mode=in-process | assertions=43 | passed=43 | failedAssertions=0 | failedFiles=0
+
+📂 Running worker-parity.test.mjs in process...
+--- Worker Parity Tests ---
+✅ Monte-Carlo merge parity passed
+✅ Sweep split parity passed
+✅ Uneven Sweep split parity with invalid combinations passed
+✅ Dynamic-Flex Sweep invalid-shape parity passed
+✅ Dynamic-Flex MC parity passed
+✅ Uneven Monte-Carlo chunk parity passed
+✅ Monte-Carlo logshape chunk-boundary parity passed
+✅ Continuous CAPE runner parity passed
+✅ Longevity runner parity passed
+✅ Tail-risk worker-like metrics parity passed
+✅ Stationary Bootstrap worker-like chunk parity passed
+✅ Care-cost drift scenario/runner parity passed
+--- Worker Parity Tests Completed ---
+Test: opt-in stress replay capture leaves normal MC financial outputs unchanged
+Stress replay surviving capture trace: {"continuationActive":false,"yearIndices":[0,1,2,3,4,5]}
+Stress replay ruin capture trace: {"continuationActive":true,"yearIndices":[0,1,2,3,4,5]}
+Test: stress replay advances the terminal ruin market year exactly once before shadow continuation
+Test: stress replay capture isolates a technical-error run from sibling runs
+Test: stress replay capture identity is invariant across worker-like chunk boundaries
+✅ worker-parity.test.mjs completed.
+📊 FILE RESULT: worker-parity.test.mjs | mode=in-process | assertions=605 | passed=605 | failedAssertions=0 | failedFiles=0
+
+📂 Running worker-pool.test.mjs in process...
+--- Worker Pool Tests ---
+Test 1: Pool-Erstellung
+✓ Pool-Erstellung OK
+Test 2: Pool ohne URL
+✓ Pool ohne URL OK
+Test 3: runJob - Einzelner Job
+✓ runJob Einzelner Job OK
+Test 4: runJob - Mehrere parallele Jobs
+✓ runJob Mehrere parallele Jobs OK
+Test 5: broadcast - Init
+✓ broadcast Init OK
+Test 6: Queue-Verarbeitung
+✓ Queue-Verarbeitung OK
+Test 7: dispose - Cleanup
+✓ dispose Cleanup OK
+Test 8: Job mit Transferables
+✓ Job mit Transferables OK
+Test 9: onProgress Callback
+✓ onProgress Callback OK
+Test 10: onError Callback
+✓ onError Callback OK
+Test 11: Telemetrie-Aufzeichnung
+✓ Telemetrie-Aufzeichnung OK
+Test 12: Worker-ID-Zuweisung
+✓ Worker-ID-Zuweisung OK
+Test 13: Pool-Größe Normalisierung
+✓ Pool-Größe Normalisierung OK
+Test 14: Job-Typ MC
+✓ Job-Typ MC OK
+Test 15: Job-Typ Sweep
+✓ Job-Typ Sweep OK
+Test 16: Idle-Worker Management
+✓ Idle-Worker Management OK
+Test 17: nextJobId Inkrementierung
+✓ nextJobId Inkrementierung OK
+--- Worker Pool Tests Abgeschlossen ---
+✅ worker-pool.test.mjs completed.
+📊 FILE RESULT: worker-pool.test.mjs | mode=in-process | assertions=40 | passed=40 | failedAssertions=0 | failedFiles=0
+
+========================================
+SUMMARY:
+Total Assertions: 20196
+Passed: 20196
+Failed Assertions: 0
+Failed Files: 0
+Separate Gates: 4
+Failed: 0
+Open Handles: 0
+========================================

@@ -89,6 +89,7 @@ Keine Rolle ersetzt eine andere. Der Implementer gibt die eigene Arbeit niemals 
 - **[Wie der Orchestrator arbeitet](docs/reference/ablauf-des-orchestrators.md) — der Einstieg.** Erklärt den vollständigen Ablauf in Schichten: zuerst ohne Fachbegriffe, dann ein protokollierter echter Lauf als Beispiel, dann die Regeln so genau, dass man danach prüfen kann.
 - [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md) beschreibt Systemgrenze, Domänenmodell, Invarianten, Komponenten, Zustandsmaschine, Vertrauensgrenzen und betriebliche Eigenschaften.
 - [Marktvergleich](docs/reference/market-comparison.md) ordnet den Orchestrator anhand aktueller offizieller Produktdokumentation gegenüber repräsentativen Coding-Agenten und Agentenplattformen ein.
+- [Architektur-Whitepaper Phase A](docs/reference/architektur-whitepaper-phase-a.pdf) (PDF, Stand 28.09.2026) beschreibt Rollenverträge, Providergrenzen, Records und den realen Abnahmelauf; die [Evidenz zum Whitepaper](docs/reference/whitepaper-phase-a-evidenz.md) bindet die Aussagen an Commits, Lauf-ID und die öffentlichen Testprotokolle. Das [Quellpaket](docs/reference/whitepaper-phase-a-quellen.zip) enthält den Generator für eine Folgeausgabe.
 
 ## Voraussetzungen und unterstützte Plattformen
 
