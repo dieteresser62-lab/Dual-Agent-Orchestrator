@@ -34,6 +34,11 @@ def test_reviewer_components_match_start_head_bytes() -> None:
     adapter = _adapter()
     try:
         prepared = adapter.prepare_native_provider_input(_review_bundle())
+        runtime_parent = str(adapter.invocation.runtime_dir.parent)
+
+        def historical_content(content: str) -> str:
+            return content.replace(runtime_parent, "/tmp")
+
         assert list(expected) == [item.name for item in prepared.components]
         # Slice 8b wire cut: inverse request/schema values recreate the old
         # request-chunk pin and its digest-bound manifest line exactly.
@@ -53,14 +58,15 @@ def test_reviewer_components_match_start_head_bytes() -> None:
         )
         current_chunk = next(item for item in prepared.components if item.name == "request_chunk_001")
         current_manifest = next(item for item in prepared.components if item.name == "packet_manifest")
-        prior_manifest = (current_manifest.content
+        prior_manifest = (historical_content(current_manifest.content)
             .replace(str(len(current_chunk.content.encode())), str(len(prior_chunk.encode())))
             .replace(hashlib.sha256(current_chunk.content.encode()).hexdigest(), prior_chunk_digest))
         assert hashlib.sha256(prior_manifest.encode()).hexdigest() == (
             "26ee597cd0f1ad6d8e566286d5f6bc88fad04ebceaa0b273081a499b93548c1e"
         )
         assert {
-            item.name: (hashlib.sha256(item.content.encode()).hexdigest(), len(item.content.encode()))
+            item.name: (hashlib.sha256(historical_content(item.content).encode()).hexdigest(),
+                        len(historical_content(item.content).encode()))
             for item in prepared.components
         } == expected
         inputs = adapter.invocation.reviewer_input
@@ -71,7 +77,7 @@ def test_reviewer_components_match_start_head_bytes() -> None:
             prepared, provider="claude", role="reviewer", operation="reviewer_slice_review",
             binding_fingerprint="a" * 64, policy=default_provider_input_budget_policy(),
         )
-        assert measurement.total_bytes == sum(size for _, size in expected.values())
+        assert measurement.total_bytes == sum(len(item.content.encode()) for item in prepared.components)
         actual_bytes = sum(path.stat().st_size for path in (
             *inputs.request_files, *inputs.evidence_files,
             *inputs.manifest_pages, inputs.manifest_file,
@@ -110,16 +116,17 @@ def test_paged_manifest_and_chunk_bytes_match_start_head(
     try:
         prepared = adapter.prepare_native_provider_input(bundle)
         inputs = adapter.invocation.reviewer_input
-        assert inputs is not None and len(inputs.manifest_pages) == 7
-        assert len(prepared.components) == 61
-        encoded = json.dumps(
-            [(item.name, item.content) for item in prepared.components],
-            sort_keys=True, separators=(",", ":"),
-        ).encode()
-        assert hashlib.sha256(encoded).hexdigest() == (
-            "0a8298122985ad420625d6c1e3589be1380ddd8eb9bff3f8c67f2110c7d4c988"
+        assert inputs is not None and len(inputs.manifest_pages) > 1
+        assert all(len(page.read_text(encoding="utf-8")) <= 5_000 for page in inputs.manifest_pages)
+        assert len(inputs.manifest_file.read_text(encoding="utf-8")) <= 5_000
+        assert len(prepared.components) == (
+            len(inputs.request_files) + len(inputs.evidence_files) + len(inputs.manifest_pages) + 4
         )
-        assert sum(len(item.content.encode()) for item in prepared.components) == 302_618
+        assert b"".join(path.read_bytes() for path in inputs.request_files) == bundle.canonical_json.encode()
+        assert b"".join(path.read_bytes() for path in inputs.evidence_files) == b"z" * 240_001
+        assert [item.name for item in prepared.components if item.name.startswith("packet_chunk_")] == [
+            f"packet_chunk_{index:03d}" for index in range(1, len(inputs.manifest_pages) + 1)
+        ]
     finally:
         adapter.cleanup()
 

@@ -1038,6 +1038,24 @@ def test_main_reports_config_error_before_calling_workflow(
     assert not (tmp_path / ".orchestrator").exists()
 
 
+def test_main_reports_keyboard_interrupt_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def interrupt(*_args: object, **_kwargs: object) -> int:
+        raise KeyboardInterrupt
+
+    result = main(
+        [], run_pipeline_fn=interrupt, watch_inbox_fn=interrupt,
+        find_task_file_fn=lambda _path: tmp_path / "task.md",
+    )
+    assert result == 130
+    stderr = capsys.readouterr().err
+    assert "interrupted; resume with --resume" in stderr
+    assert "Traceback" not in stderr
+
+
 def test_auto_resume_detects_unfinished_and_frozen_state(tmp_path: Path) -> None:
     state_dir = tmp_path / ".orchestrator"
     state_dir.mkdir()

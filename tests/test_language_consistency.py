@@ -36,6 +36,57 @@ USER_MARKDOWN_FILES = (
     *REFERENCE_DOC_FILES,
 )
 USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
+ROLE_PROSE_FILES = (
+    ROOT / "README.md", ROOT / "Quickstart.md",
+    *(path for path in sorted((ROOT / "docs/reference").glob("*.md"))
+      if path.name != "market-comparison.md"),
+)
+TEXT_FILE_SUFFIXES = frozenset({
+    ".json", ".md", ".puml", ".py", ".sh", ".svg", ".toml", ".txt",
+})
+EXTENSIONLESS_TEXT_FILES = frozenset({"run_task"})
+
+
+def _is_text_file(path: Path) -> bool:
+    return path.suffix.casefold() in TEXT_FILE_SUFFIXES or path.name in EXTENSIONLESS_TEXT_FILES
+
+
+ROLE_PROSE_PATTERN = re.compile(
+    r"\b(?:Codex|Claude)(?:\s+Code)?\s+"  # allowlist:provider -- documentation guard: detect provider role sentences
+    r"(?:plant|implementiert|schreibt|baut|prüft|reviewt|liest|erstellt|bekommt|"
+    r"arbeitet|korrigiert|meldet|fragt|gibt\b[^.!?\n]{0,60}?\bfrei)\b"
+    r"|\bvon\s+(?:Codex|Claude)\s+(?:geprüft|freigegeben|gemeldet)(?:en|e|er|es)?\b",  # allowlist:provider -- documentation guard: detect passive role claims
+    re.IGNORECASE,
+)
+# The install prompt belongs to the CLI, not an orchestrator role.
+ROLE_PROSE_ALLOWLIST = {
+    ("docs/reference/einrichtung.md", "Claude Code fragt vor `npm install` nach; in Codex ist das Netz in der Sandbox"),  # allowlist:provider -- documentation guard: CLI installation behavior
+}
+
+
+def _role_prose_hits(path: Path, text: str) -> list[str]:
+    relative = path.relative_to(ROOT).as_posix()
+    lines = text.splitlines()
+    hits: list[str] = []
+    for match in ROLE_PROSE_PATTERN.finditer(text):
+        line_no = text.count("\n", 0, match.start()) + 1
+        line = lines[line_no - 1]
+        if any(relative == name and excerpt in line for name, excerpt in ROLE_PROSE_ALLOWLIST):
+            continue
+        hits.append(f"{relative}:{line_no}: {line.strip()}")
+    return hits
+
+
+def test_active_prose_uses_role_names_for_role_actions() -> None:
+    hits = [hit for path in ROLE_PROSE_FILES
+            for hit in _role_prose_hits(path, path.read_text(encoding="utf-8"))]
+    assert not hits, "Provider names used as roles:\n" + "\n".join(hits)
+
+
+def test_role_prose_guard_detects_a_new_provider_role_sentence() -> None:
+    assert _role_prose_hits(ROOT / "README.md", "Codex implementiert die Aufgabe.\n")  # allowlist:provider -- documentation guard: negative control
+    assert _role_prose_hits(ROOT / "README.md", "Codex\nimplementiert die Aufgabe.\n")  # allowlist:provider -- documentation guard: wrapped negative control
+
 READABLE_AUDIT_PATH = ROOT / "src" / "readable_audit.py"
 _AUDIT_FRAME_ENTRY_POINTS_BY_PATH = {
     READABLE_AUDIT_PATH: frozenset({
@@ -881,6 +932,7 @@ _PROVIDER_REFERENCE_CATEGORIES = (
     "certification data", "role policy file", "legacy branch syntax",
     "stable audit marker", "historical wire proof",
     "profile configuration",
+    "documentation guard",
 )
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"
@@ -916,7 +968,7 @@ def _provider_productive_files(
         glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
         for path in root.glob(glob_pattern):
             resolved = path.resolve()
-            if not resolved.is_file():
+            if not resolved.is_file() or not _is_text_file(path):
                 continue
             if include_tests and path.is_relative_to(root / "tests") and path.suffix != ".py":
                 continue
@@ -1015,7 +1067,10 @@ def _retirement_active_files(root: Path = ROOT) -> tuple[Path, ...]:
         # pathlib's terminal ** yields directories; append * to include all
         # declared descendants while keeping the repository pattern canonical.
         glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
-        files.update(path for path in root.glob(glob_pattern) if path.is_file())
+        files.update(
+            path for path in root.glob(glob_pattern)
+            if path.is_file() and _is_text_file(path)
+        )
 
     def relative(path: Path) -> Path:
         return path.relative_to(root)
@@ -1321,6 +1376,25 @@ def test_retirement_guard_rejects_every_active_retired_reference() -> None:
     assert not hits, "Retired active references found:\n" + "\n".join(hits)
 
 
+def test_retirement_guard_skips_binary_document(tmp_path: Path) -> None:
+    (tmp_path / "orchestrator.toml").write_bytes((ROOT / "orchestrator.toml").read_bytes())
+    reference = tmp_path / "docs" / "reference"
+    reference.mkdir(parents=True)
+    document = reference / "active.md"
+    document.write_text("# Active documentation\n", encoding="utf-8")
+    binary = reference / "synthetic.pdf"
+    binary.write_bytes(b"%PDF-1.4\n\xff\x00\n")
+
+    active_files = _retirement_active_files(tmp_path)
+    assert document in active_files
+    assert binary not in active_files
+    assert not [
+        hit
+        for path in active_files
+        for hit in _retirement_hits(path, path.read_text(encoding="utf-8"))
+    ]
+
+
 def test_retirement_guard_ignores_only_managed_audit_projection() -> None:
     retired_name = "anti" + "gravity"
     internal_document = ROOT / "docs" / "internal" / "synthetic-audit.md"
@@ -1410,8 +1484,8 @@ def test_market_comparison_allows_only_exact_external_product_lines() -> None:
             '| **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; stellt den unabhängigen Abschlussprüfer dieses Orchestrators |',
         ),
         (
-            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.',
-            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die drei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, **Antigravity** prüft abschließend, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.',
+            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: Der **Implementer** (standardmäßig Codex) plant und baut, **Reviewer und Final-Reviewer** (standardmäßig Claude) prüfen schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket. `[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung.',
+            'Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die drei vorhandene Agenten in feste Rollen setzt: Der **Implementer** (standardmäßig Codex) plant und baut, **Reviewer und Final-Reviewer** (standardmäßig Claude) prüfen schreibgeschützt, **Antigravity** prüft abschließend, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket. `[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung.',
         ),
         (
             'Google Antigravity ist seit Mai 2026 als Version 2 eine Desktop-App (aktuell 2.16), dazu kommen IDE, IDE-Erweiterungen und eine CLI, die seit Juni die Gemini CLI für Einzelnutzer ersetzt. Agenten laufen lokal, parallel und im Worktree-Modus, neben Gemini- auch mit Claude- und GPT-OSS-Modellen; die Terminal-Sandbox ist standardmäßig aktiv. Der Planning Mode erzeugt Plan, Aufgabenliste und Walkthrough, und „Review" heißt, dass ein Mensch diese Artefakte prüft. Ein Prüfagent und eine von Google gehostete Cloud-Ausführung sind nicht nachgewiesen.',
@@ -2155,7 +2229,7 @@ def test_active_document_links_and_anchors_resolve() -> None:
             url = urlsplit(target)
             destination = (source.parent / unquote(url.path)).resolve() if url.path else source
             assert destination.is_file(), f"{source}: {target}"
-            if url.fragment:
+            if url.fragment and _is_text_file(destination):
                 headings = _unfenced_headings(destination.read_text(encoding="utf-8"))
                 slugs = {
                     re.sub(r"[^\w-]", "", heading.lstrip("# ").lower().replace(" ", "-"))

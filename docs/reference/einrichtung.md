@@ -341,7 +341,7 @@ diesen Slot; ohne ihn erbt der Finalreviewer das Reviewerprofil.
 
 ### 2.4 Den Agenten das Projekt erklären: `AGENTS.md`
 
-Die Datei `AGENTS.md` im Projektordner bekommt Codex bei jedem Auftrag mit
+Die Datei `AGENTS.md` im Projektordner bekommt der Implementer bei jedem Auftrag mit
 (die ersten 12.000 Zeichen). Sie ist keine Pflicht, aber der größte Hebel für
 gute Ergebnisse. Eine Vorlage:
 
@@ -640,7 +640,7 @@ git init -b main
 ### 3.2 Die Beschreibung ins Repository legen
 
 Legen Sie die vollständige Projektbeschreibung als `docs/spezifikation.md` ab.
-Dort können Codex und Claude sie bei jedem Schritt nachlesen; die späteren Ideen
+Dort können Implementer, Reviewer und Final-Reviewer sie bei jedem Schritt nachlesen; die späteren Ideen
 im Eingang bleiben kurz und verweisen darauf.
 
 ```bash
@@ -823,7 +823,7 @@ Freigabebefehl `--resume --approve-gate --gate-rationale "…"`.
 |---|---|
 | `[paths]` | ordnet Pfade Produktivcode, Tests, Doku und Erzeugtem zu; unbekannte Pfade zählen als Produktivcode. Die Klassen steuern unter anderem, welche Scope-Erweiterungen automatisch genehmigt werden. |
 | `[validation]` | `default_command` läuft nach jedem Paket; `[[validation.rules]]` ergänzen `command` für bestimmte Pfadmuster. Alle Befehle sind Argumentlisten; für Unterordner und Shell-Semantik etwa `default_command = ["sh", "-c", "cd app && flutter test"]`. `required_artifacts` und `product_command` erlauben Akzeptanzkriterien gegen Bauergebnis beziehungsweise laufendes Produkt. |
-| `[[stop_rules]]` | projektspezifische Stoppregeln, die Codex vor einer Verletzung anhalten lassen |
+| `[[stop_rules]]` | projektspezifische Stoppregeln, die den Implementer vor einer Verletzung anhalten lassen |
 | `[repository]` | `base_branch` nennt den Hauptbranch ausdrücklich. Ohne Angabe erkennt der Orchestrator ihn selbst: Standardbranch des Remotes, sonst der einzige von `main` und `master`, sonst der einzige Branch außerhalb von `feature/…` und `codex/…`. |
 | `[workflow]` | Zusätzliche menschliche Freigaben: `plan_gate`, `test_change_gate`, `manual_slice_gate`, `scope_extension_gate` – standardmäßig aus. Bei ausgeschaltetem `scope_extension_gate` genehmigt der Orchestrator angemeldete Umfangserweiterungen eines Arbeitspakets selbst und fragt den Programmierer neu; eingeschaltet gehen bestehende Testdateien und Dateien späterer Pakete an Sie. Arbeitsplan und Prüfberichte sind nie erweiterbar. `merge_completed_branch` ist standardmäßig `true` und wird für den ganzen Lauf im Run-Profil gebunden; `false` lässt den Zielbranch nach dem Archiv-Commit ausgecheckt. `archive_run_directory` ist standardmäßig `{run_id}` und wird ebenfalls beim Laufstart gebunden. Es bezeichnet einen relativen Unterordner von `docs/internal/archive/`, verlangt `{run_id}` als vollständiges Segment und erlaubt zusätzlich `{year}` und `{branch_slug}`. Ungültige Muster werden bei der Konfiguration abgewiesen; ein vorhandener Zielordner oder ein Symlink auf dem Zielpfad stoppt vor dem ersten Umsetzungsslice. Beide Abschluss-Schlüssel stehen nur in `orchestrator.toml`, ohne Kommandozeilenoption. |
 | `[[provider_input_budget]]` | Obergrenzen für die Eingabegröße je Provider, Rolle und Operation |

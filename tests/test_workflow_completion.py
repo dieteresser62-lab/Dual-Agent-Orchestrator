@@ -492,7 +492,7 @@ def test_final_review_handler_reaches_local_git_completion(
     assert (root / workflow_completion.ARCHIVE_RELATIVE / "plan.md").exists()
 
 
-def test_empty_archive_still_gets_its_own_commit(
+def test_empty_archive_keeps_feature_head_without_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "repo"
@@ -510,9 +510,40 @@ def test_empty_archive_still_gets_its_own_commit(
     feature_head = git(root, "rev-parse", "HEAD")
     run = completion(root, merge=False)
     committed = run.run(monkeypatch)
-    assert committed != feature_head
-    assert git(root, "show", "-s", "--format=%P", committed) == feature_head
-    assert git(root, "show", "-s", "--format=%T", committed) == git(root, "show", "-s", "--format=%T", feature_head)
+    assert committed == feature_head
+    assert git(root, "rev-parse", "HEAD") == feature_head
+    assert not any(effect.operation[0] == "archive_commit" for effect in run.bridge.effects.values())
+
+
+def test_empty_archive_merge_resumes_without_archive_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.name", "Test Operator")
+    git(root, "config", "user.email", "operator@example.invalid")
+    (root / "src.txt").write_text("base\n")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "base")
+    git(root, "switch", "-qc", "feature/task")
+    (root / "src.txt").write_text("feature\n")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "feature")
+    feature_head = git(root, "rev-parse", "HEAD")
+    run = completion(root, merge=True)
+
+    def interrupt(boundary) -> None:  # type: ignore[no-untyped-def]
+        if (boundary.effect_class == "git_merge"
+                and boundary.phase is SideEffectBoundaryPhase.AFTER_EFFECT):
+            raise RuntimeError("injected crash")
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        run.run(monkeypatch, interrupt)
+    merged = run.run(monkeypatch)
+    assert merged == git(root, "rev-parse", "main")
+    assert git(root, "rev-parse", "feature/task") == feature_head
+    assert not any(effect.operation[0] == "archive_commit" for effect in run.bridge.effects.values())
 
 
 def test_merge_disabled_still_commits_archive(tmp_path: Path,

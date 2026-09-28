@@ -112,7 +112,7 @@ Eine menschliche Planabnahme ist opt-in:
 run_task --watch --plan-gate
 ```
 
-Entsprechend aktivieren `--test-change-gate` eine zusätzliche Abnahme für Teständerungen und `--manual-slice-gate` eine Abnahme vor jedem Slice-Commit. Ohne diese Optionen bleiben Validierung sowie Claude-Reviews vollständig verpflichtend; nur der zusätzliche menschliche Halt entfällt.
+Entsprechend aktivieren `--test-change-gate` eine zusätzliche Abnahme für Teständerungen und `--manual-slice-gate` eine Abnahme vor jedem Slice-Commit. Ohne diese Optionen bleiben Validierung sowie Reviewer-Reviews vollständig verpflichtend; nur der zusätzliche menschliche Halt entfällt.
 
 Für bereits ausgearbeitete, maschinell erzeugte oder bewusst getrennt ausgeführte Aufträge bleiben formale Dateien unterstützt. [example-plan-task.md](example-plan-task.md) zeigt `ORCHESTRATOR_MODE: PLAN_ONLY`; [example-task.md](example-task.md) zeigt `ORCHESTRATOR_MODE: IMPLEMENT`, einen optional ausdrücklich gesetzten `TARGET_BRANCH`, `TASK_SCOPE`, Akzeptanzkriterien und Stopbedingungen.
 

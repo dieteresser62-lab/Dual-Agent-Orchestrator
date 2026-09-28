@@ -638,7 +638,15 @@ def complete_chain(
     prior_merge = next((effect for effect in reversed(replay.side_effects)
                         if effect.effect_class == "git_merge"
                         and effect.work_unit_id == str(state.current_work_unit_id)), None)
-    if prior_archive is None:
+    resume_without_archive = prior_archive is None and prior_merge is not None
+    if resume_without_archive:
+        # An empty archive has no commit effect; the merge intent binds its source HEAD.
+        merge_source = prior_merge.operation[3]
+        if _archive_paths(root, base_ref, merge_source):
+            raise GitTransactionError("merge has no archive effect despite archive paths")
+        operation = ("archive_commit", target, merge_source, "", "", "")
+        paths = ()
+    elif prior_archive is None:
         check_archive_directory(root, profile, state.run_id, state.branch)
         identity = inspect_repository(root)
         if identity.branch != target:
@@ -708,7 +716,7 @@ def complete_chain(
             if _value(root, "write-tree") != operation[3]:
                 raise GitTransactionError("archive tree differs from the preflight tree")
             _git(root, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
-                 "commit", "--allow-empty", "-m", ARCHIVE_SUBJECT)
+                 "commit", "-m", ARCHIVE_SUBJECT)
         except Exception:
             if inspect_repository(root).head == operation[2]:
                 for source, destination in reversed(moved):
@@ -721,8 +729,10 @@ def complete_chain(
         committed = inspect_repository(root).head
         return committed, committed
 
-    archive_result = executor.execute(spec, reconcile=reconcile_archive,
-                                      perform=perform_archive)
+    archive_result = (
+        operation[2] if resume_without_archive or (not paths and prior_archive is None)
+        else executor.execute(spec, reconcile=reconcile_archive, perform=perform_archive)
+    )
     archive_head = str(archive_result)
     if not profile.merge_completed_branch:
         if getattr(profile, "post_merge_hook_enabled", False):

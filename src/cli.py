@@ -1271,12 +1271,16 @@ def main(
         run_pipeline_fn = orchestrator.run_pipeline
         watch_inbox_fn = orchestrator.watch_inbox
         find_task_file_fn = orchestrator.find_task_file
-    return run_cli(
-        args,
-        run_pipeline_fn=run_pipeline_fn,
-        watch_inbox_fn=watch_inbox_fn,
-        find_task_file_fn=find_task_file_fn,
-    )
+    try:
+        return run_cli(
+            args,
+            run_pipeline_fn=run_pipeline_fn,
+            watch_inbox_fn=watch_inbox_fn,
+            find_task_file_fn=find_task_file_fn,
+        )
+    except KeyboardInterrupt:
+        print("interrupted; resume with --resume", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
