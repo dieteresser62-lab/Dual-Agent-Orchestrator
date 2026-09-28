@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from contracts import (
     AgentRole,
@@ -82,9 +83,9 @@ def _context() -> NativeReviewContext:
     return NativeReviewContext(
         run_id="run-native-request",
         work_unit_id="work-unit-1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -93,6 +94,11 @@ def _context() -> NativeReviewContext:
         test_changes_approved=True,
         anchor_origin="approved-plan",
     )
+
+
+def test_native_review_context_rejects_traversing_test_path() -> None:
+    with pytest.raises(NativeReviewContractError, match="test files must be sorted, unique"):
+        replace(_context(), test_files=("../outside.py",))
 
 
 def _spec() -> NativeReviewRequestSpec:
@@ -164,14 +170,43 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
 def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
+    # Slice 8b wire cut: reviewer constants and request fields are the only changes.
+    prior_schema = (
+        bundle.provider_response_schema_json
+        .replace('"const":"reviewer"', '"const":"claude"')
+        .replace('"enum":["reviewer"]', '"enum":["claude"]')
+    )
+    prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
+    assert prior_schema_digest == "ff428b9654124e5fe2ad36df43f6e464dbea15e05ef9e4f702a1a102f329e0aa"
+    prior = prior_role_wire_document(bundle.document, prior_schema_sha256=prior_schema_digest)
+    assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
+        "ac487a3c35574934e6319f477802a183c73d70a4ffab795bd780d9ccdd81e1ae"
+    )
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "195353b47801aa00ef0c856397abdf44848383fbeb480777a35f6ad155ff51fc"
+        "6ff1f871609d06ddb9396d73a69b3301ff3e8dc29497edcbed490b0fbd9595fc"
     )
-    assert hashlib.sha256(
-        bundle.provider_response_schema_json.encode("utf-8")
-    ).hexdigest() == (
-        "5e215e1e6bb8520ec065149af641cc16130ed6db156f1af739e0521afd23c82d"
+    assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
+        "c7cf6bfb5064a4511cb5f22a0e4967d7c2d5d9d4fcf66b4eb026989aaa1752b8"
     )
+
+
+def test_capability_profile_selects_reviewer_writer_and_binds_request_id() -> None:
+    from native_provider_schema import (
+        ANTHROPIC_PROVIDER, OPENAI_PROVIDER, NativeProviderSchemaError,
+    )
+
+    first = build_native_review_request(_spec(), profile=ANTHROPIC_PROVIDER)
+    second = build_native_review_request(_spec(), profile=OPENAI_PROVIDER)
+    assert first.provider_response_schema != second.provider_response_schema
+    assert first.bound_context.request_id != second.bound_context.request_id
+    for bundle in (first, second):
+        assert bundle.document["response_contract"]["schema_sha256"] == hashlib.sha256(
+            bundle.provider_response_schema_json.encode()
+        ).hexdigest()
+    with pytest.raises(NativeReviewRequestError, match="differs from bound context"):
+        replace(first, capability_profile=OPENAI_PROVIDER)
+    with pytest.raises(NativeProviderSchemaError, match="no capability entry"):
+        build_native_review_request(_spec(), profile="unknown")
 
 
 
@@ -214,11 +249,11 @@ def test_plan_disposition_overflow_stops_before_request_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     findings = tuple(
-        _prior_finding(f"C-{number:02d}") for number in range(1, 34)
+        _prior_finding(f"R-{number:02d}") for number in range(1, 34)
     )
     context = replace(
         _context(),
-        operation="claude_plan_review",
+        operation="reviewer_plan_review",
         approval_marker=ApprovalMarker.PLAN,
         previous_findings=findings,
         plan_artifact_path="docs/internal/plan.md",
@@ -238,7 +273,7 @@ def test_final_review_request_binds_default_and_hard_capacity(
 ) -> None:
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -288,7 +323,7 @@ def test_final_review_request_rejects_capacity_outside_one_to_512(
     with pytest.raises(NativeReviewContractError, match="from 1 to 512"):
         replace(
             _context(),
-            operation="claude_final_review",
+            operation="reviewer_final_review",
             approval_marker=ApprovalMarker.FINAL_REVIEW,
             anchor_origin=None,
             max_new_findings=capacity,
@@ -300,7 +335,7 @@ def test_final_review_contract_has_no_pagination_or_cursor_fields(
 ) -> None:
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -357,7 +392,7 @@ def test_generated_review_schema_requires_typed_paths_and_passes_provider_projec
 
 
 def _prior_finding(
-    finding_id: str = "C-01",
+    finding_id: str = "R-01",
     *,
     finding_class: FindingClass = FindingClass.BLOCKER,
 ) -> FindingRecord:
@@ -367,16 +402,16 @@ def _prior_finding(
         status=FindingStatus.OPEN,
         summary="Existing Claude finding",
         acceptance_test="Focused regression",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
 def _writer_response(*, decision: str = "approved") -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "c" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": decision,
         "new_findings": [],
         "status_changes": [],
@@ -418,7 +453,7 @@ def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> 
     )
     final_review = replace(
         context,
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -457,7 +492,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_findings(
     assert missing_blocker.value.code is NativeReviewErrorCode.APPROVAL_INVALID
     approved["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "OPEN",
             "rationale": "not fixed",
             "closure": None,
@@ -467,7 +502,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_findings(
         validate_schema_document({"result": approved}, schema)
     approved["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": "fixed",
             "closure": {"kind": "fixed"},
@@ -476,7 +511,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_findings(
     validate_schema_document({"result": approved}, schema)
 
     foreign = json.loads(json.dumps(approved))
-    foreign["status_changes"][0]["finding_id"] = "C-99"
+    foreign["status_changes"][0]["finding_id"] = "R-99"
     with pytest.raises(SchemaMismatch):
         validate_schema_document({"result": foreign}, schema)
 
@@ -499,7 +534,7 @@ def test_writer_schema_bounds_touched_findings_anchors_and_convergence_findings(
     denied = _writer_response(decision="denied")
     denied["new_findings"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "finding_class": "FINDING",
             "summary": "Late non-blocking idea",
             "acceptance_test": {"kind": "prose", "text": "Follow up later"},
@@ -518,7 +553,7 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
     approved = _writer_response()
     approved["new_findings"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "finding_class": "FINDING",
             "summary": "Cross-cutting follow-up",
             "acceptance_test": {"kind": "prose", "text": "Address in a later Slice"},
@@ -530,9 +565,9 @@ def test_initial_slice_writer_can_report_observation_before_commit_ratchet() -> 
 
 
 def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them() -> None:
-    blocker = _prior_finding("C-01")
+    blocker = _prior_finding("R-01")
     observation = _prior_finding(
-        "C-02", finding_class=FindingClass.FINDING
+        "R-02", finding_class=FindingClass.FINDING
     )
     context = replace(
         _context(), previous_findings=(blocker, observation)
@@ -542,7 +577,7 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     approved["request_id"] = bundle.bound_context.request_id
     approved["status_changes"] = [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "status": "OPEN",
             "rationale": "Cross-cutting follow-up remains explicit.",
             "closure": None,
@@ -554,8 +589,8 @@ def test_writer_can_express_open_slice_findings_but_local_approval_rejects_them(
     with pytest.raises(NativeReviewContractError) as raised:
         parse_bound_native_contract_result(approved, bundle.bound_context)
     assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
-    assert "C-01 (existing before this response)" in raised.value.detail
-    assert "C-02 (existing before this response)" in raised.value.detail
+    assert "R-01 (existing before this response)" in raised.value.detail
+    assert "R-02 (existing before this response)" in raised.value.detail
     assert "status_changes entry with status=CLOSED" in raised.value.detail
     assert "typed fixed or evidenced-rejection closure" in raised.value.detail
     assert "leave it open and deny the review" in raised.value.detail
@@ -601,7 +636,7 @@ def test_denied_writer_response_may_include_nonblank_pre_mortem() -> None:
     denied["request_id"] = bundle.bound_context.request_id
     denied["new_findings"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "finding_class": "BLOCKER",
             "summary": "The bounded contract still has a defect.",
             "acceptance_test": {
@@ -629,14 +664,14 @@ def test_denied_writer_response_may_include_nonblank_pre_mortem() -> None:
 
 
 def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> None:
-    blocker = _prior_finding("C-01")
+    blocker = _prior_finding("R-01")
     context = replace(_context(), previous_findings=(blocker,))
     bundle = build_native_review_request(replace(_spec(), context=context))
     denied = _writer_response(decision="denied")
     denied["request_id"] = bundle.bound_context.request_id
     denied["new_findings"] = [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "finding_class": "FINDING",
             "summary": "Non-blocking follow-up discovered during denial.",
             "acceptance_test": {
@@ -656,8 +691,8 @@ def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> Non
         (item.finding_id, item.finding_class, item.status)
         for item in result.findings
     ) == (
-        ("C-01", FindingClass.BLOCKER, FindingStatus.OPEN),
-        ("C-02", FindingClass.FINDING, FindingStatus.OPEN),
+        ("R-01", FindingClass.BLOCKER, FindingStatus.OPEN),
+        ("R-02", FindingClass.FINDING, FindingStatus.OPEN),
     )
 
     convergence_context = replace(
@@ -681,7 +716,7 @@ def test_initial_denial_keeps_a_new_finding_for_implementer_disposition() -> Non
     ordinary_only["request_id"] = no_prior_bundle.bound_context.request_id
     ordinary_only["new_findings"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "finding_class": "FINDING",
             "summary": "An ordinary Finding awaits implementer disposition.",
             "acceptance_test": {
@@ -736,10 +771,10 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
             validate_schema_document({"result": candidate}, schema)
 
     stop = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "stop_request",
         "request_id": "native-review-request-" + "c" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "Additional scope is required.",
         "remediation_paths": [],
@@ -759,7 +794,7 @@ def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() 
             review_kind=NativeReviewKind.PLAN,
             context=replace(
                 base.context,
-                operation="claude_plan_review",
+                operation="reviewer_plan_review",
                 approval_marker=ApprovalMarker.PLAN,
             ),
         ),
@@ -775,7 +810,7 @@ def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() 
             review_kind=NativeReviewKind.FINAL_REVIEW,
             context=replace(
                 base.context,
-                operation="claude_final_review",
+                operation="reviewer_final_review",
                 approval_marker=ApprovalMarker.FINAL_REVIEW,
                 anchor_origin=None,
             ),
@@ -809,12 +844,12 @@ def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
 
 def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> None:
     observation_one = _prior_finding(
-        "C-01", finding_class=FindingClass.FINDING
+        "R-01", finding_class=FindingClass.FINDING
     )
     observation_two = _prior_finding(
-        "C-02", finding_class=FindingClass.FINDING
+        "R-02", finding_class=FindingClass.FINDING
     )
-    blocker = _prior_finding("C-01")
+    blocker = _prior_finding("R-01")
     duplicate_context = replace(
         _context(), previous_findings=(observation_one, observation_two)
     )
@@ -844,13 +879,13 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
     duplicate_events = _writer_response()
     duplicate_events["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": "fixed",
             "closure": {"kind": "fixed"},
         },
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": "fixed",
             "closure": {"kind": "fixed"},
@@ -870,7 +905,7 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
             },
             "affected_paths": ["src/repeated.py"],
         }
-        for finding_id in ("C-02", "C-03")
+        for finding_id in ("R-02", "R-03")
     ]
     contexts_and_responses.append((blocker_context, duplicate_signature))
 
@@ -883,14 +918,14 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
             "acceptance_test": {"kind": "prose", "text": "Focused regression"},
             "affected_paths": [],
         }
-        for finding_id in ("C-02", "C-01")
+        for finding_id in ("R-02", "R-01")
     ]
     contexts_and_responses.append((_context(), noncontiguous))
 
     no_remaining_blocker = _writer_response(decision="denied")
     no_remaining_blocker["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": "fixed",
             "closure": {"kind": "fixed"},
@@ -961,10 +996,10 @@ def _legacy_packet_evidence() -> NativeReviewEvidenceInput:
 
 def _response(request_id: str) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -986,7 +1021,7 @@ def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None
     assert first.canonical_json == canonical_native_review_request_json(first.document)
     assert first.bound_context.request_id == first.document["request_id"]
     assert first.bound_context.request_id != first.bound_context.context.request_id
-    assert first.document["review_contract"]["next_finding_id"] == "C-01"
+    assert first.document["review_contract"]["next_finding_id"] == "R-01"
     assert first.document["review_contract"][
         "slice_commit_decision_finding_ids"
     ] == []
@@ -1005,7 +1040,7 @@ def test_slice_commit_decision_finding_ids_are_typed_and_complete() -> None:
 
     assert bundle.document["review_contract"][
         "slice_commit_decision_finding_ids"
-    ] == ["C-01"]
+    ] == ["R-01"]
     object.__setattr__(context, "slice_commit_decision_finding_ids", ())
     with pytest.raises(
         NativeReviewContractError,
@@ -1052,7 +1087,7 @@ def test_next_finding_id_uses_complete_ledger_not_offered_subset(
 ) -> None:
     findings = tuple(
         replace(
-            _prior_finding(f"C-{number:02d}"),
+            _prior_finding(f"R-{number:02d}"),
             status=(FindingStatus.CLOSED if number == 23 else FindingStatus.OPEN),
             status_rationale=("Verified earlier." if number == 23 else None),
         )
@@ -1072,8 +1107,8 @@ def test_next_finding_id_uses_complete_ledger_not_offered_subset(
     assert tuple(
         item["finding_id"]
         for item in bundle.document["review_contract"]["previous_findings"]
-    ) == tuple(f"C-{number:02d}" for number in offered_numbers)
-    assert bundle.document["review_contract"]["next_finding_id"] == "C-66"
+    ) == tuple(f"R-{number:02d}" for number in offered_numbers)
+    assert bundle.document["review_contract"]["next_finding_id"] == "R-66"
     assert "authoritative_finding_ids" not in bundle.canonical_json
 
 
@@ -1081,12 +1116,12 @@ def test_next_finding_id_uses_numeric_maximum_beyond_two_digits() -> None:
     context = replace(
         _context(),
         previous_findings=(),
-        authoritative_finding_ids=("C-99", "C-100"),
+        authoritative_finding_ids=("R-99", "R-100"),
     )
 
     bundle = build_native_review_request(replace(_spec(), context=context))
 
-    assert bundle.document["review_contract"]["next_finding_id"] == "C-101"
+    assert bundle.document["review_contract"]["next_finding_id"] == "R-101"
 
 
 def test_only_plan_requests_carry_the_mandatory_artifact_path_decision() -> None:
@@ -1098,7 +1133,7 @@ def test_only_plan_requests_carry_the_mandatory_artifact_path_decision() -> None
         review_kind=NativeReviewKind.PLAN,
         context=replace(
             _context(),
-            operation="claude_plan_review",
+            operation="reviewer_plan_review",
             approval_marker=ApprovalMarker.PLAN,
             plan_artifact_path=None,
         ),
@@ -1151,12 +1186,12 @@ def test_semantic_request_changes_change_request_id(mutate) -> None:  # type: ig
 
 def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The native loop must carry the response.",
         acceptance_test="Claude sees the durable Codex disposition.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         responses=(
             FindingResponse(
                 FindingResponseDecision.ACCEPTED,
@@ -1186,9 +1221,9 @@ def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
 
 
 def test_request_names_signatures_for_known_open_findings_outside_offer() -> None:
-    first = _prior_finding("C-01")
+    first = _prior_finding("R-01")
     offered = replace(
-        _prior_finding("C-02", finding_class=FindingClass.FINDING),
+        _prior_finding("R-02", finding_class=FindingClass.FINDING),
         summary="A different issue affects src/other.py.",
         acceptance_test="Preserve valid data in src/other.py.",
     )
@@ -1196,7 +1231,7 @@ def test_request_names_signatures_for_known_open_findings_outside_offer() -> Non
         _context(),
         previous_findings=(offered,),
         known_open_findings=(first, offered),
-        authoritative_finding_ids=("C-01", "C-02"),
+        authoritative_finding_ids=("R-01", "R-02"),
     )
 
     bundle = build_native_review_request(replace(_spec(), context=context))
@@ -1207,7 +1242,7 @@ def test_request_names_signatures_for_known_open_findings_outside_offer() -> Non
     assert signatures == native_review_context_binding(context)[
         "known_open_finding_signatures"
     ]
-    assert [item["finding_id"] for item in signatures] == ["C-01", "C-02"]
+    assert [item["finding_id"] for item in signatures] == ["R-01", "R-02"]
 
 
 def test_large_evidence_is_content_addressed_and_bound() -> None:

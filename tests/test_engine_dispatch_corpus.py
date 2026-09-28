@@ -16,10 +16,10 @@ import agent_runtime
 import pytest
 import workflow as production
 
-from agent_runtime import NativeAgentCodexOutput
-from contracts import AgentRole, CodexContractResult, PlannedSlice, StopRequest
+from agent_runtime import NativeAgentImplementerOutput
+from contracts import AgentRole, ImplementerContractResult, PlannedSlice, StopRequest
 from test_workflow import FakeDriver, TEST_FILE, _changes, _context, _slice_state
-from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
+from workflow import ImplementerInvocation, ReviewerInvocation, WorkflowHistory
 from workflow_state import WorkflowStep, init_workflow_state
 
 
@@ -39,7 +39,7 @@ RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 
 
 DISPATCH_HELPERS = {
-    "_run_codex": (
+    "_run_implementer": (
         "_prepare_agent_dispatch",
         "_apply_agent_output",
         "_apply_stopped_agent_output",
@@ -487,7 +487,7 @@ def _static_document(source: str | None = None) -> dict[str, object]:
         "source_commit": SOURCE_COMMIT,
         "source_blob": SOURCE_BLOB,
         "layers": [
-            _static_layer(tree, "_run_codex"),
+            _static_layer(tree, "_run_implementer"),
             _static_layer(tree, "_run_review"),
         ],
     }
@@ -497,7 +497,7 @@ def _checkpoint_site_map() -> dict[tuple[str, int], str]:
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
     result: dict[tuple[str, int], str] = {}
     checkpoint_owners = {
-        "_run_codex": (
+        "_run_implementer": (
             "_apply_agent_output",
             "_apply_stopped_agent_output",
             "_apply_scope_extension",
@@ -521,7 +521,7 @@ CHECKPOINT_SITE_BY_LINE = _checkpoint_site_map()
 
 @dataclass
 class ProbeDriver(FakeDriver):
-    codex_factory: Callable[[CodexInvocation], object] | None = None
+    implementer_factory: Callable[[ImplementerInvocation], object] | None = None
     reviewer_factory: Callable[[ReviewerInvocation], object] | None = None
     recovered_reviewer: object | None = None
     provider_dispatch_count: int = 0
@@ -544,11 +544,11 @@ class ProbeDriver(FakeDriver):
             del caller
         super().checkpoint(state, history)
 
-    def invoke_codex(self, invocation: CodexInvocation) -> object:
+    def invoke_implementer(self, invocation: ImplementerInvocation) -> object:
         self.provider_dispatch_count += 1
         self.codex_calls.append(invocation)
-        assert self.codex_factory is not None
-        return self.codex_factory(invocation)
+        assert self.implementer_factory is not None
+        return self.implementer_factory(invocation)
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> object:
         self.provider_dispatch_count += 1
@@ -583,9 +583,9 @@ def _plan_state(scope: tuple[str, ...] = ("docs/internal/plan.md",)) -> object:
 
 
 def _codex_output(
-    invocation: CodexInvocation,
-    result: CodexContractResult,
-) -> NativeAgentCodexOutput:
+    invocation: ImplementerInvocation,
+    result: ImplementerContractResult,
+) -> NativeAgentImplementerOutput:
     assert invocation.native_request is not None
     request_id = invocation.native_request.bound_context.request_id
     canonical = json.dumps(
@@ -593,7 +593,7 @@ def _codex_output(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return NativeAgentCodexOutput(
+    return NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=request_id,
@@ -640,7 +640,7 @@ def _checkpoint_sequence(driver: ProbeDriver) -> list[dict[str, str]]:
     ]
 
 
-def _run_codex_scenario(
+def _run_implementer_scenario(
     scenario_id: str,
 ) -> tuple[ProbeDriver, object, object, AgentRole]:
     state = _slice_state()
@@ -652,18 +652,18 @@ def _run_codex_scenario(
     )
 
     if scenario_id == "codex-correction-missing-start-fingerprint":
-        state = _plan_state().with_current_step(WorkflowStep.CODEX_CORRECTION)
+        state = _plan_state().with_current_step(WorkflowStep.IMPLEMENTER_CORRECTION)
     elif scenario_id == "codex-non-native-result":
-        driver.codex_factory = lambda _invocation: object()
+        driver.implementer_factory = lambda _invocation: object()
     elif scenario_id == "codex-stop-missing-request":
-        driver.codex_factory = lambda invocation: _codex_output(
+        driver.implementer_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(False, True, None, None, (), ()),
+            ImplementerContractResult(False, True, None, None, (), ()),
         )
     elif scenario_id == "codex-stop-invalid-content":
-        driver.codex_factory = lambda invocation: _codex_output(
+        driver.implementer_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 False,
                 True,
                 StopRequest(
@@ -683,9 +683,9 @@ def _run_codex_scenario(
             require_slice_plan=True,
             task_scope_patterns=("docs/internal/plan.md",),
         )
-        driver.codex_factory = lambda invocation: _codex_output(
+        driver.implementer_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -704,9 +704,9 @@ def _run_codex_scenario(
             work_plan_path="docs/internal/plan.md",
             task_scope_patterns=("docs/internal/plan.md",),
         )
-        driver.codex_factory = lambda invocation: _codex_output(
+        driver.implementer_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -729,9 +729,9 @@ def _run_codex_scenario(
             work_plan_path="docs/internal/plan.md",
             task_scope_patterns=scope,
         )
-        driver.codex_factory = lambda invocation: _codex_output(
+        driver.implementer_factory = lambda invocation: _codex_output(
             invocation,
-            CodexContractResult(
+            ImplementerContractResult(
                 True,
                 False,
                 None,
@@ -743,26 +743,26 @@ def _run_codex_scenario(
         )
     else:  # pragma: no cover - closed by SCENARIOS
         raise AssertionError(f"unknown Codex scenario {scenario_id}")
-    return driver, state, context, AgentRole.CODEX
+    return driver, state, context, AgentRole.IMPLEMENTER
 
 
 def _run_review_scenario(
     scenario_id: str,
 ) -> tuple[ProbeDriver, object, object, AgentRole]:
-    state = _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    state = _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     context = _context()
-    reviewer = AgentRole.CLAUDE
+    reviewer = AgentRole.REVIEWER
     driver = ProbeDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
         reviewer_outputs=[],
     )
     if scenario_id == "review-non-claude":
-        reviewer = AgentRole.CODEX
+        reviewer = AgentRole.IMPLEMENTER
     elif scenario_id == "review-incomplete-attestation":
         driver.invalid_attestation = "incomplete"
     elif scenario_id == "review-slice-packet-missing-start-fingerprint":
-        state = _plan_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+        state = _plan_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
         context = replace(
             context,
             approved_plan_text="# Approved plan",
@@ -787,7 +787,7 @@ def _run_scenario(
     real_provider_counter: dict[str, int] | None = None,
 ) -> dict[str, object]:
     if spec["path"] == "codex":
-        driver, state, context, reviewer = _run_codex_scenario(spec["scenario_id"])
+        driver, state, context, reviewer = _run_implementer_scenario(spec["scenario_id"])
     else:
         driver, state, context, reviewer = _run_review_scenario(spec["scenario_id"])
     before_real = real_provider_counter["count"] if real_provider_counter else 0
@@ -802,7 +802,7 @@ def _run_scenario(
             engine = module.WorkflowEngine(driver)
             history = WorkflowHistory(state.current_work_unit_id)
             if spec["path"] == "codex":
-                engine._run_codex(state, context, history)
+                engine._run_implementer(state, context, history)
             else:
                 engine._run_review(state, context, history, reviewer)
         except BaseException as caught:  # corpus records mutant mismatches too
@@ -916,7 +916,7 @@ def _change_first_codex_provider_request_field(tree: ast.Module) -> None:
         if isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "workflow_requests"
-        and node.func.attr == "native_codex_request"
+        and node.func.attr == "native_implementer_request"
     )
     context_keyword = next(
         keyword for keyword in request_call.keywords if keyword.arg == "context"
@@ -1001,7 +1001,25 @@ def _move_packet_helper_out_of_catcher(tree: ast.Module) -> None:
 
 def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None:
     baseline = json.loads(STATIC_BASELINE.read_text("utf-8"))
-    assert _static_document() == baseline
+    historical_digest = hashlib.sha256(
+        json.dumps(baseline["layers"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert historical_digest == "fffd6bf3d7b07de101d3d62f798a8722c30d92ea1a2dae4f95984ab621b548f2"
+
+    def active_names(value: object) -> object:
+        if isinstance(value, str):
+            for old, new in baseline["active_name_changes"].items():
+                value = value.replace(old, new)
+            return value
+        if isinstance(value, list):
+            return [active_names(item) for item in value]
+        if isinstance(value, dict):
+            return {key: active_names(item) for key, item in value.items()}
+        return value
+
+    assert _static_document()["layers"] == active_names(baseline["layers"])
+    for key in ("schema_version", "source_commit", "source_blob"):
+        assert _static_document()[key] == baseline[key]
     codex, review = baseline["layers"]
     assert (len(codex["conditions"]), len(codex["aborts"])) == (22, 7)
     assert (len(review["conditions"]), len(review["aborts"])) == (13, 6)
@@ -1163,7 +1181,7 @@ def test_removing_nested_dispatch_helper_call_turns_corpus_red() -> None:
 
 def test_reordering_declared_nested_dispatch_helpers_turns_corpus_red() -> None:
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
-    function = _function(tree, "_run_codex")
+    function = _function(tree, "_run_implementer")
     helper_names = (
         "_prepare_agent_dispatch",
         "_apply_agent_output",
@@ -1179,7 +1197,7 @@ def test_reordering_declared_nested_dispatch_helpers_turns_corpus_red() -> None:
         match=r"reachable dispatch helper order differs from declaration",
     ):
         _assert_dispatch_helper_graph(
-            "_run_codex",
+            "_run_implementer",
             function,
             helpers,
             helper_names,
@@ -1229,8 +1247,8 @@ def test_moving_review_helper_out_of_its_catcher_turns_binding_red() -> None:
 def test_dispatch_entrypoints_and_new_helpers_stay_below_b32_threshold() -> None:
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
     names = {
-        "_run_codex",
-        *DISPATCH_HELPERS["_run_codex"],
+        "_run_implementer",
+        *DISPATCH_HELPERS["_run_implementer"],
         "_run_review",
         *DISPATCH_HELPERS["_run_review"],
     }
@@ -1240,7 +1258,7 @@ def test_dispatch_entrypoints_and_new_helpers_stay_below_b32_threshold() -> None
     }
     assert all(span < 200 for span in spans.values()), spans
     size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text("utf-8"))
-    assert "src/workflow.py::WorkflowEngine._run_codex" not in size_baseline["functions"]
+    assert "src/workflow.py::WorkflowEngine._run_implementer" not in size_baseline["functions"]
     assert "src/workflow.py::WorkflowEngine._run_review" not in size_baseline["functions"]
 
 

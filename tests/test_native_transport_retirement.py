@@ -12,7 +12,7 @@ from agent_adapters import (
 )
 from agent_config import AgentSettings
 from cli import build_parser, parse_args
-from workflow_state import ProtocolBinding, WorkflowStateValidationError
+from workflow_state import ProtocolBinding, ProtocolMode, WorkflowStateValidationError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +21,7 @@ RETIRED_RUNTIME_SYMBOLS = (
     "validate_review_response",
     "parse_finding_responses",
     "parse_anchors",
-    "normalize_codex_contract_output",
+    "normalize_implementer_contract_output",
     "normalize_review_contract_output",
     "repair_review_contract",
     "recover_failed_reviewer_output",
@@ -109,13 +109,14 @@ def test_payload_construction_inventory_requires_complete_native_binding() -> No
 def test_runtime_registry_contains_only_native_transports() -> None:
     registry = build_agent_registry(
         {
-            "codex": AgentSettings("codex", "codex", "gpt-5.6-sol", 60, "medium"),
-            "claude": AgentSettings("claude", "claude", "sonnet", 60, "high"),
+            "implementer": AgentSettings("codex", "codex", "gpt-5.6-sol", 60, "medium"),
+            "reviewer": AgentSettings("claude", "claude", "sonnet", 60, "high"),
+            "final_reviewer": AgentSettings("claude", "claude", "sonnet", 60, "high"),
         }
     )
 
-    assert type(registry["codex"]) is NativeCodexAdapter
-    assert type(registry["claude"]) is NativeClaudeReviewAdapter
+    assert type(registry["implementer"]) is NativeCodexAdapter
+    assert type(registry["reviewer"]) is NativeClaudeReviewAdapter
 
 
 def test_retired_result_grammar_and_repair_symbols_cannot_reenter_runtime() -> None:
@@ -159,26 +160,28 @@ def test_retired_transport_flags_are_unknown(flag: str, tmp_path: Path) -> None:
     (
         {
             "mode": "structured-v2",
-            "schema_version": "2",
+            "schema_version": "3",
             "claude_review_transport": None,
             "codex_result_transport": None,
-            "codex_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
-            "claude_profile": {"model": "sonnet", "effort": "high"},
+            "implementer_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
+            "reviewer_profile": {"model": "sonnet", "effort": "high"},
         },
         {
             "mode": "structured-v2",
-            "schema_version": "2",
-            "claude_review_transport": "native-claude-review-v2",
+            "schema_version": "3",
+            "claude_review_transport": "native-claude-review-unsupported",
             "codex_result_transport": None,
-            "codex_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
-            "claude_profile": {"model": "sonnet", "effort": "high"},
+            "implementer_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
+            "reviewer_profile": {"model": "sonnet", "effort": "high"},
         },
     ),
 )
 def test_incomplete_persisted_transport_binding_is_rejected(
     document: dict[str, object],
 ) -> None:
+    complete = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3").to_dict()
+    complete.update({key: value for key, value in document.items() if not key.endswith("_profile")})
     with pytest.raises(
         WorkflowStateValidationError, match="transport.*string|complete native"
     ):
-        ProtocolBinding.from_dict(document)
+        ProtocolBinding.from_dict(complete)

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import math
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
+
+from agent_roles import AgentSlot
+import role_occupancy
 
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
@@ -21,9 +27,100 @@ class AgentSettings:
     timeout_seconds: int | None
     effort: str
     max_budget_usd: float | None = None
+    profile_name: str = "scripted"
 
 
-# The selectable model families per role; the first family is the default.
+@dataclass(frozen=True)
+class AgentProfileConfig:
+    provider: str
+    binary: str
+    model: str
+    effort: str
+    timeout_seconds: int | None
+    max_budget_usd: float | None = None
+
+
+_SHIPPED_TOML = tomllib.loads((Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text(encoding="utf-8"))
+DEFAULT_ROLE_PROFILES = {AgentSlot(name): profile for name, profile in _SHIPPED_TOML["roles"].items()}
+
+
+def default_profiles() -> dict[str, AgentProfileConfig]:
+    return {
+        name: AgentProfileConfig(
+            raw["provider"], raw.get("binary", raw["provider"]), raw["model"],
+            raw["effort"], _process_timeout(raw.get("timeout_seconds"), f"shipped agent_profiles.{name}.timeout_seconds"),
+            raw.get("provider_options", {}).get("claude", {}).get("max_budget_usd"),  # allowlist:provider -- profile configuration: shipped USD option
+        )
+        for name, raw in _SHIPPED_TOML["agent_profiles"].items()
+    }
+
+
+def parse_profile_tables(
+    roles_raw: object | None, profiles_raw: object | None,
+) -> tuple[dict[AgentSlot, str], dict[str, AgentProfileConfig]]:
+    """Validate every named profile, including profiles unused by the three slots."""
+    if roles_raw is not None and not isinstance(roles_raw, dict):
+        raise AgentConfigError("roles must be a TOML table")
+    if profiles_raw is not None and not isinstance(profiles_raw, dict):
+        raise AgentConfigError("agent_profiles must be a TOML table")
+    roles = dict(DEFAULT_ROLE_PROFILES)
+    for name, value in (roles_raw or {}).items():
+        try:
+            slot = AgentSlot(name)
+        except ValueError as exc:
+            raise AgentConfigError(f"unknown role slot: {name}") from exc
+        roles[slot] = _non_empty(value, f"roles.{name}")
+    profiles = default_profiles()
+    for name, raw in (profiles_raw or {}).items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(raw, dict):
+            raise AgentConfigError(f"agent_profiles.{name} must be a TOML table")
+        unknown = set(raw) - {"provider", "binary", "model", "effort", "timeout_seconds", "provider_options"}
+        if unknown:
+            raise AgentConfigError(f"unknown agent_profiles.{name} keys: {sorted(unknown)}")
+        base = profiles.get(name)
+        if base is None and not {"provider", "model", "effort"}.issubset(raw):
+            raise AgentConfigError(f"agent_profiles.{name} needs provider, model and effort")
+        provider = _non_empty(raw.get("provider", base.provider if base else None), f"agent_profiles.{name}.provider")
+        if provider not in MODEL_FAMILIES:
+            raise AgentConfigError(f"agent_profiles.{name}.provider is unsupported: {provider}")
+        binary = _non_empty(raw.get("binary", base.binary if base else provider), f"agent_profiles.{name}.binary")
+        model = _selectable_model(provider, _non_empty(raw.get("model", base.model if base else None), f"agent_profiles.{name}.model"))
+        effort = _non_empty(raw.get("effort", base.effort if base else None), f"agent_profiles.{name}.effort").lower()
+        if effort not in VALID_EFFORTS:
+            raise AgentConfigError(f"agent_profiles.{name}.effort is unsupported: {effort}")
+        timeout_raw = raw.get("timeout_seconds", base.timeout_seconds if base else None)
+        if timeout_raw is not None and (isinstance(timeout_raw, bool) or not isinstance(timeout_raw, int) or timeout_raw < 0):
+            raise AgentConfigError(f"agent_profiles.{name}.timeout_seconds must be a non-negative integer")
+        timeout = _process_timeout(timeout_raw, f"agent_profiles.{name}.timeout_seconds")
+        options = raw.get("provider_options", {})
+        if not isinstance(options, dict) or set(options) - {"claude"}:  # allowlist:provider -- profile configuration: provider option table
+            raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
+        claude_options = options.get("claude", {})  # allowlist:provider -- profile configuration: provider option table
+        if not isinstance(claude_options, dict) or set(claude_options) - {"max_budget_usd"}:  # allowlist:provider -- profile configuration: provider option table
+            raise AgentConfigError(f"agent_profiles.{name}.provider_options.claude is invalid")  # allowlist:provider -- profile configuration: provider option table
+        if claude_options and provider != "claude":  # allowlist:provider -- profile configuration: provider option validation
+            raise AgentConfigError(f"agent_profiles.{name}: Claude options require provider claude")  # allowlist:provider -- profile configuration: provider option validation
+        if "max_budget_usd" in claude_options and (isinstance(claude_options["max_budget_usd"], bool) or not isinstance(claude_options["max_budget_usd"], (int, float))):  # allowlist:provider -- profile configuration: USD option
+            raise AgentConfigError(f"agent_profiles.{name}.provider_options.claude.max_budget_usd must be numeric")  # allowlist:provider -- profile configuration: USD option
+        budget = _positive_float(claude_options["max_budget_usd"], f"agent_profiles.{name}.provider_options.claude.max_budget_usd") if "max_budget_usd" in claude_options else (base.max_budget_usd if base and provider == base.provider else None)  # allowlist:provider -- profile configuration: USD option
+        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget)
+    for slot, name in roles.items():
+        if name not in profiles:
+            raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
+    return roles, profiles
+
+
+def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
+    """Compatibility view of the shipped TOML slot defaults."""
+    return role_occupancy.current_pre_toml_occupancy()
+
+
+def current_provider_for_role(role: str) -> str:
+    """Return the shipped default provider for a slot."""
+    return current_pre_toml_occupancy()[AgentSlot(role)]
+
+
+# The selectable model families per provider; the first family is the default.
 # Implementer families name their newest model explicitly, while the reviewer
 # CLI resolves its aliases to the newest model itself.
 MODEL_FAMILIES = {
@@ -47,24 +144,24 @@ _DEFAULT_EFFORTS = {
 
 def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     label = role.capitalize()
+    flag = role.replace("_", "-")
     parser.add_argument(
-        f"--{role}-binary",
+        f"--{flag}-binary", dest=f"{role}_binary",
         help=f"{label} CLI binary or explicit path (default: RUN_TASK_{role.upper()}_BINARY or detection).",
     )
     parser.add_argument(
-        f"--{role}-model",
+        f"--{flag}-model", dest=f"{role}_model",
         help=(
-            f"{label} model family: {', '.join(MODEL_FAMILIES[role])} "
-            f"(default: RUN_TASK_{role.upper()}_MODEL or {_DEFAULT_MODELS[role]})."
+            f"{label} model family (default: RUN_TASK_{role.upper()}_MODEL or TOML profile)."
         ),
     )
     parser.add_argument(
-        f"--{role}-timeout",
+        f"--{flag}-timeout", dest=f"{role}_timeout",
         help=(f"Hard {label} process timeout in seconds; 0 disables it "
               f"(default: RUN_TASK_{role.upper()}_TIMEOUT or no limit)."),
     )
     parser.add_argument(
-        f"--{role}-effort",
+        f"--{flag}-effort", dest=f"{role}_effort",
         choices=VALID_EFFORTS,
         help=f"{label} reasoning effort (default: RUN_TASK_{role.upper()}_EFFORT or role default).",
     )
@@ -72,16 +169,8 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
 
 def add_agent_arguments(parser: argparse.ArgumentParser) -> None:
     """Add local, non-repository agent configuration to the public CLI."""
-    for role in ("codex", "claude"):
+    for role in ("implementer", "reviewer", "final_reviewer"):
         _add_role_arguments(parser, role)
-    parser.add_argument(
-        "--claude-max-budget-usd",
-        type=float,
-        help=(
-            "Optional Claude print-mode budget guard in USD "
-            "(default: RUN_TASK_CLAUDE_MAX_BUDGET_USD or unset)."
-        ),
-    )
 
 
 def _non_empty(value: object, location: str) -> str:
@@ -111,7 +200,7 @@ def _positive_float(value: object, location: str) -> float:
         parsed = float(str(value).strip())
     except (TypeError, ValueError) as exc:
         raise AgentConfigError(f"{location} must be a positive number") from exc
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise AgentConfigError(f"{location} must be a positive number")
     return parsed
 
@@ -146,31 +235,35 @@ def _selectable_model(role: str, value: str) -> str:
 def resolve_agent_settings(
     args: argparse.Namespace,
     environ: Mapping[str, str],
+    *,
+    roles: Mapping[AgentSlot, str] | None = None,
+    profiles: Mapping[str, AgentProfileConfig] | None = None,
 ) -> dict[str, AgentSettings]:
-    """Resolve CLI > environment > role defaults without reading repository TOML."""
-    default_binaries = {
-        "codex": "codex",
-        "claude": "claude",
-    }
+    """Resolve CLI > nonempty role environment > profile > shipped defaults."""
+    roles = roles or DEFAULT_ROLE_PROFILES
+    profiles = profiles or default_profiles()
     settings: dict[str, AgentSettings] = {}
-    for role in ("codex", "claude"):
+    for slot in AgentSlot:
+        role = slot.value
+        profile = profiles[roles[slot]]
+        provider = profile.provider
         binary = _non_empty(
-            _resolve(args, environ, role, "binary", default_binaries[role]),
+            _resolve(args, environ, role, "binary", profile.binary),
             f"{role} binary",
         )
         model = _selectable_model(
-            role,
+            provider,
             _non_empty(
-                _resolve(args, environ, role, "model", _DEFAULT_MODELS[role]),
+                _resolve(args, environ, role, "model", profile.model),
                 f"{role} model",
             ),
         )
         timeout_seconds = _process_timeout(
-            _resolve(args, environ, role, "timeout", DEFAULT_TIMEOUT_SECONDS),
+            _resolve(args, environ, role, "timeout", profile.timeout_seconds),
             f"{role} timeout",
         )
         effort = _non_empty(
-            _resolve(args, environ, role, "effort", _DEFAULT_EFFORTS[role]),
+            _resolve(args, environ, role, "effort", profile.effort),
             f"{role} effort",
         ).lower()
         if effort not in VALID_EFFORTS:
@@ -178,39 +271,36 @@ def resolve_agent_settings(
                 f"{role} effort must be one of {', '.join(VALID_EFFORTS)}; got {effort!r}"
             )
         settings[role] = AgentSettings(
-            name=role,
+            name=provider,
             binary=binary,
             model=model,
             timeout_seconds=timeout_seconds,
             effort=effort,
+            max_budget_usd=profile.max_budget_usd,
+            profile_name=roles[slot],
         )
-
-    budget_value = args.claude_max_budget_usd
-    if budget_value is None:
-        raw_budget = environ.get("RUN_TASK_CLAUDE_MAX_BUDGET_USD", "").strip()
-        budget_value = raw_budget or None
-    if budget_value is not None:
-        budget = _positive_float(budget_value, "claude max budget USD")
-        claude = settings["claude"]
-        settings["claude"] = AgentSettings(
-            name=claude.name,
-            binary=claude.binary,
-            model=claude.model,
-            timeout_seconds=claude.timeout_seconds,
-            effort=claude.effort,
-            max_budget_usd=budget,
+    if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
+        inherited = settings["reviewer"]
+        current = settings["final_reviewer"]
+        settings["final_reviewer"] = AgentSettings(
+            name=current.name,
+            binary=_resolve(args, environ, "final_reviewer", "binary", inherited.binary),
+            model=_selectable_model(current.name, _non_empty(_resolve(args, environ, "final_reviewer", "model", inherited.model), "final_reviewer model")),
+            timeout_seconds=_process_timeout(_resolve(args, environ, "final_reviewer", "timeout", inherited.timeout_seconds), "final_reviewer timeout"),
+            effort=_non_empty(_resolve(args, environ, "final_reviewer", "effort", inherited.effort), "final_reviewer effort").lower(),
+            max_budget_usd=inherited.max_budget_usd,
+            profile_name=current.profile_name,
         )
     return settings
 
 
 def default_agent_settings() -> dict[str, AgentSettings]:
-    """Return deterministic defaults for compatibility imports and unit tests."""
+    """Return deterministic settings for all three independent slots."""
     namespace = argparse.Namespace(
         **{
             f"{role}_{field}": None
-            for role in ("codex", "claude")
+            for role in ("implementer", "reviewer", "final_reviewer")
             for field in ("binary", "model", "timeout", "effort")
         },
-        claude_max_budget_usd=None,
     )
     return resolve_agent_settings(namespace, {})

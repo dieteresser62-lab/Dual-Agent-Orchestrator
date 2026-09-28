@@ -5,13 +5,17 @@ import hashlib
 import json
 import subprocess
 import sys
+import signal
+import time
 from pathlib import Path
 
 import pytest
 
 import agent_runtime
+import provider_process
+from provider_identity import ProviderIdentity
 from agent_adapters import (
-    AGENT_REGISTRY,
+    build_agent_registry,
     AgentBudgetError,
     AgentOutputError,
     AgentPermissionError,
@@ -36,9 +40,9 @@ from agent_runtime import (
     run_agent,
     run_native_review_agent,
     run_native_review_agent_checked,
-    run_native_codex_agent,
-    run_native_codex_agent_checked,
-    NativeAgentCodexOutput,
+    run_native_implementer_agent,
+    run_native_implementer_agent_checked,
+    NativeAgentImplementerOutput,
     run_tests_snapshot,
     run_validation_matrix,
     verify_agent_capabilities,
@@ -78,18 +82,18 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestSpec,
-    build_native_codex_request,
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
-from contracts import CodexStepContract, ReadinessMarker
+from contracts import ImplementerStepContract, ReadinessMarker
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
-def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
-    contract = CodexStepContract(
+def _runtime_native_implementer_bundle():  # type: ignore[no-untyped-def]
+    contract = ImplementerStepContract(
         name="native-plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -97,23 +101,23 @@ def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="run-native-codex-runtime",
         work_unit_id="work-unit-1",
-        operation="codex_plan",
+        operation="implementer_plan",
         current_fingerprint="a" * 64,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
     )
-    return build_native_codex_request(
-        NativeCodexRequestSpec(
+    return build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native",
             base_commit="b" * 40,
             authorized_paths=("docs/internal/plan.md",),
             assignment="Create the plan.",
             work_context="Context.",
-            evidence=(NativeCodexEvidenceInput("e01_plan", "plan", "body"),),
+            evidence=(NativeImplementerEvidenceInput("e01_plan", "plan", "body"),),
         )
     )
 
@@ -131,7 +135,7 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
 
 
 def test_capability_verification_accepts_forward_compatible_claude_minor(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
     class FakeClaude:
         name = "claude"
@@ -154,11 +158,10 @@ def test_capability_verification_accepts_forward_compatible_claude_minor(
             assert stderr == ""
 
     adapter = FakeClaude()
-    monkeypatch.setattr(
-        agent_runtime,
-        "_resolve_agent_binary",
-        lambda binary: "/opt/bin/claude",
-    )
+    binary = tmp_path / "claude"
+    binary.write_bytes(b"fake executable")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
 
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
@@ -175,7 +178,7 @@ def test_capability_verification_accepts_forward_compatible_claude_minor(
 
 
 def test_capability_verification_accepts_forward_compatible_codex_minor(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
     class FakeCodex:
         name = "codex"
@@ -198,11 +201,10 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
             assert stderr == ""
 
     adapter = FakeCodex()
-    monkeypatch.setattr(
-        agent_runtime,
-        "_resolve_agent_binary",
-        lambda binary: "/opt/bin/codex",
-    )
+    binary = tmp_path / "codex"
+    binary.write_bytes(b"fake executable")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
 
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
@@ -218,12 +220,12 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
     assert adapter.capability_verified is True
 
 
-def test_run_native_codex_agent_parses_bound_result_without_text_contract(
+def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -232,7 +234,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
             {
                 "slice_id": 1,
                 "summary": "Implement native Codex.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The native Codex contract is implemented.",
                     "measured_against": "SOURCE",
@@ -245,7 +247,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     )
     captured: dict[str, object] = {}
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -267,12 +269,12 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
         return canonical
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    output = run_native_codex_agent(
-        FakeNativeCodex(),  # type: ignore[arg-type]
+    output = run_native_implementer_agent(
+        FakeNativeImplementer(),  # type: ignore[arg-type]
         bundle,
         config=OrchestratorConfig(),
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
     )
     assert output.result.ready is True
@@ -283,12 +285,12 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     assert isinstance(captured["prepared_provider_input"], PreparedProviderInput)
 
 
-def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
+def test_native_implementer_exposes_schema_valid_bytes_before_domain_rejection(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -309,7 +311,7 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -329,12 +331,12 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
     persisted: list[str] = []
     with pytest.raises(AgentOutputError) as raised:
-        run_native_codex_agent(
-            FakeNativeCodex(),  # type: ignore[arg-type]
+        run_native_implementer_agent(
+            FakeNativeImplementer(),  # type: ignore[arg-type]
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             validated_response_callback=persisted.append,
         )
@@ -347,12 +349,12 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     assert persisted == [canonical]
 
 
-def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
+def test_native_implementer_writer_invalid_bytes_never_reach_validated_callback(
     monkeypatch,
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -360,7 +362,7 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
             {
                 "slice_id": 1,
                 "summary": "Reader-valid but writer-incomplete result.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
             }
         ],
     }
@@ -368,7 +370,7 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
         response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -387,12 +389,12 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
     monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
     persisted: list[str] = []
     with pytest.raises(AgentOutputError) as raised:
-        run_native_codex_agent(
-            FakeNativeCodex(),  # type: ignore[arg-type]
+        run_native_implementer_agent(
+            FakeNativeImplementer(),  # type: ignore[arg-type]
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             validated_response_callback=persisted.append,
         )
@@ -400,10 +402,10 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
     assert persisted == []
 
 
-def test_native_codex_runtime_forwards_canary_execution_root(
+def test_native_implementer_runtime_forwards_canary_execution_root(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
+    bundle = _runtime_native_implementer_bundle()
     repository_root = tmp_path / "repository"
     execution_root = tmp_path / "isolated" / "work"
     evidence_root = tmp_path / "isolated" / "evidence"
@@ -416,7 +418,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
         evidence_asset_root=evidence_root,
     )
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -425,7 +427,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
             {
                 "slice_id": 1,
                 "summary": "Exercise the isolated runtime.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The isolated runtime is exercised.",
                     "measured_against": "SOURCE",
@@ -435,7 +437,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
     }
     captured: dict[str, object] = {}
 
-    class FakeNativeCodex:
+    class FakeNativeImplementer:
         name = "codex"
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
@@ -457,12 +459,12 @@ def test_native_codex_runtime_forwards_canary_execution_root(
         return json.dumps(response)
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    run_native_codex_agent(
-        FakeNativeCodex(),  # type: ignore[arg-type]
+    run_native_implementer_agent(
+        FakeNativeImplementer(),  # type: ignore[arg-type]
         bundle,
         config=OrchestratorConfig(repo_root=repository_root),
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
         execution_boundary=boundary,
     )
@@ -471,14 +473,14 @@ def test_native_codex_runtime_forwards_canary_execution_root(
     assert captured["execution_root_override"] == execution_root.resolve()
 
 
-def test_native_codex_checked_writes_raw_before_accepted_callback(
+def test_native_implementer_checked_writes_raw_before_accepted_callback(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
-    result = parse_bound_native_codex_contract_result_for_test(bundle)
+    bundle = _runtime_native_implementer_bundle()
+    result = parse_bound_native_implementer_contract_result_for_test(bundle)
     canonical = json.dumps(
         {
-            "schema_version": "native-agent-codex-result-v2",
+            "schema_version": "native-agent-implementer-result-v3",
             "result_type": "plan_result",
             "request_id": bundle.bound_context.request_id,
             "ready": True,
@@ -486,7 +488,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                 {
                     "slice_id": 1,
                     "summary": "Implement it.",
-                    "scope_paths": ["src/native_codex_contract.py"],
+                    "scope_paths": ["src/native_implementer_contract.py"],
                     "acceptance_criteria": [{
                         "text": "The native contract is implemented.",
                         "measured_against": "SOURCE",
@@ -499,7 +501,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         sort_keys=True,
         separators=(",", ":"),
     )
-    output = NativeAgentCodexOutput(
+    output = NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
@@ -511,7 +513,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         kwargs["validated_response_callback"](canonical)
         return output
 
-    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    monkeypatch.setattr(agent_runtime, "run_native_implementer_agent", fake_native_run)
     monkeypatch.setattr(agent_runtime, "print_agent_output", lambda *args, **kwargs: None)
 
     class Adapter:
@@ -524,18 +526,18 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
         events.append("write")
         path.write_text(content, encoding="utf-8")
 
-    def accept(_output: NativeAgentCodexOutput) -> None:
+    def accept(_output: NativeAgentImplementerOutput) -> None:
         assert raw_path.read_text(encoding="utf-8") == canonical
         events.append("accept")
 
-    returned = run_native_codex_agent_checked(
+    returned = run_native_implementer_agent_checked(
         adapter=Adapter(),  # type: ignore[arg-type]
         bundle=bundle,
         raw_response_path=raw_path,
         config=OrchestratorConfig(),
         write_file=write_raw,
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
         pre_start_callback=None,
         provider_attempt_lifecycle=None,
@@ -545,12 +547,12 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
     assert events == ["write", "accept"]
 
 
-def test_native_codex_checked_write_failure_prevents_callback(
+def test_native_implementer_checked_write_failure_prevents_callback(
     monkeypatch, tmp_path: Path
 ) -> None:
-    bundle = _runtime_native_codex_bundle()
-    result = parse_bound_native_codex_contract_result_for_test(bundle)
-    output = NativeAgentCodexOutput(
+    bundle = _runtime_native_implementer_bundle()
+    result = parse_bound_native_implementer_contract_result_for_test(bundle)
+    output = NativeAgentImplementerOutput(
         result=result,
         canonical_json="{}",
         request_id=bundle.bound_context.request_id,
@@ -560,7 +562,7 @@ def test_native_codex_checked_write_failure_prevents_callback(
         kwargs["validated_response_callback"]("{}")
         return output
 
-    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    monkeypatch.setattr(agent_runtime, "run_native_implementer_agent", fake_native_run)
     accepted: list[bool] = []
 
     class Adapter:
@@ -568,14 +570,14 @@ def test_native_codex_checked_write_failure_prevents_callback(
         metadata: dict[str, object] = {}
 
     with pytest.raises(AgentInvocationError):
-        run_native_codex_agent_checked(
+        run_native_implementer_agent_checked(
             adapter=Adapter(),  # type: ignore[arg-type]
             bundle=bundle,
             raw_response_path=tmp_path / "raw.json",
             config=OrchestratorConfig(),
             write_file=lambda _path, _content: (_ for _ in ()).throw(OSError("disk")),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             pre_start_callback=None,
             provider_attempt_lifecycle=None,
@@ -584,9 +586,9 @@ def test_native_codex_checked_write_failure_prevents_callback(
     assert accepted == []
 
 
-def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
+def parse_bound_native_implementer_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -594,7 +596,7 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
             {
                 "slice_id": 1,
                 "summary": "Implement it.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [{
                     "text": "The native contract is implemented.",
                     "measured_against": "SOURCE",
@@ -603,9 +605,9 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
         ],
         "finding_dispositions": [],
     }
-    from native_codex_contract import parse_bound_native_codex_contract_result
+    from native_implementer_contract import parse_bound_native_implementer_contract_result
 
-    return parse_bound_native_codex_contract_result(document, bundle.bound_context)
+    return parse_bound_native_implementer_contract_result(document, bundle.bound_context)
 
 
 def test_orchestrator_config_has_no_agent_substitution_state() -> None:
@@ -634,9 +636,9 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
     context = NativeReviewContext(
         run_id="run-native-runtime",
         work_unit_id="work-unit-1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -655,10 +657,10 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         )
     )
     response = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -697,7 +699,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         bundle,
         config=OrchestratorConfig(),
         shorten=lambda value, _maximum: value or "",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         binding_fingerprint=fingerprint,
     )
 
@@ -717,7 +719,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="claude_slice_review",
+            operation="reviewer_slice_review",
             binding_fingerprint=fingerprint,
         )
     assert "request-mismatch" in raised.value.technical_text
@@ -730,7 +732,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         **response,
         "new_findings": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "finding_class": "BLOCKER",
                 "affected_paths": [],
                 "summary": "Approval still contains an open blocker.",
@@ -751,7 +753,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="claude_slice_review",
+            operation="reviewer_slice_review",
             binding_fingerprint=fingerprint,
             response_callback=persisted.append,
         )
@@ -771,7 +773,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
 def test_native_review_checked_preserves_schema_valid_domain_rejection(
     monkeypatch, tmp_path: Path
 ) -> None:
-    canonical = '{"schema_version":"native-agent-review-result-v2"}'
+    canonical = '{"schema_version":"native-agent-review-result-v3"}'
 
     def reject_after_persist(*args, **kwargs):  # type: ignore[no-untyped-def]
         kwargs["response_callback"](canonical)
@@ -796,7 +798,7 @@ def test_native_review_checked_preserves_schema_valid_domain_rejection(
             write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
             shorten=lambda value, _maximum: value or "",
             reviewer_manifest_paths=None,
-            operation="claude_plan_review",
+            operation="reviewer_plan_review",
             binding_fingerprint="a" * 64,
             pre_start_callback=None,
             provider_attempt_lifecycle=None,
@@ -854,8 +856,8 @@ def test_budget_denial_happens_after_preparation_but_before_capability_or_proces
                 rule.provider,
                 rule.role,
                 rule.operation,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_bytes,
             )
             for rule in defaults.rules
         )
@@ -875,7 +877,7 @@ def test_budget_denial_happens_after_preparation_but_before_capability_or_proces
         run_agent(
             FakeCodex(),
             "four",
-            operation="codex_implementation",
+            operation="implementer_implementation",
             binding_fingerprint="binding",
             pre_start_callback=measurements.append,
             config=OrchestratorConfig(provider_input_budget=policy),
@@ -914,18 +916,19 @@ def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() 
         '"text":"Slice geprüft und bereit."}}'
     )
 
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", codex_line, state) == (
+    registry = build_agent_registry()
+    assert _compact_stream_text(registry["implementer"], "stdout", codex_line, state) == (
         "Slice geprüft und bereit."
     )
     assert _compact_stream_text(
-        AGENT_REGISTRY["claude"],
+        registry["reviewer"],
         "stdout",
         '{"usage":{"output_tokens":9000},"result":"very large"}',
         {},
     ) is None
     warning = "same important warning"
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stderr", warning, state) == warning
-    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", warning, state) == warning
+    assert _compact_stream_text(registry["implementer"], "stderr", warning, state) == warning
+    assert _compact_stream_text(registry["implementer"], "stdout", warning, state) == warning
 
 
 def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
@@ -934,7 +937,7 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
             "result_type": "review_result",
             "request_id": "native-review-request-" + "a" * 64,
             "decision": "denied",
-            "new_findings": [{"finding_id": "C-01"}],
+            "new_findings": [{"finding_id": "R-01"}],
             "status_changes": [],
         }
     )
@@ -1185,7 +1188,7 @@ def test_native_review_contract_failure_kind_is_output_for_all_codes(
 
 def test_native_review_content_rejection_cannot_masquerade_as_provider_failure() -> None:
     detail = (
-        "new finding C-17 duplicates known open finding C-03 "
+        "new finding R-17 duplicates known open finding R-03 "
         "(signature " + ("a" * 64) + ") despite network timeout quota wording"
     )
     contract_error = NativeReviewContractError(
@@ -1313,7 +1316,7 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
 def test_provider_clock_past_old_limit_requires_explicit_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str,
 ) -> None:
-    settings = default_agent_settings()[role]
+    settings = default_agent_settings()[{"codex": "implementer", "claude": "reviewer"}[role]]
     command = [sys.executable, "-c", "print('completed')"]
     config = OrchestratorConfig(
         repo_root=tmp_path, agent_live_stream=True, agent_live_stream_mode="full"
@@ -1435,7 +1438,7 @@ def test_preflight_skip_git_check_bypasses_dirty_repo(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": AGENT_REGISTRY["codex"]},
+        agents={"codex": build_agent_registry()["implementer"]},
         skip_git_check=True,
     )
 
@@ -1455,7 +1458,7 @@ def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": AGENT_REGISTRY["codex"]},
+        agents={"codex": build_agent_registry()["implementer"]},
     )
 
     assert ok is False
@@ -1637,7 +1640,10 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
             _ = prompt
-            return ["timeout-cli"], True
+            return ["timeout"], True
+
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             _ = stdout
@@ -1658,12 +1664,14 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             self.cleaned = True
 
     adapter = TimeoutAdapter()
+    adapter.provider_identity = ProviderIdentity("timeout", "/fake/timeout", "1", "0" * 64, None, None, None)
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda _adapter, **_kwargs: adapter.provider_identity)
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
         _ = args
-        raise agent_runtime.subprocess.TimeoutExpired("timeout-cli", kwargs["timeout"])
+        raise agent_runtime.subprocess.TimeoutExpired("timeout-cli", kwargs["timeout_seconds"])
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_run)
 
     try:
         run_agent(
@@ -1671,6 +1679,7 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             "prompt",
             config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
             shorten=lambda text, _limit: text or "",
+            operation="implementer_implementation",
         )
     except RuntimeError:
         pass
@@ -1695,7 +1704,10 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
         metadata: dict[str, object] = {}
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
-            return ["rejecting-cli"], True
+            return ["rejecting"], True
+
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             raise AgentOutputError(
@@ -1716,14 +1728,18 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
         stdout = '{"status":"ERROR"}'
         stderr = ""
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda adapter, **_kwargs: adapter.provider_identity)
+    adapter = RejectingAdapter()
+    adapter.provider_identity = ProviderIdentity("rejecting", "/fake/rejecting", "1", "0" * 64, None, None, None)
 
     with pytest.raises(AgentOutputError) as exc_info:
         run_agent(
-            RejectingAdapter(),
+            adapter,
             "prompt",
             config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
             shorten=lambda text, _limit: text or "",
+            operation="implementer_implementation",
         )
 
     assert exc_info.value.exit_code == 9
@@ -1904,6 +1920,9 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
             return ["reviewer"], True
 
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
+
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             return stdout
 
@@ -1925,20 +1944,23 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         captured.update(kwargs)
         return Result()
 
-    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_run)
+    monkeypatch.setattr(agent_runtime, "_check_bound_provider_identity", lambda adapter, **_kwargs: adapter.provider_identity)
+    adapter = ReviewerAdapter()
+    adapter.provider_identity = ProviderIdentity("reviewer", "/fake/reviewer", "1", "0" * 64, None, None, None)
     monkeypatch.setenv("RUN_TASK_REVIEW_TEST_COMMAND", "python3 -m pytest tests/ -v")
     monkeypatch.setenv("RUN_TASK_REVIEW_PROBE_PATH", "README.md")
     monkeypatch.setenv("RUN_TASK_REVIEW_TIMEOUT", "1800")
     caplog.set_level("INFO")
     output = run_agent(
-        ReviewerAdapter(),
+        adapter,
         "prompt",
         config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
         shorten=lambda text, limit: (text or "")[:limit],
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
 
-    working_directory = captured["cwd"]
+    working_directory = captured["execution_root"]
     process_environment = captured["env"]
     assert isinstance(working_directory, Path)
     assert isinstance(process_environment, dict)
@@ -1950,7 +1972,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert captured["bound_snapshot"] == working_directory
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
-    assert "operation=claude_slice_review" in caplog.text
+    assert "operation=reviewer_slice_review" in caplog.text
     assert "input_tokens=10 output_tokens=20 turns=2" in caplog.text
 
 
@@ -1977,3 +1999,255 @@ def test_provider_usage_normalization_is_closed_and_preserves_unknown() -> None:
     )
     assert normalize_provider_usage({"conversation_id": "secret"}) is None
     assert _compact_usage_metadata(None) == "unknown"
+
+
+@pytest.mark.parametrize("interruption", ("keyboard", "callback", "timeout"))
+def test_provider_group_cleanup_reaps_grandchild_and_reconciles_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str,
+) -> None:
+    response = tmp_path / "response.json"
+    ready = tmp_path / "grandchild.pid"
+    code = (
+        "import pathlib,subprocess,sys,time\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "print('ready',flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    config = OrchestratorConfig(
+        repo_root=tmp_path, agent_live_stream=interruption == "keyboard",
+        agent_live_stream_mode="compact",
+    )
+    started_pids: list[int] = []
+
+    def on_start(pid: int) -> None:
+        started_pids.append(pid)
+        provider_process.record_process_start(response, "effect", pid)
+        if interruption == "callback":
+            deadline = time.monotonic() + 2
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ready.exists()
+            raise RuntimeError("callback failed")
+
+    if interruption == "keyboard":
+        def interrupt(*_args: object) -> None:
+            raise KeyboardInterrupt
+        monkeypatch.setattr(agent_runtime, "_compact_stream_text", interrupt)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            KeyboardInterrupt if interruption == "keyboard" else
+            RuntimeError if interruption == "callback" else subprocess.TimeoutExpired
+        ):
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-u", "-c", code, str(ready)], None,
+                config=config, env=os.environ.copy(), execution_root=tmp_path,
+                timeout_seconds=1 if interruption == "timeout" else 5,
+                agent_key="implementer", process_started=on_start,
+            )
+        assert time.monotonic() - started < 5
+        assert len(started_pids) == 1
+        assert ready.exists()
+        assert provider_process.observe_process(response, "effect").status is provider_process.ProcessStatus.ENDED
+        grandchild = provider_process._proc_stat(int(ready.read_text()))
+        assert grandchild is None or grandchild.state in {"Z", "X", "x"}
+    finally:
+        if started_pids:
+            identity = provider_process.capture_process_identity(started_pids[0])
+            if identity is not None:
+                provider_process.signal_process_group(identity, signal.SIGKILL)
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+def test_full_stdin_has_bounded_group_cleanup(
+    tmp_path: Path, live_stream: bool,
+) -> None:
+    config = OrchestratorConfig(repo_root=tmp_path, agent_live_stream=live_stream)
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        agent_runtime._run_agent_process(
+            object(), [sys.executable, "-c", "import time; time.sleep(60)"],
+            "x" * (16 * 1024 * 1024), config=config, env=os.environ.copy(),
+            execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+        )
+    assert time.monotonic() - start < 5
+
+
+@pytest.mark.parametrize("timeout_seconds", (None, 5))
+def test_non_live_large_prompt_reaches_eof_after_delayed_read(
+    tmp_path: Path, timeout_seconds: int | None,
+) -> None:
+    prompt = "x" * (256 * 1024)
+    code = (
+        "import hashlib,sys,time; time.sleep(.35); "
+        "data=sys.stdin.read(); "
+        "print(len(data),hashlib.sha256(data.encode()).hexdigest())"
+    )
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code], prompt,
+        config=OrchestratorConfig(repo_root=tmp_path, agent_live_stream=False),
+        env=os.environ.copy(), execution_root=tmp_path,
+        timeout_seconds=timeout_seconds, agent_key="implementer",
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"{len(prompt)} {hashlib.sha256(prompt.encode()).hexdigest()}"
+
+
+def test_missing_proc_identity_still_kills_owned_unreaped_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[int] = []
+    monkeypatch.setattr(agent_runtime, "capture_process_identity", lambda _pid: None)
+    with pytest.raises(subprocess.TimeoutExpired):
+        agent_runtime._run_agent_process(
+            object(), [sys.executable, "-c", "import time; time.sleep(60)"], None,
+            config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+            execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+            process_started=started.append,
+        )
+    assert len(started) == 1
+    observed = provider_process._proc_stat(started[0])
+    assert observed is None or observed.state in {"Z", "X", "x"}
+
+
+def test_timeout_kills_grandchild_in_separate_group_of_same_session(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "grandchild.pid"
+    code = (
+        "import os,pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "preexec_fn=os.setpgrp); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-c", code, str(ready)], None,
+                config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+                execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
+            )
+        assert ready.exists()
+        observed = provider_process._proc_stat(int(ready.read_text()))
+        assert observed is None or observed.state in {"Z", "X", "x"}
+    finally:
+        if ready.exists():
+            pid = int(ready.read_text())
+            observed = provider_process._proc_stat(pid)
+            if observed is not None and observed.state not in {"Z", "X", "x"}:
+                os.kill(pid, signal.SIGKILL)
+
+
+def test_successful_leader_exit_does_not_leave_a_child_running(tmp_path: Path) -> None:
+    ready = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); print('ok',flush=True)"
+    )
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code, str(ready)], None,
+        config=OrchestratorConfig(repo_root=tmp_path), env=os.environ.copy(),
+        execution_root=tmp_path, timeout_seconds=5, agent_key="implementer",
+    )
+    assert result.returncode == 0 and result.stdout == "ok\n"
+    child = provider_process._proc_stat(int(ready.read_text()))
+    assert child is None or child.state in {"Z", "X", "x"}
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+@pytest.mark.parametrize("timeout_seconds", (None, 5))
+def test_exited_leader_with_inherited_pipe_has_bounded_wait(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    live_stream: bool, timeout_seconds: int | None,
+) -> None:
+    ready = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); print('ok',flush=True)"
+    )
+    started = time.monotonic()
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-c", code, str(ready)], None,
+        config=OrchestratorConfig(
+            repo_root=tmp_path, agent_live_stream=live_stream, agent_live_stream_mode="full",
+        ),
+        env=os.environ.copy(), execution_root=tmp_path,
+        timeout_seconds=timeout_seconds, agent_key="implementer",
+    )
+    assert result.returncode == 0
+    assert result.stdout == "ok\n"
+    assert time.monotonic() - started < 5
+    child = provider_process._proc_stat(int(ready.read_text()))
+    assert child is None or child.state in {"Z", "X", "x"}
+    assert "terminated 1 remaining provider group process(es)" in caplog.text
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+def test_exited_leader_with_escaped_pipe_holder_has_bounded_process_error(
+    tmp_path: Path, live_stream: bool,
+) -> None:
+    ready = tmp_path / "escaped.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'], "
+        "start_new_session=True); "
+        "stat=pathlib.Path(f'/proc/{child.pid}/stat').read_text(); "
+        "ticks=stat[stat.rfind(')')+2:].split()[19]; "
+        "pathlib.Path(sys.argv[1]).write_text(f'{child.pid} {ticks}'); "
+        "print('ok',flush=True)"
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(agent_runtime.AgentProcessError, match="after group cleanup") as exc:
+            agent_runtime._run_agent_process(
+                object(), [sys.executable, "-c", code, str(ready)], None,
+                config=OrchestratorConfig(
+                    repo_root=tmp_path, agent_live_stream=live_stream,
+                    agent_live_stream_mode="full",
+                ),
+                env=os.environ.copy(), execution_root=tmp_path,
+                timeout_seconds=10, agent_key="implementer",
+            )
+        assert exc.value.kind_hint is agent_runtime.AgentFailureKind.PROCESS
+        assert time.monotonic() - started < 7
+    finally:
+        if ready.exists():
+            pid, ticks = map(int, ready.read_text().split())
+            child = provider_process._proc_stat(pid)
+            if child is not None and child.start_ticks == ticks and child.state not in {"Z", "X", "x"}:
+                os.kill(pid, signal.SIGKILL)
+
+
+def test_reviewer_root_files_follow_full_or_manifest_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+        (source / name).write_text(name, encoding="utf-8")
+    full = create_read_only_reviewer_workspace(source)
+    selected = create_read_only_reviewer_workspace(source, ("AGENTS.md",))
+    try:
+        assert {p.name for p in full.root.iterdir()} == {"AGENTS.md", "CLAUDE.md", "CODEX.md"}
+        assert {p.name for p in selected.root.iterdir()} == {"AGENTS.md"}
+    finally:
+        full.cleanup()
+        selected.cleanup()
+
+
+def test_run_agent_needs_explicit_operation_before_provider_preparation(tmp_path: Path) -> None:
+    class Adapter:
+        name = "codex"
+        reviewer = False
+        timeout = 1
+
+        def prepare_provider_input(self, prompt: str) -> None:
+            raise AssertionError("provider preparation must not run")
+
+        def cleanup(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="provider input operation is required for codex"):
+        run_agent(Adapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)

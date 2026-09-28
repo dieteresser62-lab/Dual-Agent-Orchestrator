@@ -1,8 +1,8 @@
 # Dual-Agent Task Orchestrator
 
-**Codex baut, Claude prüft, und committet wird nur, was getestet und freigegeben ist.**
+**Der Implementer baut, der Reviewer prüft, und committet wird nur, was getestet und freigegeben ist.**
 
-Du beschreibst eine Aufgabe in einer Markdown-Datei. Der Orchestrator lässt sie von zwei Coding-Agenten verschiedener Hersteller in festen Rollen umsetzen: **Codex** plant und implementiert, **Claude** prüft ausschließlich lesend. Tests, Buchführung und Git-Commits übernimmt der Orchestrator selbst. Keiner der beiden Agenten kann seine eigene Arbeit freigeben.
+Du beschreibst eine Aufgabe in einer Markdown-Datei. Der Orchestrator besetzt drei getrennte Slots: **Implementer** (standardmäßig Codex) plant und implementiert, **Reviewer** und **Final-Reviewer** (standardmäßig Claude) prüfen ausschließlich lesend. `[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung. Tests, Buchführung und Git-Commits übernimmt der Orchestrator selbst. Kein Agent kann seine eigene Arbeit freigeben.
 
 ## Überblick
 
@@ -13,15 +13,15 @@ Ein einzelner Agent kann in einem Durchgang erstaunlich viel erzeugen. Bei grö�
 ### So läuft eine Aufgabe ab
 
 1. **Idee ablegen.** Eine formlose Markdown-Datei in `inbox/` genügt.
-2. **Planen.** Codex zerlegt die Aufgabe in kleine Arbeitspakete (*Slices*). Für jedes Paket ist genau festgelegt, welche Dateien es ändern darf. Claude prüft den Plan.
-3. **Umsetzen, Paket für Paket.** Codex implementiert. Der Orchestrator führt die Tests aus, Claude reviewt den Diff. Jeder Befund muss beantwortet werden, entweder behoben oder begründet abgelehnt. Erst wenn kein blockierender Befund offen ist, committet der Orchestrator das Paket lokal.
-4. **Abnahme.** Zum Schluss liest Claude den kompletten Branch. Findet sich Restarbeit, wird daraus automatisch eine neue Aufgabe.
+2. **Planen.** Der Implementer zerlegt die Aufgabe in kleine Arbeitspakete (*Slices*). Für jedes Paket ist genau festgelegt, welche Dateien es ändern darf. Der Reviewer prüft den Plan.
+3. **Umsetzen, Paket für Paket.** Der Implementer setzt um. Der Orchestrator führt die Tests aus, der Reviewer prüft den Diff. Jeder Befund muss beantwortet werden, entweder behoben oder begründet abgelehnt. Erst wenn kein blockierender Befund offen ist, committet der Orchestrator das Paket lokal.
+4. **Abnahme.** Zum Schluss liest der Final-Reviewer den kompletten Branch. Findet sich Restarbeit, wird daraus automatisch eine neue Aufgabe.
 
 ![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/HEAD/workflow.puml)
 
 ### Was ihn von anderen Ansätzen unterscheidet
 
-- **Getrennte Rollen.** Codex schreibt, darf aber weder freigeben noch committen. Claude arbeitet auf einer schreibgeschützten Kopie. Tests laufen nur im Orchestrator, sodass kein Agent ein Testergebnis behaupten kann.
+- **Getrennte Rollen.** Der Implementer schreibt, darf aber weder freigeben noch committen. Reviewer arbeiten auf einer schreibgeschützten Kopie. Tests laufen nur im Orchestrator, sodass kein Agent ein Testergebnis behaupten kann.
 - **Harte Grenzen.** Ein Paket, das Dateien außerhalb seiner Liste ändert, wird nicht committet.
 - **Konvergenz statt Endlosschleife.** Jede weitere Reviewrunde muss nachweisbar Fortschritt bringen. Wenn nicht, endet das Paket ohne Commit.
 - **Fail-closed.** Bei Unklarheiten, Widersprüchen oder unbekanntem Zustand hält der Lauf an, statt zu raten.
@@ -37,8 +37,7 @@ Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP
 ### Stand und Grenzen
 
 - Ein-Personen-Projekt seit Februar 2026, Python ohne Laufzeitabhängigkeiten, gut 1.600 Tests. Seit August entsteht der Orchestrator zunehmend mit sich selbst.
-- Läuft unter Linux, macOS und WSL2. Natives Windows wird nicht unterstützt.
-  Das automatische Fortsetzen nach einem Absturz braucht Linux oder WSL mit lesbarem `/proc`; auf anderen Systemen führt der Weg über ein Freigabe-Gate.
+- Läuft unter Linux und WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt.
 - Setzt installierte und angemeldete `codex`- und `claude`-CLIs voraus.
 - Gründlichkeit kostet Zeit und Tokens: Ein Lauf dauert deutlich länger als ein One-Shot-Durchgang.
 - Die Dokumentation ist deutsch.
@@ -59,22 +58,21 @@ Für den echten Einstieg: [Quickstart.md](Quickstart.md) oder die ausführliche 
 
 ## Ablauf im Detail
 
+Die Rollenbesetzung wird aus TOML aufgelöst: Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen im Zielrepository gelten die mitgelieferten Profile aus dem Orchestrator-TOML (Implementer: Codex; Reviewer und Final-Reviewer: Claude). Das Zielrepository kann Profile und den Finalslot ausdrücklich überschreiben.
+
 Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
-2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude den Planfingerprint prüfen lassen.
+2. Den Implementer geordnete `SLICE_PLAN`-Datensätze erstellen und den Reviewer den Planfingerprint prüfen lassen.
 3. Den von Claude freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
 4. Für jeden geplanten Slice:
-   - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
+   - Der Implementer bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix für diesen Fingerprint aus. Ein grüner erster Durchgang bleibt einmalig; nach einem roten ersten Durchgang folgt eine vorab laufzeitabhängig begrenzte Flackerprobe, deren Einzelergebnisse vollständig und fail-closed attestiert werden.
-   - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
+   - Der Reviewer prüft in jeder Runde den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
-5. Codex einen branchweiten Vollständigkeitsbericht gegen die Branchbasis erstellen
-   lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude
-   für die Abschlussentscheidung übergeben.
-6. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
+5. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
 
 Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
 abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
@@ -99,10 +97,9 @@ Erforderlich ist Python 3.11 oder neuer. Für das TOML-Parsing wird die Python-S
 Unterstützte Ausführungsumgebungen sind:
 
 - Linux
-- macOS
 - WSL2
 
-Natives Windows wird derzeit nicht unterstützt, weil der vollständige Workflow dort noch nicht verifiziert wurde.
+Andere Plattformen werden nicht unterstützt; die Prozessidentität benötigt Linux-`/proc`.
 
 Beide Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend müssen sie in `PATH` liegen oder über explizite Binärpfade konfiguriert werden:
 
@@ -234,7 +231,7 @@ Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verw
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Claude verwendet standardmäßig Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
+Das mitgelieferte TOML-Profil verwendet für den Reviewer Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
 geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
@@ -274,13 +271,13 @@ Die wichtigsten Gates sind:
 
 Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen und keinen reviewer-eigenen offenen Blocker.
 
-Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `C-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
+Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `R-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
 
 Eine Eskalation wird nicht ausgesprochen, sondern geschieht: Ein gewöhnliches Finding, das Claude in einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion zum `BLOCKER`. Es gibt keinen Reklassifizierungszug und keine Observation-Klasse. Umgekehrt ist eine Freigabe mit einem eigenen offenen Finding widersprüchlich und wird zurückgewiesen — entweder im selben Zug schließen oder ablehnen.
 
 Jedes Finding gehört unveränderlich zu dem Slice, in dem es eröffnet wurde. Die einzige Commitbedingung lautet, dass die aus den Records abgeleitete Findingmenge dieses Slices keinen offenen Blocker enthält. Die erste Prüfung eines Slices entdeckt; jede weitere abgelehnte Prüfung ist eine Konvergenzrunde und muss einen bekannten Befund schließen oder eine attestierte, fingerprintändernde Behebung nachweisen. Eine Runde ohne beides beendet den Slice negativ, ebenso das Rundenlimit `max_rounds_per_loop`.
 
-Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `C-`-Kennung schließen.
+Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `R-`-Kennung schließen.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
@@ -326,10 +323,10 @@ Der Watch-Modus:
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
 - verwendet den vollständig automatischen Workflowstandard: Plan-, Teständerungs- und Slice-Commit-Gates sind aus, während echte Stopregeln, Scopeverletzungen, unauflösbare Vertragsfragen und fehlgeschlagene Pflichtvalidierungen weiterhin anhalten;
 - behandelt einen von Codex gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
-- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum Codex-Vollständigkeitscheck und Claude-Abschlussreview ab;
+- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum branchweiten Reviewer-Abschlussreview ab;
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an; das digestgebundene Gesamtaudit fasst deren Stand und Commit zusammen, ohne Slice-Inhalte zu wiederholen. Die vollständigen technischen Nachweise bleiben in der Recordkette;
 - streamt standardmäßig `stdout`;
-- verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
+- verschiebt abgeschlossene Aufgaben mit UTR-Zeitstempel nach `outbox/done/`;
 - wiederholt nur typisierte transiente Provider-, Netz- oder Prozessfehler und verschiebt erst ausgeschöpfte transiente Aufgaben als Poison Tasks nach `outbox/failed/`; daneben bleibt eine gleichnamige `.error.json` mit Fehlerklasse, Diagnosecode, Lauf-ID, Step und letzter Ursache erhalten;
 - hält bei deterministischen Record-, Mirror-, Schema-, Fingerprint-, Bindungs- oder Recoveryfehlern sofort mit Exitcode 4 an, ohne den Retryzähler zu erhöhen oder die Watch-Identität zu verlieren; nicht zentral zugeordnete Fehler fallen ebenfalls sicher in diesen Halt;
 - legt einen vor dem ersten Record erkannten terminalen Aufgabenvertragsfehler einmalig als `*.rejected` mit Diagnosebericht in `outbox/failed/` ab und verarbeitet die nächste Queue-Aufgabe weiter; nach Recordbeginn wird dieselbe Ablehnung zwingend zum resumierbaren Halt;
@@ -442,21 +439,23 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 | Rolle | CLI-Optionen | Standards |
 |---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
+| Implementer (Codex) | `--implementer-binary`, `--implementer-model`, `--implementer-timeout`, `--implementer-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
+| Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`, `--reviewer-timeout`, `--reviewer-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
+| Finalreviewer (Claude) | `--final-reviewer-binary`, `--final-reviewer-model`, `--final-reviewer-timeout`, `--final-reviewer-effort` | erbt den Reviewer; eigener TOML-Finalslot kann überschreiben |
 
-`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus.
+`agent_profiles.<name>.provider_options.claude.max_budget_usd` setzt eine optionale Budgetobergrenze für den Claude-Print-Modus in der TOML-Konfiguration.
 
-Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--codex-timeout` und `--claude-timeout` beziehungsweise `RUN_TASK_CODEX_TIMEOUT` und `RUN_TASK_CLAUDE_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
+Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--implementer-timeout` und `--reviewer-timeout` beziehungsweise `RUN_TASK_IMPLEMENTER_TIMEOUT` und `RUN_TASK_REVIEWER_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
 
 Das Modell wählt man über seine Familie: für Codex `sol` (`gpt-6-sol`, Standard), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) oder `astra` (`gpt-6-astra`), für Claude `opus` (Standard), `sonnet` oder `fable`; die Claude-Aliase zeigen immer auf das neueste Modell. Andere Werte weist der Orchestrator vor dem ersten Aufruf ab. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
 
 Beispiele:
 
 ```bash
-./run_task --codex-effort xhigh --claude-effort max
-./run_task --codex-model luna --claude-model sonnet --codex-effort medium
-./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
+./run_task --implementer-effort xhigh --reviewer-effort max
+./run_task --implementer-model luna --reviewer-model sonnet --implementer-effort medium
+./run_task --implementer-binary /opt/codex/bin/codex --implementer-timeout 2400
+./run_task --final-reviewer-model opus
 ```
 
 ### Watch- und Loggingoptionen
@@ -482,7 +481,7 @@ Die Konfigurationspräzedenz lautet:
 3. Wert aus `orchestrator.toml` des Repositorys;
 4. integrierter Standard oder automatische Erkennung des Testbefehls.
 
-Werte für Agentenprogramm, Modell, Effort, Timeout und Claude-Budget umgehen bewusst das Repository-TOML und verwenden ausschließlich CLI, Umgebung und Rollenstandards.
+Rollenbesetzung und persistente Profile werden aus den mitgelieferten TOML-Tabellen aufgelöst und können in `[roles]` und `[agent_profiles.*]` des Zielrepositorys überschrieben werden. Explizite Rollen-CLI-Optionen und `RUN_TASK_<ROLLE>_*` überschreiben Profilfelder; das Claude-Budget steht ausschließlich unter `agent_profiles.<name>.provider_options.claude.max_budget_usd`.
 
 Ein explizit leerer Testbefehl deaktiviert die Erkennung eines Validierungsbefehls:
 
@@ -513,13 +512,6 @@ required_artifacts = ["dist/**/*.css", "dist/index.html"]
 product_command = ["npm", "run", "test:product"]
 product_timeout_seconds = 300
 
-[[provider_input_budget]]
-provider = "codex"
-role = "codex"
-operation = "codex_implementation"
-max_chars = 4000000
-max_bytes = 16000000
-
 [[validation.rules]]
 patterns = ["frontend/**"]
 command = ["npm", "test"]
@@ -536,6 +528,29 @@ scope_extension_gate = false
 [repository]
 base_branch = "main"
 ```
+
+Die mitgelieferte TOML enthält die feste Startbesetzung und alle drei Slots.
+Für einen eigenen Finalreviewer kann das Zielrepository ein gesondertes Profil
+aktivieren (der Reviewer und der Finalreviewer dürfen denselben Provider nutzen):
+
+```toml
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "final_review"
+
+[agent_profiles.final_review]
+provider = "claude"
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.final_review.provider_options.claude]
+max_budget_usd = 5.0
+```
+
+`--final-reviewer-model` und `RUN_TASK_FINAL_REVIEWER_MODEL` überschreiben
+nur den aktivierten Finalslot. Ohne eigene Profilwahl erbt er das Reviewerprofil.
 
 `[repository] base_branch` nennt den Hauptbranch, von dessen Abzweigpunkt aus jeder Lauf misst und gegen den der Abnahmereview liest. Ohne Angabe ermittelt der Orchestrator ihn selbst: zuerst den Standardbranch des Remotes (`origin/HEAD`), sofern es ihn lokal gibt, dann den einzigen vorhandenen von `main` und `master`, dann den einzigen lokalen Branch außerhalb von `feature/…` und `codex/…`. Bleibt die Lage mehrdeutig, hält der Lauf mit einer Meldung an, die die Kandidaten nennt.
 
@@ -572,16 +587,16 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | Datei | Verantwortung |
 |---|---|
 | `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
-| `CODEX.md` | Implementiererrolle und native Ergebnisvarianten. |
-| `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Opus-/High-Profil. |
+| `CODEX.md` | Dünner Einstieg der Codex CLI; verweist auf `AGENTS.md`. |
+| `CLAUDE.md` | Dünner Einstieg der Claude CLI; verweist auf `AGENTS.md`. |
 
 Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
-erhält `native-agent-codex-request-v2` und antwortet gemäß
-`native-agent-codex-result-v2` mit einer der strikt
+erhält `native-agent-implementer-request-v3` und antwortet gemäß
+`native-agent-implementer-result-v3` mit einer der strikt
 getrennten Varianten `plan_result`, `implementation_result`,
-`correction_result`, `final_report_result` oder `stop_result`. Claude erhält
-`native-agent-review-request-v2` und antwortet gemäß
-`native-agent-review-result-v2`; sein request-spezifisches Writerschema bindet
+`correction_result` oder `stop_result`. Claude erhält
+`native-agent-review-request-v3` und antwortet gemäß
+`native-agent-review-result-v3`; sein request-spezifisches Writerschema bindet
 Freigabe, Findings, Statusänderungen, Reviewevidenz,
 Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
 persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder
@@ -628,17 +643,16 @@ erzwingt dieses Betreiber-Gate nicht.
 
 ### Diagnosewerkzeuge
 
-Beide arbeiten ausschließlich lesend auf einer vorhandenen Recordkette.
+Das verbleibende Werkzeug arbeitet ausschließlich lesend auf einer vorhandenen Recordkette.
 
 ```bash
-python3 scripts/verify_legacy_chain.py <artefaktverzeichnis>
 python3 scripts/baseline_findingfluss.py <artefaktverzeichnis>
 ```
 
-`verify_legacy_chain.py` prüft eine archivierte structured-v2-Kette. Der
-installierte Reducer weist eine Kette mit fremder Reducer-Semantik
-fail-closed ab und verweist auf dieses Werkzeug; es interpretiert die Kette
-nicht und setzt sie nicht fort, sondern belegt nur ihren Zustand.
+Der installierte Reducer weist eine Kette mit fremder Reducer-Semantik
+fail-closed ab. Die Diagnose nennt die gefundene und erwartete Kennung und
+verweist auf die passende ältere Orchestrator-Version zur Prüfung oder
+Fortsetzung des Laufs.
 
 `baseline_findingfluss.py` rekonstruiert den Findingfluss eines Laufs aus
 seiner Recordkette: wie viele der am Laufende offenen Findings in einem

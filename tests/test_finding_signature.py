@@ -16,12 +16,12 @@ from finding_signature import (
 
 def _finding(summary: str, acceptance_test: str) -> FindingRecord:
     return FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary=summary,
         acceptance_test=acceptance_test,
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 

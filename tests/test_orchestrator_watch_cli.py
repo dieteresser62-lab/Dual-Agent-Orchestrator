@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import subprocess
 import sys
 import hashlib
 import json
+import copy
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from artifact_resume import ArtifactResumeError
 from artifact_store import ArtifactStore
 from cli import parse_args
 from inbox_watcher import (
+    _process_watch_task,
     WatchTaskDisposition,
     WatchTaskIdentity,
     WatchTaskResult,
@@ -33,11 +37,33 @@ from inbox_watcher import (
     watch_inbox,
     watch_identity_path,
 )
+
+
 from orchestrator import run_pipeline
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from task_contract import TaskContractError
 from workflow import WorkflowExecutionError, WorkflowHistory, WorkflowRunResult
 from workflow_state import GateReason, ProtocolBinding, ProtocolMode, init_workflow_state
+
+
+def test_watch_new_run_reloads_toml_while_retry_keeps_prior_slot_settings(tmp_path: Path) -> None:
+    args = parse_args(["--watch"], cwd=tmp_path, environ={})
+    old_model = args.slot_settings["implementer"].model
+    (tmp_path / "orchestrator.toml").write_text(
+        '[agent_profiles.implementation]\nmodel = "gpt-6-luna"\n', encoding="utf-8"
+    )
+    task = tmp_path / "queued.md"
+    task.write_text("queued", encoding="utf-8")
+    identity = WatchTaskIdentity("watch-profile-refresh", "a" * 64)
+    seen: list[str] = []
+
+    def process(_task, task_args, _force_new):
+        seen.append(task_args.slot_settings["implementer"].model)
+        return 0
+
+    _process_watch_task(task, copy.copy(args), True, identity, process)
+    _process_watch_task(task, copy.copy(args), False, identity, process)
+    assert seen == ["gpt-6-luna", old_model]
 
 
 def _append_test_record(
@@ -158,7 +184,7 @@ def test_nonterminal_direct_resume_keeps_bound_watch_task_in_inbox(
         task_digest=digest,
         task_scope_patterns=("src/**",),
         target_branch="feature/resume",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(detail="repair", fingerprint="b" * 64)
     monkeypatch.setattr(
         orchestrator,
@@ -383,9 +409,9 @@ def test_halt_with_identity_profile_baseline_has_no_second_diagnostic(
     _append_test_record(
         tmp_path,
         run_id,
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         "run-profile",
     )
@@ -508,7 +534,7 @@ def test_pipeline_exposes_bootstrap_denial_as_resumable_exit_four(
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(
         detail="FINAL-REVIEW-PREFLIGHT | restore the record mirror",
         fingerprint="b" * 64,

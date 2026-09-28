@@ -47,7 +47,7 @@ def test_rejected_closure_projects_reason_and_named_evidence() -> None:
     )
     response = _review(
         NativeStatusChange(
-            "C-01",
+            "R-01",
             FindingStatus.CLOSED,
             "The finding is outside this task",
             closure,
@@ -70,11 +70,11 @@ def test_rejected_closure_projects_reason_and_named_evidence() -> None:
 
 def test_recorded_fixed_closure_satisfies_slice_exit() -> None:
     records = _slice_with_opening()
-    records.append(_record(len(records) + 1, _closure("C-01", "fixed"), records))
+    records.append(_record(len(records) + 1, _closure("R-01", "fixed"), records))
 
     result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
 
-    assert result.cohort_finding_ids == ("C-01",)
+    assert result.cohort_finding_ids == ("R-01",)
     assert result.status is SliceExitStatus.SATISFIED
     assert result.commit_eligible
 
@@ -91,7 +91,7 @@ def test_origin_slice_is_immutable_cohort_fact() -> None:
             ),
             _record(
                 len(records) + 2,
-                _opening("C-01", "3", FindingSeverity.BLOCKER),
+                _opening("R-01", "3", FindingSeverity.BLOCKER),
                 records,
             ),
             _record(
@@ -106,7 +106,7 @@ def test_origin_slice_is_immutable_cohort_fact() -> None:
     origin = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="3")
     current = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
 
-    assert origin.cohort_finding_ids == ("C-01",)
+    assert origin.cohort_finding_ids == ("R-01",)
     assert origin.condition(1).status is SliceExitStatus.VIOLATED
     assert current.cohort_finding_ids == ()
     assert current.status is SliceExitStatus.SATISFIED
@@ -117,10 +117,10 @@ def test_completion_blocks_open_finding_and_accepts_recorded_closure() -> None:
 
     assert workflow_completion_blocking_finding_ids(
         records, run_id=RUN_ID
-    ) == ("C-01",)
+    ) == ("R-01",)
 
     records.append(
-        _record(len(records) + 1, _closure("C-01", "rejected"), records)
+        _record(len(records) + 1, _closure("R-01", "rejected"), records)
     )
     assert workflow_completion_blocking_finding_ids(records, run_id=RUN_ID) == ()
 
@@ -128,7 +128,7 @@ def test_completion_blocks_open_finding_and_accepts_recorded_closure() -> None:
 def _review(*status_changes: NativeStatusChange) -> NativeReviewResult:
     return NativeReviewResult(
         request_id="native-review-request-" + "d" * 64,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approved=False,
         new_findings=(),
         status_changes=status_changes,
@@ -140,12 +140,12 @@ def _review(*status_changes: NativeStatusChange) -> NativeReviewResult:
 
 def _finding() -> FindingRecord:
     return FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.FINDING,
         FindingStatus.OPEN,
         "Repair src/fix.py",
         "src/fix.py passes its regression test",
-        FindingOrigin("6", 1, AgentRole.CLAUDE),
+        FindingOrigin("6", 1, AgentRole.REVIEWER),
         affected_paths=("src/fix.py",),
     )
 
@@ -181,7 +181,7 @@ def _slice_with_opening(
     records.append(
         _record(
             len(records) + 1,
-            _opening("C-01", "6", severity),
+            _opening("R-01", "6", severity),
             records,
         )
     )
@@ -193,8 +193,8 @@ def _opening(
 ) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=severity,
         finding_status="open",
@@ -211,8 +211,8 @@ def _opening(
 def _closure(finding_id: str, kind: str) -> FindingTransitionPayload:
     return FindingTransitionPayload(
         finding_id=finding_id,
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="status_changed",
         severity=FindingSeverity.BLOCKER,
         finding_status="closed",

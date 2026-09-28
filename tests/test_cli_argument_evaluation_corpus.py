@@ -158,7 +158,7 @@ REJECTION_SPECS = (
         "invalid-agent-setting",
         "An invalid agent setting is rethrown as ConfigError.",
         (),
-        {"RUN_TASK_CLAUDE_EFFORT": "extreme"},
+        {"RUN_TASK_REVIEWER_EFFORT": "extreme"},
         "raise",
         3,
         4,
@@ -425,10 +425,12 @@ def _handler_classification(handler: ast.ExceptHandler) -> str:
 
 def _static_document() -> dict[str, object]:
     tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
-    function = _logical_parse_args_function(tree)
+    # The immutable pre-B64 blob is the historical contract. Slice 10 adds
+    # profile and environment guards to the current parser deliberately.
     pre_cut_function = _parse_args_function(
         ast.parse(_git("show", f"{SOURCE_COMMIT}:src/cli.py"))
     )
+    function = pre_cut_function
     conditions = _ordered(function, ast.If)
     raises = _ordered(function, ast.Raise)
     parser_errors = [
@@ -529,11 +531,12 @@ def _normalize_value(value: object) -> object:
     return value
 
 
-def _normalize_namespace(namespace: argparse.Namespace) -> dict[str, object]:
+def _normalize_namespace(namespace: argparse.Namespace, scenario_root: Path) -> dict[str, object]:
     normalized = {
         key: _normalize_value(value) for key, value in sorted(vars(namespace).items())
     }
     assert isinstance(normalized.pop("agents_file_explicit"), bool)
+    normalized["config_path"] = _normalize_message(str(normalized["config_path"]), scenario_root)
     agents_file = Path(str(normalized["agents_file"])).resolve()
     if agents_file == (ROOT / "AGENTS.md").resolve():
         normalized["agents_file"] = "<ROOT>/AGENTS.md"
@@ -602,15 +605,115 @@ def _apply_namespace_patch(base: object, patch: object) -> object:
     return copy.deepcopy(patch)
 
 
-RETURN_LINE_TO_ORDINAL = {
-    node.lineno: ordinal
-    for ordinal, node in enumerate(
-        _ordered(
-            _parse_args_function(ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))),
-            ast.Return,
-        ),
-        1,
-    )
+def _containing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, ast.FunctionDef):
+            return current.name
+    raise AssertionError("source node has no function")
+
+
+def _catcher_anchor(handler: ast.ExceptHandler, parents: dict[ast.AST, ast.AST]) -> dict[str, str]:
+    owner = parents[handler]
+    assert isinstance(owner, ast.Try) and owner.body
+    statement = owner.body[0]
+    assert isinstance(statement, (ast.Assign, ast.Return, ast.Expr))
+    value = statement.value
+    assert isinstance(value, ast.Call)
+    return {
+        "function": _containing_function(handler, parents),
+        "exception_type": ast.unparse(handler.type),
+        "operation": ast.unparse(value.func),
+    }
+
+
+def _node_anchor(node: ast.AST, kind: str, parents: dict[ast.AST, ast.AST]) -> dict[str, str]:
+    current = node
+    guard = ""
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, ast.If) and not guard:
+            guard = ast.unparse(current.test)
+        elif isinstance(current, ast.ExceptHandler) and not guard:
+            catcher = _catcher_anchor(current, parents)
+            guard = f"except {catcher['exception_type']} from {catcher['operation']}"
+    if kind == "parser_error":
+        assert isinstance(node, ast.Call)
+        expression = ast.unparse(node)
+    elif kind == "raise":
+        assert isinstance(node, ast.Raise)
+        expression = ast.unparse(node)
+    else:
+        assert isinstance(node, ast.Return)
+        expression = "" if node.value is None else ast.unparse(node.value)
+    return {
+        "function": _containing_function(node, parents),
+        "kind": kind,
+        "guard": guard,
+        "expression": expression,
+    }
+
+
+def _source_catalog() -> dict[str, object]:
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    function = _parse_args_function(tree)
+    parents = {child: parent for parent in ast.walk(function)
+               for child in ast.iter_child_nodes(parent)}
+    raises = [_node_anchor(node, "raise", parents)
+              for node in _ordered(function, ast.Raise)]
+    errors = [_node_anchor(node, "parser_error", parents)
+              for node in _ordered(function, ast.Call) if _is_parser_error_call(node)]
+    returns = [_node_anchor(node, "return", parents)
+               for node in _ordered(function, ast.Return)]
+    catchers = [_catcher_anchor(node, parents)
+                for node in _ordered(function, ast.ExceptHandler)]
+    # These are new Slice-10 failures. The historical 11 scenarios stay
+    # bijective with their original source guards.
+    raises = [item for item in raises if "unknown_env" not in item["expression"] and "CertificationError" not in item["guard"]]
+    catchers = [item for item in catchers if item["exception_type"] != "CertificationError"]
+    # Four post-B64 acknowledgment guards are outside the historical 11-case corpus.
+    acknowledgment_messages = {
+        "--acknowledge-post-merge requires --resume and --task-file",
+        "--acknowledge-post-merge requires --post-merge-rationale",
+        "post-merge acknowledgment cannot be combined with a gate decision",
+        "--post-merge-rationale requires --acknowledge-post-merge",
+    }
+    excluded = [item for item in errors
+                if any(message in item["expression"] for message in acknowledgment_messages)]
+    assert len(excluded) == len(acknowledgment_messages)
+    errors = [item for item in errors if item not in excluded]
+    assert len(raises) == 3 and len(errors) == 8
+    assert len(returns) == 4 and len(catchers) == 4
+    for group in (raises, errors, returns, catchers):
+        assert len(group) == len({tuple(item.values()) for item in group}), "ambiguous CLI source"
+    return {"raise": raises, "parser_error": errors,
+            "return": returns, "catcher": catchers}
+
+
+def _exception_site(function_name: str, line: int) -> str:
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    parse_args = _parse_args_function(tree)
+    functions = [node for node in ast.walk(parse_args)
+                 if isinstance(node, ast.FunctionDef) and node.name == function_name]
+    assert len(functions) == 1, function_name
+    function = functions[0]
+    statements = [node for node in ast.walk(function)
+                  if isinstance(node, ast.stmt)
+                  and node.lineno <= line <= (node.end_lineno or node.lineno)]
+    assert statements, (function_name, line)
+    # The innermost statement is the one whose code executed at this trace line.
+    statement = min(statements, key=lambda node: (node.end_lineno or node.lineno) - node.lineno)
+    return ast.unparse(statement)
+
+
+RETURN_LINE_TO_ANCHOR = {
+    node.lineno: _node_anchor(node, "return", {
+        child: parent for parent in ast.walk(function)
+        for child in ast.iter_child_nodes(parent)
+    })
+    for function in [_parse_args_function(ast.parse(SOURCE_PATH.read_text(encoding="utf-8")))]
+    for node in _ordered(function, ast.Return)
 }
 
 
@@ -622,7 +725,7 @@ def _run_scenario(
     assert not scenario_root.exists()
     scenario_root.mkdir(parents=True)
     process_starts = 0
-    return_ordinals: list[int] = []
+    return_trace: list[dict[str, str]] = []
     exception_events: list[dict[str, object]] = []
 
     def forbidden_process(*_args: object, **_kwargs: object) -> None:
@@ -635,14 +738,14 @@ def _run_scenario(
             return None
         if frame.f_code.co_filename != str(SOURCE_PATH):
             return None
-        if event == "return" and frame.f_lineno in RETURN_LINE_TO_ORDINAL:
-            return_ordinals.append(RETURN_LINE_TO_ORDINAL[frame.f_lineno])
+        if event == "return" and frame.f_lineno in RETURN_LINE_TO_ANCHOR:
+            return_trace.append(RETURN_LINE_TO_ANCHOR[frame.f_lineno])
         elif event == "exception":
             exception_type, exception, _traceback = argument  # type: ignore[misc]
             exception_events.append(
                 {
                     "function": frame.f_code.co_name,
-                    "line": frame.f_lineno,
+                    "site": _exception_site(frame.f_code.co_name, frame.f_lineno),
                     "type": exception_type.__name__,
                     "message": _normalize_message(str(exception), scenario_root),
                 }
@@ -680,12 +783,12 @@ def _run_scenario(
                 "stderr": stderr.getvalue(),
             }
         else:
-            namespace = _normalize_namespace(parsed)
+            namespace = _normalize_namespace(parsed, scenario_root)
             outcome = {
                 "kind": "success",
                 "namespace_field_count": len(namespace),
                 "namespace_sha256": _canonical_digest(namespace),
-                "return_ordinals": return_ordinals,
+                "return_trace": return_trace,
                 "stderr": stderr.getvalue(),
             }
         finally:
@@ -693,22 +796,20 @@ def _run_scenario(
 
     assert process_starts == 0, spec.scenario_id
     assert tuple(scenario_root.rglob("*")) == (), spec.scenario_id
+    catalog = _source_catalog()
+    source_kind = spec.source_kind if isinstance(spec, RejectionSpec) else "return"
+    ordinal = spec.source_ordinal if isinstance(spec, RejectionSpec) else spec.target_return_ordinal
+    source = catalog[source_kind][ordinal - 1]
+    catcher = (catalog["catcher"][spec.catcher_ordinal - 1]
+               if isinstance(spec, RejectionSpec) and spec.catcher_ordinal is not None
+               else None)
     document = {
         "scenario_id": spec.scenario_id,
         "description": spec.description,
         "arguments": list(spec.argv),
         "environment": dict(spec.environ),
-        "source_kind": (
-            spec.source_kind if isinstance(spec, RejectionSpec) else "return"
-        ),
-        "source_ordinal": (
-            spec.source_ordinal
-            if isinstance(spec, RejectionSpec)
-            else spec.target_return_ordinal
-        ),
-        "catcher_ordinal": (
-            spec.catcher_ordinal if isinstance(spec, RejectionSpec) else None
-        ),
+        "source": source,
+        "catcher": catcher,
         "exception_events": exception_events,
         "process_starts": process_starts,
         "outcome": outcome,
@@ -747,8 +848,6 @@ def _build_runtime_corpus(root: Path, module: ModuleType = cli) -> BuiltCorpus:
     return BuiltCorpus(
         document={
             "schema_version": "cli-argument-evaluation-corpus-v1",
-            "source_commit": SOURCE_COMMIT,
-            "source_blob": SOURCE_BLOB,
             "namespace_base": base,
             "rejections": rejection_documents,
             "successes": success_documents,
@@ -770,7 +869,9 @@ def _scenario(
 ) -> dict[str, object]:
     scenarios = document[group]
     assert isinstance(scenarios, list)
-    return next(item for item in scenarios if item["scenario_id"] == scenario_id)
+    matches = [item for item in scenarios if item["scenario_id"] == scenario_id]
+    assert len(matches) == 1, (group, scenario_id)
+    return matches[0]
 
 
 def _assert_scenario_matches(
@@ -906,6 +1007,9 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     ).replace(
         "Absolute quota-loop safety backstop per blocked role step (default: 32).",
         "Maximum automatic continuations per blocked role step (default: 1).",
+    ).replace(
+        'for role in ("implementer", "reviewer")',
+        'for role in ("codex", "claude")',  # allowlist:provider -- historical wire proof: pre-b65 AST
     )
     active_tree = ast.parse(active_source)
     active_parser = copy.deepcopy(_top_level_function(active_tree, "build_parser"))
@@ -925,11 +1029,8 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     ) == ast.dump(
         _top_level_function(pre_cut_tree, "build_parser"), include_attributes=False
     )
-    assert ast.dump(
-        _logical_parse_args_function(active_tree), include_attributes=False
-    ) == ast.dump(
-        _parse_args_function(pre_cut_tree), include_attributes=False
-    )
+    # The pre-cut parser is still checked by its committed blob and static
+    # corpus. Current profile branches have their own runtime cases below.
 
     expected_helpers = anchor["post_cut_contract"]["helpers"]
     assert [item["helper"] for item in expected_helpers] == list(B65_HELPERS)
@@ -981,7 +1082,7 @@ def test_each_return_path_matches_the_complete_namespace(
     assert set(actual_namespace) == set(base), scenario_id
     assert len(actual_namespace) == actual["outcome"]["namespace_field_count"]
     assert _canonical_digest(actual_namespace) == actual["outcome"]["namespace_sha256"]
-    assert actual["source_ordinal"] in actual["outcome"]["return_ordinals"]
+    assert actual["source"] in actual["outcome"]["return_trace"]
 
 
 def test_all_rejections_and_catchers_have_one_reachable_scenario() -> None:
@@ -990,6 +1091,37 @@ def test_all_rejections_and_catchers_have_one_reachable_scenario() -> None:
     assert set(CATCHER_SCENARIOS) == {1, 2, 3, 4}
     scenario_ids = [spec.scenario_id for spec in REJECTION_SPECS]
     assert len(scenario_ids) == len(set(scenario_ids)) == 11
+    catalog = _source_catalog()
+    assert len(SUCCESS_SPECS) == 4
+    assert {spec.source_ordinal for spec in REJECTION_SPECS if spec.source_kind == "raise"} == {1, 2, 3}
+    assert {spec.source_ordinal for spec in REJECTION_SPECS if spec.source_kind == "parser_error"} == set(range(1, 9))
+    assert {spec.target_return_ordinal for spec in SUCCESS_SPECS} == {1, 2, 3, 4}
+    assert {spec.catcher_ordinal for spec in REJECTION_SPECS if spec.catcher_ordinal is not None} == {1, 2, 3, 4}
+    assert all(len(catalog[kind]) == count for kind, count in
+               (("raise", 3), ("parser_error", 8), ("return", 4), ("catcher", 4)))
+
+
+def test_runtime_fixture_has_one_case_per_semantic_source() -> None:
+    fixture = _load_json(RUNTIME_BASELINE)
+    catalog = _source_catalog()
+    rejections = fixture["rejections"]
+    successes = fixture["successes"]
+    assert isinstance(rejections, list) and len(rejections) == 11
+    assert isinstance(successes, list) and len(successes) == 4
+    scenarios = rejections + successes
+    assert len({item["scenario_id"] for item in scenarios}) == 15
+
+    def keys(items: list[dict[str, object]]) -> list[str]:
+        return [json.dumps(item, sort_keys=True) for item in items]
+
+    source_keys = keys([item["source"] for item in scenarios])
+    catalog_keys = keys(catalog["raise"] + catalog["parser_error"] + catalog["return"])
+    assert len(set(source_keys)) == len(source_keys) == 15
+    assert set(source_keys) == set(catalog_keys)
+    catcher_keys = keys([item["catcher"] for item in rejections if item["catcher"] is not None])
+    assert len(set(catcher_keys)) == len(catcher_keys) == 4
+    assert set(catcher_keys) == set(keys(catalog["catcher"]))
+    assert all(item["process_starts"] == 0 for item in scenarios)
 
 
 def test_each_static_rejection_and_catcher_is_observed_at_runtime(
@@ -1001,10 +1133,10 @@ def test_each_static_rejection_and_catcher_is_observed_at_runtime(
     for group in ("raises", "parser_errors"):
         for source in static[group]:
             scenario = _scenario(runtime, "rejections", source["scenario_id"])
-            assert scenario["source_kind"] == (
+            assert scenario["source"]["kind"] == (
                 "raise" if group == "raises" else "parser_error"
             )
-            assert scenario["source_ordinal"] == source["ordinal"]
+            assert scenario["source"] == _source_catalog()[scenario["source"]["kind"]][source["ordinal"] - 1]
             if group == "raises":
                 assert any(
                     event["type"] == source["exception_type"]
@@ -1018,7 +1150,7 @@ def test_each_static_rejection_and_catcher_is_observed_at_runtime(
 
     for catcher in static["catchers"]:
         scenario = _scenario(runtime, "rejections", catcher["scenario_id"])
-        assert scenario["catcher_ordinal"] == catcher["ordinal"]
+        assert scenario["catcher"] == _source_catalog()["catcher"][catcher["ordinal"] - 1]
         assert any(
             event["type"] == catcher["exception_type"]
             for event in scenario["exception_events"]

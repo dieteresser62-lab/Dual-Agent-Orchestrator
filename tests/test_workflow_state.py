@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_state_profile
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,8 +11,8 @@ import workflow_requests
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import technical_text_evidence
-from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
-from native_codex_contract import NativeCodexRequestKind
+from contracts import ImplementerStepContract, PlannedSlice, ReadinessMarker
+from native_implementer_contract import NativeImplementerRequestKind
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     WorkflowChanges,
@@ -73,7 +75,7 @@ def test_final_review_is_the_terminal_work_unit_of_the_implementation_run() -> N
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="a" * 40,
         scope_paths=("src/core.py",),
@@ -83,7 +85,7 @@ def test_final_review_is_the_terminal_work_unit_of_the_implementation_run() -> N
     ).start_final_review_work_unit()
 
     assert state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
     assert state.current_work_unit.round_number == 1
     assert state.current_work_unit.request_sequence == 1
     assert state.current_slice.status is SliceStatus.COMPLETED
@@ -100,10 +102,10 @@ def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
     assert tuple(item.work_unit_id for item in state.work_units) == (1,)
     assert state.current_slice_id == 1
     assert state.current_work_unit_id == 1
-    assert state.current_step is WorkflowStep.CODEX_PLAN
+    assert state.current_step is WorkflowStep.IMPLEMENTER_PLAN
     assert state.current_work_unit.round_number == 1
-    assert state.current_work_unit.codex_return_count == 0
-    assert state.current_work_unit.max_codex_returns == DEFAULT_LOOP_ROUND_LIMIT
+    assert state.current_work_unit.implementer_return_count == 0
+    assert state.current_work_unit.max_implementer_returns == DEFAULT_LOOP_ROUND_LIMIT
     assert state.current_work_unit.gate.status is GateStatus.CLEAR
     assert state.branch_base == "a" * 40
     assert state.current_slice.start_commit == "a" * 40
@@ -127,8 +129,8 @@ def test_init_workflow_state_does_not_inherit_first_slice_start_from_branch_base
 
 def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     fact = BootstrapCheckFact(
-        "provider_input_measurement", "a" * 64, "codex", "codex",
-        "codex_plan", 1, "b" * 64, "allowed",
+        "provider_input_measurement", "a" * 64, "codex", "implementer",
+        "implementer_plan", 1, "b" * 64, "allowed",
     )
     state = make_state().with_bootstrap_check(fact).with_bootstrap_check(fact)
     halted = state.await_bootstrap_resume(
@@ -141,7 +143,7 @@ def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.paths == ("src/external.py",)
-    assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+    assert halted.resume_after_invocation_halt().current_step is WorkflowStep.IMPLEMENTER_PLAN
 
 
 def test_denied_provider_input_measurement_becomes_a_terminal_visible_verdict() -> None:
@@ -149,8 +151,8 @@ def test_denied_provider_input_measurement_becomes_a_terminal_visible_verdict() 
         "provider_input_measurement",
         "a" * 64,
         "codex",
-        "codex",
-        "codex_plan",
+        "implementer",
+        "implementer_plan",
         1,
         "b" * 64,
         "denied",
@@ -162,7 +164,7 @@ def test_denied_provider_input_measurement_becomes_a_terminal_visible_verdict() 
     result = WorkflowRunResult(terminal, WorkflowHistory(1))
 
     assert terminal.current_work_unit.status is WorkUnitStatus.COMPLETED
-    assert terminal.current_step is WorkflowStep.CODEX_PLAN
+    assert terminal.current_step is WorkflowStep.IMPLEMENTER_PLAN
     assert terminal.current_work_unit.gate.status is GateStatus.CLEAR
     assert terminal.current_slice.status is SliceStatus.IN_PROGRESS
     assert result.workflow_rejected
@@ -183,7 +185,7 @@ def test_provider_input_verdict_requires_the_matching_denied_measurement() -> No
 
 
 def test_stop_request_resume_starts_a_new_semantic_round() -> None:
-    state = make_state().with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    state = make_state().with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
     halted = state.await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail="UNEXPECTED-PATH | exact authorization is required",
@@ -191,7 +193,7 @@ def test_stop_request_resume_starts_a_new_semantic_round() -> None:
 
     resumed = halted.resume_after_user_decision()
 
-    assert resumed.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert resumed.current_step is WorkflowStep.IMPLEMENTER_PLAN_REVISION
     assert resumed.current_work_unit.round_number == 1
     assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
 
@@ -204,9 +206,9 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
         fingerprint="b" * 64,
         paths=(path,),
         rationale="Reviewed bootstrap hotfix.",
-        resume_step=WorkflowStep.CODEX_PLAN_REVISION,
+        resume_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
     )
-    state = make_state().with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    state = make_state().with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
     state = state._replace_current_unit(
         replace(state.current_work_unit, gate_decisions=(decision,))
     )
@@ -218,7 +220,7 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
 
     engine = WorkflowEngine(Driver())  # type: ignore[arg-type]
 
-    assert engine._fingerprint_bound_codex_scope_paths(state) == (path,)
+    assert engine._fingerprint_bound_implementer_scope_paths(state) == (path,)
 
     class DriftedDriver:
         @staticmethod
@@ -226,10 +228,10 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
             return type("Changes", (), {"fingerprint": "c" * 64})()
 
     drifted = WorkflowEngine(DriftedDriver())  # type: ignore[arg-type]
-    assert drifted._fingerprint_bound_codex_scope_paths(state) == ()
+    assert drifted._fingerprint_bound_implementer_scope_paths(state) == ()
 
 
-def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation() -> None:
+def test_native_implementer_request_projects_fingerprint_bound_paths_and_explanation() -> None:
     state = init_workflow_state(
         run_id="native-scope",
         task_file="/repo/task.md",
@@ -247,7 +249,7 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         distilled_plan="Use the persisted task contract.",
         slice_summary="Plan the work.",
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         "native-plan",
         ReadinessMarker.PLAN,
         "01",
@@ -256,13 +258,13 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         plan_artifact_path="docs/internal/plan.md",
     )
 
-    bundle = workflow_requests.native_codex_request(
+    bundle = workflow_requests.native_implementer_request(
         execution_error=WorkflowExecutionError,
         state=state,
         context=context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         additional_authorized_paths=("src/runtime-hotfix.py",),
     )
 
@@ -283,7 +285,7 @@ def test_legacy_unexpected_path_stop_becomes_fingerprint_bound_user_gate() -> No
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_CORRECTION,
+            step=WorkflowStep.IMPLEMENTER_CORRECTION,
         )
         .bind_current_slice_git_boundary(
             start_commit="a" * 40,
@@ -314,7 +316,7 @@ def test_legacy_unexpected_path_stop_becomes_fingerprint_bound_user_gate() -> No
     assert reframed.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
     assert reframed.current_work_unit.gate.fingerprint == "b" * 64
     assert reframed.current_work_unit.gate.paths == ("src/runtime-hotfix.py",)
-    assert reframed.current_work_unit.gate.resume_step is WorkflowStep.CODEX_CORRECTION
+    assert reframed.current_work_unit.gate.resume_step is WorkflowStep.IMPLEMENTER_CORRECTION
 
 
 def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
@@ -328,7 +330,7 @@ def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         task_scope_patterns=(plan_path,),
-    ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION).await_policy_gate(
+    ).with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail=(
             "PLAN-CONTRACT-INVALID | changed_path_outside_scope | "
@@ -355,10 +357,10 @@ def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
     assert reframed.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
     assert reframed.current_work_unit.gate.fingerprint == "c" * 64
     assert reframed.current_work_unit.gate.paths == (hotfix_path,)
-    assert reframed.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    assert reframed.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
     assert (
         reframed.current_work_unit.gate.resume_step
-        is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is WorkflowStep.REVIEWER_PLAN_REVIEW
     )
 
 
@@ -373,7 +375,7 @@ def test_plan_pre_review_scope_drift_gates_without_reinvoking_codex() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         task_scope_patterns=(plan_path,),
-    ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    ).with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
     checkpoints: list[WorkflowState] = []
 
     class Driver:
@@ -420,12 +422,12 @@ def test_plan_pre_review_scope_drift_gates_without_reinvoking_codex() -> None:
     assert halted
     assert history == WorkflowHistory(state.current_work_unit_id)
     assert checkpoints == [gated]
-    assert gated.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    assert gated.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
     assert gated.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
     assert gated.current_work_unit.gate.paths == (hotfix_path,)
     assert (
         gated.current_work_unit.gate.resume_step
-        is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is WorkflowStep.REVIEWER_PLAN_REVIEW
     )
 
 
@@ -466,7 +468,7 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
 
     structured = replace(
         historical,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     assert WorkflowState.from_dict(structured.to_dict()) == structured
     assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
@@ -475,8 +477,8 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
         historical,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
+            "3",
+            "native-claude-review-v3",
         ),
     )
     assert WorkflowState.from_dict(native.to_dict()) == native
@@ -490,7 +492,7 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            "native-claude-review-v2",
+            "native-claude-review-v3",
         )
 
     with pytest.raises(
@@ -500,40 +502,65 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            codex_result_transport="native-codex-v2",
+            codex_result_transport="native-codex-v3",
         )
 
 
-def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
+def test_protocol_binding_roundtrips_native_implementer_result_transport() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
-        "2",
-        codex_result_transport="native-codex-v2",
+        "3",
+        codex_result_transport="native-codex-v3",
     )
 
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
+
+
+def test_protocol_binding_roundtrips_full_final_slot_profile() -> None:
+    profile = bound_state_profile("sonnet", "xhigh", provider="claude", binary="/opt/claude", max_budget_usd=10.0, manufacturer="anthropic", certification_sha256="a" * 64)
+    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3", final_reviewer_profile=profile)
+    assert ProtocolBinding.from_dict(binding.to_dict()) == binding
+    assert binding.to_dict()["final_reviewer_profile"]["certification_sha256"] == "a" * 64
 
 
 def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
-        "2",
-        codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-        claude_profile=AgentProfileBinding("sonnet", "high"),
+        "3",
+        implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+        reviewer_profile=bound_state_profile("sonnet", "high"),
     )
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
 
     document = binding.to_dict()
-    document.pop("codex_profile")
-    with pytest.raises(WorkflowStateValidationError, match="codex_profile"):
+    document.pop("implementer_profile")
+    with pytest.raises(WorkflowStateValidationError, match="implementer_profile"):
         ProtocolBinding.from_dict(document)
     with pytest.raises(WorkflowStateValidationError, match="unsupported"):
-        AgentProfileBinding("sonnet", "extreme")
+        bound_state_profile("sonnet", "extreme")
+
+
+@pytest.mark.parametrize("field", (
+    "provider", "binary", "timeout_seconds", "manufacturer",
+    "capability_sha256", "transport_sha256", "rights_sha256",
+    "policy_sha256", "certification_sha256", "binary_identity",
+    "binary_identity_sha256",
+))
+def test_state_profile_reader_rejects_absent_or_null_binding(field: str) -> None:
+    valid = bound_state_profile("opus", "high").to_dict()
+    missing = dict(valid)
+    missing.pop(field)
+    with pytest.raises(WorkflowStateValidationError):
+        AgentProfileBinding.from_dict(missing, "reviewer")
+    null = dict(valid)
+    null[field] = None
+    with pytest.raises(WorkflowStateValidationError):
+        AgentProfileBinding.from_dict(null, "reviewer")
 
 
 @pytest.mark.parametrize(
     ("mode", "schema_version"),
-    [(ProtocolMode.STRUCTURED_V2, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
+    [(ProtocolMode.STRUCTURED_V2, "2"), (ProtocolMode.LEGACY_STATE_V3, "1")],
 )
 def test_protocol_binding_rejects_mode_schema_mismatch(
     mode: ProtocolMode, schema_version: str
@@ -562,7 +589,7 @@ def test_state_rejects_non_contiguous_or_mismatched_ids() -> None:
         replace(state, slices=bad_slices)
 
     with pytest.raises(WorkflowStateValidationError, match="current_step"):
-        replace(state, current_step=WorkflowStep.CLAUDE_PLAN_REVIEW)
+        replace(state, current_step=WorkflowStep.REVIEWER_PLAN_REVIEW)
 
 
 @pytest.mark.parametrize("step", list(WorkflowStep))
@@ -584,22 +611,22 @@ def test_review_denials_stop_at_configured_loop_round_limit() -> None:
     state = make_state()
     for expected_count in range(1, DEFAULT_LOOP_ROUND_LIMIT + 1):
         state = state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,
-            open_findings=("C-01",),
-            return_step=WorkflowStep.CODEX_PLAN_REVISION,
+            reviewer=Reviewer.REVIEWER,
+            open_findings=("R-01",),
+            return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
             progress_made=True,
             updated_at=f"round-{expected_count}",
         )
-        assert state.current_work_unit.codex_return_count == expected_count
+        assert state.current_work_unit.implementer_return_count == expected_count
 
     unit = state.current_work_unit
     assert unit.round_number == DEFAULT_LOOP_ROUND_LIMIT
     assert unit.status is WorkUnitStatus.COMPLETED
     assert unit.gate.status is GateStatus.CLEAR
     assert unit.gate.reason is GateReason.NONE
-    assert unit.max_codex_returns == DEFAULT_LOOP_ROUND_LIMIT
-    assert unit.reviewer is Reviewer.CLAUDE
-    assert unit.open_findings == ("C-01",)
+    assert unit.max_implementer_returns == DEFAULT_LOOP_ROUND_LIMIT
+    assert unit.reviewer is Reviewer.REVIEWER
+    assert unit.open_findings == ("R-01",)
     assert state.current_step is WorkflowStep.COMPLETED
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
     assert state.current_slice.commit_ref is None
@@ -607,9 +634,9 @@ def test_review_denials_stop_at_configured_loop_round_limit() -> None:
 
 def test_review_denial_without_progress_completes_as_clear_terminal_verdict() -> None:
     state = make_state().record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01", "C-09"),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01", "R-09"),
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=False,
     )
 
@@ -617,7 +644,7 @@ def test_review_denial_without_progress_completes_as_clear_terminal_verdict() ->
     assert unit.status is WorkUnitStatus.COMPLETED
     assert unit.current_step is WorkflowStep.COMPLETED
     assert unit.gate == GateRecord()
-    assert unit.open_findings == ("C-01", "C-09")
+    assert unit.open_findings == ("R-01", "R-09")
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
 
 
@@ -636,9 +663,9 @@ def test_recomposition_advances_only_request_sequence_until_review_is_recorded()
     ] == [1, 2, 3]
 
     recorded = third_request.record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01",),
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
     )
 
@@ -650,12 +677,12 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     state = make_state()
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached; retry in 60 seconds",
         received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
@@ -678,21 +705,21 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     assert loaded.current_work_unit.gate.status is GateStatus.WAITING_FOR_QUOTA
     assert loaded.current_work_unit.invocation_failures == (failure,)
     resumed = loaded.resume_after_invocation_halt(updated_at="2026-08-12T10:01:30+00:00")
-    assert resumed.current_step is WorkflowStep.CODEX_PLAN
+    assert resumed.current_step is WorkflowStep.IMPLEMENTER_PLAN
     assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
     assert resumed.current_work_unit.invocation_failures == (failure,)
 
 
-def test_native_codex_retry_feedback_roundtrips_in_state() -> None:
+def test_native_implementer_retry_feedback_roundtrips_in_state() -> None:
     diagnostic = OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID.text
     failure = InvocationFailureRecord(
         invocation_id="inv-codex-form-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.OUTPUT,
         provider_text="native Codex result violates its bound contract",
         received_at="2026-09-19T20:24:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=3,
@@ -718,12 +745,12 @@ def test_native_codex_retry_feedback_roundtrips_in_state() -> None:
 def test_nonautomatic_quota_failure_remains_resumable_on_same_step() -> None:
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-terminal",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached without reset",
         received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
@@ -738,26 +765,26 @@ def test_nonautomatic_quota_failure_remains_resumable_on_same_step() -> None:
     result = WorkflowRunResult(halted, WorkflowHistory(1))
 
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
-    assert halted.current_step is WorkflowStep.CODEX_PLAN
+    assert halted.current_step is WorkflowStep.IMPLEMENTER_PLAN
     assert halted.current_work_unit.gate.status is GateStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.QUOTA
-    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
+    assert halted.current_work_unit.gate.resume_step is WorkflowStep.IMPLEMENTER_PLAN
     assert halted.current_slice.status is SliceStatus.AWAITING_RESUME
     assert not result.workflow_rejected
     assert result.exit_code == 2
     assert WorkflowState.from_dict(halted.to_dict()) == halted
-    assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+    assert halted.resume_after_invocation_halt().current_step is WorkflowStep.IMPLEMENTER_PLAN
 
 
 def test_prior_terminal_quota_record_fails_closed_before_next_work_unit() -> None:
     failure = InvocationFailureRecord(
         invocation_id="prior-quota",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage limit",
         received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
@@ -792,12 +819,12 @@ def test_prior_terminal_quota_record_fails_closed_before_next_work_unit() -> Non
 def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() -> None:
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-diff",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
@@ -829,20 +856,20 @@ def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() ->
 
     assert reopened.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert reopened.current_work_unit.gate.reason is GateReason.QUOTA
-    assert reopened.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
+    assert reopened.current_work_unit.gate.resume_step is WorkflowStep.IMPLEMENTER_PLAN
     assert not any(
         item.startswith("quota-resume-diff:inv-quota-diff:")
         for item in reopened.current_work_unit.completed_side_effects
     )
     revalidating = reopened.resume_after_invocation_halt()
-    assert revalidating.current_step is WorkflowStep.CODEX_PLAN
+    assert revalidating.current_step is WorkflowStep.IMPLEMENTER_PLAN
 
     rebound = revalidating.await_user_gate(
         reason=GateReason.QUOTA_RESUME_DIFF,
         detail=detail,
         fingerprint="3" * 64,
         paths=("src/runtime.py",),
-        resume_step=WorkflowStep.CODEX_PLAN,
+        resume_step=WorkflowStep.IMPLEMENTER_PLAN,
     )
     with pytest.raises(WorkflowStateValidationError, match="explicit recorded"):
         rebound.resume_after_user_decision()
@@ -892,12 +919,12 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     state = make_state()
     failure = InvocationFailureRecord(
         invocation_id="inv-network-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="connection reset by peer",
         received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
+        step=WorkflowStep.IMPLEMENTER_PLAN,
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=3,
@@ -915,23 +942,23 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     assert loaded.current_slice.status is SliceStatus.WAITING_FOR_RETRY
     assert loaded.current_work_unit.gate.status is GateStatus.WAITING_FOR_RETRY
     assert loaded.current_work_unit.gate.reason is GateReason.INSTANCE_FAILURE
-    assert loaded.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+    assert loaded.resume_after_invocation_halt().current_step is WorkflowStep.IMPLEMENTER_PLAN
 
 
 def test_review_denial_requires_findings_and_unique_records() -> None:
     state = make_state()
     with pytest.raises(WorkflowStateValidationError, match="requires open findings"):
         state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,
+            reviewer=Reviewer.REVIEWER,
             open_findings=(),
-            return_step=WorkflowStep.CODEX_CORRECTION,
+            return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
             progress_made=False,
         )
     with pytest.raises(WorkflowStateValidationError, match="unique"):
         state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,
-            open_findings=("C-01", "C-01"),
-            return_step=WorkflowStep.CODEX_CORRECTION,
+            reviewer=Reviewer.REVIEWER,
+            open_findings=("R-01", "R-01"),
+            return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
             progress_made=False,
         )
 
@@ -966,7 +993,7 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     slice_one = plan_done.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         updated_at="slice-one",
     )
     slice_one = slice_one.bind_current_slice_git_boundary(
@@ -982,7 +1009,7 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     slice_two = slice_one_done.start_work_unit(
         slice_id=2,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_start_commit="b" * 40,
         updated_at="slice-two",
     )
@@ -996,7 +1023,7 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     assert slice_two.current_work_unit_id == 3
     assert resumed.slice_id == 2
     assert resumed.work_unit_id == 3
-    assert resumed.step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert resumed.step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
 
 
 def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
@@ -1162,7 +1189,7 @@ def test_new_slice_cannot_start_without_persisted_start_commit() -> None:
         state.start_work_unit(
             slice_id=2,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
 
 
@@ -1172,13 +1199,13 @@ def test_fingerprint_bound_gate_rejects_mismatch_and_persists_denial_then_approv
         detail="test approval required",
         fingerprint="1" * 64,
         paths=("tests/test_one.py",),
-        gate_step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        gate_step=WorkflowStep.REVIEWER_SLICE_REVIEW,
         updated_at="halted",
     )
 
     assert state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
     assert state.current_slice.status is SliceStatus.AWAITING_USER_DECISION
-    assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert state.current_step is WorkflowStep.REVIEWER_SLICE_REVIEW
     with pytest.raises(WorkflowStateValidationError, match="does not match"):
         state.record_user_gate_decision(
             approved=True,
@@ -1226,8 +1253,8 @@ def test_anchor_gate_persists_reset_and_resume_steps() -> None:
         detail="anchor changed",
         fingerprint="3" * 64,
         paths=("RATE",),
-        gate_step=WorkflowStep.CODEX_PLAN_REVISION,
-        resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        gate_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
+        resume_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     approved = state.record_user_gate_decision(
         approved=True,
@@ -1237,9 +1264,9 @@ def test_anchor_gate_persists_reset_and_resume_steps() -> None:
     )
     decision = approved.current_work_unit.gate_decisions[-1]
 
-    assert approved.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert approved.current_step is WorkflowStep.IMPLEMENTER_PLAN_REVISION
     assert decision.reason is GateReason.ANCHOR_CHANGE
-    assert decision.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert decision.resume_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
 
 
 def test_pre_slice11_v3_gate_and_work_unit_shapes_load_with_empty_new_fields() -> None:
@@ -1358,7 +1385,7 @@ def test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume() -> No
     state = state.start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
 
     with pytest.raises(WorkflowStateValidationError, match="must match"):
@@ -1373,7 +1400,7 @@ def test_in_progress_slice_can_extend_exact_remediation_scope() -> None:
     state = make_state().complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="a" * 40,
         scope_paths=("src/current.py", "tests/current.test.py"),
@@ -1399,11 +1426,31 @@ def test_state_scope_rejects_orchestrator_internal_paths() -> None:
     state = make_state().complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     with pytest.raises(WorkflowStateValidationError, match="outside .orchestrator"):
         state.bind_current_slice_git_boundary(
             start_commit="a" * 40,
             scope_paths=(".orchestrator/state.json",),
             start_fingerprint="1" * 64,
+        )
+
+
+def test_bootstrap_fact_accepts_synthetic_registered_role_occupancy(monkeypatch) -> None:
+    import role_occupancy
+    from agent_roles import AgentRoleName
+
+    monkeypatch.setattr(role_occupancy, "provider_roles", lambda: {
+        "claude": AgentRoleName.IMPLEMENTER,
+        "codex": AgentRoleName.REVIEWER,
+    })
+    fact = BootstrapCheckFact(
+        "provider_input_measurement", "a" * 64, "claude", "implementer",
+        "implementer_plan", 1, "b" * 64, "allowed",
+    )
+    assert BootstrapCheckFact.from_dict(fact.to_dict()) == fact
+    with pytest.raises(WorkflowStateValidationError, match="bootstrap provider and role are invalid"):
+        BootstrapCheckFact(
+            "provider_input_measurement", "a" * 64, "unknown", "implementer",
+            "implementer_plan", 1, "b" * 64, "allowed",
         )

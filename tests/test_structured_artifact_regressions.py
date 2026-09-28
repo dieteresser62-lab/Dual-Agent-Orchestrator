@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile
+
 from collections import Counter
 import hashlib
 import json
@@ -16,7 +18,7 @@ from agent_adapters import AgentOutputError
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     classify_agent_failure,
 )
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
@@ -67,7 +69,7 @@ from content_authority_support import (
 )
 from contracts import (
     AgentRole,
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingClass,
     FindingOrigin,
@@ -160,7 +162,7 @@ def _state(repository: Path, run_id: str = "structured-regression"):
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-regression",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
 
 
@@ -242,14 +244,14 @@ def test_resume_compares_only_latest_review_packet_per_work_unit(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="0" * 64,
         )
-        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+        .with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     )
     driver = _driver(repository)
     history = WorkflowHistory(state.current_work_unit_id)
@@ -411,7 +413,7 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     raw_technical_text = "stderr sentinel: provider worker was killed"
     raw_provider_text = "provider process rejected the request"
     error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        "claude",
         AgentOutputError(
             "review invocation failed",
             provider_text=raw_provider_text,
@@ -426,7 +428,7 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -498,7 +500,7 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     model_text = "MODEL_OUTPUT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error_text = "PROVIDER_ERROR_TEXT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error = AgentInvocationError(
-        agent_key=AgentRole.CLAUDE.value,
+        agent_key="claude",
         kind=AgentFailureKind.OUTPUT,
         invocation_id="structured-output-diagnostic-1",
         received_at=now,
@@ -522,7 +524,7 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -665,7 +667,7 @@ def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
     monkeypatch.setattr(Path, "mkdir", reject_diagnostic_directory)
     now = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
     error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        "claude",
         AgentOutputError(
             "native Claude error",
             exit_code=1,
@@ -683,7 +685,7 @@ def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         error,
     )
 
@@ -757,8 +759,8 @@ def test_code_version_change_is_warned_and_recorded_before_provider_start(
         {
             "protocol_binding": ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
-                codex_profile=AgentProfileBinding("foreign-codex", "medium"),
+                "3",
+                implementer_profile=bound_state_profile("foreign-codex", "medium"),
             )
         },
     ),
@@ -836,12 +838,12 @@ def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="1",
             verdict="approved",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -874,7 +876,7 @@ def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
 def _legacy_final_denial_recovery_case(
     repository: Path,
     *,
-    correction_finding_ids: tuple[str, ...] = ("C-01",),
+    correction_finding_ids: tuple[str, ...] = ("R-01",),
 ) -> tuple[WorkflowState, tuple[object, ...], tuple[ArtifactRecord, ...]]:
     head = _git(repository, "rev-parse", "HEAD")
     state = _state(repository, "structured-final-denial-transition").bind_slice_plan(
@@ -883,7 +885,7 @@ def _legacy_final_denial_recovery_case(
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -923,14 +925,14 @@ def _legacy_final_denial_recovery_case(
         start_commit=head,
         scope_paths=("src/runtime.py",),
         start_fingerprint="e" * 64,
-        finding_ids=("C-01",),
+        finding_ids=("R-01",),
     )
     signature = (
         str(state.current_work_unit_id),
         "claude",
         attestation.diff_fingerprint,
         "denied",
-        ("C-01",),
+        ("R-01",),
     )
 
     bridge = ArtifactBridge(ArtifactStore(repository, correction.run_id))
@@ -951,12 +953,12 @@ def _legacy_final_denial_recovery_case(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload(
-                binding.codex_profile.model, binding.codex_profile.effort
+        bound_run_profile(
+            bound_role_profile(
+                binding.implementer_profile.model, binding.implementer_profile.effort
             ),
-            RoleProfilePayload(
-                binding.claude_profile.model, binding.claude_profile.effort
+            bound_role_profile(
+                binding.reviewer_profile.model, binding.reviewer_profile.effort
             ),
         ),
         logical_id="run-profile",
@@ -981,8 +983,8 @@ def _legacy_final_denial_recovery_case(
         bridge.append(
             FindingTransitionPayload(
                 finding_id=finding_id,
-                reporter=Role.CLAUDE,
-                actor=Role.CLAUDE,
+                reporter=Role.REVIEWER,
+                actor=Role.REVIEWER,
                 action="opened",
                 severity=FindingSeverity.BLOCKER,
                 finding_status="open",
@@ -1007,12 +1009,12 @@ def _legacy_final_denial_recovery_case(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id=signature[0],
             verdict="denied",
             finding_ids=signature[4],
             evidence="legacy final denial",
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
@@ -1067,7 +1069,7 @@ def test_external_side_effect_guard_rejects_near_miss_final_denial_recovery(
 def _pending_reviewer_recovery_case(
     repository: Path,
     *,
-    reviewer: Role = Role.CLAUDE,
+    reviewer: Role = Role.REVIEWER,
     verdict: str = "denied",
     output_verdict: str = "denied",
     logical_round: int = 1,
@@ -1086,7 +1088,7 @@ def _pending_reviewer_recovery_case(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -1100,9 +1102,9 @@ def _pending_reviewer_recovery_case(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
-            finding_ids=("C-07",),
+            finding_ids=("R-07",),
         )
-        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+        .with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     )
     fingerprint = "d" * 64
     attestation = ValidationAttestation(
@@ -1123,19 +1125,19 @@ def _pending_reviewer_recovery_case(
         ),
     )
     prior_finding = FindingRecord(
-        finding_id="C-07",
+        finding_id="R-07",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="pre-existing observation",
         acceptance_test="Carry the observation through review.",
-        origin=FindingOrigin("1", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("1", 1, AgentRole.REVIEWER),
     )
     events: tuple[object, ...] = (
         ValidationAuditEvent(1, state.current_slice_id, attestation),
     )
     if mirrored_partial_review:
         partial_finding = FindingRecord(
-            finding_id="C-99",
+            finding_id="R-99",
             finding_class=FindingClass.BLOCKER,
             status=FindingStatus.OPEN,
             summary="partially mirrored reviewer result",
@@ -1143,11 +1145,11 @@ def _pending_reviewer_recovery_case(
             origin=FindingOrigin(
                 f"{state.current_slice_id:02d}",
                 1,
-                AgentRole.CLAUDE,
+                AgentRole.REVIEWER,
             ),
         )
         partial = ContractResult(
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval=False,
             stopped=False,
             stop_request=None,
@@ -1180,7 +1182,7 @@ def _pending_reviewer_recovery_case(
                 "REVIEWER: claude",
                 "REVIEW_EVIDENCE: replay identity and binding | stale durable "
                 "verdict | the replay record differs from its provider log",
-                "FINDING_STATUS: C-07 | CLOSED | The correction resolves the prior finding.",
+                "FINDING_STATUS: R-07 | CLOSED | The correction resolves the prior finding.",
                 "PRE_MORTEM: A future adapter change could weaken replay identity.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | YES",
                 "STATUS: DONE",
@@ -1190,8 +1192,8 @@ def _pending_reviewer_recovery_case(
         output = "\n".join(
             (
                 "REVIEWER: claude",
-                "NEW_FINDING: C-01 | BLOCKER | replay near miss | Keep replay fail closed.",
-                "FINDING_STATUS: C-07 | OPEN | Preserve the prior finding for correction.",
+                "NEW_FINDING: R-01 | BLOCKER | replay near miss | Keep replay fail closed.",
+                "FINDING_STATUS: R-07 | OPEN | Preserve the prior finding for correction.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | NO",
                 "STATUS: DONE",
             )
@@ -1209,8 +1211,8 @@ def _pending_reviewer_recovery_case(
     )
     bridge.append(
         finding_payload(prior_finding),
-        logical_id="finding-C-07",
-        idempotency_key="finding:C-07:opened:1:claude",
+        logical_id="finding-R-07",
+        idempotency_key="finding:R-07:opened:1:reviewer",
         fingerprint_sha256=fingerprint,
     )
     bridge.append(
@@ -1219,9 +1221,9 @@ def _pending_reviewer_recovery_case(
             work_unit_id=str(state.current_work_unit_id),
             verdict=verdict,
             finding_ids=(
-                ("C-07",)
+                ("R-07",)
                 if output_verdict == "approved" and verdict == "approved"
-                else ("C-01", "C-07")
+                else ("R-01", "R-07")
             ),
             evidence=(
                 "replay identity and binding | stale durable verdict | "
@@ -1231,7 +1233,7 @@ def _pending_reviewer_recovery_case(
                 if verdict == "approved"
                 else None
             ),
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
@@ -1249,7 +1251,7 @@ def _pending_reviewer_recovery_case(
     driver.log_dir.mkdir(parents=True, exist_ok=True)
     (
         driver.log_dir
-        / f"work-unit-{state.current_work_unit_id:04d}-claude_slice_review.attempt-1.log"
+        / f"work-unit-{state.current_work_unit_id:04d}-reviewer_slice_review.attempt-1.log"
     ).write_text(output + "\n", encoding="utf-8")
     return driver, state, output
 
@@ -1273,7 +1275,7 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1286,8 +1288,8 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
                 rule.provider,
                 rule.role,
                 rule.operation,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_bytes,
             )
             for rule in defaults.rules
         )
@@ -1299,8 +1301,8 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
             components=(ProviderInputComponent("stdin_prompt", "oversized"),),
         ),
         provider="codex",
-        role="codex",
-        operation="codex_implementation",
+        role="implementer",
+        operation="implementer_implementation",
         binding_fingerprint="b" * 64,
         policy=policy,
     )
@@ -1317,13 +1319,13 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
         raise ProviderInputBudgetExceeded(measurement)
 
     halted, output = engine._invoke_role(
-        state, history, context, AgentRole.CODEX, denied_provider_start
+        state, history, context, AgentRole.IMPLEMENTER, denied_provider_start
     )
 
     assert output is None
     assert halted.current_work_unit.status is WorkUnitStatus.COMPLETED
     assert halted.current_work_unit.gate.status is GateStatus.CLEAR
-    assert halted.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.current_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
     assert WorkflowRunResult(halted, history).rejection_code == "PROVIDER-INPUT-BUDGET"
     assert driver.state_file.exists()
     checkpoint_path = next((driver.checkpoint_dir / halted.run_id).iterdir())
@@ -1375,7 +1377,7 @@ def test_final_review_preflight_missing_prerequisite_halts_for_resume(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -1417,12 +1419,12 @@ def test_final_review_preflight_missing_prerequisite_halts_for_resume(
         state,
         history,
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         denied_provider_start,
     )
 
     assert output is None
-    assert halted.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert halted.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.detail is not None
@@ -1438,7 +1440,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1450,7 +1452,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:codex"
         ),
-        role="codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -1488,7 +1490,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
     )
     assert chain.index(failure_record) < chain.index(quota_records[0])
     assert quota_records[0].payload == QuotaPausePayload(
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         repository_fingerprint="c" * 64,
         retry_at=failure.resume_at_utc,
     )
@@ -1517,7 +1519,7 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1529,7 +1531,7 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:claude"
         ),
-        role="claude",
+        role="reviewer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at="2026-08-31T10:00:00+00:00",
@@ -1585,8 +1587,8 @@ def test_gate_transition_after_invocation_failure_supersedes_failure_projection(
     driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
     failure = InvocationFailureRecord(
         invocation_id="failure-before-policy-gate",
-        idempotency_key=f"{state.run_id}:1:codex_plan:codex",
-        role="codex",
+        idempotency_key=f"{state.run_id}:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at="2026-08-31T10:00:00+00:00",
@@ -1635,7 +1637,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1647,7 +1649,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:claude"
         ),
-        role="claude",
+        role="reviewer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -1681,7 +1683,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     )
     assert chain.index(failure_record) < chain.index(retry_records[0])
     assert retry_records[0].payload == TransientRetryPayload(
-        role=Role.CLAUDE,
+        role=Role.REVIEWER,
         repository_fingerprint="c" * 64,
         retry_at=failure.resume_at_utc,
         attempt=1,
@@ -1712,7 +1714,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     state = state.complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     ).bind_current_slice_git_boundary(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -1739,7 +1741,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     )
     output_error.__cause__ = contract_error
     failure_error = classify_agent_failure(
-        AgentRole.CLAUDE.value,
+        "claude",
         output_error,
         invocation_id="review-form-retry-1",
         received_at=now,
@@ -1752,7 +1754,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
         active,
         WorkflowHistory(active.current_work_unit_id),
         WorkflowContext("assignment", "plan", "slice"),
-        AgentRole.CLAUDE,
+        AgentRole.REVIEWER,
         failure_error,
     )
     driver.checkpoint(waiting, WorkflowHistory(waiting.current_work_unit_id))
@@ -1812,7 +1814,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
         ),
     )
     stopped = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=None,
         stopped=True,
         stop_request=StopRequest("CONTRACT-UNCLEAR", "owner decision required"),
@@ -1834,12 +1836,12 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="1",
             verdict="stop",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
             stop_request=ReviewStopRequestPayload(
@@ -1860,8 +1862,8 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             ReviewAuditEvent(2, 1, 1, stopped),
         ),
         attestations=(attestation,),
-        last_claude_fingerprint=attestation.diff_fingerprint,
-        latest_claude_review=stopped,
+        last_reviewer_fingerprint=attestation.diff_fingerprint,
+        latest_reviewer_review=stopped,
     )
     assert driver.active_state is not None
     driver.checkpoint(driver.active_state, history)
@@ -1875,7 +1877,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     )
     driver.checkpoint(
         driver.active_state,
-        replace(history, latest_claude_review=wrong_latest),
+        replace(history, latest_reviewer_review=wrong_latest),
     )
 
     resumed = _driver(repository)
@@ -1907,33 +1909,25 @@ def test_pre_r1_failure_artifact_chain_is_rejected_without_synthesized_facts(
         idempotency_key="work-unit:1",
         fingerprint_sha256="a" * 64,
     )
-    measurement = bridge.append(
-        ProviderInputMeasurementPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+    with pytest.raises(ArtifactBridgeError, match="earlier run profile"):
+        bridge.append(
+            ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "a" * 64, "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt_file", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,
             "prompt_file",
         ),
-        logical_id="measurement-legacy",
-        idempotency_key="measurement:legacy",
-        fingerprint_sha256="a" * 64,
-    )
-    before = store.load_chain()
-
-    with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
-        bridge.start_provider_attempt(
-            measurement_record=measurement,
-            binding_fingerprint="a" * 64,
-            work_unit_id="1",
+            logical_id="measurement-legacy",
+            idempotency_key="measurement:legacy",
+            fingerprint_sha256="a" * 64,
         )
+    before = store.load_chain()
 
     after = store.load_chain()
     assert after == before
     assert Counter(record.record_type for record in after) == Counter(
         {
             RecordType.WORK_UNIT: 1,
-            RecordType.PROVIDER_INPUT_MEASUREMENT: 1,
         }
     )
     assert not any(

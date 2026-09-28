@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 
@@ -44,16 +45,13 @@ def test_unmeasurable_identity_does_not_abort_process(
         repo_root=tmp_path, agent_live_stream=live_stream, agent_live_stream_mode="full",
     )
     command = [sys.executable, "-c", "print('completed')"]
-    with monkeypatch.context() as measured_proc:
-        measured_proc.setattr(provider_process, "_boot_id", lambda: "boot-1")
-        measured_proc.setattr(provider_process, "_proc_stat", lambda _pid: ("R", 17))
-        expected = agent_runtime._run_agent_process(
-            object(), command, None, config=config, env=os.environ.copy(),
-            execution_root=tmp_path, timeout_seconds=None, agent_key="implementer",
-            process_started=lambda pid: record_process_start(
-                tmp_path / "measured.json", "effect-2", pid,
-            ),
-        )
+    expected = agent_runtime._run_agent_process(
+        object(), command, None, config=config, env=os.environ.copy(),
+        execution_root=tmp_path, timeout_seconds=None, agent_key="implementer",
+        process_started=lambda pid: record_process_start(
+            tmp_path / "measured.json", "effect-2", pid,
+        ),
+    )
     monkeypatch.setattr(Path, "read_text", read_proc)
     actual = agent_runtime._run_agent_process(
         object(), command, None, config=config, env=os.environ.copy(),
@@ -120,10 +118,10 @@ def test_process_identity_requires_matching_boot_pid_and_start_ticks(
 ) -> None:
     response = tmp_path / "response.json"
     monkeypatch.setattr(provider_process, "_boot_id", lambda: "current-boot")
-    monkeypatch.setattr(provider_process, "_proc_stat", lambda _pid: ("S", 41))
+    monkeypatch.setattr(provider_process, "_proc_stat", lambda pid: provider_process.ProcStat("S", 41, pid, pid))
     record_process_start(response, "effect-1", 711)
     monkeypatch.setattr(provider_process, "_boot_id", lambda: boot)
-    monkeypatch.setattr(provider_process, "_proc_stat", lambda _pid: stat)
+    monkeypatch.setattr(provider_process, "_proc_stat", lambda pid: None if stat is None else provider_process.ProcStat(stat[0], stat[1], pid, pid))
     assert observe_process(response, "effect-1").status is expected
 
 
@@ -132,7 +130,7 @@ def test_unreadable_process_state_and_foreign_identity_remain_unknown(
 ) -> None:
     response = tmp_path / "response.json"
     monkeypatch.setattr(provider_process, "_boot_id", lambda: "current-boot")
-    monkeypatch.setattr(provider_process, "_proc_stat", lambda _pid: ("S", 41))
+    monkeypatch.setattr(provider_process, "_proc_stat", lambda pid: provider_process.ProcStat("S", 41, pid, pid))
     record_process_start(response, "effect-1", 711)
     assert observe_process(response, "another-effect").status is ProcessStatus.UNKNOWN
 
@@ -141,3 +139,98 @@ def test_unreadable_process_state_and_foreign_identity_remain_unknown(
 
     monkeypatch.setattr(provider_process, "_proc_stat", unreadable)
     assert observe_process(response, "effect-1").status is ProcessStatus.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("leader", "child", "expected"),
+    (
+        (None, provider_process.ProcStat("S", 42, 711, 711), ProcessStatus.RUNNING),
+        (None, provider_process.ProcStat("S", 42, 712, 711), ProcessStatus.RUNNING),
+        (None, provider_process.ProcStat("S", 40, 711, 711), ProcessStatus.UNKNOWN),
+        (None, provider_process.ProcStat("S", 42, 711, 999), ProcessStatus.UNKNOWN),
+        (provider_process.ProcStat("S", 43, 711, 711), None, ProcessStatus.ENDED),
+        (provider_process.ProcStat("S", 41, 712, 711), None, ProcessStatus.UNKNOWN),
+    ),
+)
+def test_leader_loss_reuse_and_group_drift_block_unproved_restart(
+    monkeypatch: pytest.MonkeyPatch, leader: provider_process.ProcStat | None,
+    child: provider_process.ProcStat | None, expected: ProcessStatus,
+) -> None:
+    identity = provider_process.ProcessIdentity("boot", 711, 41, 711, 711)
+    monkeypatch.setattr(provider_process, "_boot_id", lambda: "boot")
+    monkeypatch.setattr(provider_process, "_proc_stat", lambda pid: leader if pid == 711 else child)
+    monkeypatch.setattr(provider_process.os, "scandir", lambda _path: _FakeProcDirectory(("712",)))
+    assert provider_process.observe_identity(identity).status is expected
+
+
+class _FakeProcDirectory:
+    def __init__(self, pids: tuple[str, ...]) -> None:
+        from types import SimpleNamespace
+
+        self.entries = [SimpleNamespace(name=pid) for pid in pids]
+
+    def __enter__(self):
+        return iter(self.entries)
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+def test_reused_or_drifting_group_is_never_signalled(monkeypatch: pytest.MonkeyPatch) -> None:
+    identity = provider_process.ProcessIdentity("boot", 711, 41, 711, 711)
+    monkeypatch.setattr(provider_process, "_boot_id", lambda: "boot")
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(provider_process.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+    monkeypatch.setattr(provider_process.os, "scandir", lambda _path: _FakeProcDirectory(()))
+    for current, expected in (
+        (provider_process.ProcStat("S", 42, 711, 711), ProcessStatus.ENDED),
+        (provider_process.ProcStat("S", 41, 712, 711), ProcessStatus.UNKNOWN),
+    ):
+        monkeypatch.setattr(provider_process, "_proc_stat", lambda _pid: current)
+        assert provider_process.observe_identity(identity).status is expected
+        assert not provider_process.signal_process_group(identity, signal.SIGTERM)
+    monkeypatch.setattr(provider_process.os, "scandir", lambda _path: _FakeProcDirectory(("712",)))
+    monkeypatch.setattr(
+        provider_process, "_proc_stat",
+        lambda pid: None if pid == 711 else provider_process.ProcStat("S", 42, 711, 999),
+    )
+    assert not provider_process.signal_process_group(identity, signal.SIGTERM)
+    assert signals == []
+
+
+def test_unreadable_group_membership_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    identity = provider_process.ProcessIdentity("boot", 711, 41, 711, 711)
+    monkeypatch.setattr(provider_process, "_boot_id", lambda: "boot")
+    monkeypatch.setattr(provider_process, "_proc_stat", lambda _pid: None)
+
+    def denied(_path: str) -> None:
+        raise PermissionError("proc enumeration denied")
+
+    monkeypatch.setattr(provider_process.os, "scandir", denied)
+    assert provider_process.observe_identity(identity).status is ProcessStatus.UNKNOWN
+    assert not provider_process.signal_process_group(identity, signal.SIGTERM)
+
+
+def test_separate_group_in_same_session_is_observed_and_signalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = provider_process.ProcessIdentity("boot", 711, 41, 711, 711)
+    members = {
+        711: provider_process.ProcStat("S", 41, 711, 711),
+        712: provider_process.ProcStat("S", 42, 712, 711),
+        713: provider_process.ProcStat("S", 43, 713, 999),
+    }
+    monkeypatch.setattr(provider_process, "_boot_id", lambda: "boot")
+    monkeypatch.setattr(provider_process, "_proc_stat", members.get)
+    monkeypatch.setattr(provider_process.os, "scandir", lambda _path: _FakeProcDirectory(("711", "712", "713")))
+    signalled: list[int] = []
+    monkeypatch.setattr(provider_process.os, "killpg", lambda pgid, _sig: signalled.append(pgid))
+    assert provider_process.observe_identity(identity).status is ProcessStatus.RUNNING
+    assert provider_process.count_process_group_members(identity) == 2
+    assert provider_process.signal_process_group(identity, signal.SIGTERM)
+    assert signalled == [711, 712]
+    members[713] = provider_process.ProcStat("S", 43, 712, 999)
+    signalled.clear()
+    assert provider_process.observe_identity(identity).status is ProcessStatus.UNKNOWN
+    assert not provider_process.signal_process_group(identity, signal.SIGKILL)
+    assert signalled == []

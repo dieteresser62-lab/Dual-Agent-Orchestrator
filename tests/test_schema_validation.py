@@ -15,6 +15,18 @@ def test_public_schema_validator_rejects_unknown_keywords() -> None:
         check_schema({"type": "object", "surprise": True})
 
 
+@pytest.mark.parametrize("zero", (0, 0.0))
+def test_artifact_budget_schema_rejects_zero_for_integer_and_float(zero: float) -> None:
+    from artifact_models import load_schema
+
+    rule = load_schema()["$defs"]["role_profile"]["properties"]["max_budget_usd"]
+    assert rule["exclusiveMinimum"] == 0
+    check_schema(rule)
+    with pytest.raises(SchemaMismatch, match="greater than 0"):
+        validate_schema_document(zero, rule)
+    validate_schema_document(0.01, rule)
+
+
 def test_public_schema_validator_preserves_closed_object_error_path() -> None:
     schema = {
         "type": "object",

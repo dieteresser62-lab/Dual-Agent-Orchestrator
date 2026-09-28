@@ -12,6 +12,7 @@ from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+from path_policy import is_canonical_repository_relative_path
 from typing import Any, Mapping, TypeAlias
 
 from schema_validation import (
@@ -45,6 +46,13 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
+from finding_identity import (
+    FINDING_ID_EXAMPLE,
+    FINDING_ID_PATTERN_TEXT,
+    FINDING_ID_PREFIX,
+    format_finding_id,
+    parse_finding_number,
+)
 from finding_signature import (
     finding_record_signature,
     finding_signature,
@@ -52,12 +60,16 @@ from finding_signature import (
 )
 from native_provider_schema import (
     ANTHROPIC_PROVIDER,
+    OPENAI_PROVIDER,
     assert_projected_provider_schema,
     bind_required_empty_array as bind_provider_required_empty_array,
     defensive_provider_projection,
+    lower_reviewer_writer_for_openai,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from rejected_response_shape import RejectedNativeResponseShape
+from schema_patterns import ANY_LINE_VISIBLE_PATTERN, VISIBLE_LINE_PATTERN, has_visible_text
+from path_policy import is_canonical_repository_relative_path
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
@@ -65,19 +77,17 @@ from native_finding_decisions import (
 )
 
 
-SCHEMA_VERSION = "native-agent-review-result-v2"
+SCHEMA_VERSION = "native-agent-review-result-v3"
 MAX_NATIVE_REVIEW_DISPOSITIONS = 32
 DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS = 128
 MAX_FINAL_REVIEW_NEW_FINDINGS = 512
 DISCOVERY_OUTPUT_LIMIT_RULE_ID = "DISCOVERY_OUTPUT_LIMIT"
-NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
-NONBLANK_LINE_PATTERN = (
-    "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
-)
+NONBLANK_TEXT_PATTERN = ANY_LINE_VISIBLE_PATTERN
+NONBLANK_LINE_PATTERN = VISIBLE_LINE_PATTERN
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-review-result-v2.schema.json"
+    / "native-agent-review-result-v3.schema.json"
 )
 
 
@@ -166,7 +176,7 @@ _NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
         "Copy the reviewer field from this request into the response unchanged."
     ),
     NativeReviewErrorCode.FINDING_ID_INVALID: (
-        "Use review_contract.next_finding_id and contiguous following C- identifiers."
+        f"Use review_contract.next_finding_id and contiguous following {FINDING_ID_PREFIX} identifiers."
     ),
     NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN: (
         "Reference only reviewer-owned findings offered in review_contract.previous_findings."
@@ -544,10 +554,10 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "request_sequence must be 1-based",
             )
-        if self.reviewer is not AgentRole.CLAUDE:
+        if self.reviewer is not AgentRole.REVIEWER:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "reviewer must be claude",
+                "reviewer must be reviewer",
             )
         if len(self.diff_fingerprint) != 64 or any(
             character not in "0123456789abcdef"
@@ -582,7 +592,7 @@ class NativeReviewContext:
         ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "authoritative finding ids must use the C-01 namespace",
+                f"authoritative finding ids must use the {FINDING_ID_EXAMPLE} namespace",
             )
         if not set(previous_ids).issubset(authoritative_ids):
             raise NativeReviewContractError(
@@ -621,7 +631,7 @@ class NativeReviewContext:
                 )
         normalized_tests = tuple(sorted(set(self.test_files)))
         if normalized_tests != self.test_files or any(
-            not item.strip() for item in self.test_files
+            not is_canonical_repository_relative_path(item) for item in self.test_files
         ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
@@ -653,15 +663,10 @@ class NativeReviewContext:
                 "red_state_followup_slice must be non-empty when present",
             )
         if self.plan_artifact_path is not None:
-            path = PurePosixPath(self.plan_artifact_path)
             if (
-                not self.plan_artifact_path.strip()
-                or "\\" in self.plan_artifact_path
-                or path.is_absolute()
-                or ".." in path.parts
+                not is_canonical_repository_relative_path(self.plan_artifact_path)
                 or any(character in self.plan_artifact_path for character in "*?[")
-                or self.plan_artifact_path != path.as_posix()
-                or path.suffix.lower() != ".md"
+                or PurePosixPath(self.plan_artifact_path).suffix.lower() != ".md"
             ):
                 raise NativeReviewContractError(
                     NativeReviewErrorCode.CONTEXT_INVALID,
@@ -759,7 +764,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
         "oneOf": [
             {
                 "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                "pattern": FINDING_ID_PATTERN_TEXT,
             },
             {"type": "null"},
         ],
@@ -775,7 +780,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
         "properties": {
             "finding_id": {
                 "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+                "pattern": FINDING_ID_PATTERN_TEXT,
             },
             "rationale": {
                 "type": "string",
@@ -804,7 +809,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
                         "type": "string",
                         "pattern": "^native-review-request-[0-9a-f]{64}$",
                     },
-                    "reviewer": {"const": "claude"},  # allowlist:provider -- canonical reviewer role
+                    "reviewer": {"const": "reviewer"},
                     "scan_complete": {"type": "boolean"},
                     "new_findings": {
                         "type": "array",
@@ -965,7 +970,8 @@ def _final_review_provider_response_schema(
 
 
 def native_review_provider_response_schema(
-    context: NativeReviewContext, *, base_schema: Mapping[str, Any] | None = None,
+    context: NativeReviewContext, profile: str = ANTHROPIC_PROVIDER,
+    *, base_schema: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project the reader contract into a request-bound reviewer writer schema.
 
@@ -976,25 +982,29 @@ def native_review_provider_response_schema(
             NativeReviewErrorCode.CONTEXT_INVALID,
             "provider schema projection requires NativeReviewContext",
         )
-    if context.reviewer is not AgentRole.CLAUDE:
+    if context.reviewer is not AgentRole.REVIEWER:
         raise NativeReviewContractError(
             NativeReviewErrorCode.CONTEXT_INVALID,
-            "native Claude writer schema requires reviewer=claude",
+            "native reviewer writer schema requires reviewer=reviewer",
         )
     schema = defensive_provider_projection(
         base_schema if base_schema is not None else load_native_review_schema(),
-        provider="claude",
+        provider=profile,
         required_features=(
             "closed_object",
             "min_max_items",
             "nested_any_of",
-            "nested_one_of",
+        ),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=(
+            "/$defs/finding/properties/affected_paths/uniqueItems",
+            "/$defs/stop_request/allOf/1/properties/remediation_paths/uniqueItems",
         ),
     )
     definitions = schema["$defs"]
     definitions["finding"]["properties"]["finding_id"] = {
         "type": "string",
-        "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+        "pattern": FINDING_ID_PATTERN_TEXT,
     }
     definitions["prose_acceptance"]["properties"]["text"]["pattern"] = (
         NONBLANK_TEXT_PATTERN
@@ -1016,9 +1026,9 @@ def native_review_provider_response_schema(
         projected_schema = _final_review_provider_response_schema(
             context, definitions
         )
-        assert_projected_provider_schema(
-            projected_schema, provider=context.reviewer.value
-        )
+        if profile == OPENAI_PROVIDER:
+            projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+        assert_projected_provider_schema(projected_schema, provider=profile)
         return projected_schema
     own_findings = tuple(
         item
@@ -1196,9 +1206,9 @@ def native_review_provider_response_schema(
         "additionalProperties": False,
         "$defs": definitions,
     }
-    assert_projected_provider_schema(
-        projected_schema, provider=context.reviewer.value
-    )
+    if profile == OPENAI_PROVIDER:
+        projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+    assert_projected_provider_schema(projected_schema, provider=profile)
     return projected_schema
 
 
@@ -1206,9 +1216,8 @@ def _native_finding_id_window(
     context: NativeReviewContext, *, size: int
 ) -> tuple[str, ...]:
     first = next_native_finding_id(context)
-    prefix, raw_number = first.split("-", 1)
-    start = int(raw_number)
-    return tuple(f"{prefix}-{number:02d}" for number in range(start, start + size))
+    start = parse_finding_number(first)
+    return tuple(format_finding_id(number) for number in range(start, start + size))
 
 
 def _bind_approved_status_changes(
@@ -1649,19 +1658,19 @@ def parse_bound_native_contract_result(
 
 def next_native_finding_id(context: NativeReviewContext) -> str:
     """Return the first reviewer-owned finding id not reserved by the ledger."""
-    prefix = "C"
+    prefix = FINDING_ID_PREFIX
     finding_ids = context.authoritative_finding_ids or tuple(
         item.finding_id for item in context.previous_findings
     )
     number = max(
         (
-            int(finding_id.split("-", 1)[1])
+            parse_finding_number(finding_id)
             for finding_id in finding_ids
-            if finding_id.startswith(prefix + "-")
+            if finding_id.startswith(prefix)
         ),
         default=0,
     ) + 1
-    return f"{prefix}-{number:02d}"
+    return format_finding_id(number)
 
 
 def canonical_native_review_json(document: Mapping[str, Any]) -> str:
@@ -1919,11 +1928,11 @@ def _validate_response_events(
                 NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
                 f"finding {update.finding_id} status update must add a new rationale",
             )
-    expected_prefix = "C-"
+    expected_prefix = FINDING_ID_PREFIX
     first_id = next_native_finding_id(context)
-    first_number = int(first_id.split("-", 1)[1])
+    first_number = parse_finding_number(first_id)
     expected_new_ids = [
-        f"{expected_prefix}{first_number + index:02d}"
+        format_finding_id(first_number + index)
         for index in range(len(response.new_findings))
     ]
     if new_ids != expected_new_ids:
@@ -2133,10 +2142,10 @@ def _coalesce_known_finding_occurrences(
 
     if not response.new_findings:
         return response
-    first_number = int(next_native_finding_id(context).split("-", 1)[1])
+    first_number = parse_finding_number(next_native_finding_id(context))
     raw_ids = tuple(item.finding_id for item in response.new_findings)
     expected_raw_ids = tuple(
-        f"C-{first_number + index:02d}"
+        format_finding_id(first_number + index)
         for index in range(len(response.new_findings))
     )
     if raw_ids != expected_raw_ids:
@@ -2232,7 +2241,7 @@ def _coalesce_known_finding_occurrences(
             )
 
     renumbered = tuple(
-        replace(finding, finding_id=f"C-{first_number + index:02d}")
+        replace(finding, finding_id=format_finding_id(first_number + index))
         for index, finding in enumerate(retained)
     )
     return replace(
@@ -2452,9 +2461,9 @@ def _slice_decision_retry_guidance(
     if new_count is None:
         return None
     if include_new_findings:
-        first_number = int(next_native_finding_id(context).split("-", 1)[1])
+        first_number = parse_finding_number(next_native_finding_id(context))
         new_ids = tuple(
-            f"C-{first_number + offset:02d}" for offset in range(new_count)
+            format_finding_id(first_number + offset) for offset in range(new_count)
         )
     else:
         new_ids = ()
@@ -2669,8 +2678,7 @@ def _require_native_text(
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value)
         or len(value) > max_length
     ):
         raise NativeReviewContractError(

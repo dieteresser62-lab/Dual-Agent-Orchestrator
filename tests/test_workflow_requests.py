@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -25,7 +26,7 @@ from contracts import (
 )
 from artifact_models import technical_text_evidence
 from gates import StopRule
-from native_codex_contract import NativeCodexRequestKind
+from native_implementer_contract import NativeImplementerRequestKind
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import (
     EvidenceKind,
@@ -35,7 +36,7 @@ from workflow import (
     WorkflowHistory,
 )
 import workflow_requests
-from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_CODEX_SYSTEM_POLICY
+from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_IMPLEMENTER_SYSTEM_POLICY
 from task_contract import TaskMode, parse_task_contract
 from validation_matrix import ValidationCommand, ValidationMatrix
 from workflow_state import (
@@ -43,6 +44,9 @@ from workflow_state import (
     InvocationFailureRecord,
     WorkflowState,
     WorkflowStep,
+    ProtocolBinding,
+    ProtocolMode,
+    scripted_profile_binding,
     init_workflow_state,
 )
 
@@ -50,10 +54,10 @@ from workflow_state import (
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256 = (
-    "4a1562a7710909f2dbed84a0b54f7214c8cf127a0fd3189eeeb2e6f89e099e85"
+    "3df05d6673e8134817cef501b58ff0a98baf926c4978e0b96d2d039fa415e682"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "1b0dc0c9479a690055eea95445dd8e6813096020085be3c78d6cfac352085b26"
+    "271c9f634fc0473cba8572a3f49e2daac0e5801a140da55e1fa726b27267f8b5"
 )
 
 
@@ -73,9 +77,9 @@ def _context() -> WorkflowContext:
 
 
 def _codex_bundle(
-    *, context: WorkflowContext | None = None
-) -> workflow_requests.NativeCodexRequestBundle:
-    state = init_workflow_state(
+    *, context: WorkflowContext | None = None, state: WorkflowState | None = None,
+) -> workflow_requests.NativeImplementerRequestBundle:
+    state = state or init_workflow_state(
         run_id="b31-request-builder",
         task_file="/repo/inbox/backlog/00-b31.md",
         branch="feature/backlog-followups",
@@ -87,7 +91,7 @@ def _codex_bundle(
         target_branch="feature/backlog-followups",
         timestamp="2026-09-02T10:00:00+00:00",
     )
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name="b31-plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -95,14 +99,44 @@ def _codex_bundle(
         require_slice_plan=True,
         plan_artifact_path="docs/internal/b31-plan.md",
     )
-    return workflow_requests.native_codex_request(
+    return workflow_requests.native_implementer_request(
         state=state,
         context=_context() if context is None else context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         execution_error=WorkflowExecutionError,
     )
+
+
+def test_request_builders_pass_bound_slot_capability_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = ProtocolBinding(
+        ProtocolMode.STRUCTURED_V2, "3",
+        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude"),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex"),  # allowlist:provider -- transport: swapped occupancy fixture
+        final_reviewer_profile=scripted_profile_binding("final_reviewer"),
+    )
+    state = init_workflow_state(
+        run_id="swapped-request", task_file="/repo/task.md", branch="feature/swapped",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        task_digest="b" * 64, task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/swapped",
+        protocol_binding=binding,
+    )
+    observed: dict[str, str] = {}
+    monkeypatch.setattr(
+        workflow_requests, "build_native_implementer_request",
+        lambda _spec, *, profile: observed.setdefault("implementer", profile),
+    )
+    monkeypatch.setattr(
+        workflow_requests, "build_native_review_request",
+        lambda _spec, *, profile: observed.setdefault("reviewer", profile),
+    )
+    _codex_bundle(state=state)  # allowlist:provider -- transport: implementer request fixture
+    _review_bundle(state=state.with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW))
+    assert observed == {"implementer": "claude", "reviewer": "codex"}  # allowlist:provider -- transport: forwarded profiles
 
 
 def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> None:
@@ -112,7 +146,7 @@ def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> Non
         if item["evidence_id"] == "native-policy"
     )
     assert policy["kind"] == "system_policy"
-    assert policy["content"] == NATIVE_CODEX_SYSTEM_POLICY
+    assert policy["content"] == NATIVE_IMPLEMENTER_SYSTEM_POLICY
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in policy["content"]
     assert policy["sha256"] == hashlib.sha256(policy["content"].encode()).hexdigest()
 
@@ -135,7 +169,7 @@ def _review_bundle(
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-09-02T10:00:00+00:00",
-    ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    ).with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     if bound_open_finding_ids:
         state = replace(
             state,
@@ -167,7 +201,7 @@ def _review_bundle(
     )
     contract = StepContract(
         name="b31-slice-review",
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=approval_marker,
         slice_id="01",
         round_number=1,
@@ -203,7 +237,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
         "_review_request_finding_inputs",
-        "native_codex_request",
+        "native_implementer_request",
         "native_review_request",
     }
     assert not any(isinstance(node, ast.ClassDef) for node in tree.body)
@@ -234,7 +268,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "workflow_requests"
     ]
-    codex_calls = [node for node in calls if node.func.attr == "native_codex_request"]
+    codex_calls = [node for node in calls if node.func.attr == "native_implementer_request"]
     review_calls = [node for node in calls if node.func.attr == "native_review_request"]
     assert len(codex_calls) == 2
     assert len(review_calls) == 1
@@ -273,28 +307,45 @@ def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
 
 
 def test_canonical_requests_match_the_current_bound_bytes() -> None:
-    assert _canonical_digest(_codex_bundle().canonical_json) == (
+    # Slice 8b wire cut: inverse names recover both pre-cut request documents.
+    implementer = _codex_bundle()
+    prior_implementer = prior_role_wire_document(implementer.document)
+    assert _canonical_digest(json.dumps(prior_implementer, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
         LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256
     )
-    assert _canonical_digest(_review_bundle().canonical_json) == (
+    assert _canonical_digest(implementer.canonical_json) == (
+        "0eb8c72c3ed3c971361f4e4b24ef195cf8a2d018ff3c47886ff655d93c023510"
+    )
+    review = _review_bundle()
+    prior_schema = (review.provider_response_schema_json
+        .replace('"const":"reviewer"', '"const":"claude"')
+        .replace('"enum":["reviewer"]', '"enum":["claude"]'))
+    assert _canonical_digest(prior_schema) == "8892fb0113d102afa886f2be6421c393440a683fd6065e31198823205c2c9746"
+    prior_review = prior_role_wire_document(
+        review.document, prior_schema_sha256=_canonical_digest(prior_schema)
+    )
+    assert _canonical_digest(json.dumps(prior_review, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
         PRE_CUT_REVIEW_REQUEST_SHA256
+    )
+    assert _canonical_digest(review.canonical_json) == (
+        "82e2a02f3bc289275c35392b37abae96fcdc4e2a1b4b17bc45b522e023187946"
     )
 
 
 def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Current Slice finding",
         acceptance_test="The finding receives a valid exit decision.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
     empty = _review_bundle()
     populated = _review_bundle(
         findings=(finding,),
-        bound_open_finding_ids=("C-01", "C-02"),
+        bound_open_finding_ids=("R-01", "R-02"),
     )
 
     assert empty.document["review_contract"][
@@ -302,7 +353,7 @@ def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     ] == []
     assert populated.document["review_contract"][
         "slice_commit_decision_finding_ids"
-    ] == ["C-01", "C-02"]
+    ] == ["R-01", "R-02"]
 
 
 
@@ -390,7 +441,7 @@ def test_b78_codex_request_projects_the_exact_runtime_stop_rule_set() -> None:
     )
 
 
-def test_canary_33_codex_plan_schema_uses_the_runtime_validation_declarations() -> None:
+def test_canary_33_implementer_plan_schema_uses_the_runtime_validation_declarations() -> None:
     source_only = _codex_bundle()
     configured = _codex_bundle(
         context=replace(
@@ -405,7 +456,7 @@ def test_canary_33_codex_plan_schema_uses_the_runtime_validation_declarations() 
     )
 
     def measurement_stages(
-        bundle: workflow_requests.NativeCodexRequestBundle,
+        bundle: workflow_requests.NativeImplementerRequestBundle,
     ) -> list[str]:
         return bundle.provider_response_schema["$defs"]["planned_slice"][
             "properties"
@@ -458,7 +509,7 @@ Bring the six explicitly scoped documents to one consistent end state.
             execution_mode=execution_mode.value,
             work_plan_path=work_plan_path,
             timestamp="2026-09-06T10:00:00+00:00",
-        ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+        ).with_current_step(WorkflowStep.REVIEWER_PLAN_REVIEW)
         context = replace(
             _context(),
             assignment=assignment,
@@ -475,7 +526,7 @@ Bring the six explicitly scoped documents to one consistent end state.
         )
         contract = StepContract(
             name="b72-plan-review",
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval_marker=ApprovalMarker.PLAN,
             slice_id="01",
             round_number=1,

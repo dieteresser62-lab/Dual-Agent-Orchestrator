@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import asdict, replace
 import json
+from types import SimpleNamespace
 
 import artifact_models
 import pytest
+import role_occupancy
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import (
@@ -71,11 +75,94 @@ from orchestrator_diagnostics import (
     OrchestratorDiagnostic,
 )
 from rejected_response_shape import extract_rejected_native_response_shape
+from agent_config import current_pre_toml_occupancy
+from agent_roles import AgentSlot
+from agent_runtime import _binary_remedy
+from provider_input_budget import (
+    PROVIDER_OPERATIONS,
+    PROVIDER_ROLES,
+    default_provider_input_budget_policy,
+)
+
+_PROVIDER_ONE = "codex"  # allowlist:provider -- transport: occupancy test input
+_PROVIDER_TWO = "claude"  # allowlist:provider -- transport: occupancy test input
+
+
+def _measurement_for_pair(provider: str, role: Role) -> ProviderInputMeasurementPayload:
+    return ProviderInputMeasurementPayload(
+        provider, role, "implementer_implementation", "work-01", DIGEST, "b" * 64,
+        "c" * 64, "d" * 64,
+        (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
+        3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
+    )
+
+
+def _attempt_for_pair(provider: str, role: Role) -> ProviderAttemptPayload:
+    return ProviderAttemptPayload(
+        provider, role, "implementer_implementation", "work-01",
+        "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
+        "started", CREATED_AT, None, None, None, None,
+    )
+
+
+def _preflight_for_pair(provider: str, role: Role) -> FinalReviewPreflightPayload:
+    return FinalReviewPreflightPayload(
+        provider, role, "reviewer_final_review", "work-01", DIGEST, "b" * 64,
+        "measurement-01", "passed", None, None, (), (), None,
+    )
+
+
+@pytest.mark.parametrize(
+    "make_payload",
+    (_measurement_for_pair, _attempt_for_pair, _preflight_for_pair),
+    ids=("measurement", "attempt", "preflight"),
+)
+@pytest.mark.parametrize(
+    ("provider", "role"),
+    ((_PROVIDER_TWO, Role.IMPLEMENTER), (_PROVIDER_ONE, Role.REVIEWER)),
+)
+def test_provider_payloads_accept_registered_provider_and_agent_role_locally(
+    make_payload, provider: str, role: Role,
+) -> None:
+    assert make_payload(provider, role).provider == provider
+
+
+def test_occupancy_patch_changes_payload_budget_and_binary_remedy_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        role_occupancy, "current_pre_toml_occupancy",
+        lambda: {
+            AgentSlot.IMPLEMENTER: _PROVIDER_TWO,
+            AgentSlot.REVIEWER: _PROVIDER_ONE,
+            AgentSlot.FINAL_REVIEWER: _PROVIDER_ONE,
+        },
+    )
+    assert current_pre_toml_occupancy()[AgentSlot.IMPLEMENTER] == _PROVIDER_TWO
+    assert dict(PROVIDER_ROLES) == {
+        _PROVIDER_TWO: "implementer", _PROVIDER_ONE: "reviewer",
+    }
+    assert "implementer_implementation" in PROVIDER_OPERATIONS[_PROVIDER_TWO]
+    assert "reviewer_final_review" in PROVIDER_OPERATIONS[_PROVIDER_ONE]
+    assert (_PROVIDER_TWO, "implementer", "implementer_implementation") in {
+        rule.key for rule in default_provider_input_budget_policy().rules
+    }
+    for make_payload in (_measurement_for_pair, _attempt_for_pair):
+        assert make_payload(_PROVIDER_TWO, Role.IMPLEMENTER).provider == _PROVIDER_TWO
+        assert make_payload(_PROVIDER_ONE, Role.IMPLEMENTER).provider == _PROVIDER_ONE
+    assert _preflight_for_pair(_PROVIDER_ONE, Role.REVIEWER).provider == _PROVIDER_ONE
+    assert _preflight_for_pair(_PROVIDER_TWO, Role.REVIEWER).provider == _PROVIDER_TWO
+    assert "--implementer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
+    assert "RUN_TASK_IMPLEMENTER_BINARY" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
+    assert "--reviewer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_ONE))
+    unknown = _binary_remedy(SimpleNamespace(name="unknown-provider"))
+    assert "no role is assigned" in unknown
+    assert "--unknown-provider-binary" not in unknown
 
 
 DIGEST = "a" * 64
 CREATED_AT = "2026-08-18T10:30:00+00:00"
-CODEX_REQUEST_ID = "native-codex-request-" + "b" * 64
+CODEX_REQUEST_ID = "native-implementer-request-" + "b" * 64
 CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
 PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
     "provider diagnostic"
@@ -111,7 +198,7 @@ def test_post_merge_side_effect_rejects_invalid_digest_and_accepts_legacy() -> N
 @pytest.mark.parametrize(
     ("generation_fields", "missing_field"),
     (
-        ({"predecessor_finding_ref": "C-01"}, "evidence_anchor_sha256"),
+        ({"predecessor_finding_ref": "R-01"}, "evidence_anchor_sha256"),
         ({"evidence_anchor_sha256": DIGEST}, "predecessor_finding_ref"),
     ),
 )
@@ -121,7 +208,7 @@ def test_final_review_finding_generation_pair_diagnostic_is_complete(
 ) -> None:
     with pytest.raises(ArtifactValidationError) as raised:
         FinalReviewFindingPayload(
-            finding_id="C-02",
+            finding_id="R-02",
             severity=FindingSeverity.FINDING,
             summary="Rediscovered defect",
             acceptance_test="The generation identity is complete.",
@@ -137,17 +224,17 @@ def test_final_review_finding_generation_pair_diagnostic_is_complete(
 
 def test_final_review_finding_generation_pair_accepts_both_or_neither() -> None:
     absent = FinalReviewFindingPayload(
-        finding_id="C-02",
+        finding_id="R-02",
         severity=FindingSeverity.FINDING,
         summary="New defect",
         acceptance_test="The defect is fixed.",
     )
     complete = FinalReviewFindingPayload(
-        finding_id="C-02",
+        finding_id="R-02",
         severity=FindingSeverity.FINDING,
         summary="Rediscovered defect",
         acceptance_test="The generation identity is complete.",
-        predecessor_finding_ref="C-01",
+        predecessor_finding_ref="R-01",
         evidence_anchor_sha256=DIGEST,
     )
 
@@ -166,10 +253,9 @@ def test_final_review_finding_generation_pair_accepts_both_or_neither() -> None:
 def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
     technical_fields: dict[str, object],
 ) -> None:
-    measurement = ProviderInputMeasurementPayload(
-        Role.CODEX,
-        Role.CODEX,
-        "codex_final_review",
+    measurement = ProviderInputMeasurementPayload("codex",
+        Role.IMPLEMENTER,
+        "implementer_implementation",
         "work-01",
         DIGEST,
         "b" * 64,
@@ -202,28 +288,73 @@ def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
 
 
 def test_run_profile_record_fields_are_role_keyed() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
 
-    assert asdict(profile) == {
-        "implementer": {"model": "implementer-model", "effort": "medium"},
-        "reviewer": {"model": "reviewer-model", "effort": "high"},
-        "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
-        "merge_completed_branch": True,
-        "base_branch": None,
-        "archive_run_directory": None,
-        "post_merge_hook_enabled": True,
-    }
+    payload = _record(profile).to_dict()["payload"]
+    assert set(payload) >= {"implementer", "reviewer", "final_reviewer", "orchestrator_code_version"}
+    assert payload["implementer"]["model"] == "implementer-model"
+    assert payload["reviewer"]["effort"] == "high"
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        assert payload[slot]["binary_identity"]["kind"] == "dry_run"
+        assert len(payload[slot]["binary_identity_sha256"]) == 64
     assert not {"codex", "claude"} & set(asdict(profile))
 
 
+def test_full_slot_profiles_roundtrip_with_certificate_and_final_override() -> None:
+    impl = bound_role_profile("gpt-6-sol", "high", provider="codex", binary="/opt/codex", manufacturer="openai", capability_sha256="a" * 64, transport_sha256="b" * 64, rights_sha256="c" * 64, policy_sha256="d" * 64, certification_sha256="e" * 64)
+    review = bound_role_profile("opus", "high", provider="claude", binary="/opt/claude", manufacturer="anthropic", max_budget_usd=5.0, certification_sha256="f" * 64)
+    final = replace(review, model="sonnet", max_budget_usd=10.0)
+    payload = bound_run_profile(impl, review, final_reviewer=final)
+    record = _record(payload)
+    assert ArtifactRecord.from_dict(record.to_dict()).payload == payload
+    assert record.to_dict()["payload"]["final_reviewer"]["max_budget_usd"] == 10.0
+
+
+@pytest.mark.parametrize("slot", ("implementer", "reviewer", "final_reviewer"))
+@pytest.mark.parametrize("field", (
+    "provider", "binary", "timeout_seconds", "manufacturer",
+    "capability_sha256", "transport_sha256", "rights_sha256",
+    "policy_sha256", "certification_sha256", "binary_identity",
+    "binary_identity_sha256",
+))
+@pytest.mark.parametrize("replacement", ("missing", None))
+def test_run_profile_rejects_missing_or_null_binding_fields(
+    slot: str, field: str, replacement: object,
+) -> None:
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high"),
+        bound_role_profile("reviewer-model", "high"),
+    )
+    document = _record(profile).to_dict()
+    if replacement == "missing":
+        document["payload"][slot].pop(field)
+    else:
+        document["payload"][slot][field] = None
+    with pytest.raises(ArtifactValidationError):
+        ArtifactRecord.from_dict(document)
+
+
+def test_run_profile_requires_explicit_final_and_allows_null_usd_and_zero_timeout() -> None:
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high", timeout_seconds=0),
+        bound_role_profile("reviewer-model", "high", max_budget_usd=None),
+    )
+    document = _record(profile).to_dict()
+    assert document["payload"]["implementer"]["timeout_seconds"] == 0
+    assert document["payload"]["reviewer"]["max_budget_usd"] is None
+    assert ArtifactRecord.from_dict(document).payload == profile
+    document["payload"].pop("final_reviewer")
+    with pytest.raises(ArtifactValidationError):
+        ArtifactRecord.from_dict(document)
+
+
 def test_run_profile_archive_pattern_wire_compatibility() -> None:
-    legacy = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    legacy = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
     legacy_document = _record(legacy).to_dict()
     assert "archive_run_directory" not in legacy_document["payload"]
@@ -240,9 +371,9 @@ def test_run_profile_archive_pattern_wire_compatibility() -> None:
 
 
 def test_pre_hook_run_profile_keeps_its_original_wire_shape() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
         post_merge_hook_enabled=False,
     )
     document = _record(profile).to_dict()
@@ -259,13 +390,28 @@ def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION,
         )
+
+
+def test_foreign_reducer_document_reports_found_and_installed_versions() -> None:
+    document = _record(bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
+    )).to_dict()
+    document["payload"]["reducer_version"] = "foreign-reducer"
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        validate_artifact_document(document)
+
+    assert "foreign-reducer" in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+    assert "matching older orchestrator release" in str(raised.value)
 
 
 def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed() -> None:
@@ -275,11 +421,11 @@ def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed()
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION
             ),
@@ -293,11 +439,11 @@ def test_pre_scope_extension_reducer_is_named_and_rejected_fail_closed() -> None
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_SCOPE_EXTENSION_REDUCER_VERSION,
         )
 
@@ -309,11 +455,11 @@ def test_pre_family_from_entry_reducer_is_named_and_rejected_fail_closed() -> No
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_FAMILY_FROM_ENTRY_REDUCER_VERSION,
         )
 
@@ -325,11 +471,11 @@ def test_pre_target_finding_lifecycle_reducer_is_named_and_rejected_fail_closed(
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_FINDING_LIFECYCLE_REDUCER_VERSION
             ),
@@ -343,11 +489,11 @@ def test_pre_target_routing_removal_reducer_is_named_and_rejected_fail_closed() 
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_ROUTING_REMOVAL_REDUCER_VERSION
             ),
@@ -361,11 +507,11 @@ def test_pre_target_acceptance_removal_reducer_is_named_and_rejected_fail_closed
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
             reducer_version=(
                 artifact_models.PRE_TARGET_ACCEPTANCE_REMOVAL_REDUCER_VERSION
             ),
@@ -397,9 +543,9 @@ def test_scope_extension_record_roundtrips_paths_categories_and_reason() -> None
 
 def test_finding_opening_roundtrips_record_bound_affected_paths() -> None:
     payload = FindingTransitionPayload(
-        finding_id="C-01",
-        reporter=Role.CLAUDE,
-        actor=Role.CLAUDE,
+        finding_id="R-01",
+        reporter=Role.REVIEWER,
+        actor=Role.REVIEWER,
         action="opened",
         severity=FindingSeverity.BLOCKER,
         finding_status="open",
@@ -467,9 +613,9 @@ def test_legacy_plan_record_omits_empty_acceptance_criteria() -> None:
 
 
 def test_run_profile_without_orchestrator_code_version_is_rejected() -> None:
-    profile = RunProfilePayload(
-        RoleProfilePayload("implementer-model", "medium"),
-        RoleProfilePayload("reviewer-model", "high"),
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "medium"),
+        bound_role_profile("reviewer-model", "high"),
     )
     document = _record(profile).to_dict()
     document["payload"].pop("orchestrator_code_version")
@@ -484,11 +630,11 @@ def _agent_result(
     test_files: tuple[str, ...] = (),
 ) -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         outcome,
         test_files,
-        "native-codex-v2",
+        "native-codex-v3",
         CODEX_REQUEST_ID,
         "c" * 64,
     )
@@ -501,12 +647,12 @@ def _review(
     evidence: str | None = "contracts checked",
 ) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         verdict,
         finding_ids,
         evidence,
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         CLAUDE_REQUEST_ID,
         "c" * 64,
     )
@@ -534,12 +680,12 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "IMPLEMENT",
         "docs/internal/task-audit.md",
     ),
-    RunProfilePayload(
-        RoleProfilePayload("gpt-5.6-sol", "max"),
-        RoleProfilePayload("opus", "high"),
+    bound_run_profile(
+        bound_role_profile("gpt-5.6-sol", "max"),
+        bound_role_profile("opus", "high"),
     ),
     WorkflowTransitionPayload(
-        "1", "in_progress", "2", "codex_implementation", "in_progress"
+        "1", "in_progress", "2", "implementer_implementation", "in_progress"
     ),
     WorkflowPolicyPayload("2", 1, 4),
     SliceBoundaryPayload(
@@ -551,11 +697,11 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     TaskPayload("feature/records", ("src/a.py",), DIGEST),
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),
-    CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("C-01",)),
+    CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("R-01",)),
     _agent_result(test_files=("tests/test_a.py",)),
-    DiagnosticPayload(Role.CLAUDE, "work-01", 1, DIGEST, "malformed verdict"),
+    DiagnosticPayload(Role.REVIEWER, "work-01", 1, DIGEST, "malformed verdict"),
     _review(),
-    FindingTransitionPayload("C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.BLOCKER, "open", "broken"),
+    FindingTransitionPayload("R-01", Role.REVIEWER, Role.REVIEWER, "opened", FindingSeverity.BLOCKER, "open", "broken"),
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload(
         (ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),),
@@ -571,42 +717,39 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "test approval required",
         DIGEST,
         ("tests/test_gate.py",),
-        "claude_slice_review",
+        "reviewer_slice_review",
         DIGEST,
         ("tests/test_gate.py",),
     ),
     GateDecisionPayload(
         "work-01", "gate-record-01", ("tests/test_gate.py",),
-        "claude_slice_review",
+        "reviewer_slice_review",
     ),
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
     InvocationFailurePayload(
-        "invocation-01", "run-01:work-01:claude_slice_review:claude",
-        Role.CLAUDE, "network", "transient", "AGENT-INVOCATION",
+        "invocation-01", "run-01:work-01:reviewer_slice_review:claude",
+        Role.REVIEWER, "network", "transient", "AGENT-INVOCATION",
         PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES,
         TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES,
         "2026-08-18T11:30:00+00:00", "2026-08-18T11:30:00+00:00",
-        "claude_slice_review", "1", "work-01", 3, None,
+        "reviewer_slice_review", "1", "work-01", 3, None,
         None, None, None, "2026-08-18T11:30:05+00:00", 0, 5, 1, True,
         DIGEST,
     ),
-    QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
-    TransientRetryPayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:05Z", 1),
+    QuotaPausePayload(Role.REVIEWER, DIGEST, "2026-08-18T11:30:00Z"),
+    TransientRetryPayload(Role.REVIEWER, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
-    ProviderInputMeasurementPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+    ProviderInputMeasurementPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01", DIGEST, "b" * 64,
         "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
     ),
-    ProviderAttemptPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+    ProviderAttemptPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01",
         "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
         "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None,
         ProviderUsagePayload(input_tokens=0, output_tokens=7, turns=1),
     ),
-    FinalReviewPreflightPayload(
-        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+    FinalReviewPreflightPayload("claude", Role.REVIEWER, "reviewer_final_review", "work-01", DIGEST, "b" * 64,
         "measurement-01", "passed", None, None, (), (), None,
     ),
 ])
@@ -628,7 +771,7 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
 
 def test_gate_decision_optional_invocation_binding_is_backward_compatible() -> None:
     historical = GateDecisionPayload(
-        "work-01", "gate-record-01", ("src/runtime.py",), "codex_implementation"
+        "work-01", "gate-record-01", ("src/runtime.py",), "implementer_implementation"
     )
     bound = replace(historical, invocation_id="timeout-invocation-17")
 
@@ -667,8 +810,8 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
     marker, digest, byte_count = technical_text_evidence(raw)
     payload = InvocationFailurePayload(
         invocation_id="invocation-process-diagnostic",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
+        role=Role.REVIEWER,
         failure_kind="process",
         failure_class="transient",
         diagnostic_code="AGENT-PROCESS",
@@ -680,7 +823,7 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
         technical_text_bytes=byte_count,
         received_at="2026-09-01T18:30:00+00:00",
         decision_at_utc="2026-09-01T18:30:01+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -725,8 +868,8 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     marker, digest, byte_count = technical_text_evidence("schema-invalid")
     payload = InvocationFailurePayload(
         invocation_id="native-review-form-output",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
+        role=Role.REVIEWER,
         failure_kind="output",
         failure_class="transient",
         diagnostic_code="NATIVE-REVIEW-FORM",
@@ -738,7 +881,7 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
         technical_text_bytes=byte_count,
         received_at="2026-09-07T20:24:00+00:00",
         decision_at_utc="2026-09-07T20:24:00+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -770,16 +913,16 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     with pytest.raises(ArtifactValidationError):
         replace(payload, diagnostic_code="AGENT-OUTPUT")
     with pytest.raises(ArtifactValidationError):
-        replace(payload, role=Role.CODEX, step="codex_implementation")
+        replace(payload, role=Role.IMPLEMENTER, step="implementer_implementation")
 
     codex_diagnostic = OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID.text
     codex = replace(
         payload,
         invocation_id="native-codex-form-output",
-        idempotency_key="run-01:work-01:codex_implementation:codex",
-        role=Role.CODEX,
+        idempotency_key="run-01:work-01:implementer_implementation:codex",
+        role=Role.IMPLEMENTER,
         diagnostic_code="NATIVE-IMPLEMENTER-FORM",
-        step="codex_implementation",
+        step="implementer_implementation",
         orchestrator_diagnostic=codex_diagnostic,
         native_review_rejection=None,
         native_review_retry_round=None,
@@ -802,7 +945,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
             "decision": "approved",
             "status_changes": [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "status": "CLOSED",
                     "closure": {"kind": "fixed"},
                     "rationale": "provider rationale is discarded",
@@ -813,8 +956,8 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
     assert shape is not None
     payload = InvocationFailurePayload(
         invocation_id="native-review-terminal-output",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
-        role=Role.CLAUDE,
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
+        role=Role.REVIEWER,
         failure_kind="output",
         failure_class="resumable_halt",
         diagnostic_code="NATIVE-REVIEW-FORM",
@@ -826,7 +969,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
         technical_text_bytes=byte_count,
         received_at="2026-09-21T20:24:00+00:00",
         decision_at_utc="2026-09-21T20:24:00+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="4",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -881,8 +1024,8 @@ def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> 
     marker, digest, byte_count = technical_text_evidence(raw)
     payload = InvocationFailurePayload(
         invocation_id="invocation-readable-diagnostic",
-        idempotency_key="run-01:work-01:codex_plan:codex",
-        role=Role.CODEX,
+        idempotency_key="run-01:work-01:implementer_plan:codex",
+        role=Role.IMPLEMENTER,
         failure_kind="output",
         failure_class="resumable_halt",
         diagnostic_code="NATIVE-IMPLEMENTER-CONTRACT",
@@ -894,7 +1037,7 @@ def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> 
         technical_text_bytes=byte_count,
         received_at="2026-09-05T22:13:08+00:00",
         decision_at_utc="2026-09-05T22:13:09+00:00",
-        step="codex_plan",
+        step="implementer_plan",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -946,14 +1089,14 @@ def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:
         )
 
 
-def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() -> None:
+def test_native_implementer_agent_result_roundtrips_with_closed_transport_binding() -> None:
     payload = AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         "work-01",
         "ready",
-        ("tests/test_native_codex_contract.py",),
-        transport_schema="native-codex-v2",
-        request_id="native-codex-request-" + "b" * 64,
+        ("tests/test_native_implementer_contract.py",),
+        transport_schema="native-codex-v3",
+        request_id="native-implementer-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
     record = _record(payload)
@@ -963,23 +1106,23 @@ def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() ->
     assert ArtifactRecord.from_dict(document) == record
 
 
-def test_native_codex_agent_result_rejects_partial_or_foreign_bindings() -> None:
+def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -> None:
     payload = AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         "work-01",
         "ready",
         (),
-        transport_schema="native-codex-v2",
-        request_id="native-codex-request-" + "b" * 64,
+        transport_schema="native-codex-v3",
+        request_id="native-implementer-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
 
     with pytest.raises(ArtifactValidationError, match="response_sha256"):
         replace(payload, response_sha256=None)
-    with pytest.raises(ArtifactValidationError, match="role=codex"):
-        replace(payload, role=Role.CLAUDE)
+    with pytest.raises(ArtifactValidationError, match="role=implementer"):
+        replace(payload, role=Role.REVIEWER)
     with pytest.raises(ArtifactValidationError, match="request_id"):
-        replace(payload, request_id="native-codex-request-invalid")
+        replace(payload, request_id="native-implementer-request-invalid")
 
 
 def test_schema_is_bundled_and_self_contained() -> None:
@@ -1042,7 +1185,7 @@ def _references(value):  # type: ignore[no-untyped-def]
 def test_closed_schema_rejects_unknown_missing_or_inconsistent_fields(mutation) -> None:  # type: ignore[no-untyped-def]
     raw = _record(TaskPayload("feature/records", ("src/a.py",), DIGEST)).to_dict()
     mutation(raw)
-    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+    with pytest.raises(ArtifactValidationError, match="schema validation failed|UNSUPPORTED-PROTOCOL"):
         validate_artifact_document(raw)
 
 
@@ -1078,16 +1221,16 @@ def test_stable_id_binds_run_type_logical_identity_and_positive_revision() -> No
 
 def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> None:
     with pytest.raises(ArtifactValidationError, match="reporting reviewer"):
-        FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("R-01", Role.REVIEWER, Role.IMPLEMENTER, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
     with pytest.raises(ArtifactValidationError, match="cannot close"):
-        FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("R-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
 
 def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     escalation = FindingTransitionPayload(
-        "C-01",
-        Role.CLAUDE,
-        Role.CLAUDE,
+        "R-01",
+        Role.REVIEWER,
+        Role.REVIEWER,
         "escalated",
         FindingSeverity.BLOCKER,
         "open",
@@ -1096,7 +1239,7 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     assert ArtifactRecord.from_dict(_record(escalation).to_dict()).payload == escalation
 
     for mutation in (
-        lambda: replace(escalation, actor=Role.CODEX),
+        lambda: replace(escalation, actor=Role.IMPLEMENTER),
         lambda: replace(escalation, severity=FindingSeverity.FINDING),
         lambda: replace(escalation, finding_status="closed"),
     ):
@@ -1109,8 +1252,8 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     (
         lambda: FindingTransitionPayload(
             "A-01",  # retirement-negative-control
-            Role.CLAUDE,
-            Role.CLAUDE,
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -1130,7 +1273,7 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     ),
 )
 def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: ignore[no-untyped-def]
-    with pytest.raises(ArtifactValidationError, match=r"canonical C-\* finding ID"):
+    with pytest.raises(ArtifactValidationError, match=r"canonical R-\* finding ID"):
         factory()
 
 
@@ -1140,9 +1283,9 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
         (
             _record(
                 FindingTransitionPayload(
-                    "C-01",
-                    Role.CLAUDE,
-                    Role.CLAUDE,
+                    "R-01",
+                    Role.REVIEWER,
+                    Role.REVIEWER,
                     "opened",
                     FindingSeverity.BLOCKER,
                     "open",
@@ -1155,7 +1298,7 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
             _record(
                 _review(
                     verdict="denied",
-                    finding_ids=("C-01",),
+                    finding_ids=("R-01",),
                     evidence="valid namespace",
                 )
             ),
@@ -1167,7 +1310,7 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
                     "01",
                     2,
                     ("src/a.py",),
-                    ("C-01",),
+                    ("R-01",),
                 )
             ),
             "finding_ids",
@@ -1194,9 +1337,9 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
         (
             _record(
                 FindingTransitionPayload(
-                    "C-01",
-                    Role.CLAUDE,
-                    Role.CLAUDE,
+                    "R-01",
+                    Role.REVIEWER,
+                    Role.REVIEWER,
                     "opened",
                     FindingSeverity.BLOCKER,
                     "open",
@@ -1209,7 +1352,7 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
             _record(
                 _review(
                     verdict="denied",
-                    finding_ids=("C-01",),
+                    finding_ids=("R-01",),
                     evidence="valid namespace",
                 )
             ),
@@ -1221,7 +1364,7 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
                     "01",
                     2,
                     ("src/a.py",),
-                    ("C-01",),
+                    ("R-01",),
                 )
             ),
             "finding_ids",
@@ -1233,7 +1376,7 @@ def test_v2_schema_and_deserializer_reject_finding_id_with_trailing_newline(
     field: str,
 ) -> None:
     raw = record.to_dict()
-    raw["payload"][field] = "C-01\n" if field == "finding_id" else ["C-01\n"]
+    raw["payload"][field] = "R-01\n" if field == "finding_id" else ["R-01\n"]
 
     with pytest.raises(ArtifactValidationError, match="schema validation failed"):
         validate_artifact_document(raw)
@@ -1244,9 +1387,9 @@ def test_v2_schema_and_deserializer_reject_finding_id_with_trailing_newline(
 def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optional() -> None:
     structured = _record(
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -1262,9 +1405,9 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
 
     historical = _record(
         FindingTransitionPayload(
-            "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            "R-01",
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -1284,10 +1427,10 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
 
 
 def test_work_unit_open_findings_are_sorted_and_roundtrip() -> None:
-    payload = WorkUnitPayload("1", 1, ("src/a.py",), ("C-62", "C-101"))
+    payload = WorkUnitPayload("1", 1, ("src/a.py",), ("R-62", "R-101"))
     assert ArtifactRecord.from_dict(_record(payload).to_dict()).payload == payload
     with pytest.raises(ArtifactValidationError, match="must be sorted"):
-        replace(payload, open_finding_ids=("C-101", "C-62"))
+        replace(payload, open_finding_ids=("R-101", "R-62"))
 
 
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:
@@ -1302,12 +1445,12 @@ def test_approval_requires_fingerprint_and_positive_evidence() -> None:
 
 def test_native_review_transport_fields_roundtrip_together() -> None:
     payload = ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         "work-01",
         "approved",
         (),
         "checked",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         f"native-review-request-{'b' * 64}",
         "c" * 64,
     )
@@ -1333,12 +1476,12 @@ def test_pre_s4a_review_evidence_is_read_as_opaque_legacy_data() -> None:
 def test_review_approval_requires_one_evidence_form_in_schema_and_domain() -> None:
     with pytest.raises(ArtifactValidationError, match="requires findings or review evidence"):
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "work-01",
             "approved",
             (),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             CLAUDE_REQUEST_ID,
             "c" * 64,
         )
@@ -1372,8 +1515,8 @@ def test_review_schema_rejects_simultaneous_legacy_and_structured_evidence() -> 
 
 
 def test_native_review_transport_rejects_foreign_reviewer() -> None:
-    with pytest.raises(ArtifactValidationError, match="reviewer must be claude"):
-        replace(_review(), reviewer=Role.CODEX)
+    with pytest.raises(ArtifactValidationError, match="reviewer must be reviewer"):
+        replace(_review(), reviewer=Role.IMPLEMENTER)
 
 
 def test_review_record_without_native_fields_is_rejected() -> None:
@@ -1388,7 +1531,7 @@ def test_review_record_without_native_fields_is_rejected() -> None:
 @pytest.mark.parametrize(
     "native_fields",
     (
-        ("native-claude-review-v2", None, None),
+        ("native-claude-review-v3", None, None),
         (None, f"native-review-request-{'b' * 64}", None),
     ),
 )
@@ -1400,7 +1543,7 @@ def test_native_review_transport_rejects_partial_binding(
         match="unsupported|request_id",
     ):
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "work-01",
             "approved",
             (),
@@ -1417,15 +1560,13 @@ def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
 
 def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     with pytest.raises(ArtifactValidationError, match="started provider attempt"):
-        ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "started", CREATED_AT, None, None, None,
             ProviderUsagePayload(input_tokens=0),
         )
     with pytest.raises(ArtifactValidationError, match="failure_kind"):
-        ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None, None,
         )
@@ -1433,8 +1574,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
         ProviderUsagePayload(output_tokens=-1)
 
     failed = _record(
-        ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-failed", DIGEST, "measurement-failed", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             "network",
@@ -1444,11 +1584,11 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     validate_artifact_document(failed.to_dict())
     assert ArtifactRecord.from_dict(failed.to_dict()) == failed
 
+
     failed_without_usage = replace(failed.payload, usage=None)
     assert failed_without_usage.usage is None
     succeeded = _record(
-        ProviderAttemptPayload(
-            Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+        ProviderAttemptPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01",
             "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
             "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             None, ProviderUsagePayload(output_tokens=1),
@@ -1459,10 +1599,14 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
         validate_artifact_document(succeeded)
 
 
+def test_artifact_schema_accepts_swapped_attempt_occupancy() -> None:
+    attempt = _record(_attempt_for_pair("claude", Role.IMPLEMENTER))  # allowlist:provider -- transport: swapped occupancy regression
+    validate_artifact_document(attempt.to_dict())
+
+
 def test_failed_network_attempt_with_usage_roundtrips_model_and_schema() -> None:
     failed = _record(
-        ProviderAttemptPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-network", DIGEST, "measurement-network",
             "b" * 64, 1, "failed", CREATED_AT,
             "2026-08-18T10:30:01+00:00", 1.0, "network",

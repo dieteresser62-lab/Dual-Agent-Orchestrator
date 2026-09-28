@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
+
 from agent_runtime import (
     AgentInvocationError,
     is_structured_output_retry_exhaustion,
@@ -24,6 +25,7 @@ from artifact_models import (
     technical_text_evidence,
 )
 from contracts import AgentRole
+from agent_config import current_provider_for_role
 from orchestrator_diagnostics import (
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
     STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
@@ -32,6 +34,7 @@ from workflow_state import (
     AgentFailureKind,
     InvocationFailureRecord,
     WorkflowState,
+    WorkflowStep,
     WorkUnitKind,
     is_native_implementer_output_retry,
     is_native_review_output_retry,
@@ -660,7 +663,15 @@ class WorkflowFailureRecording:
         disposition_limit_failure: bool = False,
         native_response_retry_allowed: bool = True,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
-        if error.agent_key != role.value:
+        slot = (
+            "implementer" if role is AgentRole.IMPLEMENTER else
+            "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else
+            "reviewer"
+        )
+        binding = getattr(state, "protocol_binding", None)
+        profile = getattr(binding, f"{slot}_profile", None)
+        expected_provider = getattr(profile, "provider", None) or current_provider_for_role(role.value)
+        if error.agent_key != expected_provider:
             raise self._dependencies.execution_error(
                 "agent failure role differs from the required workflow role"
             )

@@ -13,24 +13,24 @@ from typing import Any
 
 from contracts import (
     ApprovalMarker,
-    CodexStepContract as ImplementerStepContract,
+    ImplementerStepContract,
     FindingRecord,
     StepContract,
 )
 from finding_order import sorted_finding_ids
 from finding_reducer import project_open_set
-from native_codex_contract import (
-    NativeCodexContext,
-    NativeCodexErrorCode as NativeImplementerErrorCode,  # allowlist:provider -- typed implementer rejection
-    NativeCodexRequestKind,
-    native_codex_retry_guidance as native_implementer_retry_guidance,  # allowlist:provider -- typed implementer guidance
+from native_implementer_contract import (
+    NativeImplementerContext,
+    NativeImplementerErrorCode,
+    NativeImplementerRequestKind,
+    native_implementer_retry_guidance,
 )
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestBundle,
-    NativeCodexRequestSpec,
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestBundle,
+    NativeImplementerRequestSpec,
     NativeImplementerRetryFeedback,
-    build_native_codex_request,
+    build_native_implementer_request,
 )
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
@@ -47,13 +47,15 @@ from native_review_request import (
     PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
     build_native_review_request,
 )
-from prompts import NATIVE_CODEX_SYSTEM_POLICY
+from agent_roles import AgentRoleName
+from role_binding import binding_for_role
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from provider_input_efficiency import (
     ProviderInputEfficiencyError,
     build_correction_execution_package,
     build_slice_execution_package,
 )
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 from review_packets import (
     ReviewPacket,
     ReviewPacketError,
@@ -62,6 +64,7 @@ from review_packets import (
 from slice_exit import slice_commit_decision_finding_ids
 from workflow_state import (
     WorkflowState,
+    WorkflowStep,
     WorkUnitKind,
     project_implementer_return_policy,
 )
@@ -86,21 +89,21 @@ FINDING_SIGNATURE_REVIEW_CRITERION = (
 )
 
 
-def native_codex_request(
+def native_implementer_request(
     *,
     state: WorkflowState,
     context: Any,
     history: Any,
     contract: ImplementerStepContract,
-    request_kind: NativeCodexRequestKind,
+    request_kind: NativeImplementerRequestKind,
     execution_error: type[RuntimeError],
     work_context: str | None = None,
     additional_authorized_paths: tuple[str, ...] = (),
     current_slice_diff: str | None = None,
     correction_fingerprint: str | None = None,
     correction_findings: tuple[FindingRecord, ...] | None = None,
-) -> NativeCodexRequestBundle:
-    """Build one Codex request exclusively from orchestrator-owned values."""
+) -> NativeImplementerRequestBundle:
+    """Build one implementer request exclusively from orchestrator-owned values."""
     if state.current_work_unit.kind is WorkUnitKind.PLAN:
         current_fingerprint = state.task_digest
         base_commit = state.branch_base
@@ -108,7 +111,7 @@ def native_codex_request(
     else:
         current_fingerprint = (
             correction_fingerprint
-            if request_kind is NativeCodexRequestKind.CORRECTION
+            if request_kind is NativeImplementerRequestKind.CORRECTION
             else state.current_slice.start_fingerprint
         )
         base_commit = state.current_slice.start_commit or state.branch_base
@@ -133,7 +136,7 @@ def native_codex_request(
     )
     native_findings = history.findings
     correction_goal: str | None = None
-    if request_kind is NativeCodexRequestKind.CORRECTION:
+    if request_kind is NativeImplementerRequestKind.CORRECTION:
         if correction_findings is None:
             raise execution_error(
                 "native correction request lacks record-backed findings"
@@ -170,7 +173,7 @@ def native_codex_request(
             "allowlist even when absent from the original plan. Their presence is "
             "not an UNEXPECTED-PATH condition."
         )
-    native_context = NativeCodexContext(
+    native_context = NativeImplementerContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
         operation=state.current_step.value,
@@ -183,14 +186,14 @@ def native_codex_request(
         running_product_declared=context.validation_matrix.product_command is not None,
     )
     evidence = [
-        NativeCodexEvidenceInput(
-            "native-policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY
+        NativeImplementerEvidenceInput(
+            "native-policy", "system_policy", binding_for_role(AgentRoleName.IMPLEMENTER).policy
         )
     ]
     request_assignment = context.assignment
     try:
         if (
-            request_kind is NativeCodexRequestKind.IMPLEMENTATION
+            request_kind is NativeImplementerRequestKind.IMPLEMENTATION
             and context.approved_plan_text is not None
         ):
             if context.work_plan_path is None:
@@ -222,7 +225,7 @@ def native_codex_request(
                     "slice execution package differs from the native request open finding set"
                 )
             evidence.append(
-                NativeCodexEvidenceInput(
+                NativeImplementerEvidenceInput(
                     "slice-execution-package",
                     "slice_execution_package",
                     package.canonical_json,
@@ -230,7 +233,7 @@ def native_codex_request(
                 )
             )
             request_assignment = "Implement only the bound Slice execution package."
-        elif request_kind is NativeCodexRequestKind.CORRECTION:
+        elif request_kind is NativeImplementerRequestKind.CORRECTION:
             if current_slice_diff is None or correction_fingerprint is None:
                 raise execution_error(
                     "native correction request lacks its current delta binding"
@@ -242,7 +245,7 @@ def native_codex_request(
                 current_delta=current_slice_diff,
             )
             evidence.append(
-                NativeCodexEvidenceInput(
+                NativeImplementerEvidenceInput(
                     "correction-execution-package",
                     "correction_execution_package",
                     package.canonical_json,
@@ -257,8 +260,8 @@ def native_codex_request(
             f"native Codex execution package is invalid: {exc}"
         ) from exc
     retry_feedback = _native_implementer_retry_feedback(state, contract)
-    return build_native_codex_request(
-        NativeCodexRequestSpec(
+    return build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=native_context,
             target_branch=context.current_branch or state.branch,
             base_commit=base_commit,
@@ -267,7 +270,9 @@ def native_codex_request(
             work_context=effective_work_context,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
-        )
+        ),
+        profile=(state.protocol_binding.implementer_profile.provider
+                 if state.protocol_binding is not None else OPENAI_PROVIDER),
     )
 
 
@@ -610,5 +615,9 @@ def native_review_request(
             acceptance_criteria=acceptance_criteria,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
-        )
+        ),
+        profile=(state.protocol_binding.final_reviewer_profile.provider
+                 if state.protocol_binding is not None and state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
+                 else state.protocol_binding.reviewer_profile.provider
+                 if state.protocol_binding is not None else ANTHROPIC_PROVIDER),
     )

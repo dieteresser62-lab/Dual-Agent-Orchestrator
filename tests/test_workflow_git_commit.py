@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import ast
 from dataclasses import replace
 from pathlib import Path
@@ -182,9 +184,9 @@ def _bridge(root: Path, run_id: str) -> ArtifactBridge:
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -355,7 +357,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         task_digest=DIGEST,
         task_scope_patterns=(changed_path,),
         target_branch="feature/b30-commit-bracket",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,
         scope_paths=(changed_path,),
@@ -404,7 +406,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         output_digest=stored_attestation.payload.output_digest,
     )
     request_bound_review = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -424,22 +426,22 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         review_payload(
             request_bound_review,
             work_unit_id=state.current_work_unit_id,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "c" * 64,
             response_sha256="d" * 64,
         ),
         logical_id="review-claude-b30",
         idempotency_key="review:b30",
         fingerprint_sha256=changes.fingerprint,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     carried_finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A finding outside the compact request remains in the ledger.",
         acceptance_test="The request-bound review still authorizes the commit.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Closed before this compact review.",
     )
     complete_review = replace(
@@ -450,7 +452,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         slice_id=1,
         fingerprint=changes.fingerprint,
         attestation=attestation,
-        claude_review=complete_review,
+        reviewer_review=complete_review,
         findings=(carried_finding,),
     )
 

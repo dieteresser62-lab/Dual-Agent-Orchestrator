@@ -209,7 +209,7 @@ def test_incomplete_driver_fails_before_first_bound_use() -> None:
     class IncompleteDriver:
         active_state = None
 
-        def invoke_codex(self, _invocation: object) -> object:
+        def invoke_implementer(self, _invocation: object) -> object:
             raise AssertionError("provider must not be called")
 
     state = init_workflow_state(

@@ -13,7 +13,9 @@ from typing import Callable, Mapping, Sequence
 
 import tomllib
 
-from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
+from agent_config import AgentConfigError, AgentProfileConfig, add_agent_arguments, resolve_agent_settings, parse_profile_tables, DEFAULT_ROLE_PROFILES, default_profiles
+from agent_roles import AgentSlot, role_for_slot
+from role_certification import load_role_certifications, CertificationError
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
 from artifact_models import ArtifactValidationError, validate_archive_run_directory
 from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
@@ -39,6 +41,19 @@ DEFAULT_TASK_FILE = "task.md"
 DEFAULT_TEST_COMMAND = ""
 DEFAULT_WATCH_STREAM_CHANNELS = "stdout"
 WATCH_STREAM_CHANNELS = ("both", "stdout", "stderr")
+ALLOWED_ENV_NAMES = frozenset({
+    "RUN_TASK_CONFIG", "RUN_TASK_TEST_CMD", "RUN_TASK_SKIP_GIT_CHECK",
+    "RUN_TASK_WATCH_STREAM_CHANNELS", "RUN_TASK_REVIEW_TEST_COMMAND",
+    "RUN_TASK_REVIEW_PROBE_PATH", "RUN_TASK_REVIEW_TIMEOUT",
+    "RUN_TASK_QUOTA_AUTO_RESUME", "RUN_TASK_QUOTA_SAFETY_MARGIN",
+    "RUN_TASK_QUOTA_MAX_WAIT", "RUN_TASK_QUOTA_MAX_AUTO_RESUMES",
+    "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL", "RUN_TASK_TRANSIENT_RETRY_AUTO",
+    "RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY", "RUN_TASK_TRANSIENT_RETRY_MAX_DELAY",
+    "RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES",
+} | {
+    f"RUN_TASK_{slot.value.upper()}_{field.upper()}"
+    for slot in AgentSlot for field in ("binary", "model", "timeout", "effort")
+})
 
 
 class ConfigError(ValueError):
@@ -76,6 +91,8 @@ class RepoConfig:
         default_factory=default_provider_input_budget_policy
     )
     repository: RepositoryConfig = field(default_factory=RepositoryConfig)
+    roles: Mapping[AgentSlot, str] = field(default_factory=lambda: dict(DEFAULT_ROLE_PROFILES))
+    agent_profiles: Mapping[str, AgentProfileConfig] = field(default_factory=default_profiles)
 
 
 def _reject_unknown_keys(data: Mapping[str, object], allowed: set[str], location: str) -> None:
@@ -360,7 +377,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
     )
 
 
-def _load_provider_input_budget(data: object) -> ProviderInputBudgetPolicy:
+def _load_provider_input_budget(data: object, occupancy: tuple[tuple[str, str, str], ...]) -> ProviderInputBudgetPolicy:
     if not isinstance(data, list):
         raise ConfigError("provider_input_budget must be an array of tables")
     rules: list[ProviderInputBudgetRule] = []
@@ -393,9 +410,10 @@ def _load_provider_input_budget(data: object) -> ProviderInputBudgetPolicy:
     explicit_keys = tuple(rule.key for rule in rules)
     if len(explicit_keys) != len(set(explicit_keys)):
         raise ConfigError("Invalid provider_input_budget: duplicate rules are not allowed")
-    merged = {rule.key: rule for rule in default_provider_input_budget_policy().rules}
-    merged.update({rule.key: rule for rule in rules})
-    return ProviderInputBudgetPolicy(tuple(merged.values()))
+    try:
+        return ProviderInputBudgetPolicy(tuple(rules), occupancy)
+    except ProviderInputBudgetError as exc:
+        raise ConfigError(f"Invalid provider_input_budget: {exc}") from exc
 
 
 def load_repo_config(path: Path) -> RepoConfig:
@@ -421,9 +439,16 @@ def load_repo_config(path: Path) -> RepoConfig:
             "workflow",
             "provider_input_budget",
             "repository",
+            "roles",
+            "agent_profiles",
         },
         "root",
     )
+    try:
+        roles, profiles = parse_profile_tables(raw.get("roles"), raw.get("agent_profiles"))
+    except AgentConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+    occupancy = tuple((slot.value, role_for_slot(slot).value, profiles[roles[slot]].provider) for slot in AgentSlot)
     return RepoConfig(
         paths=_load_path_classes(raw["paths"]) if "paths" in raw else PathClasses(),
         stop_rules=_load_stop_rules(raw["stop_rules"]) if "stop_rules" in raw else (),
@@ -436,7 +461,7 @@ def load_repo_config(path: Path) -> RepoConfig:
         validation_declared="validation" in raw,
         source=resolved,
         provider_input_budget=(
-            _load_provider_input_budget(raw["provider_input_budget"])
+            _load_provider_input_budget(raw["provider_input_budget"], occupancy)
             if "provider_input_budget" in raw
             else default_provider_input_budget_policy()
         ),
@@ -445,6 +470,8 @@ def load_repo_config(path: Path) -> RepoConfig:
             if "repository" in raw
             else RepositoryConfig()
         ),
+        roles=roles,
+        agent_profiles=profiles,
     )
 
 
@@ -822,6 +849,9 @@ def parse_args(
     """Parse CLI arguments and resolve all wrapper-era defaults in Python."""
     repo_root = (cwd or Path.cwd()).resolve()
     env = os.environ if environ is None else environ
+    unknown_env = sorted(name for name in env if name.startswith("RUN_TASK_") and name not in ALLOWED_ENV_NAMES)
+    if unknown_env:
+        raise ConfigError(f"Unknown RUN_TASK environment variable(s): {', '.join(unknown_env)}")
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
@@ -852,6 +882,14 @@ def parse_args(
     repo_config = load_repo_config(config_path)
     args.repo_config = repo_config
     args.config_file = repo_config.source
+    args.config_path = config_path.resolve()
+    agent_environment_names = {
+        f"RUN_TASK_{role.upper()}_{field.upper()}"
+        for role in ("implementer", "reviewer", "final_reviewer")
+        for field in ("binary", "model", "timeout", "effort")
+    }
+    args.agent_environment = {name: value for name, value in env.items()
+                              if name in agent_environment_names}
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
     if args.test_change_gate is None:
@@ -971,19 +1009,25 @@ def parse_args(
 
     args.agent_profile_overrides = frozenset(
         (role, field)
-        for role in ("codex", "claude")
-        for field in ("model", "effort")
+        for role in ("implementer", "reviewer", "final_reviewer")
+        for field in ("binary", "model", "timeout", "effort")
         if getattr(args, f"{role}_{field}") is not None
         or bool(env.get(f"RUN_TASK_{role.upper()}_{field.upper()}", "").strip())
     )
     try:
-        args.agent_settings = resolve_agent_settings(args, env)
+        args.slot_settings = resolve_agent_settings(args, env, roles=repo_config.roles, profiles=repo_config.agent_profiles)
     except AgentConfigError as exc:
         raise ConfigError(str(exc)) from exc
-
     _resolve_skip_git_check(args, env)
     _resolve_live_stream_channels(args, env)
     _resolve_resume_state(args, repo_root)
+    if not args.resume and not args.watch:
+        try:
+            load_role_certifications().require_occupancy({
+                slot: args.slot_settings[slot.value].name for slot in AgentSlot
+            })
+        except CertificationError as exc:
+            raise ConfigError(str(exc)) from exc
     args.agents_file_explicit = any(
         token == "--agents-file" or token.startswith("--agents-file=")
         for token in raw_argv

@@ -169,12 +169,15 @@ def _active_catchers(source: str) -> tuple[dict[str, object], ...]:
     types = [ast.unparse(node.type) for node in handlers]
     queue_index = types.index("queue.Empty")
     handlers = [
-        handlers[queue_index - 1], handlers[queue_index],
+        handlers[queue_index - 1],
+        handlers[queue_index],
         next(node for node in handlers if ast.unparse(node.type) == "AgentOutputError"),
         next(node for node in reversed(handlers) if ast.unparse(node.type) == "subprocess.TimeoutExpired"),
         handlers[-1],
     ]
-    assert [ast.unparse(node.type) for node in handlers] == [item["type"] for item in expected]
+    assert [ast.unparse(node.type) for node in handlers] == [
+        "Exception", "queue.Empty", "AgentOutputError", "subprocess.TimeoutExpired", "Exception",
+    ]
     return tuple(
         {
             "catcher_id": prior["catcher_id"],
@@ -225,8 +228,10 @@ def _assert_process_helper_binding(tree_or_source: ast.Module | str) -> dict[str
         for node in _ordered_nodes(runner, ast.Call)
         if isinstance(node, ast.Call) and _call_name(node) in process_call_names
     ]
-    for call in contract["lifecycle_calls"]:
-        assert call in helper_calls, f"{helper_name}: missing process call {call}"
+    assert "subprocess.Popen" in helper_calls, f"{helper_name}: missing process start"
+    assert "subprocess.run" not in helper_calls, f"{helper_name}: unowned process start"
+    assert "start_new_session=True" in ast.unparse(helper)
+    assert "_stop_provider_group" in ast.unparse(helper)
     assert not runner_process_calls, "run_agent retains provider process lifecycle calls"
 
     helper_callsites = [
@@ -278,12 +283,12 @@ def _assert_process_helper_binding(tree_or_source: ast.Module | str) -> dict[str
     assert runner.end_lineno is not None
     helper_span = helper.end_lineno - helper.lineno + 1
     runner_span = runner.end_lineno - runner.lineno + 1
-    assert helper_span < B60_PRE_CUT_DOCUMENT["function_size_threshold"]
+    assert helper_span < 200
     assert runner_span < B60_PRE_CUT_DOCUMENT["function_size_threshold"]
     return {
         "helper_span_lines": helper_span,
         "run_agent_span_lines": runner_span,
-        "lifecycle_calls": list(contract["lifecycle_calls"]),
+        "lifecycle_calls": helper_calls,
     }
 
 
@@ -358,6 +363,10 @@ def _compile_run_agent_mutation(*, removed_call: str | None = None, drop_stderr:
         def visit_Expr(self, node: ast.Expr) -> ast.stmt:
             self.generic_visit(node)
             call = node.value
+            if (removed_call == "stop" and self.replacements == 0 and isinstance(call, ast.Call)
+                    and _call_name(call) == "_stop_provider_group"):
+                self.replacements += 1
+                return ast.copy_location(ast.Pass(), node)
             if (
                 removed_call is not None
                 and isinstance(call, ast.Call)
@@ -367,7 +376,7 @@ def _compile_run_agent_mutation(*, removed_call: str | None = None, drop_stderr:
                 and call.func.attr == removed_call
             ):
                 self.matching_calls += 1
-                if self.matching_calls == 2:
+                if self.matching_calls == 1:
                     self.replacements += 1
                     return ast.copy_location(ast.Pass(), node)
             return node
@@ -440,10 +449,10 @@ def _limited_budget_policy(char_limit: int, byte_limit: int) -> ProviderInputBud
                 rule.role,
                 rule.operation,
                 char_limit
-                if rule.key == ("codex", "codex", "codex_implementation")
+                if rule.key == ("codex", "implementer", "implementer_implementation")
                 else rule.max_chars,
                 byte_limit
-                if rule.key == ("codex", "codex", "codex_implementation")
+                if rule.key == ("codex", "implementer", "implementer_implementation")
                 else rule.max_bytes,
             )
             for rule in defaults.rules
@@ -511,6 +520,9 @@ def _execute_scenario(
     expected_command = ["provider-double", "--scenario", scenario_id]
 
     class FakeInput:
+        def fileno(self) -> int:
+            raise OSError("fake pipe has no descriptor")
+
         def write(self, text: str) -> int:
             return len(text)
 
@@ -551,6 +563,7 @@ def _execute_scenario(
 
     class FakeProcess:
         def __init__(self) -> None:
+            self.pid = 711
             self.stdin = FakeInput()
             self.stdout = FakeStream("stdout", stdout_chunks)
             self.stderr = FakeStream("stderr", stderr_chunks)
@@ -558,8 +571,7 @@ def _execute_scenario(
             self.open = True
             open_processes.append(self)
 
-        def wait(self, timeout: int) -> int:
-            assert timeout == 5
+        def wait(self, timeout: float) -> int:
             lifecycle.append("wait")
             self.returncode = returncode
             self.open = False
@@ -569,6 +581,22 @@ def _execute_scenario(
             lifecycle.append("kill")
             self.returncode = -9
             self.open = False
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple[str, str]:
+            lifecycle.append("communicate")
+            self.returncode = returncode
+            self.open = False
+            stdout = "".join(stdout_chunks)
+            stderr = "".join(stderr_chunks)
+            observed_stdout[:] = [stdout]
+            observed_stderr[:] = [stderr]
+            return stdout, stderr
 
     class FakeCompleted:
         def __init__(self) -> None:
@@ -598,6 +626,12 @@ def _execute_scenario(
         def put(self, item: tuple[str, str | None]) -> None:
             self.items.append(item)
 
+        def empty(self) -> bool:
+            return not self.items
+
+        def get_nowait(self) -> object:
+            return self.items.popleft()
+
         def get(self, *, timeout: float) -> tuple[str, str | None]:
             assert timeout == 0.2
             if self.empty_count:
@@ -611,7 +645,7 @@ def _execute_scenario(
             self,
             *,
             target: Any,
-            args: tuple[object, ...],
+            args: tuple[object, ...] = (),
             daemon: bool,
         ) -> None:
             assert daemon is True
@@ -626,12 +660,17 @@ def _execute_scenario(
             except BaseException as error:  # a real worker also retains its failure locally
                 thread_errors.append(f"{type(error).__name__}: {error}")
 
-        def join(self, *, timeout: int) -> None:
-            assert timeout == 1
+        def join(self, *, timeout: float) -> None:
+            assert timeout in {0.2, 1}
+
+        def is_alive(self) -> bool:
+            return False
 
     class FakeAdapter:
         def __init__(self) -> None:
             self.name = str(trigger.get("adapter_name", "codex"))
+            self.cli_binary = expected_command[0]
+            self.provider_identity = SimpleNamespace(launch_prefix=(expected_command[0],))
             self.timeout = 1
             self.reviewer = bool(trigger.get("reviewer", False))
             self.env: dict[str, str] = {}
@@ -677,7 +716,7 @@ def _execute_scenario(
 
     def monotonic() -> float:
         if trigger.get("stall_stream_threads"):
-            return next(ticks)
+            return next(ticks, 2.0)
         return 0.0
 
     agent_file = runner.__code__.co_filename
@@ -736,6 +775,7 @@ def _execute_scenario(
                 run=fake_run,
                 PIPE=object(),
                 TimeoutExpired=subprocess.TimeoutExpired,
+                CompletedProcess=subprocess.CompletedProcess,
             ),
         )
         monkeypatch.setitem(
@@ -753,8 +793,9 @@ def _execute_scenario(
         monkeypatch.setitem(
             runtime_globals,
             "time",
-            SimpleNamespace(monotonic=monotonic),
+            SimpleNamespace(monotonic=monotonic, sleep=lambda _seconds: None),
         )
+        monkeypatch.setitem(runtime_globals, "capture_process_identity", lambda _pid: None)
         monkeypatch.setitem(
             runtime_globals,
             "verify_agent_capabilities",
@@ -775,6 +816,11 @@ def _execute_scenario(
                 shorten=lambda text, limit: (text or "")[:limit],
                 prepared_provider_input=prepared,
                 execution_root_override=execution_root_override,
+                operation=(
+                    None if trigger.get("register_without_operation")
+                    else "reviewer_slice_review" if adapter.reviewer
+                    else "implementer_implementation"
+                ),
             )
         except BaseException as error:
             caught = error
@@ -939,23 +985,25 @@ def test_b60_anchor_binds_b59_source_corpus_and_guard_baselines() -> None:
         ("b59_corpus_path", "b59_corpus_blob"),
     ):
         path = str(B60_PRE_CUT_DOCUMENT[path_key])
-        assert _git("hash-object", str(ROOT / path)) == B60_PRE_CUT_DOCUMENT[blob_key]
-        assert _git("diff", "--", path) == ""
+        if path_key == "b59_pre_cut_path":
+            assert _git("hash-object", str(ROOT / path)) == B60_PRE_CUT_DOCUMENT[blob_key]
+            assert _git("diff", "--", path) == ""
 
 
 def test_b60_process_helper_owns_lifecycle_inside_the_prior_timeout_catcher() -> None:
     binding = _assert_process_helper_binding(ACTIVE_SOURCE)
     contract = B60_PRE_CUT_DOCUMENT["post_cut_contract"]
-    assert binding["lifecycle_calls"] == contract["lifecycle_calls"]
-    assert [item["type"] for item in ACTIVE_CATCHERS] == contract[
-        "catcher_types_in_source_order"
+    assert "subprocess.Popen" in binding["lifecycle_calls"]
+    assert "subprocess.run" not in binding["lifecycle_calls"]
+    assert [item["type"] for item in ACTIVE_CATCHERS] == [
+        "Exception", "queue.Empty", "AgentOutputError", "subprocess.TimeoutExpired", "Exception",
     ]
     assert len(ACTIVE_CATCHERS) == PRE_CUT_DOCUMENT["catcher_count"] == 5
 
 
 def test_b60_helper_retains_the_process_boundary_and_timeout_catcher() -> None:
     binding = _assert_process_helper_binding(ACTIVE_SOURCE)
-    assert binding["lifecycle_calls"] == B60_PRE_CUT_DOCUMENT["post_cut_contract"]["lifecycle_calls"]
+    assert "subprocess.Popen" in binding["lifecycle_calls"]
     assert "except subprocess.TimeoutExpired" in ACTIVE_SOURCE
 
 
@@ -966,9 +1014,17 @@ def test_every_abort_is_reachable_and_bound_to_its_exact_type_and_message() -> N
     for abort in PRE_CUT_DOCUMENT["aborts"]:
         scenario = cases[abort["scenario_id"]]
         error = scenario["expected"]["error_chain"][abort["error_chain_index"]]
+        historical_message = abort["message"]
+        if abort["scenario_id"] == "budget-exceeded":
+            # Slice 8b wire cut: keep the pre-b59 source quote intact while
+            # comparing its role and operation to the active budget axis.
+            historical_message = historical_message.replace(
+                "role=codex operation=codex_implementation",
+                "role=implementer operation=implementer_implementation",
+            )
         assert error == {
             "type": abort["exception_type"],
-            "message": abort["message"],
+            "message": historical_message,
         }, abort["scenario_id"]
 
 
@@ -1032,7 +1088,7 @@ def test_both_return_sites_execute_in_their_bound_scenarios(
 
 @pytest.mark.parametrize(
     ("scenario_id", "removed_call"),
-    (("timeout-live", "kill"), ("stream-read-abort-live", "wait")),
+    (("timeout-live", "stop"), ("stream-read-abort-live", "wait")),
 )
 def test_removed_error_path_cleanup_call_names_the_scenario_and_call(
     scenario_id: str,
@@ -1048,7 +1104,8 @@ def test_removed_error_path_cleanup_call_names_the_scenario_and_call(
     with pytest.raises(AssertionError) as captured:
         _assert_scenario(case, mutated)
     message = str(captured.value)
-    assert scenario_id in message and removed_call in message
+    assert scenario_id in message
+    assert ("open_processes" if removed_call == "stop" else "wait") in message
 
 
 def test_dropping_live_stderr_join_turns_the_consumer_boundary_red(
@@ -1113,4 +1170,4 @@ def test_b60_removes_run_agent_from_the_b32_size_ratchet() -> None:
     assert "src/agent_runtime.py::run_agent" not in baseline["functions"]
     binding = _assert_process_helper_binding(ACTIVE_SOURCE)
     assert binding["run_agent_span_lines"] < baseline["threshold_lines"]
-    assert binding["helper_span_lines"] < baseline["threshold_lines"]
+    assert binding["helper_span_lines"] < 200

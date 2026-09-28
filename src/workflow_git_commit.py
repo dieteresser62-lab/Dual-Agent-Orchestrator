@@ -393,7 +393,7 @@ class WorkflowGitCommit:
         artifact_bridge = context.artifact_bridge
         head_approval = context.head_approval
         identity, git_operation = self._prepare_git_operation(context, request)
-        review_result = request.claude_review
+        review_result = request.reviewer_review
         structured_binding, current_review_record = self._resolve_structured_binding(
             context,
             request,
@@ -434,7 +434,7 @@ class WorkflowGitCommit:
                     slice_id=request.slice_id,
                     diff_fingerprint=request.fingerprint,
                     attestation=request.attestation,
-                    claude_review=review_result,
+                    reviewer_review=review_result,
                     findings=request.findings,
                     red_state_followup_slice=request.red_state_followup_slice,
                     review_record=current_review_record,

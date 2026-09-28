@@ -19,10 +19,10 @@ REQUEST_ID = "native-review-request-" + "a" * 64
 
 def _review() -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": REQUEST_ID,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -43,17 +43,17 @@ def _assert_schema_error(document: dict[str, object]) -> None:
 
 
 def test_bundled_native_schema_self_checks_and_accepts_review() -> None:
-    assert load_native_review_schema()["$id"] == "native-agent-review-result-v2"
+    assert load_native_review_schema()["$id"] == "native-agent-review-result-v3"
     validate_native_review_document(_review())
 
 
 def test_schema_accepts_minimal_closed_stop_request() -> None:
     validate_native_review_document(
         {
-            "schema_version": "native-agent-review-result-v2",
+            "schema_version": "native-agent-review-result-v3",
             "result_type": "stop_request",
             "request_id": REQUEST_ID,
-            "reviewer": "claude",
+            "reviewer": "reviewer",
             "rule_id": "UNEXPECTED-PATH",
             "rationale": "A path is outside the bound scope.",
             "remediation_paths": [],
@@ -119,7 +119,7 @@ def test_schema_rejects_finding_specific_validation_command() -> None:
     review["decision"] = "denied"
     review["new_findings"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "finding_class": "BLOCKER",
             "summary": "Finding commands are retired",
             "acceptance_test": {
@@ -134,10 +134,10 @@ def test_schema_rejects_finding_specific_validation_command() -> None:
 
 def test_schema_rejects_stop_request_with_review_fields() -> None:
     stop = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "stop_request",
         "request_id": REQUEST_ID,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "rule_id": "STOP",
         "rationale": "Cannot continue.",
         "decision": "denied",

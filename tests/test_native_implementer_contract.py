@@ -6,12 +6,12 @@ from dataclasses import replace
 
 import pytest
 
-import native_codex_contract
+import native_implementer_contract
 
 from acceptance_criteria import acceptance_criterion_id
 from contracts import (
     AgentRole,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -27,23 +27,24 @@ from gates import (
     SCOPE_EXTENSION_REQUESTED_RULE_ID,
     validate_builtin_stop_content,
 )
-from native_codex_contract import (
-    BoundNativeCodexContext,
-    NATIVE_CODEX_RESPONSE_RETRY_CODES,
-    NativeCodexContext,
-    NativeCodexContractError,
-    NativeCodexErrorCode,
-    NativeCodexRequestKind,
-    canonical_native_codex_json,
-    load_native_codex_schema,
-    native_codex_retry_guidance,
-    native_codex_provider_response_schema,
-    parse_native_codex_response,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    BoundNativeImplementerContext,
+    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,
+    NativeImplementerContext,
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
+    NativeImplementerRequestKind,
+    canonical_native_implementer_json,
+    load_native_implementer_schema,
+    native_implementer_retry_guidance,
+    native_implementer_provider_response_schema,
+    parse_native_implementer_response,
+    parse_bound_native_implementer_contract_result,
     validate_native_correction_fingerprint,
 )
 from native_provider_schema import (
     NativeProviderSchemaError,
+    OPENAI_PROVIDER,
     assert_projected_provider_schema,
     defensive_provider_projection,
     registered_exceptions,
@@ -82,54 +83,54 @@ def _criterion(text: str, measured_against: str = "SOURCE") -> dict[str, str]:
 
 def _finding() -> FindingRecord:
     return FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Close the native boundary.",
         acceptance_test="The native result round-trips.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
 def _bound(
-    kind: NativeCodexRequestKind,
+    kind: NativeImplementerRequestKind,
     *,
     findings: tuple[FindingRecord, ...] = (),
     expected_tests: tuple[str, ...] = (),
     test_changes_approved: bool = False,
     require_slice_plan: bool | None = None,
     enforce_expected_test_files: bool = True,
-) -> BoundNativeCodexContext:
+) -> BoundNativeImplementerContext:
     readiness = {
-        NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
-        NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.PLAN: ReadinessMarker.PLAN,
+        NativeImplementerRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
     }[kind]
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name=f"native-{kind.value}",
         readiness_marker=readiness,
         slice_id="01",
         round_number=1,
         require_test_files_record=kind in {
-            NativeCodexRequestKind.IMPLEMENTATION,
-            NativeCodexRequestKind.CORRECTION,
+            NativeImplementerRequestKind.IMPLEMENTATION,
+            NativeImplementerRequestKind.CORRECTION,
         },
         expected_test_files=expected_tests,
         test_changes_approved=test_changes_approved,
         enforce_expected_test_files=enforce_expected_test_files,
         require_slice_plan=(
-            kind is NativeCodexRequestKind.PLAN
+            kind is NativeImplementerRequestKind.PLAN
             if require_slice_plan is None
             else require_slice_plan
         ),
         plan_artifact_path=(
             "docs/internal/plan.md"
-            if kind is NativeCodexRequestKind.PLAN
+            if kind is NativeImplementerRequestKind.PLAN
             and require_slice_plan is not False
             else None
         ),
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="run-1",
         work_unit_id="work-unit-1",
         operation=f"codex_{kind.value}",
@@ -138,29 +139,61 @@ def _bound(
         contract=contract,
         previous_findings=findings,
     )
-    return BoundNativeCodexContext(
+    return BoundNativeImplementerContext(
         context=context,
-        request_id="native-codex-request-" + "b" * 64,
+        request_id="native-implementer-request-" + "b" * 64,
         request_digest="b" * 64,
     )
 
 
-def _base(bound: BoundNativeCodexContext, result_type: str) -> dict[str, object]:
+@pytest.mark.parametrize(
+    ("route", "expected"),
+    [
+        ("context", OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_REQUIRES_TYPED_CONTRACT),
+        ("bound", OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_BOUND_CONTEXT_TYPED),
+        ("projection", OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_PROVIDER_PROJECTION),
+        ("parsing", OrchestratorDiagnostic.IMPLEMENTER_CONTEXT_PARSING_BOUND),
+    ],
+)
+def test_schema_bound_context_errors_keep_specific_diagnostics(
+    route: str, expected: OrchestratorDiagnostic
+) -> None:
+    bound = _bound(NativeImplementerRequestKind.PLAN)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        if route == "context":
+            replace(bound.context, contract=None)
+        elif route == "bound":
+            replace(bound, context=None)
+        elif route == "projection":
+            native_implementer_provider_response_schema(None)
+        else:
+            parse_native_implementer_response({}, None)
+
+    error = raised.value
+    assert error.code is NativeImplementerErrorCode.CONTEXT_INVALID
+    assert error.orchestrator_diagnostic is expected
+    assert error.orchestrator_diagnostic is not (
+        native_implementer_contract._IMPLEMENTER_DIAGNOSTIC_BY_CODE[error.code]
+    )
+    assert str(error) == expected.value
+
+
+def _base(bound: BoundNativeImplementerContext, result_type: str) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": result_type,
         "request_id": bound.request_id,
     }
 
 
-def _measurement_stage_enum(context: NativeCodexContext) -> list[str]:
-    return native_codex_provider_response_schema(context)["$defs"]["planned_slice"][
+def _measurement_stage_enum(context: NativeImplementerContext) -> list[str]:
+    return native_implementer_provider_response_schema(context)["$defs"]["planned_slice"][
         "properties"
     ]["acceptance_criteria"]["items"]["properties"]["measured_against"]["enum"]
 
 
 def _assert_canary_33_measurement_stage_offer() -> None:
-    plan_context = _bound(NativeCodexRequestKind.PLAN).context
+    plan_context = _bound(NativeImplementerRequestKind.PLAN).context
 
     assert _measurement_stage_enum(plan_context) == ["SOURCE"]
     assert _measurement_stage_enum(
@@ -180,8 +213,8 @@ def _assert_canary_33_measurement_stage_offer() -> None:
 
 def test_canary_33_writer_offers_only_runnable_measurement_stages() -> None:
     _assert_canary_33_measurement_stage_offer()
-    source_only = native_codex_provider_response_schema(
-        _bound(NativeCodexRequestKind.PLAN).context
+    source_only = native_implementer_provider_response_schema(
+        _bound(NativeImplementerRequestKind.PLAN).context
     )["$defs"]["planned_slice"]["properties"]["acceptance_criteria"]["items"][
         "properties"
     ]["measured_against"]
@@ -222,7 +255,7 @@ def test_canary_33_proof_kills_measurement_stage_offer_mutations(
         return stages
 
     monkeypatch.setattr(
-        native_codex_contract,
+        native_implementer_contract,
         "_available_measurement_stages",
         mutated_stages,
     )
@@ -236,7 +269,7 @@ def _canary_34_correction_guard_accepts(
     resulting_fingerprint: str,
     *,
     finding_class: FindingClass | None = None,
-) -> tuple[bool, NativeCodexContractError | None]:
+) -> tuple[bool, NativeImplementerContractError | None]:
     finding = replace(
         _finding(),
         finding_class=(
@@ -250,7 +283,7 @@ def _canary_34_correction_guard_accepts(
         ),
     )
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(finding,),
         expected_tests=(),
         test_changes_approved=True,
@@ -261,20 +294,20 @@ def _canary_34_correction_guard_accepts(
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": decision.value.lower(),
                 "rationale": "Resolve the offered finding according to the decision.",
             }
         ],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
     try:
         validate_native_correction_fingerprint(
             result,
             bound.context,
             resulting_fingerprint,
         )
-    except NativeCodexContractError as error:
+    except NativeImplementerContractError as error:
         return False, error
     return True, None
 
@@ -304,17 +337,17 @@ def test_canary_34_rejects_accepted_correction_without_fingerprint_change() -> N
 
     assert not accepted
     assert error is not None
-    assert error.code is NativeCodexErrorCode.RESULT_CONTENT_INVALID
+    assert error.code is NativeImplementerErrorCode.RESULT_CONTENT_INVALID
     assert error.detail == (
-        "correction result accepted finding IDs C-01 but made no "
+        "correction result accepted finding IDs R-01 but made no "
         "fingerprint-changing repository change; accepting a finding requires a "
-        "change; resolve the accepted findings as follows: resolve BLOCKER IDs C-01"
+        "change; resolve the accepted findings as follows: resolve BLOCKER IDs R-01"
     )
     assert str(error) == (
-        "result-content-invalid: correction result accepted finding IDs C-01 but "
+        "result-content-invalid: correction result accepted finding IDs R-01 but "
         "made no fingerprint-changing repository change; accepting a finding "
         "requires a change; resolve the accepted findings as follows: resolve "
-        "BLOCKER IDs C-01"
+        "BLOCKER IDs R-01"
     )
 
 
@@ -328,20 +361,20 @@ def test_u13_unchanged_ordinary_finding_offers_resolve_or_reject() -> None:
     assert not accepted
     assert error is not None
     assert error.detail == (
-        "correction result accepted finding IDs C-01 but made no "
+        "correction result accepted finding IDs R-01 but made no "
         "fingerprint-changing repository change; accepting a finding requires a "
         "change; resolve the accepted findings as follows: resolve or reject "
-        "ordinary FINDING IDs C-01"
+        "ordinary FINDING IDs R-01"
     )
 
 
 def test_u13_unchanged_mixed_classes_offer_class_legal_paths_per_id() -> None:
     findings = (
-        replace(_finding(), finding_id="C-01", finding_class=FindingClass.BLOCKER),
-        replace(_finding(), finding_id="C-02", finding_class=FindingClass.FINDING),
+        replace(_finding(), finding_id="R-01", finding_class=FindingClass.BLOCKER),
+        replace(_finding(), finding_id="R-02", finding_class=FindingClass.FINDING),
     )
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=findings,
         expected_tests=(),
         test_changes_approved=True,
@@ -359,16 +392,16 @@ def test_u13_unchanged_mixed_classes_offer_class_legal_paths_per_id() -> None:
             for finding in findings
         ],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
-    with pytest.raises(NativeCodexContractError) as raised:
+    with pytest.raises(NativeImplementerContractError) as raised:
         validate_native_correction_fingerprint(result, bound.context, "a" * 64)
 
     assert raised.value.detail == (
-        "correction result accepted finding IDs C-01, C-02 but made no "
+        "correction result accepted finding IDs R-01, R-02 but made no "
         "fingerprint-changing repository change; accepting a finding requires a "
         "change; resolve the accepted findings as follows: resolve BLOCKER IDs "
-        "C-01; resolve or reject ordinary FINDING IDs C-02"
+        "R-01; resolve or reject ordinary FINDING IDs R-02"
     )
 
 
@@ -387,7 +420,7 @@ def test_u13_proof_kills_blanket_or_reject_them_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        native_codex_contract,
+        native_implementer_contract,
         "_correction_fingerprint_remediation",
         lambda _accepted: "resolve the accepted findings or reject them",
     )
@@ -399,7 +432,7 @@ def test_u13_proof_kills_blanket_or_reject_them_mutation(
 def test_u13_non_correction_context_bypasses_fingerprint_guard() -> None:
     finding = _finding()
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=(finding,),
         expected_tests=(),
         test_changes_approved=True,
@@ -410,13 +443,13 @@ def test_u13_non_correction_context_bypasses_fingerprint_guard() -> None:
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "accepted",
                 "rationale": "Accept the finding without invoking correction policy.",
             }
         ],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     validate_native_correction_fingerprint(result, bound.context, "a" * 64)
 
@@ -465,7 +498,7 @@ def test_canary_34_proof_kills_each_correction_guard_mutation(
         return request_fingerprint == resulting_fingerprint
 
     monkeypatch.setattr(
-        native_codex_contract,
+        native_implementer_contract,
         "_accepted_correction_without_change",
         mutant,
     )
@@ -474,9 +507,9 @@ def test_canary_34_proof_kills_each_correction_guard_mutation(
         _assert_canary_34_correction_guard()
 
 
-def test_native_codex_schema_is_checked_and_canonical() -> None:
-    assert load_native_codex_schema()["$id"] == "native-agent-codex-result-v2"
-    bound = _bound(NativeCodexRequestKind.PLAN)
+def test_native_implementer_schema_is_checked_and_canonical() -> None:
+    assert load_native_implementer_schema()["$id"] == "native-agent-implementer-result-v3"
+    bound = _bound(NativeImplementerRequestKind.PLAN)
     document = {
         **_base(bound, "plan_result"),
         "ready": True,
@@ -484,23 +517,23 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
             {
                 "slice_id": 1,
                 "summary": "Implement native contracts.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "scope_paths": ["src/native_implementer_contract.py"],
                 "acceptance_criteria": [_criterion("The native contract is implemented.")],
             }
         ],
         "finding_dispositions": [],
     }
-    canonical = canonical_native_codex_json(document)
+    canonical = canonical_native_implementer_json(document)
     assert canonical == json.dumps(
         document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
     assert result.ready is True
     assert result.slice_plan[0].slice_id == 1
 
 
 def test_v2_plan_result_without_dispositions_is_rejected() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
+    bound = _bound(NativeImplementerRequestKind.PLAN)
     historical = {
         **_base(bound, "plan_result"),
         "ready": True,
@@ -514,13 +547,13 @@ def test_v2_plan_result_without_dispositions_is_rejected() -> None:
         ],
     }
 
-    provider_schema = native_codex_provider_response_schema(bound.context)
-    persisted_schema = load_native_codex_schema()
+    provider_schema = native_implementer_provider_response_schema(bound.context)
+    persisted_schema = load_native_implementer_schema()
     with pytest.raises(SchemaMismatch):
         validate_schema_document(historical, persisted_schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(historical, bound)
-    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(historical, bound)
+    assert raised.value.code is NativeImplementerErrorCode.SCHEMA_INVALID
     assert "finding_dispositions" in persisted_schema["$defs"]["plan_result"][
         "required"
     ]
@@ -533,8 +566,8 @@ def test_v2_plan_result_without_dispositions_is_rejected() -> None:
 
 
 def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None:
-    provider_schema = native_codex_provider_response_schema(
-        _bound(NativeCodexRequestKind.PLAN).context
+    provider_schema = native_implementer_provider_response_schema(
+        _bound(NativeImplementerRequestKind.PLAN).context
     )
 
     def visit(node: object) -> None:
@@ -556,8 +589,8 @@ def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None
 
 
 def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> None:
-    provider_schema = native_codex_provider_response_schema(
-        _bound(NativeCodexRequestKind.PLAN).context
+    provider_schema = native_implementer_provider_response_schema(
+        _bound(NativeImplementerRequestKind.PLAN).context
     )
 
     assert_projected_provider_schema(provider_schema, provider="codex")
@@ -587,18 +620,18 @@ def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> 
 
 def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
     expected = {
-        NativeCodexRequestKind.PLAN: "plan_result",
-        NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
-        NativeCodexRequestKind.CORRECTION: "correction_result",
+        NativeImplementerRequestKind.PLAN: "plan_result",
+        NativeImplementerRequestKind.IMPLEMENTATION: "implementation_result",
+        NativeImplementerRequestKind.CORRECTION: "correction_result",
     }
     digests: set[str] = set()
     for kind, result_name in expected.items():
-        schema = native_codex_provider_response_schema(_bound(kind).context)
+        schema = native_implementer_provider_response_schema(_bound(kind).context)
         result_options = schema["properties"]["result"]["anyOf"]
         assert result_options[-1] == {"$ref": "#/$defs/stop_result"}
         if kind in {
-            NativeCodexRequestKind.IMPLEMENTATION,
-            NativeCodexRequestKind.CORRECTION,
+            NativeImplementerRequestKind.IMPLEMENTATION,
+            NativeImplementerRequestKind.CORRECTION,
         }:
             assert all(
                 result_name in item["$ref"]
@@ -612,10 +645,10 @@ def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
 
 def test_plan_without_slice_contract_offers_only_stop_result() -> None:
     bound = _bound(
-        NativeCodexRequestKind.PLAN,
+        NativeImplementerRequestKind.PLAN,
         require_slice_plan=False,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     assert schema["properties"]["result"]["anyOf"] == [
         {"$ref": "#/$defs/stop_result"}
     ]
@@ -632,15 +665,15 @@ def test_plan_without_slice_contract_offers_only_stop_result() -> None:
 
 def test_unapproved_bound_test_changes_force_ready_false_in_writer() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
-        expected_tests=("tests/test_native_codex_contract.py",),
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        expected_tests=("tests/test_native_implementer_contract.py",),
         test_changes_approved=False,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "implementation_result"),
         "ready": True,
-        "test_files": ["tests/test_native_codex_contract.py"],
+        "test_files": ["tests/test_native_implementer_contract.py"],
         "finding_dispositions": [],
     }
 
@@ -652,12 +685,12 @@ def test_unapproved_bound_test_changes_force_ready_false_in_writer() -> None:
 
 def test_unapproved_dynamic_test_scope_allows_ready_only_without_test_files() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         expected_tests=("tests/expected.py",),
         test_changes_approved=False,
         enforce_expected_test_files=False,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "implementation_result"),
         "ready": True,
@@ -666,7 +699,7 @@ def test_unapproved_dynamic_test_scope_allows_ready_only_without_test_files() ->
     }
 
     validate_schema_document({"result": response}, schema)
-    assert parse_bound_native_codex_contract_result(response, bound).ready is True
+    assert parse_bound_native_implementer_contract_result(response, bound).ready is True
 
     response["test_files"] = ["tests/new.py"]
     with pytest.raises(SchemaMismatch):
@@ -678,12 +711,12 @@ def test_unapproved_dynamic_test_scope_allows_ready_only_without_test_files() ->
 
 def test_unapproved_empty_fixed_test_scope_closes_nonempty_ready_result() -> None:
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         expected_tests=(),
         test_changes_approved=False,
         enforce_expected_test_files=True,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "correction_result"),
         "ready": True,
@@ -695,7 +728,7 @@ def test_unapproved_empty_fixed_test_scope_closes_nonempty_ready_result() -> Non
         validate_schema_document({"result": response}, schema)
     response["test_files"] = []
     validate_schema_document({"result": response}, schema)
-    assert parse_bound_native_codex_contract_result(response, bound).ready is True
+    assert parse_bound_native_implementer_contract_result(response, bound).ready is True
 
 
 @pytest.mark.parametrize("enforce_expected", [True, False])
@@ -703,12 +736,12 @@ def test_unapproved_readiness_projection_has_no_nested_any_of(
     enforce_expected: bool,
 ) -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         expected_tests=("tests/expected.py",),
         test_changes_approved=False,
         enforce_expected_test_files=enforce_expected,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     result_options = schema["properties"]["result"]["anyOf"]
 
     assert result_options[-1] == {"$ref": "#/$defs/stop_result"}
@@ -717,13 +750,13 @@ def test_unapproved_readiness_projection_has_no_nested_any_of(
 
 
 def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
-    second = replace(_finding(), finding_id="C-02")
+    second = replace(_finding(), finding_id="R-02")
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(), second),
         test_changes_approved=True,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     base = {
         **_base(bound, "correction_result"),
         "ready": False,
@@ -731,7 +764,7 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
     }
     valid_dispositions = [
         {"finding_id": finding_id, "decision": "accepted", "rationale": "fixed"}
-        for finding_id in ("C-01", "C-02")
+        for finding_id in ("R-01", "R-02")
     ]
     validate_schema_document(
         {"result": {**base, "finding_dispositions": valid_dispositions}}, schema
@@ -742,7 +775,7 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
     )
     for invalid in (
         [*valid_dispositions, valid_dispositions[-1]],
-        [valid_dispositions[0], {**valid_dispositions[1], "finding_id": "C-99"}],
+        [valid_dispositions[0], {**valid_dispositions[1], "finding_id": "R-99"}],
     ):
         with pytest.raises(SchemaMismatch):
             validate_schema_document(
@@ -751,45 +784,45 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
 
 
 def test_writer_schema_leaves_only_registered_disposition_order_exception() -> None:
-    second = replace(_finding(), finding_id="C-02")
+    second = replace(_finding(), finding_id="R-02")
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(), second),
         test_changes_approved=True,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     duplicate = {
         **_base(bound, "correction_result"),
         "ready": False,
         "test_files": [],
         "finding_dispositions": [
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
-            {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
+            {"finding_id": "R-01", "decision": "accepted", "rationale": "fixed"},
+            {"finding_id": "R-01", "decision": "accepted", "rationale": "fixed"},
         ],
     }
     provider_output = json.loads(json.dumps(duplicate))
 
     validate_schema_document({"result": duplicate}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(duplicate, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(duplicate, bound)
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
     assert raised.value.detail == "finding dispositions must be sorted and unique"
     assert duplicate == provider_output
 
 
 def test_finding_dispositions_use_natural_order_beyond_one_hundred() -> None:
     finding_ids = (
-        "C-62",
-        "C-71",
-        "C-101",
-        "C-102",
-        "C-103",
-        "C-104",
-        "C-105",
+        "R-62",
+        "R-71",
+        "R-101",
+        "R-102",
+        "R-103",
+        "R-104",
+        "R-105",
     )
     findings = tuple(replace(_finding(), finding_id=finding_id) for finding_id in finding_ids)
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=findings,
         test_changes_approved=True,
     )
@@ -810,25 +843,25 @@ def test_finding_dispositions_use_natural_order_beyond_one_hundred() -> None:
         ]
 
     accepted = {**base, "finding_dispositions": dispositions(finding_ids)}
-    assert parse_bound_native_codex_contract_result(accepted, bound).ready is True
+    assert parse_bound_native_implementer_contract_result(accepted, bound).ready is True
 
-    unsorted = (*finding_ids[:2], "C-105", *finding_ids[2:6])
-    for invalid in (unsorted, (*finding_ids, "C-105")):
-        with pytest.raises(NativeCodexContractError) as raised:
-            parse_bound_native_codex_contract_result(
+    unsorted = (*finding_ids[:2], "R-105", *finding_ids[2:6])
+    for invalid in (unsorted, (*finding_ids, "R-105")):
+        with pytest.raises(NativeImplementerContractError) as raised:
+            parse_bound_native_implementer_contract_result(
                 {**base, "finding_dispositions": dispositions(invalid)}, bound
             )
-        assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+        assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
         assert raised.value.detail == "finding dispositions must be sorted and unique"
 
 
 def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         test_changes_approved=True,
         enforce_expected_test_files=False,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "implementation_result"),
         "ready": False,
@@ -838,19 +871,37 @@ def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
     provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
-    assert raised.value.detail == (
-        "schema validation failed at <response>: must match exactly one allowed schema"
-    )
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.TEST_FILES_INVALID
+    assert raised.value.detail == "test_files contains an unsafe repository path"
     assert response == provider_output
 
 
+def test_writer_schema_keeps_unique_path_arrays_fail_closed_locally() -> None:
+    bound = _bound(
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        test_changes_approved=True,
+        enforce_expected_test_files=False,
+    )
+    response = {
+        **_base(bound, "implementation_result"),
+        "ready": False,
+        "test_files": ["tests/a.py", "tests/a.py"],
+        "finding_dispositions": [],
+    }
+    validate_schema_document(
+        {"result": response}, native_implementer_provider_response_schema(bound.context)
+    )
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.SCHEMA_INVALID
+
+
 def test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally() -> None:
-    for request_kind in NativeCodexRequestKind:
+    for request_kind in NativeImplementerRequestKind:
         bound = _bound(request_kind)
-        schema = native_codex_provider_response_schema(bound.context)
+        schema = native_implementer_provider_response_schema(bound.context)
         response = {
             **_base(bound, "stop_result"),
             "rule_id": "CONTRACT-UNCLEAR",
@@ -859,13 +910,11 @@ def test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally() -> N
         }
         provider_output = json.loads(json.dumps(response))
 
-        validate_schema_document({"result": response}, schema)
-        with pytest.raises(NativeCodexContractError) as raised:
-            parse_bound_native_codex_contract_result(response, bound)
-        assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
-        assert raised.value.detail == (
-            "schema validation failed at <response>: must match exactly one allowed schema"
-        )
+        with pytest.raises(SchemaMismatch):
+            validate_schema_document({"result": response}, schema)
+        with pytest.raises(NativeImplementerContractError) as raised:
+            parse_bound_native_implementer_contract_result(response, bound)
+        assert raised.value.code is NativeImplementerErrorCode.SCHEMA_INVALID
         assert response == provider_output
 
 
@@ -875,12 +924,12 @@ def test_writer_schema_keeps_test_file_order_fail_closed_locally(
 ) -> None:
     expected = ("tests/a.py", "tests/b.py") if enforce_expected else ()
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         expected_tests=expected,
         test_changes_approved=True,
         enforce_expected_test_files=enforce_expected,
     )
-    schema = native_codex_provider_response_schema(bound.context)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "implementation_result"),
         "ready": False,
@@ -890,16 +939,16 @@ def test_writer_schema_keeps_test_file_order_fail_closed_locally(
     provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.TEST_FILES_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.TEST_FILES_INVALID
     assert raised.value.detail == "test_files must be sorted and unique"
     assert response == provider_output
 
 
 def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
-    schema = native_codex_provider_response_schema(bound.context)
+    bound = _bound(NativeImplementerRequestKind.PLAN)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "plan_result"),
         "ready": False,
@@ -916,9 +965,9 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
     provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.SLICE_PLAN_INVALID
     assert raised.value.detail == (
         "planned slice paths must be sorted, unique, and non-empty"
     )
@@ -937,19 +986,31 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
     ]
     provider_output = json.loads(json.dumps(response))
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.SLICE_PLAN_INVALID
     assert raised.value.detail == "slice plan ids must be contiguous and 1-based"
     assert response == provider_output
 
 
-def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
-    projected = defensive_provider_projection(
-        load_native_codex_schema(),
-        provider="codex",
+def _project_checked_implementer_reader() -> dict[str, object]:
+    return defensive_provider_projection(
+        load_native_implementer_schema(),
+        provider=OPENAI_PROVIDER,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=(
+            "/$defs/planned_slice/properties/scope_paths/uniqueItems",
+            "/$defs/planned_slice/properties/acceptance_criteria/uniqueItems",
+            "/$defs/implementation_result/properties/test_files/uniqueItems",
+            "/$defs/correction_result/properties/test_files/uniqueItems",
+            "/$defs/stop_result/properties/remediation_paths/uniqueItems",
+        ),
     )
+
+
+def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
+    projected = _project_checked_implementer_reader()
     definitions = projected["$defs"]
     finding_dispositions = [
         definitions[result_name]["properties"]["finding_dispositions"]
@@ -1007,11 +1068,7 @@ def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
 
 
 def test_b70_semantic_descriptions_survive_provider_projection() -> None:
-    projected = defensive_provider_projection(
-        load_native_codex_schema(),
-        provider="codex",
-        required_features=("closed_object", "min_max_items", "nested_any_of"),
-    )
+    projected = _project_checked_implementer_reader()
     definitions = projected["$defs"]
     result_names = (
         "plan_result",
@@ -1043,8 +1100,8 @@ def test_b70_semantic_descriptions_survive_provider_projection() -> None:
     assert stop["properties"]["rationale"]["anyOf"] == [
         {"$ref": "#/$defs/safe_text"}
     ]
-    for kind in NativeCodexRequestKind:
-        writer_definitions = native_codex_provider_response_schema(
+    for kind in NativeImplementerRequestKind:
+        writer_definitions = native_implementer_provider_response_schema(
             _bound(kind).context
         )["$defs"]
         assert writer_definitions[
@@ -1058,8 +1115,8 @@ def test_b70_semantic_descriptions_survive_provider_projection() -> None:
 
 
 def test_b71_projected_schema_has_all_descriptions_and_no_ref_siblings() -> None:
-    schema = native_codex_provider_response_schema(
-        _bound(NativeCodexRequestKind.PLAN).context
+    schema = native_implementer_provider_response_schema(
+        _bound(NativeImplementerRequestKind.PLAN).context
     )
     descriptions: list[str] = []
     ref_siblings: list[tuple[str, ...]] = []
@@ -1085,8 +1142,8 @@ def test_b71_projected_schema_has_all_descriptions_and_no_ref_siblings() -> None
 
 
 def test_b78_writer_schema_closes_stop_rule_vocabulary() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
-    schema = native_codex_provider_response_schema(bound.context)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
+    schema = native_implementer_provider_response_schema(bound.context)
     rule_id = schema["$defs"]["stop_result"]["properties"]["rule_id"]
     assert rule_id == {
         "description": "Identifies the rule that blocks the current step.",
@@ -1110,13 +1167,13 @@ def test_b78_writer_schema_closes_stop_rule_vocabulary() -> None:
 def test_b71_provider_guard_rejects_description_beside_any_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    invalid = copy.deepcopy(load_native_codex_schema())
+    invalid = copy.deepcopy(load_native_implementer_schema())
     invalid["$defs"]["planned_slice"]["properties"]["summary"][
         "description"
     ] = "A future description beside a ref must fail closed."
     monkeypatch.setattr(
-        native_codex_contract,
-        "load_native_codex_schema",
+        native_implementer_contract,
+        "load_native_implementer_schema",
         lambda: copy.deepcopy(invalid),
     )
 
@@ -1124,8 +1181,8 @@ def test_b71_provider_guard_rejects_description_beside_any_ref(
         NativeProviderSchemaError,
         match=r"/\$defs/planned_slice/properties/summary: \$ref must not have sibling",
     ):
-        native_codex_provider_response_schema(
-            _bound(NativeCodexRequestKind.PLAN).context
+        native_implementer_provider_response_schema(
+            _bound(NativeImplementerRequestKind.PLAN).context
         )
 
 
@@ -1142,8 +1199,8 @@ def test_b70_remaining_provider_semantic_gap_inventory_is_explicit() -> None:
 
 
 def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
-    schema = native_codex_provider_response_schema(bound.context)
+    bound = _bound(NativeImplementerRequestKind.PLAN)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "stop_result"),
         "rule_id": "UNEXPECTED-PATH",
@@ -1153,19 +1210,19 @@ def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:
     provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.STOP_CONTENT_INVALID
     assert raised.value.detail == "remediation_paths must be sorted and unique"
     assert response == provider_output
 
 
 def test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
-    schema = native_codex_provider_response_schema(bound.context)
+    bound = _bound(NativeImplementerRequestKind.PLAN)
+    schema = native_implementer_provider_response_schema(bound.context)
     response = {
         **_base(bound, "plan_result"),
-        "request_id": "native-codex-request-" + "c" * 64,
+        "request_id": "native-implementer-request-" + "c" * 64,
         "ready": False,
         "slice_plan": [
             {
@@ -1179,21 +1236,21 @@ def test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally() -> 
     }
 
     validate_schema_document({"result": response}, schema)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(response, bound)
-    assert raised.value.code is NativeCodexErrorCode.REQUEST_MISMATCH
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(response, bound)
+    assert raised.value.code is NativeImplementerErrorCode.REQUEST_MISMATCH
 
 
 def test_registered_exception_codes_cover_writer_valid_local_rejections() -> None:
-    second = replace(_finding(), finding_id="C-02")
+    second = replace(_finding(), finding_id="R-02")
     disposition_bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(), second),
         test_changes_approved=True,
     )
-    plan_bound = _bound(NativeCodexRequestKind.PLAN)
+    plan_bound = _bound(NativeImplementerRequestKind.PLAN)
     work_bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         test_changes_approved=True,
         enforce_expected_test_files=False,
     )
@@ -1206,12 +1263,12 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
                 "test_files": [],
                 "finding_dispositions": [
                     {
-                        "finding_id": "C-01",
+                        "finding_id": "R-01",
                         "decision": "accepted",
                         "rationale": "fixed",
                     },
                     {
-                        "finding_id": "C-01",
+                        "finding_id": "R-01",
                         "decision": "accepted",
                         "rationale": "fixed",
                     },
@@ -1222,7 +1279,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
             plan_bound,
             {
                 **_base(plan_bound, "plan_result"),
-                "request_id": "native-codex-request-" + "c" * 64,
+                "request_id": "native-implementer-request-" + "c" * 64,
                 "ready": False,
                 "slice_plan": [
                     {
@@ -1273,10 +1330,10 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
     encountered: set[str] = set()
     for bound, response in cases:
         validate_schema_document(
-            {"result": response}, native_codex_provider_response_schema(bound.context)
+            {"result": response}, native_implementer_provider_response_schema(bound.context)
         )
-        with pytest.raises(NativeCodexContractError) as raised:
-            parse_bound_native_codex_contract_result(response, bound)
+        with pytest.raises(NativeImplementerContractError) as raised:
+            parse_bound_native_implementer_contract_result(response, bound)
         encountered.add(raised.value.code.value)
     registered = {
         str(item["error_code"]) for item in registered_exceptions("codex")
@@ -1287,7 +1344,7 @@ def test_registered_exception_codes_cover_writer_valid_local_rejections() -> Non
 
 
 def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
-    bound = _bound(NativeCodexRequestKind.PLAN)
+    bound = _bound(NativeImplementerRequestKind.PLAN)
     document = {
         **_base(bound, "plan_result"),
         "ready": True,
@@ -1302,7 +1359,7 @@ def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
         "finding_dispositions": [],
     }
 
-    parsed = parse_native_codex_response(document, bound)
+    parsed = parse_native_implementer_response(document, bound)
     assert tuple(
         criterion.text for criterion in parsed.slice_plan[0].acceptance_criteria
     ) == ("The record path is covered.",)
@@ -1310,31 +1367,31 @@ def test_active_plan_contract_accepts_acceptance_criteria_field() -> None:
 
 def test_implementation_result_applies_each_supplied_finding_disposition() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=(_finding(),),
-        expected_tests=("tests/test_native_codex_contract.py",),
+        expected_tests=("tests/test_native_implementer_contract.py",),
         test_changes_approved=True,
     )
     document = {
         **_base(bound, "implementation_result"),
         "ready": True,
-        "test_files": ["tests/test_native_codex_contract.py"],
+        "test_files": ["tests/test_native_implementer_contract.py"],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "accepted",
                 "rationale": "The implementation now covers it.",
             }
         ],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
-    assert result.test_files == ("tests/test_native_codex_contract.py",)
+    result = parse_bound_native_implementer_contract_result(document, bound)
+    assert result.test_files == ("tests/test_native_implementer_contract.py",)
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
 
 
 def test_implementation_result_rejects_a_blocker_rejection() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=(_finding(),),
         expected_tests=(),
         test_changes_approved=True,
@@ -1345,27 +1402,27 @@ def test_implementation_result_rejects_a_blocker_rejection() -> None:
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "rejected",
                 "rationale": "The implementer disputes the reviewer-owned blocker.",
             }
         ],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
 
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
-    assert "BLOCKER C-01 cannot be rejected" in raised.value.detail
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
+    assert "BLOCKER R-01 cannot be rejected" in raised.value.detail
 
 
 def test_implementation_dispositions_cover_every_open_finding() -> None:
     findings = tuple(
-        replace(_finding(), finding_id=f"C-{number:02d}")
+        replace(_finding(), finding_id=f"R-{number:02d}")
         for number in range(1, 66)
     )
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=findings,
         expected_tests=(),
         test_changes_approved=True,
@@ -1383,10 +1440,10 @@ def test_implementation_dispositions_cover_every_open_finding() -> None:
             for finding in findings
         ],
     }
-    writer = native_codex_provider_response_schema(bound.context)
+    writer = native_implementer_provider_response_schema(bound.context)
 
     validate_schema_document({"result": document}, writer)
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     disposition_schema = writer["$defs"]["implementation_result"]["properties"][
         "finding_dispositions"
@@ -1400,14 +1457,14 @@ def test_implementation_dispositions_cover_every_open_finding() -> None:
 
     document["finding_dispositions"] = [
         {
-            "finding_id": "C-65",
+            "finding_id": "R-65",
             "decision": "accepted",
             "rationale": "Only this finding needs a new implementation answer.",
         }
     ]
     validate_schema_document({"result": document}, writer)
-    with pytest.raises(NativeCodexContractError, match="missing disposition for C-01"):
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError, match="missing disposition for R-01"):
+        parse_bound_native_implementer_contract_result(document, bound)
 
 
 @pytest.mark.parametrize(
@@ -1415,19 +1472,19 @@ def test_implementation_dispositions_cover_every_open_finding() -> None:
     [
         (
             lambda document: document.update(
-                request_id="native-codex-request-" + "0" * 64
+                request_id="native-implementer-request-" + "0" * 64
             ),
-            NativeCodexErrorCode.REQUEST_MISMATCH,
+            NativeImplementerErrorCode.REQUEST_MISMATCH,
         ),
         (
             lambda document: document.update(result_type="correction_result"),
-            NativeCodexErrorCode.RESULT_KIND_MISMATCH,
+            NativeImplementerErrorCode.RESULT_KIND_MISMATCH,
         ),
     ],
 )
 def test_native_result_rejects_wrong_request_or_result_kind(mutate, code) -> None:  # type: ignore[no-untyped-def]
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         expected_tests=(),
         test_changes_approved=True,
     )
@@ -1438,14 +1495,42 @@ def test_native_result_rejects_wrong_request_or_result_kind(mutate, code) -> Non
         "finding_dispositions": [],
     }
     mutate(document)
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
     assert raised.value.code is code
+
+
+def test_native_result_reports_all_missing_dispositions_in_natural_order() -> None:
+    findings = tuple(
+        replace(_finding(), finding_id=finding_id)
+        for finding_id in ("R-01", "R-02", "R-10")
+    )
+    bound = _bound(
+        NativeImplementerRequestKind.CORRECTION,
+        findings=findings,
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [],
+    }
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "missing disposition for R-01, R-02, R-10 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.IMPLEMENTER_FINDING_REFERENCE_INVALID
+    )
 
 
 def test_native_result_rejects_missing_and_foreign_dispositions() -> None:
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(),),
         expected_tests=(),
         test_changes_approved=True,
@@ -1456,26 +1541,26 @@ def test_native_result_rejects_missing_and_foreign_dispositions() -> None:
         "test_files": [],
         "finding_dispositions": [],
     }
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
     assert raised.value.detail == (
-        "missing disposition for C-01 "
+        "missing disposition for R-01 "
         "(context: work-unit=work-unit-1 round=1)"
     )
 
     document["finding_dispositions"] = [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "decision": "accepted",
             "rationale": "This finding was never offered in the bound context.",
         }
     ]
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
     assert raised.value.detail == (
-        "disposition references non-open finding C-02 "
+        "disposition references non-open finding R-02 "
         "(context: work-unit=work-unit-1 round=1)"
     )
 
@@ -1487,7 +1572,7 @@ def test_native_result_rejects_disposition_to_closed_finding_with_context() -> N
         status_rationale="The reviewer closed this finding before the request.",
     )
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(closed,),
         expected_tests=(),
         test_changes_approved=True,
@@ -1498,26 +1583,26 @@ def test_native_result_rejects_disposition_to_closed_finding_with_context() -> N
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "accepted",
                 "rationale": "This closed finding must remain unavailable.",
             }
         ],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
 
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
     assert raised.value.detail == (
-        "disposition references non-open finding C-01 "
+        "disposition references non-open finding R-01 "
         "(context: work-unit=work-unit-1 round=1)"
     )
 
 
 def test_native_result_rejects_unknown_finding_with_context() -> None:
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(),
         expected_tests=(),
         test_changes_approved=True,
@@ -1528,26 +1613,26 @@ def test_native_result_rejects_unknown_finding_with_context() -> None:
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-99",
+                "finding_id": "R-99",
                 "decision": "accepted",
                 "rationale": "This identifier is absent from the bound context.",
             }
         ],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
 
-    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.code is NativeImplementerErrorCode.FINDING_REFERENCE_INVALID
     assert raised.value.detail == (
-        "disposition references non-open finding C-99 "
+        "disposition references non-open finding R-99 "
         "(context: work-unit=work-unit-1 round=1)"
     )
 
 
 def test_correction_without_dispositions_is_rejected_by_schema_and_domain() -> None:
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(),),
         expected_tests=(),
         test_changes_approved=True,
@@ -1560,73 +1645,73 @@ def test_correction_without_dispositions_is_rejected_by_schema_and_domain() -> N
     }
     validate_schema_document(
         {"result": native_document},
-        native_codex_provider_response_schema(bound.context),
+        native_implementer_provider_response_schema(bound.context),
     )
-    with pytest.raises(NativeCodexContractError, match="missing disposition for C-01"):
-        parse_bound_native_codex_contract_result(native_document, bound)
+    with pytest.raises(NativeImplementerContractError, match="missing disposition for R-01"):
+        parse_bound_native_implementer_contract_result(native_document, bound)
 
 
 def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None:
     bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.CORRECTION,
         findings=(_finding(),),
-        expected_tests=("tests/test_native_codex_contract.py",),
+        expected_tests=("tests/test_native_implementer_contract.py",),
         test_changes_approved=True,
     )
     document = {
         **_base(bound, "correction_result"),
         "ready": True,
-        "test_files": ["tests/test_native_codex_contract.py"],
+        "test_files": ["tests/test_native_implementer_contract.py"],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "accepted",
                 "rationale": "The correction implements the requested invariant.",
             }
         ],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
     assert result.ready is True
-    assert result.test_files == ("tests/test_native_codex_contract.py",)
+    assert result.test_files == ("tests/test_native_implementer_contract.py",)
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
     assert result.self_check is None
 
 
 def test_ready_test_changes_require_prior_approval() -> None:
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
-        expected_tests=("tests/test_native_codex_contract.py",),
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        expected_tests=("tests/test_native_implementer_contract.py",),
     )
     document = {
         **_base(bound, "implementation_result"),
         "ready": True,
-        "test_files": ["tests/test_native_codex_contract.py"],
+        "test_files": ["tests/test_native_implementer_contract.py"],
         "finding_dispositions": [],
     }
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.TEST_FILES_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.TEST_FILES_INVALID
 
 
 def test_stop_result_is_exclusive_and_preserves_remediation_paths() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     document = {
         **_base(bound, "stop_result"),
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "The schema path is outside scope.",
-        "remediation_paths": ["schemas/native-agent-codex-result-v2.schema.json"],
+        "remediation_paths": ["schemas/native-agent-implementer-result-v3.schema.json"],
     }
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
     assert result.stopped is True
     assert result.ready is None
     assert result.stop_request is not None
     assert result.stop_request.remediation_paths == (
-        "schemas/native-agent-codex-result-v2.schema.json",
+        "schemas/native-agent-implementer-result-v3.schema.json",
     )
 
 
 def test_scope_extension_stop_binds_labeled_paths_to_structured_paths() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     rationale = (
         "Required paths: src/runtime.py\n\n"
         "The concrete dependency appeared during implementation.\n"
@@ -1639,7 +1724,7 @@ def test_scope_extension_stop_binds_labeled_paths_to_structured_paths() -> None:
         "remediation_paths": ["src/runtime.py"],
     }
 
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     assert result.stop_request is not None
     assert result.stop_request.rationale == rationale
@@ -1647,7 +1732,7 @@ def test_scope_extension_stop_binds_labeled_paths_to_structured_paths() -> None:
 
 
 def test_scope_extension_stop_allows_explanatory_path_label_text() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     document = {
         **_base(bound, "stop_result"),
         "rule_id": SCOPE_EXTENSION_REQUESTED_RULE_ID,
@@ -1658,7 +1743,7 @@ def test_scope_extension_stop_allows_explanatory_path_label_text() -> None:
         "remediation_paths": ["src/runtime.py"],
     }
 
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     assert result.stop_request is not None
     assert result.stop_request.remediation_paths == ("src/runtime.py",)
@@ -1702,7 +1787,7 @@ def test_stop_vents_remain_available_with_an_undisposed_blocker(
 ) -> None:
     finding = _finding()
     bound = _bound(
-        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
         findings=(finding,),
     )
     document = {
@@ -1712,14 +1797,14 @@ def test_stop_vents_remain_available_with_an_undisposed_blocker(
         "remediation_paths": remediation_paths,
     }
 
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     assert result.stopped is True
     assert result.findings == (finding,)
 
 
 def test_operator_prerequisite_stop_requires_and_preserves_all_three_details() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     document = {
         **_base(bound, "stop_result"),
         "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
@@ -1727,7 +1812,7 @@ def test_operator_prerequisite_stop_requires_and_preserves_all_three_details() -
         "remediation_paths": [],
     }
 
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     assert result.stopped is True
     assert result.stop_request is not None
@@ -1736,7 +1821,7 @@ def test_operator_prerequisite_stop_requires_and_preserves_all_three_details() -
 
 
 def test_operator_prerequisite_stop_allows_blank_lines_between_details() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     rationale = _operator_prerequisite_rationale().replace("\n", "\n\n")
     document = {
         **_base(bound, "stop_result"),
@@ -1745,7 +1830,7 @@ def test_operator_prerequisite_stop_allows_blank_lines_between_details() -> None
         "remediation_paths": [],
     }
 
-    result = parse_bound_native_codex_contract_result(document, bound)
+    result = parse_bound_native_implementer_contract_result(document, bound)
 
     assert result.stop_request is not None
     assert result.stop_request.rationale == rationale
@@ -1783,7 +1868,7 @@ def test_operator_prerequisite_stop_rejects_each_missing_detail(
     omitted_line: int,
     expected_detail: str,
 ) -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     lines = _operator_prerequisite_rationale().splitlines()
     document = {
         **_base(bound, "stop_result"),
@@ -1794,10 +1879,10 @@ def test_operator_prerequisite_stop_rejects_each_missing_detail(
         "remediation_paths": [],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
 
-    assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    assert raised.value.code is NativeImplementerErrorCode.STOP_CONTENT_INVALID
     assert expected_detail in raised.value.detail
 
 
@@ -1823,7 +1908,7 @@ def test_operator_prerequisite_stop_rejects_duplicate_labels_and_empty_values(
     rationale: str,
     expected_detail: str,
 ) -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     document = {
         **_base(bound, "stop_result"),
         "rule_id": OPERATOR_PREREQUISITE_MISSING_RULE_ID,
@@ -1831,10 +1916,10 @@ def test_operator_prerequisite_stop_rejects_duplicate_labels_and_empty_values(
         "remediation_paths": [],
     }
 
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
 
-    assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    assert raised.value.code is NativeImplementerErrorCode.STOP_CONTENT_INVALID
     assert expected_detail in raised.value.detail
 
 
@@ -1852,34 +1937,34 @@ def test_stop_rules_do_not_classify_error_text_or_environment_observations(
 
 
 def test_unknown_properties_and_unsorted_paths_fail_closed() -> None:
-    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    bound = _bound(NativeImplementerRequestKind.IMPLEMENTATION)
     document = {
         **_base(bound, "implementation_result"),
         "ready": False,
         "test_files": ["tests/z.py", "tests/a.py"],
         "finding_dispositions": [],
     }
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.TEST_FILES_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.TEST_FILES_INVALID
     document["test_files"] = []
     document["STATUS"] = "DONE"
-    with pytest.raises(NativeCodexContractError) as raised:
-        parse_bound_native_codex_contract_result(document, bound)
-    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+    with pytest.raises(NativeImplementerContractError) as raised:
+        parse_bound_native_implementer_contract_result(document, bound)
+    assert raised.value.code is NativeImplementerErrorCode.SCHEMA_INVALID
 
 
 def test_retry_guidance_inventory_covers_every_retryable_codex_code() -> None:
-    assert set(native_codex_contract._NATIVE_CODEX_RETRY_GUIDANCE) == set(
-        NATIVE_CODEX_RESPONSE_RETRY_CODES
+    assert set(native_implementer_contract._NATIVE_IMPLEMENTER_RETRY_GUIDANCE) == set(
+        NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES
     )
 
 
 def test_retry_guidance_uses_the_precise_closed_diagnostic() -> None:
     diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
 
-    guidance = native_codex_retry_guidance(
-        NativeCodexErrorCode.SLICE_PLAN_INVALID,
+    guidance = native_implementer_retry_guidance(
+        NativeImplementerErrorCode.SLICE_PLAN_INVALID,
         diagnostic,
     )
 
@@ -1889,4 +1974,4 @@ def test_retry_guidance_uses_the_precise_closed_diagnostic() -> None:
 
 def test_context_invalid_has_no_codex_retry_guidance() -> None:
     with pytest.raises(ValueError, match="is not retryable"):
-        native_codex_retry_guidance(NativeCodexErrorCode.CONTEXT_INVALID)
+        native_implementer_retry_guidance(NativeImplementerErrorCode.CONTEXT_INVALID)

@@ -11,28 +11,28 @@ from rejected_response_shape import (
 
 def _rejected_review_document() -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "a" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {
-                "finding_id": "C-09",
+                "finding_id": "R-09",
                 "finding_class": "BLOCKER",
                 "summary": "PROVIDER SUMMARY MUST NOT SURVIVE",
             }
         ],
         "finding_dispositions": [
             {
-                "finding_id": "C-03",
+                "finding_id": "R-03",
                 "decision": "accepted",
                 "rationale": "PROVIDER DISPOSITION RATIONALE MUST NOT SURVIVE",
             }
         ],
         "status_changes": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "status": "CLOSED",
                 "rationale": "PROVIDER STATUS RATIONALE MUST NOT SURVIVE",
                 "closure": {
@@ -60,9 +60,9 @@ def test_rejected_review_shape_distinguishes_dispositions_and_statuses() -> None
     assert shape.result_type == "review_result"
     assert shape.release_decision == "approved"
     assert shape.unknown_field_count == 1
-    assert shape.finding_dispositions[0].finding_id == "C-03"
+    assert shape.finding_dispositions[0].finding_id == "R-03"
     assert shape.finding_dispositions[0].decision == "accepted"
-    assert shape.status_changes[0].finding_id == "C-01"
+    assert shape.status_changes[0].finding_id == "R-01"
     assert shape.status_changes[0].status == "CLOSED"
     assert shape.status_changes[0].closure_kind == "rejected"
     assert shape.status_changes[0].rejection_reason == "no_defect"
@@ -94,14 +94,14 @@ def test_rejected_review_shape_roundtrip_contains_no_provider_prose_or_unknown_k
 def test_rejected_implementer_shape_keeps_closed_disposition_only() -> None:
     shape = extract_rejected_native_response_shape(
         {
-            "schema_version": "native-agent-codex-result-v2",
+            "schema_version": "native-agent-implementer-result-v3",
             "result_type": "implementation_result",
-            "request_id": "native-codex-request-" + "d" * 64,
+            "request_id": "native-implementer-request-" + "d" * 64,
             "ready": True,
             "test_files": ["PROVIDER/PATH/MUST/NOT/SURVIVE"],
             "finding_dispositions": [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "decision": "accepted",
                     "rationale": "PROVIDER RATIONALE MUST NOT SURVIVE",
                 }
@@ -112,7 +112,7 @@ def test_rejected_implementer_shape_keeps_closed_disposition_only() -> None:
     assert shape is not None
     assert shape.release_decision == "ready"
     disposition = shape.finding_dispositions[0]
-    assert disposition.finding_id == "C-01"
+    assert disposition.finding_id == "R-01"
     assert disposition.decision == "accepted"
     encoded = json.dumps(rejected_native_response_shape_document(shape))
     assert "PROVIDER/PATH/MUST/NOT/SURVIVE" not in encoded

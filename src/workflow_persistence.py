@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from agent_runtime import (
-    NativeAgentCodexOutput as NativeAgentImplementerOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
 )
@@ -40,6 +40,7 @@ from artifact_models import (
     GateTransitionPayload,
     InvocationFailurePayload,
     ProviderContentPayload,
+    ProviderAttemptPayload,
     QuotaPausePayload,
     RecordType,
     ReviewAnchor,
@@ -180,7 +181,7 @@ def scope_extension_source_request_id(
         record
         for record in chain
         if isinstance(record.payload, AgentResultPayload)
-        and record.payload.role is Role.CODEX  # allowlist:provider -- canonical role
+        and record.payload.role is Role.IMPLEMENTER
         and record.payload.work_unit_id == str(work_unit_id)
         and record.payload.outcome == "stopped"
         and record.fingerprint.sha256 == fingerprint
@@ -861,6 +862,7 @@ class WorkflowPersistence:
                 )
             previous = path.read_text(encoding="utf-8")
             if previous != content:
+                self._recompose_failed_correction_request(invocation, previous, content)
                 self._raise_request_binding_difference(previous, content)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -874,6 +876,7 @@ class WorkflowPersistence:
                 )
             previous = path.read_text(encoding="utf-8")
             if previous != content:
+                self._recompose_failed_correction_request(invocation, previous, content)
                 self._raise_request_binding_difference(previous, content)
         if path.read_text(encoding="utf-8") != content:
             raise WorkflowExecutionError(
@@ -881,24 +884,79 @@ class WorkflowPersistence:
             )
 
     @staticmethod
-    def _raise_request_binding_difference(previous: str, current: str) -> None:
-        def binding(document_text: str) -> str:
-            try:
-                wrapper = json.loads(document_text)
-                request = json.loads(wrapper["canonical_request"])
-                value = request["current_fingerprint"]
-            except (KeyError, TypeError, json.JSONDecodeError) as exc:
-                raise WorkflowExecutionError(
-                    "persisted native agent request binding is invalid"
-                ) from exc
-            if not isinstance(value, str):
-                raise WorkflowExecutionError(
-                    "persisted native agent request binding is invalid"
-                )
-            return value
+    def _request_binding(document_text: str) -> str:
+        try:
+            wrapper = json.loads(document_text)
+            request = json.loads(wrapper["canonical_request"])
+            value = request["current_fingerprint"]
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise WorkflowExecutionError(
+                "persisted native agent request binding is invalid"
+            ) from exc
+        if not isinstance(value, str):
+            raise WorkflowExecutionError(
+                "persisted native agent request binding is invalid"
+            )
+        return value
 
-        previous_binding = binding(previous)
-        current_binding = binding(current)
+    def _recompose_failed_correction_request(
+        self, invocation: object, previous: str, current: str
+    ) -> None:
+        if invocation.step is not WorkflowStep.IMPLEMENTER_CORRECTION:
+            return
+        previous_binding = self._request_binding(previous)
+        current_binding = self._request_binding(current)
+        if previous_binding == current_binding:
+            return
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            return
+        chain = bridge.store.current_chain()
+        replay = replay_artifacts(chain, state.run_id)
+        effects = tuple(
+            item for item in replay.side_effects
+            if item.effect_class == "provider_start"
+            and item.work_unit_id == str(invocation.work_unit_id)
+            and len(item.operation) == 7
+            and item.operation[0] == state.protocol_binding.implementer_profile.provider
+            and item.operation[1] == invocation.step.value
+            and item.operation[4] in {
+                f"request:{invocation.request_sequence}",
+                f"round:{invocation.request_sequence}",
+            }
+        )
+        if not effects or any(
+            item.operation[3] != previous_binding
+            or item.result is None
+            or not item.result.startswith("failed:")
+            for item in effects
+        ):
+            return
+        for item in effects:
+            if not any(
+                isinstance(record.payload, ProviderAttemptPayload)
+                and record.payload.phase == "failed"
+                and record.payload.role is Role.IMPLEMENTER
+                and record.payload.work_unit_id == str(invocation.work_unit_id)
+                and record.payload.operation == invocation.step.value
+                and record.payload.input_digest == item.operation[2]
+                and record.payload.binding_fingerprint == previous_binding
+                and record.payload.attempt_number == int(item.operation[5])
+                and item.result == f"failed:{record.payload.failure_kind}"
+                for record in chain
+            ):
+                return
+        raise ProviderRequestRoundRequired(
+            binding_fingerprint=current_binding,
+            previous_input_digest=hashlib.sha256(previous.encode("utf-8")).hexdigest(),
+            current_input_digest=hashlib.sha256(current.encode("utf-8")).hexdigest(),
+        )
+
+    @classmethod
+    def _raise_request_binding_difference(cls, previous: str, current: str) -> None:
+        previous_binding = cls._request_binding(previous)
+        current_binding = cls._request_binding(current)
         if previous_binding != current_binding:
             raise WorkflowExecutionError(
                 "native agent request immutable binding differs: "
@@ -1009,7 +1067,7 @@ class WorkflowPersistence:
             != NATIVE_IMPLEMENTER_TRANSPORT
         ):
             raise WorkflowExecutionError(
-                "native Codex persistence lacks its immutable transport binding"
+                "native implementer persistence lacks its immutable transport binding"
             )
         unit = state.current_work_unit
         logical = (
@@ -1018,7 +1076,7 @@ class WorkflowPersistence:
         )
         payload = agent_result_payload(
             output.result,
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=unit.work_unit_id,
             transport_schema=NATIVE_IMPLEMENTER_TRANSPORT,
             request_id=output.request_id,
@@ -1058,7 +1116,7 @@ class WorkflowPersistence:
             else FingerprintKind.IMPLEMENTATION
         )
         content_record = self._persist_provider_content(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=unit.work_unit_id,
             request_sequence=request_sequence,
             operation=state.current_step.value,
@@ -1094,7 +1152,7 @@ class WorkflowPersistence:
             bridge.append(
                 finding_payload(
                     finding,
-                    actor=AgentRole.CODEX,
+                    actor=AgentRole.IMPLEMENTER,
                     action="responded",
                     rationale=response.rationale,
                     work_unit_id=unit.work_unit_id,
@@ -1131,7 +1189,7 @@ class WorkflowPersistence:
             or native_context.approval_marker is not ApprovalMarker.FINAL_REVIEW
         ):
             raise WorkflowExecutionError(
-                "final review completion lacks its implementation-run step binding"
+                "final review completion lacks its dedicated run binding"
             )
         reviewed_head = state.current_slice.commit_ref
         if reviewed_head is None:
@@ -1254,15 +1312,15 @@ class WorkflowPersistence:
             state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_REVIEW_TRANSPORT
-            or output.result.reviewer is not AgentRole.CLAUDE
+            or output.result.reviewer is not AgentRole.REVIEWER
         ):
             raise WorkflowExecutionError(
-                "native review persistence lacks its immutable Claude binding"
+                "native review persistence lacks its immutable reviewer binding"
             )
         unit = state.current_work_unit
         review_type = (
             "final review"
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
             else "slice review"
         )
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"

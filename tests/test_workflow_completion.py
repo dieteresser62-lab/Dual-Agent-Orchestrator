@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -141,9 +143,9 @@ class CompletionRun:
 def completion(root: Path, *, merge: bool = True,
                archive_pattern: str | None = None,
                run_id: str = "run", branch: str = "feature/task") -> CompletionRun:
-    return CompletionRun(root, MemoryBridge(), RunProfilePayload(
-        RoleProfilePayload("implementer", "high"),
-        RoleProfilePayload("reviewer", "high"),
+    return CompletionRun(root, MemoryBridge(), bound_run_profile(
+        bound_role_profile("implementer", "high"),
+        bound_role_profile("reviewer", "high"),
         merge_completed_branch=merge, base_branch="main",
         archive_run_directory=archive_pattern,
     ), run_id, branch)
@@ -913,7 +915,7 @@ def test_legacy_profile_completion_does_not_start_post_merge_hook(
     hook.chmod(0o755)
     run = completion(root, merge=merge)
     legacy_document = artifact_payload_document(
-        RunProfilePayload(
+        bound_run_profile(
             run.profile.implementer, run.profile.reviewer,
             merge_completed_branch=merge, base_branch="main",
             post_merge_hook_enabled=False,
@@ -1394,7 +1396,7 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
     def codex(_driver, invocation):  # type: ignore[no-untyped-def]
         target = root / "src/one.py"
         target.parent.mkdir(parents=True, exist_ok=True)
-        if invocation.step.value == "codex_plan":
+        if invocation.step.value == "implementer_plan":
             target.write_text("value = 0\n")
             return _native_plan_output(invocation, summary="add value",
                                        scope_paths=(audit_path, "src/one.py"))
@@ -1402,11 +1404,11 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
         return _native_implementation_output(invocation)
 
     def review(driver, invocation):  # type: ignore[no-untyped-def]
-        if invocation.step.value == "claude_final_review":
+        if invocation.step.value == "reviewer_final_review":
             return _native_final_review_output(driver, invocation, finding_id=None)
         return _native_review_approval(invocation)
 
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
     monkeypatch.chdir(root)
     real_hook = workflow_completion._run_hook

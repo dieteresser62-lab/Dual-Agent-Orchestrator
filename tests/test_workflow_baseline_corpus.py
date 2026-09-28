@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_state_profile
+
 import ast
 import copy
 import json
@@ -358,9 +360,9 @@ def _state(
         # The frozen corpus records the role profiles in force when it was captured.
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
-            claude_profile=AgentProfileBinding("sonnet", "high"),
+            "3",
+            implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+            reviewer_profile=bound_state_profile("sonnet", "high"),
         ),
         timestamp=STAMP,
     )
@@ -375,7 +377,7 @@ def _state(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             updated_at=STAMP,
         )
         .bind_current_slice_git_boundary(
@@ -454,13 +456,13 @@ def _state_binding(state: WorkflowState) -> dict[str, object]:
             if binding is None
             else {
                 "mode": binding.mode.value,
-                "codex_profile": {
-                    "model": binding.codex_profile.model,
-                    "effort": binding.codex_profile.effort,
+                "implementer_profile": {
+                    "model": binding.implementer_profile.model,
+                    "effort": binding.implementer_profile.effort,
                 },
-                "claude_profile": {
-                    "model": binding.claude_profile.model,
-                    "effort": binding.claude_profile.effort,
+                "reviewer_profile": {
+                    "model": binding.reviewer_profile.model,
+                    "effort": binding.reviewer_profile.effort,
                 },
             }
         ),

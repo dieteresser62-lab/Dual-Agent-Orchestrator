@@ -8,32 +8,33 @@ import pytest
 
 from contracts import (
     AgentRole,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     ReadinessMarker,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import (
-    NativeCodexEvidenceInput,
-    NativeCodexRequestSpec,
-    build_native_codex_request,
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
 )
 from provider_input_efficiency import (
     build_correction_execution_package,
     build_slice_execution_package,
     compare_provider_input_components,
 )
-from prompts import NATIVE_CODEX_SYSTEM_POLICY
+from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/provider_input_efficiency/native-only-cutover-baseline-v1.json"
 LOCK = FIXTURE.with_name("native-only-cutover-baseline-v1.lock.json")
-REVIEWED_BASELINE_SHA256 = "3f07b52b79badf1340998973c4145b20a93892ea0f174942cd21ab1331c7adfc"
-REVIEWED_LOCK_SHA256 = "11bb60a6aed1ab78b7911d9a2eb9ea6a216b845a313c324df0558085ad9fabb9"
+# Slice 8b wire cut: role and operation metadata in the reviewed baseline.
+REVIEWED_BASELINE_SHA256 = "35a6856429189bd1e7b07baa76aab03f9fe4b166e194a25d26149c749fa44b26"
+REVIEWED_LOCK_SHA256 = "f93893fb30b8dfa8ada40b1f12ab7c6915d73fb5ecc7c91386baac2b07aaafd6"
 
 
 def _sha256(data: bytes) -> str:
@@ -47,6 +48,17 @@ def test_reviewed_baseline_and_lock_are_immutable() -> None:
 
     assert _sha256(baseline_bytes) == REVIEWED_BASELINE_SHA256
     assert _sha256(lock_bytes) == REVIEWED_LOCK_SHA256
+    # Slice 8b wire cut: only operation and role labels changed in the frozen
+    # baseline; rebinding the lock digest recreates both prior byte pins.
+    prior = json.loads(baseline_bytes)
+    for row in prior["operations"]:
+        row["operation"] = row["operation"].replace("implementer_", "codex_")
+        row["role"] = "codex"
+    prior_bytes = (json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    assert _sha256(prior_bytes) == "66cad69014a7407d5fd0fdf2bc07f062b4da8c2c88f8a81b4e0dcef948d036a5"
+    prior_lock = {**lock, "baseline_sha256": _sha256(prior_bytes)}
+    prior_lock_bytes = (json.dumps(prior_lock, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    assert _sha256(prior_lock_bytes) == "f8a25a2d6c9d080984934da28d3f168bf684f7513c9f809e375f8bb8ba8f4152"
     assert lock["baseline_sha256"] == REVIEWED_BASELINE_SHA256
     assert lock["fixture_version"] == "native-only-cutover-baseline-v1"
     assert lock["expected_removed_evidence_ids"] == [
@@ -60,12 +72,10 @@ def test_frozen_baseline_component_bindings_are_internally_complete() -> None:
     assert document["fixture_version"] == "native-only-cutover-baseline-v1"
     operations = document["operations"]
     assert [item["operation"] for item in operations] == [
-        "codex_plan",
-        "codex_plan_revision",
-        "codex_implementation",
-        "codex_correction",
-        "codex_final_review",
-        "codex_final_correction",
+        "implementer_plan",
+        "implementer_plan_revision",
+        "implementer_implementation",
+        "implementer_correction",
     ]
     for row in operations:
         components = {item["name"]: item for item in row["components"]}
@@ -161,21 +171,21 @@ def test_slice_package_excludes_sibling_sentinels_and_binds_source_plan() -> Non
 
 def test_slice_package_projects_only_open_findings_in_id_order() -> None:
     closed = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="Closed imported finding",
         acceptance_test="The closed lifecycle remains review authority.",
-        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
         status_rationale="Closed in the source run.",
     )
     open_finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Open imported finding",
         acceptance_test="Codex receives the exact imported acceptance test.",
-        origin=FindingOrigin("PLAN", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 2, AgentRole.REVIEWER),
     )
 
     package = build_slice_execution_package(
@@ -188,9 +198,9 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
 
     assert json.loads(package.canonical_json)["slice"]["open_findings"] == [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "finding_class": "FINDING",
-            "reporter": "claude",
+            "reporter": "reviewer",
             "summary": "Open imported finding",
             "acceptance_test": "Codex receives the exact imported acceptance test.",
         }
@@ -199,12 +209,12 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
 
 def test_slice_package_rejects_duplicate_finding_identity() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Duplicated imported finding",
         acceptance_test="Reject before provider construction.",
-        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
     )
 
     with pytest.raises(ValueError, match="slice findings must be unique"):
@@ -219,35 +229,35 @@ def test_slice_package_rejects_duplicate_finding_identity() -> None:
 
 def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Synthetic affected finding",
         acceptance_test="The compact correction stays bound.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     fingerprint = hashlib.sha256(f"fingerprint:{operation}".encode()).hexdigest()
     request_kind = (
-        NativeCodexRequestKind.IMPLEMENTATION
-        if operation == "codex_implementation"
-        else NativeCodexRequestKind.CORRECTION
+        NativeImplementerRequestKind.IMPLEMENTATION
+        if operation == "implementer_implementation"
+        else NativeImplementerRequestKind.CORRECTION
     )
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="baseline-native-only-cutover",
-        work_unit_id="3" if operation == "codex_implementation" else "4",
+        work_unit_id="3" if operation == "implementer_implementation" else "4",
         operation=operation,
         current_fingerprint=fingerprint,
         request_kind=request_kind,
-        contract=CodexStepContract(
+        contract=ImplementerStepContract(
             name=f"baseline-{operation}",
             readiness_marker=ReadinessMarker.IMPLEMENTATION,
             slice_id="01",
-            round_number=2 if request_kind is NativeCodexRequestKind.CORRECTION else 1,
+            round_number=2 if request_kind is NativeImplementerRequestKind.CORRECTION else 1,
             require_test_files_record=True,
         ),
-        previous_findings=(finding,) if request_kind is NativeCodexRequestKind.CORRECTION else (),
+        previous_findings=(finding,) if request_kind is NativeImplementerRequestKind.CORRECTION else (),
     )
-    if request_kind is NativeCodexRequestKind.IMPLEMENTATION:
+    if request_kind is NativeImplementerRequestKind.IMPLEMENTATION:
         package = build_slice_execution_package(
             plan_text=_three_slice_plan(),
             source_plan_path="docs/internal/plan.md",
@@ -255,7 +265,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             authorized_paths=("src/target.py", "tests/test_target.py"),
         )
         assignment = "Implement only the bound Slice execution package."
-        evidence = NativeCodexEvidenceInput(
+        evidence = NativeImplementerEvidenceInput(
             "slice-execution-package",
             "slice_execution_package",
             package.canonical_json,
@@ -269,13 +279,13 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             current_delta="diff --git a/src/target.py b/src/target.py\n+fixed\n",
         )
         assignment = "Correct only the affected findings and current delta."
-        evidence = NativeCodexEvidenceInput(
+        evidence = NativeImplementerEvidenceInput(
             "correction-execution-package",
             "correction_execution_package",
             package.canonical_json,
         )
-    bundle = build_native_codex_request(
-        NativeCodexRequestSpec(
+    bundle = build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native-only-transport-and-efficiency",
             base_commit="bdb955d4ca56ca292dd8bcbd4d1e776a2acb7a1b",
@@ -285,10 +295,10 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
             evidence=tuple(
                 sorted(
                     (
-                        NativeCodexEvidenceInput(
+                        NativeImplementerEvidenceInput(
                             "native-policy",
                             "system_policy",
-                            NATIVE_CODEX_SYSTEM_POLICY,
+                            NATIVE_IMPLEMENTER_SYSTEM_POLICY,
                         ),
                         evidence,
                     ),
@@ -310,12 +320,12 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
 
 def test_correction_package_contains_only_affected_open_finding_and_current_delta() -> None:
     affected = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="AFFECTED-SENTINEL",
         acceptance_test="CURRENT-ACCEPTANCE-SENTINEL",
-        origin=FindingOrigin("02", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("02", 2, AgentRole.REVIEWER),
     )
     package = build_correction_execution_package(
         current_fingerprint="d" * 64,
@@ -339,7 +349,7 @@ def test_current_execution_packages_have_exact_frozen_baseline_deltas() -> None:
     assert lock["baseline_sha256"] == _sha256(baseline_bytes)
     document = json.loads(baseline_bytes)
 
-    for operation in ("codex_implementation", "codex_correction"):
+    for operation in ("implementer_implementation", "implementer_correction"):
         row = next(
             item for item in document["operations"] if item["operation"] == operation
         )

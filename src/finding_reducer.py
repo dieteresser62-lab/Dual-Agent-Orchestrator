@@ -591,7 +591,7 @@ def apply_finding_responses(
         )
     missing = _missing_finding_response_ids(open_ids, response_ids)
     if missing:
-        raise ValueError(f"missing disposition for {missing[0]}")
+        raise ValueError("missing disposition for " + ", ".join(missing))
     by_id = {item.finding_id: item for item in canonical}
     for response in responses:
         finding = by_id[response.finding_id]

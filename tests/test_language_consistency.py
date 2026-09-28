@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tokenize
 import tomllib
 from pathlib import Path
 
@@ -13,7 +15,8 @@ import pytest
 
 from audit_trail import strip_managed_audit_sections
 from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
-from cli import build_parser, parse_args
+from cli import build_parser, load_repo_config, parse_args
+from agent_roles import AgentSlot
 
 ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
@@ -192,10 +195,10 @@ def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> 
         assert "validation" in text.lower()
     shared = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for native_contract_term in (
-        "native-agent-codex-request-v2",
-        "native-agent-codex-result-v2",
-        "native-agent-review-request-v2",
-        "native-agent-review-result-v2",
+        "native-agent-implementer-request-v3",
+        "native-agent-implementer-result-v3",
+        "native-agent-review-request-v3",
+        "native-agent-review-result-v3",
         "request binding",
         "domain validation",
         "Plain-text result markers",
@@ -204,70 +207,37 @@ def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> 
 
 
 def test_root_roles_share_structured_artifact_authority_contract() -> None:
-    required = (
-        "## Structured artifact authority",
-        "Native JSON results are validated",
-        ".orchestrator/artifacts/<run-id>/records/",
-        "technical source of truth",
-        "disposable projection used only to locate its `run_id`",
-        "human audit view rather than a repair source",
-        "state-projection reducer version",
-        "foreign reducer semantics, including the pre-cutover reducer, is rejected fail-closed",
-        "scripts/verify_legacy_chain.py",
+    shared = ROLE_FILES[0].read_text(encoding="utf-8")
+    for fragment in (
+        "## Structured artifact authority", "Native JSON results are validated",
+        ".orchestrator/artifacts/<run-id>/records/", "technical source of truth",
+        "state-projection reducer version", "the matching older orchestrator release",
         "exact cut of the canonical pre-work baseline append sequence",
-        "Any non-prefix fact",
         "UNSUPPORTED-PROTOCOL",
-        "never migrated, repaired, or used as a fallback",
-    )
-    sections = []
-    for path in ROLE_FILES:
-        text = path.read_text(encoding="utf-8")
-        assert all(fragment in text for fragment in required), path.name
-        assert "Pre-R1 chains without those records remain readable" not in text
-        assert (
-            "The initializer may finish only the exact canonical incomplete "
-            "baseline prefix described above"
-        ) in text
-        section = text.split(required[0], 1)[1].split("\n## ", 1)[0].strip()
-        sections.append(section)
-    assert len(set(sections)) == 1
-
+    ):
+        assert fragment in shared
+    for path in ROLE_FILES[1:]:
+        entry = path.read_text(encoding="utf-8")
+        assert "`AGENTS.md`" in entry
+        assert "## Structured artifact authority" not in entry
+        assert len(entry) < 1000
 
 def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
-    headings = (
-        "## PLAN_ONLY repository artifact",
-        "## Validation tiers",
-    )
-    sections: dict[str, list[str]] = {heading: [] for heading in headings}
-    for path in ROLE_FILES:
-        text = path.read_text(encoding="utf-8")
-        for fragment in (
-            "creates or updates the exact repository file at `WORK_PLAN_PATH`",
-            "`SLICE_PLAN` record for that path as a receipt",
-            "correct” explicitly means create the missing file",
-            "path is written as a bullet with the path enclosed in backticks",
-            "standalone line `**Akzeptanzkriterien**`",
-            "configured `--agents-file` (root `AGENTS.md` by default)",
-            "does not append `CLAUDE.md` or `CODEX.md`",
-            "Codex CLI may also discover `AGENTS.md`",
-            "Every review with a `ReviewPacket` uses its manifest-selected",
-            "Every review without a packet uses the full read-only Git snapshot",
-            "git ls-files --cached --others --exclude-standard",
-            "direct `IMPLEMENT` flows without an approved work plan",
-            "A root role file is manifest-dependent only when a packet exists",
-            "tests marked `crash_harness`",
-            "python3 -m pytest tests/test_crash_harness.py -v",
-            "before the same-run final full-branch review",
-            "The orchestrator does not select or enforce this standalone command",
-            "The operator treats a merge as permitted only when",
-            "never sampled or reduced",
-        ):
-            assert fragment in text, f"{path.name}: {fragment}"
-        for heading in headings:
-            section = text.split(heading, 1)[1].split("\n## ", 1)[0].strip()
-            sections[heading].append(section)
-    assert all(len(set(values)) == 1 for values in sections.values())
-
+    shared = ROLE_FILES[0].read_text(encoding="utf-8")
+    for fragment in (
+        "## PLAN_ONLY repository artifact", "## Validation tiers",
+        "creates or updates the exact repository file at `WORK_PLAN_PATH`",
+        "`SLICE_PLAN` record for that path as a receipt",
+        "configured `--agents-file` (root `AGENTS.md` by default)",
+        "A provider CLI may also discover `AGENTS.md`",
+        "Every review with a `ReviewPacket` uses its manifest-selected",
+        "Every review without a packet uses the full read-only Git snapshot",
+        "git ls-files --cached --others --exclude-standard",
+        "A root role file is manifest-dependent only when a packet exists",
+        "tests marked `crash_harness`",
+        "python3 -m pytest tests/test_crash_harness.py -v",
+    ):
+        assert fragment in shared
 
 def test_crash_harness_is_complete_but_not_in_default_slice_validation() -> None:
     repository_config = tomllib.loads(
@@ -308,12 +278,13 @@ def test_record_authority_module_headers_match_the_root_contract() -> None:
         assert all(fragment in header for fragment in fragments), filename
 
 
-def test_claude_profile_is_persistently_opus_high() -> None:
-    claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "Opus" in claude and "`high`" in claude
-    assert "Opus" in agents and "`high`" in agents
-
+def test_reviewer_profile_is_loaded_from_toml() -> None:
+    config = load_repo_config(ROOT / "orchestrator.toml")
+    reviewer = config.agent_profiles[config.roles[AgentSlot.REVIEWER]]
+    assert reviewer.provider == "claude" and reviewer.model == "opus"
+    assert reviewer.effort == "high"
+    for path in ROLE_FILES:
+        assert "Opus" not in path.read_text(encoding="utf-8")
 
 def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
     forbidden = (
@@ -650,8 +621,8 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--transient-retry-initial-delay <seconds>` | `{args.transient_retry_policy.initial_delay_seconds}` |",
         f"| `--transient-retry-max-delay <seconds>` | `{args.transient_retry_policy.maximum_delay_seconds}` |",
         f"| `--transient-retry-max-auto-resumes <count>` | `{args.transient_retry_policy.maximum_auto_resumes}` |",
-        f"`claude`, `{args.agent_settings['claude'].model}`, ohne \u005aeitlimit, `{args.agent_settings['claude'].effort}`",
-        f"`codex`, `{args.agent_settings['codex'].model}`, ohne \u005aeitlimit, `{args.agent_settings['codex'].effort}`",
+        f"`claude`, `{args.slot_settings['reviewer'].model}`, ohne \u005aeitlimit, `{args.slot_settings['reviewer'].effort}`",
+        f"`codex`, `{args.slot_settings['implementer'].model}`, ohne \u005aeitlimit, `{args.slot_settings['implementer'].effort}`",
         "`RUN_TASK_QUOTA_AUTO_RESUME`",
         "`RUN_TASK_QUOTA_SAFETY_MARGIN`",
         "`RUN_TASK_QUOTA_MAX_WAIT`",
@@ -668,7 +639,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
     )
     dynamic_role_names = {
         f"RUN_TASK_{role.upper()}_{field.upper()}"
-        for role in ("codex", "claude")
+        for role in ("implementer", "reviewer", "final_reviewer")
         for field in ("binary", "model", "timeout", "effort")
     }
     consumed_names = dynamic_role_names | {
@@ -737,7 +708,7 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "ORCHESTRATOR_MODE: IMPLEMENT",
         "TARGET_BRANCH:",
         "TASK_SCOPE",
-        "Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`",
+        "Der Implementer nutzt standardmäßig Codex mit Sol (`gpt-6-sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus",
         "nano inbox/meine-idee.md",
         "run_task --watch",
         "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
@@ -823,10 +794,10 @@ def test_readme_native_json_contract_matches_the_active_root_contract() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     native_contract_terms = (
-        "native-agent-codex-request-v2",
-        "native-agent-codex-result-v2",
-        "native-agent-review-request-v2",
-        "native-agent-review-result-v2",
+        "native-agent-implementer-request-v3",
+        "native-agent-implementer-result-v3",
+        "native-agent-review-request-v3",
+        "native-agent-review-result-v3",
         "native JSON",
     )
     for term in native_contract_terms:
@@ -845,7 +816,7 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
         re.findall(r"^\s*endif\b", diagram, re.MULTILINE)
     )
     for term in (
-        "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude",
+        "SLICE_PLAN", "PLAN_APPROVAL", "Implementer", "Reviewer",
         "canonical diff", "validation", "local Slice NN commit",
         "Acceptance review", "ordinary Inbox document", "STATUS: DONE",
     ):
@@ -884,7 +855,7 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
         "The operator treats a merge as permitted only when that same green "
         "HEAD-bound evidence exists, or runs a fresh complete proof after HEAD changes."
     )
-    for path in ROLE_FILES:
+    for path in ROLE_FILES[:1]:
         shared_contract_tail = path.read_text(encoding="utf-8").split(
             "## Structured artifact authority", 1
         )[1]
@@ -905,6 +876,12 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
 _RETIREMENT_EVIDENCE_PREFIX = "antigravity-endgueltige-entfernung-"
 _RETIREMENT_ARCHIVE = Path("docs/internal/archive")
 _PROVIDER_NAMES = ("codex", "claude")
+_PROVIDER_REFERENCE_CATEGORIES = (
+    "transport", "schema-bound diagnostic", "wire until slice 8/9",
+    "certification data", "role policy file", "legacy branch syntax",
+    "stable audit marker", "historical wire proof",
+    "profile configuration",
+)
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"
 )
@@ -924,17 +901,24 @@ def _matches_config_path(root: Path, path: Path, pattern: str) -> bool:
     )
 
 
-def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
+def _provider_productive_files(
+    root: Path = ROOT, *, include_tests: bool = False
+) -> tuple[Path, ...]:
     with (root / "orchestrator.toml").open("rb") as handle:
         path_config = tomllib.load(handle)["paths"]
     generated_patterns = tuple(path_config.get("generated", ()))
     files: set[Path] = set()
     resolved_root = root.resolve()
-    for pattern in path_config["productive"]:
+    patterns = [*path_config["productive"]]
+    if include_tests:
+        patterns.extend(path_config.get("tests", ()))
+    for pattern in patterns:
         glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
         for path in root.glob(glob_pattern):
             resolved = path.resolve()
             if not resolved.is_file():
+                continue
+            if include_tests and path.is_relative_to(root / "tests") and path.suffix != ".py":
                 continue
             resolved.relative_to(resolved_root)
             files.add(resolved)
@@ -954,8 +938,25 @@ def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
 
 
 def _provider_name_counts(text: str) -> dict[str, int]:
+    lines = text.splitlines()
+    allowed_lines: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT or "# allowlist:provider" not in token.string:
+                continue
+            before = lines[token.start[0] - 1].split("# allowlist:provider", 1)[0]
+            reason = token.string.split("# allowlist:provider -- ", 1)
+            if (
+                re.search(r"codex|claude", before, re.I)
+                and len(reason) == 2
+                and any(reason[1].startswith(category) for category in _PROVIDER_REFERENCE_CATEGORIES)
+            ):
+                allowed_lines.add(token.start[0])
+    except tokenize.TokenError:
+        pass
     text = "\n".join(
-        line for line in text.splitlines() if "# allowlist:provider" not in line
+        line for number, line in enumerate(lines, 1) if number not in allowed_lines
     )
     return {
         name: sum(1 for _match in re.finditer(re.escape(name), text, re.I))
@@ -977,7 +978,7 @@ def _provider_coupling_hits(
         for counts in baseline.values()
     )
     resolved_root = root.resolve()
-    files = _provider_productive_files(root)
+    files = _provider_productive_files(root, include_tests=True)
     current_paths = {
         path.relative_to(resolved_root).as_posix() for path in files
     }
@@ -1159,9 +1160,53 @@ def test_provider_name_counting_is_literal_embedded_case_insensitive_and_nonover
 
 def test_provider_name_counting_ignores_only_explicitly_allowlisted_lines() -> None:
     assert _provider_name_counts(
-        '"claude-review"  # allowlist:provider -- canonical marker\n'
+        '"claude-review"  # allowlist:provider -- wire until slice 8/9: canonical marker\n'
         '"codex-responses"\n'
     ) == {"codex": 1, "claude": 0}
+    assert _provider_name_counts('"codex"  # allowlist:provider\n')["codex"] == 1
+    assert _provider_name_counts('"codex # allowlist:provider -- transport"\n')["codex"] == 1
+
+
+def test_provider_name_ratchet_covers_tests_and_classified_transport(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestrator.toml").write_text(
+        '[paths]\nproductive = []\ntests = ["tests/**"]\ngenerated = []\n',
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "tests/test_new_role.py"
+    test_file.parent.mkdir()
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"schema_version": "provider-name-coupling-baseline-v1", "counts": {}}),
+        encoding="utf-8",
+    )
+    test_file.write_text('role = "Codex"\n', encoding="utf-8")
+    assert _provider_coupling_hits(tmp_path, baseline) == [
+        "tests/test_new_role.py: codex baseline=0 actual=1"
+    ]
+    test_file.write_text(
+        'binary = "codex"  # allowlist:provider -- transport\n',
+        encoding="utf-8",
+    )
+    assert _provider_coupling_hits(tmp_path, baseline) == []
+
+
+def test_provider_allowlist_comments_name_a_category_and_a_provider() -> None:
+    problems = []
+    for path in (*((ROOT / "src").rglob("*.py")), *((ROOT / "tests").rglob("*.py"))):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for token in tokenize.generate_tokens(io.StringIO("\n".join(lines)).readline):
+            if token.type != tokenize.COMMENT or "# allowlist:provider" not in token.string:
+                continue
+            before = lines[token.start[0] - 1].split("# allowlist:provider", 1)[0]
+            reasons = token.string.split("# allowlist:provider -- ", 1)
+            if not re.search(r"codex|claude", before, re.I) or not (
+                len(reasons) == 2
+                and any(reasons[1].startswith(category) for category in _PROVIDER_REFERENCE_CATEGORIES)
+            ):
+                problems.append(f"{path.relative_to(ROOT)}:{token.start[0]}")
+    assert not problems, problems
 
 
 def test_provider_name_ratchet_rejects_only_a_temporary_copy_increase(
@@ -1306,7 +1351,7 @@ def test_retirement_guard_ignores_only_managed_audit_projection() -> None:
     ("relative_path", "synthetic"),
     (
         (
-            "schemas/native-agent-codex-result-v2.schema.json",
+            "schemas/native-agent-implementer-result-v3.schema.json",
             '{"pattern": "^[CA]-(0[1-9]|[1-9][0-9]*)$"}',
         ),
         ("src/workflow.py", 'LEGACY_FINDING = "A-02"'),
@@ -2026,3 +2071,94 @@ def test_example_task_declares_every_required_boundary() -> None:
         assert f"## {heading}" in example
     assert "Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden" in example
     assert "Kein Push, Merge, Release oder Deployment" in example
+
+
+def _unfenced_headings(text: str) -> list[str]:
+    headings: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(r"^#{1,6} ", line):
+            headings.append(line)
+    return headings
+
+
+def test_readme_inventory_covers_every_heading_and_existing_symbol_and_proof() -> None:
+    inventory = (ROOT / "docs/internal/rollenneutralitaet-v3.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^\| `(#{1,6} [^`]+)` \| `([^`]+)` \| `([^`]+)` \|$", inventory, re.M)
+    assert rows
+    assert [row[0] for row in rows] == _unfenced_headings((ROOT / "README.md").read_text(encoding="utf-8"))
+    for _, symbol, proof in rows:
+        for entry in (symbol, proof):
+            path_text, function = entry.split("::", 1)
+            path = ROOT / path_text
+            assert path.is_file(), entry
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function for node in tree.body), entry
+
+
+def _fenced_examples(text: str, language: str) -> list[str]:
+    return re.findall(rf"^```{language}\n(.*?)^```", text, re.M | re.S)
+
+
+def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path: Path) -> None:
+    import shlex
+    configs = 0
+    commands = 0
+    final_slot = False
+    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        for index, snippet in enumerate(_fenced_examples(source, "toml")):
+            tomllib.loads(snippet)
+            config_path = tmp_path / f"{Path(name).stem}-{index}.toml"
+            config_path.write_text(snippet, encoding="utf-8")
+            config = load_repo_config(config_path)
+            configs += 1
+            if "final_reviewer = \"final_review\"" in snippet:
+                assert config.roles[AgentSlot.FINAL_REVIEWER] == "final_review"
+                final_slot = True
+        for snippet in _fenced_examples(source, "bash"):
+            logical = snippet.replace("\\\n", " ")
+            for line in logical.splitlines():
+                line = line.strip().removeprefix("> ")
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    words = shlex.split(line, comments=True)
+                except ValueError:
+                    continue
+                starts = [i for i, word in enumerate(words) if Path(word).name == "run_task"]
+                if not starts:
+                    continue
+                args = words[starts[0] + 1:]
+                if any(word in {"|", "&&", ";"} for word in args):
+                    continue
+                if "--help" in args:
+                    continue
+                build_parser().parse_args(args)
+                commands += 1
+    assert configs >= 5 and commands >= 10 and final_slot
+
+
+def test_active_document_links_and_anchors_resolve() -> None:
+    from urllib.parse import unquote, urlsplit
+    paths = [ROOT / name for name in (
+        "README.md", "Quickstart.md", "docs/reference/architecture-and-domain-concept.md",
+        "docs/reference/ablauf-des-orchestrators.md", "docs/reference/einrichtung.md",
+        "docs/internal/rollenneutralitaet-v3.md",
+    )]
+    for source in paths:
+        for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", source.read_text(encoding="utf-8")):
+            if target.startswith(("https://", "http://", "mailto:")):
+                continue
+            url = urlsplit(target)
+            destination = (source.parent / unquote(url.path)).resolve() if url.path else source
+            assert destination.is_file(), f"{source}: {target}"
+            if url.fragment:
+                headings = _unfenced_headings(destination.read_text(encoding="utf-8"))
+                slugs = {
+                    re.sub(r"[^\w-]", "", heading.lstrip("# ").lower().replace(" ", "-"))
+                    for heading in headings
+                }
+                assert unquote(url.fragment) in slugs, f"{source}: {target}"

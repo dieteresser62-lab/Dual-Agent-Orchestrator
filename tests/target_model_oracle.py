@@ -13,6 +13,8 @@ combinatorial axes.
 
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
@@ -67,7 +69,7 @@ from finding_reducer import (
     project_reviewer_persistence_transitions,
     reduce_finding_records,
 )
-from native_codex_contract import NativeFindingDisposition, _apply_dispositions  # allowlist:provider -- exercised production contract
+from native_implementer_contract import NativeFindingDisposition, _apply_dispositions
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
@@ -622,12 +624,12 @@ def _finding(
     decision: FindingResponseDecision | None = None,
 ) -> FindingRecord:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=finding_class,
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
         acceptance_test="The reported behavior is corrected.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         affected_paths=("src/native_review_contract.py",),
     )
     if decision is None:
@@ -636,7 +638,7 @@ def _finding(
         (finding,),
         (
             FindingResponseEvent(
-                "C-01", decision, "Implementer response for the oracle probe."
+                "R-01", decision, "Implementer response for the oracle probe."
             ),
         ),
     )[0]
@@ -646,7 +648,7 @@ def _context(
     previous: tuple[FindingRecord, ...] = (),
     *,
     approval: ApprovalMarker = ApprovalMarker.SLICE,
-    operation: str = "claude_slice_review",  # allowlist:provider -- persisted operation vocabulary
+    operation: str = "reviewer_slice_review",
     round_number: int = 2,
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
@@ -657,7 +659,7 @@ def _context(
         work_unit_id=WORK_UNIT_ID,
         operation=operation,
         diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        reviewer=AgentRole.REVIEWER,
         approval_marker=approval,
         slice_id="PLAN" if approval is ApprovalMarker.PLAN else "01",
         round_number=round_number,
@@ -671,10 +673,10 @@ def _context(
 
 def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": context.request_id,
-        "reviewer": "claude",  # allowlist:provider -- native wire vocabulary
+        "reviewer": "reviewer",
         "decision": "approved" if approved else "denied",
         "new_findings": [],
         "status_changes": [],
@@ -697,7 +699,7 @@ def _typed_response(
 ) -> NativeReviewResult:
     return NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        reviewer=AgentRole.REVIEWER,
         approved=approved,
         new_findings=new_findings,
         status_changes=status_changes,
@@ -730,7 +732,7 @@ class _ReviewProbeCollector:
         target_viable: bool | None = None,
         expected_status: FindingStatus | None = None,
         expected_class: CurrentFindingClass | None = None,
-        locations: tuple[str, ...] = (  # allowlist:provider -- measured code locations
+        locations: tuple[str, ...] = (
             "src/native_review_contract.py",
             "src/finding_reducer.py",
             "src/audit_trail.py",
@@ -772,12 +774,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     context = _context((accepted,))
     closure = NativeFindingClosure(NativeClosureKind.FIXED)
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The implementation resolves the finding.", closure
+        "R-01", FindingStatus.CLOSED, "The implementation resolves the finding.", closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {"kind": "fixed"},
@@ -805,12 +807,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         evidence="The named record evidence disproves the report.",
     )
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The reasoned rejection is accepted.", rejected_closure
+        "R-01", FindingStatus.CLOSED, "The reasoned rejection is accepted.", rejected_closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {
@@ -858,7 +860,7 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     # must all accept that pre-escalation state.
     context = _context(round_number=1)
     new_finding = NativeFinding(
-        "C-01",
+        "R-01",
         CurrentFindingClass.FINDING,
         "The first review discovered a correctable defect.",
         NativeProseAcceptance("Correct the defect before Slice approval."),
@@ -902,12 +904,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     )
     context = _context((blocker,))
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The blocker is fixed.", closure
+        "R-01", FindingStatus.CLOSED, "The blocker is fixed.", closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {"kind": "fixed"},
@@ -926,12 +928,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
 
     context = _context((blocker,))
     status = NativeStatusChange(
-        "C-01", FindingStatus.OPEN, "The blocker remains reproducible."
+        "R-01", FindingStatus.OPEN, "The blocker remains reproducible."
     )
     document = _base_document(context, approved=False)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "OPEN",
             "rationale": status.rationale,
             "closure": None,
@@ -996,9 +998,9 @@ def _finding_record_prefix(
     _new_record(
         records,
         "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("oracle-implementer", "medium"),
-            RoleProfilePayload("oracle-reviewer", "high"),
+        bound_run_profile(
+            bound_role_profile("oracle-implementer", "medium"),
+            bound_role_profile("oracle-reviewer", "high"),
         ),
     )
     for prior in probe.context.previous_findings:
@@ -1018,7 +1020,7 @@ def _finding_record_prefix(
                 f"finding-{prior.finding_id}",
                 finding_payload(
                     prior,
-                    actor=AgentRole.CODEX,  # allowlist:provider -- current typed ownership
+                    actor=AgentRole.IMPLEMENTER,
                     action="responded",
                     rationale=response.rationale,
                     work_unit_id=WORK_UNIT_ID,
@@ -1035,7 +1037,7 @@ def _native_opening_record(finding: NativeFinding) -> FindingRecord:
         status=FindingStatus.OPEN,
         summary=finding.summary,
         acceptance_test=finding.acceptance_test.text,
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         affected_paths=finding.affected_paths,
     )
 
@@ -1046,7 +1048,7 @@ def _semantic_match(
 ) -> bool:
     if probe.expected_status is None and probe.expected_class is None:
         return True
-    finding = next((item for item in findings if item.finding_id == "C-01"), None)
+    finding = next((item for item in findings if item.finding_id == "R-01"), None)
     if finding is None:
         return False
     if probe.expected_status is not None and finding.status is not probe.expected_status:
@@ -1066,7 +1068,7 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
     try:
         current = apply_reviewer_events(
             probe.context.previous_findings,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+            reviewer=AgentRole.REVIEWER,
             opened=opened,
             status_changes=statuses,
             escalate_unclosed_findings=not probe.typed_response.approved,
@@ -1152,7 +1154,7 @@ def _audit_probe(
             )
         )
         projection = AuditEventSequence(slice_id=slice_id, events=tuple(events))
-        review = projection.latest_review(AgentRole.CLAUDE)
+        review = projection.latest_review(AgentRole.REVIEWER)
         matched = review is not None and _semantic_match(review.result.findings, probe)
         return matched, (
             "audit projection reached the requested semantic state"
@@ -1173,7 +1175,7 @@ def _commit_probe(
         slice_id=1,
         diff_fingerprint=FINGERPRINT,
         attestation=result.validation or _attestation(),
-        claude_review=result,
+        reviewer_review=result,
         findings=result.findings,
     )
     try:
@@ -1281,7 +1283,7 @@ class _OracleWorkflowDriver:
                 "discovery" if round_number == 1 else "convergence"
             )),
             progress_made=True,
-            newly_opened_finding_ids=("C-01",),
+            newly_opened_finding_ids=("R-01",),
             closed_local_finding_ids=(),
             attested_remediation_finding_ids=(),
             reason="the oracle supplies a progressing record-backed review round",
@@ -1304,7 +1306,7 @@ def _workflow_probe(
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
     )
     history = WorkflowHistory(
         state.current_work_unit_id,
@@ -1317,7 +1319,7 @@ def _workflow_probe(
             state=state,
             context=SimpleNamespace(),  # only stop/plan branches inspect context
             history=history,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+            reviewer=AgentRole.REVIEWER,
             result=result,
             fingerprint=FINGERPRINT,
             round_number=probe.context.round_number,
@@ -1330,7 +1332,7 @@ def _workflow_probe(
     expected_step = (
         WorkflowStep.SLICE_COMMIT
         if result.approval is True
-        else WorkflowStep.CODEX_CORRECTION
+        else WorkflowStep.IMPLEMENTER_CORRECTION
     )
     expected_open_ids = (
         ()
@@ -1469,7 +1471,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     plan_context = _context(
         (plan_finding,),
         approval=ApprovalMarker.PLAN,
-        operation="claude_plan_review",  # allowlist:provider -- persisted operation vocabulary
+        operation="reviewer_plan_review",
         planned_slices=(
             PlannedSlice(
                 1,
@@ -1542,7 +1544,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             complete_dispositions_enforced,
             contract_detail,
             record_detail,
-            ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),
         )
     )
 
@@ -1552,7 +1554,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             blocker,
             (
                 NativeFindingDisposition(
-                    "C-01",
+                    "R-01",
                     FindingResponseDecision.REJECTED,
                     "The implementation disputes the blocker.",
                 ),
@@ -1578,7 +1580,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             "Finding response records reject the blocker rejection"
             if not blocker_rejection_accepted
             else "Finding response records accept the blocker rejection",
-            ("src/native_codex_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),
         )
     )
 
@@ -1594,9 +1596,9 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     )
     for index in range(DEFAULT_LOOP_ROUND_LIMIT):
         state = state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,  # allowlist:provider -- current typed ownership
-            open_findings=("C-01",),
-            return_step=WorkflowStep.CODEX_PLAN_REVISION,  # allowlist:provider -- persisted step vocabulary
+            reviewer=Reviewer.REVIEWER,
+            open_findings=("R-01",),
+            return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
             progress_made=True,
             updated_at=f"oracle-round-{index + 1}",
         )
@@ -1639,8 +1641,8 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         engine,
         SimpleNamespace(current_slice=SimpleNamespace(start_fingerprint=slice_start)),
         SimpleNamespace(approved_plan_text=None),
-        WorkflowHistory(1, last_claude_fingerprint=previous),  # allowlist:provider -- current persisted field
-        AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        WorkflowHistory(1, last_reviewer_fingerprint=previous),
+        AgentRole.REVIEWER,
         SimpleNamespace(),
         SimpleNamespace(fingerprint=POST_FINGERPRINT, full_diff="full diff"),
         False,

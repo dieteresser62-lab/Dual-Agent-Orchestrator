@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 import hashlib
 import json
 from pathlib import Path
@@ -11,12 +12,15 @@ import pytest
 import artifact_models
 import artifact_resume
 import artifact_store as artifact_store_module
+import agent_runtime
+import workflow_run_setup
 import orchestrator as orchestrator_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
-from artifact_models import FingerprintKind, canonical_json
+from artifact_models import FingerprintKind, WorkUnitPayload, canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
-from artifact_store import ArtifactStore
+from agent_config import AgentSettings
+from artifact_store import ArtifactCorruptionError, ArtifactStore
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from state_io import (
     STATE_PROJECTION_CACHE_FORMAT,
@@ -26,6 +30,7 @@ from state_io import (
     write_workflow_state_projection,
 )
 from workflow_state import (
+    scripted_profile_binding,
     ProtocolBinding,
     ProtocolMode,
     WorkflowState,
@@ -33,6 +38,7 @@ from workflow_state import (
     WorkUnitKind,
     init_workflow_state,
 )
+from workflow import WorkflowExecutionError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,11 +86,11 @@ def _record_run(
         task_digest="a" * 64,
         task_scope_patterns=("src/cutover.py",),
         target_branch="feature/cutover",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="b" * 40,
         scope_paths=("src/cutover.py",),
@@ -139,6 +145,39 @@ def test_resume_projects_records_and_uses_state_only_as_run_locator(
     assert resolved.state == projected
     assert resolved.state.branch == "feature/cutover"
     assert resolved.state.task_scope_patterns == ("src/cutover.py",)
+
+
+def test_cache_loss_reconstructs_full_profile_and_checks_identity_before_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locator, projected, _driver = _record_run(tmp_path, run_id="complete-profile-cache-loss")
+    store = ArtifactStore(tmp_path, locator.run_id)
+    (tmp_path / ".orchestrator" / "state.json").unlink(missing_ok=True)
+    store.head_path.unlink(missing_ok=True)
+    resolved = resolve_resume_state(tmp_path, locator.run_id)
+    binding = resolved.state.protocol_binding
+    assert binding == projected.protocol_binding
+    assert binding is not None
+    assert {binding.implementer_profile.provider, binding.reviewer_profile.provider} == {"codex", "claude"}
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        profile = getattr(binding, f"{slot}_profile")
+        assert profile.binary_identity.kind == "dry_run"
+        assert profile.binary_identity_sha256 == profile.binary_identity.digest
+        assert profile.certification_sha256
+    slots = {}
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        profile = scripted_profile_binding(slot)
+        alternate_model = "gpt-5.6-sol" if slot == "implementer" else "sonnet"
+        slots[slot] = AgentSettings(
+            profile.provider, profile.binary, alternate_model, None,
+            profile.effort, profile.max_budget_usd,
+        )
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    monkeypatch.setattr(agent_runtime, "verify_agent_capabilities", lambda *_args, **_kwargs: pytest.fail("provider binary must not start"))
+    workflow_run_setup._apply_resumed_agent_profiles(args, resolved.state)
+    for slot in slots:
+        assert args.slot_settings[slot].model == getattr(binding, f"{slot}_profile").model
+        assert args.slot_identities[slot] == getattr(binding, f"{slot}_profile").binary_identity
 
 
 def test_process_local_resolution_is_warm_but_explicit_resume_fully_reloads(
@@ -260,7 +299,7 @@ def test_driver_configures_artifact_phase_progress_threshold(tmp_path: Path) -> 
         task_digest="a" * 64,
         task_scope_patterns=("src/cutover.py",),
         target_branch="feature/cutover",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=tmp_path,
@@ -338,8 +377,8 @@ def test_authoritative_side_effect_result_projects_without_a_mirror_write(
         (("state", "target_branch"), "feature/cache-lie"),
         (("state", "protocol_binding", "mode"), "legacy-state-v3"),
         (("state", "protocol_binding", "schema_version"), "999"),
-        (("state", "protocol_binding", "codex_profile", "model"), "cache-model"),
-        (("state", "protocol_binding", "claude_profile", "effort"), "low"),
+        (("state", "protocol_binding", "implementer_profile", "model"), "cache-model"),
+        (("state", "protocol_binding", "reviewer_profile", "effort"), "low"),
         (("state", "bootstrap_checks"), [{"invented": True}]),
     ),
 )
@@ -437,6 +476,55 @@ def test_deleted_cache_fails_closed_when_any_candidate_chain_is_corrupt(
             expected_task_file=task,
             expected_task_digest="a" * 64,
         )
+
+
+def test_cache_discovery_skips_foreign_schema_and_reducer_runs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    task = tmp_path / "task.md"
+    _record_run(tmp_path, run_id="old-schema", task_file=task)
+    _record_run(tmp_path, run_id="old-reducer", task_file=task)
+    _valid, projected, driver = _record_run(tmp_path, run_id="current-run", task_file=task)
+
+    for run_id, field, value in (
+        ("old-schema", "schema_version", "2"),
+        ("old-reducer", "reducer_version", artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION),
+    ):
+        store = ArtifactStore(tmp_path, run_id)
+        record = next(
+            item for item in store.load_chain()
+            if item.record_type.value == ("task" if field == "schema_version" else "run_profile")
+        )
+        path = store.records_dir / f"{record.record_id}.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        target = envelope["record"] if field == "schema_version" else envelope["record"]["payload"]
+        target[field] = value
+        envelope["content_sha256"] = hashlib.sha256(canonical_json(envelope["record"])).hexdigest()
+        path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    loaded = load_resumable_workflow_state(
+        driver.state_file, repository_root=tmp_path, allowed_roots=(tmp_path,),
+        expected_task_file=task, expected_task_digest=projected.task_digest,
+    )
+    assert loaded == projected
+    assert "Skipping unsupported record run old-schema" in caplog.text
+    assert "Skipping unsupported record run old-reducer" in caplog.text
+    assert "repair or restore" not in caplog.text
+
+
+def test_foreign_schema_diagnostic_precedes_typed_record_validation(
+    tmp_path: Path,
+) -> None:
+    locator, _projected, _driver = _record_run(tmp_path)
+    store = ArtifactStore(tmp_path, locator.run_id)
+    record = store.load_chain()[0]
+    path = store.records_dir / f"{record.record_id}.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["record"]["schema_version"] = "2"
+    envelope["content_sha256"] = hashlib.sha256(canonical_json(envelope["record"])).hexdigest()
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(ArtifactResumeError, match="UNSUPPORTED-PROTOCOL.*schema_version.*matching older orchestrator release"):
+        resolve_resume_state(tmp_path, locator.run_id)
 
 
 @pytest.mark.parametrize(
@@ -567,14 +655,17 @@ def test_foreign_cache_reducer_is_rejected_by_direct_cache_reader(
     document["reducer_version"] = "foreign-reducer"
     driver.state_file.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(StateSchemaError, match="reducer is unsupported"):
+    with pytest.raises(
+        StateSchemaError,
+        match=r"foreign-reducer.*matching older orchestrator release",
+    ):
         load_workflow_state(driver.state_file, allowed_roots=(tmp_path,))
 
 
 def test_record_chain_with_foreign_bound_reducer_is_rejected(
     tmp_path: Path,
 ) -> None:
-    locator, _projected, _driver = _record_run(tmp_path)
+    locator, _projected, driver = _record_run(tmp_path)
     store = ArtifactStore(tmp_path, locator.run_id)
     profile = next(
         record
@@ -584,15 +675,40 @@ def test_record_chain_with_foreign_bound_reducer_is_rejected(
     path = store.records_dir / f"{profile.record_id}.json"
     document = json.loads(path.read_text(encoding="utf-8"))
     document["record"]["payload"]["reducer_version"] = (
-        artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION
+        artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION
     )
     document["content_sha256"] = hashlib.sha256(
         canonical_json(document["record"])
     ).hexdigest()
     path.write_text(json.dumps(document), encoding="utf-8")
+    before = _record_bytes(tmp_path, locator.run_id)
 
     with pytest.raises(
         ArtifactResumeError,
-        match=r"reducer_version.*scripts/verify_legacy_chain\.py",
-    ):
+        match=r"reducer_version.*matching older orchestrator release",
+    ) as raised:
         resolve_resume_state(tmp_path, locator.run_id)
+
+    assert artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+
+    with pytest.raises(
+        ArtifactCorruptionError,
+        match=r"reducer_version.*matching older orchestrator release",
+    ):
+        ArtifactBridge(ArtifactStore(tmp_path, locator.run_id)).append(
+            WorkUnitPayload("3", 1, ("src/cutover.py",)),
+            logical_id="work-unit-3",
+            idempotency_key="foreign-reducer:append",
+            fingerprint_sha256="a" * 64,
+        )
+
+    # Dispatch on a new invocation starts from a fresh validated store.
+    driver._artifact_bridge = ArtifactBridge(ArtifactStore(tmp_path, locator.run_id))
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=r"reducer_version.*matching older orchestrator release",
+    ):
+        driver.assert_structured_decision_context()
+
+    assert _record_bytes(tmp_path, locator.run_id) == before

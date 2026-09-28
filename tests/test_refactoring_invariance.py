@@ -12,20 +12,20 @@ from typing import Callable, Mapping
 import pytest
 
 import orchestrator
-from agent_runtime import NativeAgentCodexOutput, NativeAgentReviewOutput
+from agent_runtime import NativeAgentImplementerOutput, NativeAgentReviewOutput
 from artifact_models import RecordType
 from artifact_store import ArtifactStore
 from cli import parse_args
-from native_codex_contract import (
-    canonical_native_codex_json,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result,
 )
 from native_review_contract import (
     canonical_native_review_json,
     parse_bound_native_contract_result,
 )
 from orchestrator import ProductionWorkflowDriver, run_production_workflow
-from workflow import CodexInvocation, ReviewerInvocation
+from workflow import ImplementerInvocation, ReviewerInvocation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,11 +308,11 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
+def _native_plan_output(invocation: ImplementerInvocation) -> NativeAgentImplementerOutput:
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -331,9 +331,9 @@ def _native_plan_output(invocation: CodexInvocation) -> NativeAgentCodexOutput:
             }
         ],
     }
-    canonical = canonical_native_codex_json(document)
-    return NativeAgentCodexOutput(
-        result=parse_bound_native_codex_contract_result(
+    canonical = canonical_native_implementer_json(document)
+    return NativeAgentImplementerOutput(
+        result=parse_bound_native_implementer_contract_result(
             document, bundle.bound_context
         ),
         canonical_json=canonical,
@@ -348,10 +348,10 @@ def _native_review_approval(
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -414,12 +414,13 @@ def provider_free_record_types(
         cwd=repository,
         environ={},
     )
+    args.scripted_provider_identity = True
 
     patch = pytest.MonkeyPatch()
 
     def codex(
-        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
-    ) -> NativeAgentCodexOutput:
+        _driver: ProductionWorkflowDriver, invocation: ImplementerInvocation
+    ) -> NativeAgentImplementerOutput:
         plan = repository / "docs/internal/work-plan.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text(
@@ -432,7 +433,7 @@ def provider_free_record_types(
         _driver.last_codex_output = output.canonical_json
         return output
 
-    patch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    patch.setattr(ProductionWorkflowDriver, "invoke_implementer", codex)
     patch.setattr(
         ProductionWorkflowDriver,
         "invoke_reviewer",

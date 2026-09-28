@@ -6,85 +6,85 @@
       "trigger": "compare correction finding subset",
       "transition": "review ledger -> correction attribution",
       "events": [
-        {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
-        {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
+        {"op": "open", "finding_id": "R-01", "work_unit": "3"},
+        {"op": "open", "finding_id": "R-02", "work_unit": "3", "class": "FINDING"},
+        {"op": "correction", "work_unit": "4", "finding_ids": ["R-01"]}
       ],
-      "request": {"finding_ids": ["C-01"], "open_only": true},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01"]}, "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened"]}
+      "request": {"finding_ids": ["R-01"], "open_only": true},
+      "expected": {"ledger": ["R-01:OPEN", "R-02:OPEN"], "open": ["R-01", "R-02"], "correction": {"4": ["R-01"]}, "request": ["R-01"], "status_actions": ["R-01:opened", "R-02:opened"]}
     },
     {
       "commit": "47b4ddc",
       "trigger": "reject lossy finding carry-forward",
       "transition": "complete ledger -> bounded correction request",
       "events": [
-        {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
-        {"op": "close", "finding_id": "C-02", "work_unit": "3", "class": "FINDING"},
-        {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
+        {"op": "open", "finding_id": "R-01", "work_unit": "3"},
+        {"op": "open", "finding_id": "R-02", "work_unit": "3", "class": "FINDING"},
+        {"op": "close", "finding_id": "R-02", "work_unit": "3", "class": "FINDING"},
+        {"op": "correction", "work_unit": "4", "finding_ids": ["R-01"]}
       ],
-      "request": {"finding_ids": ["C-01"], "open_only": true},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:CLOSED"], "open": ["C-01"], "correction": {"4": ["C-01"]}, "request": ["C-01"], "status_actions": ["C-01:opened", "C-02:opened", "C-02:status_changed"]}
+      "request": {"finding_ids": ["R-01"], "open_only": true},
+      "expected": {"ledger": ["R-01:OPEN", "R-02:CLOSED"], "open": ["R-01"], "correction": {"4": ["R-01"]}, "request": ["R-01"], "status_actions": ["R-01:opened", "R-02:opened", "R-02:status_changed"]}
     },
     {
       "commit": "24abbfd",
       "trigger": "carry findings across correction rounds",
       "transition": "correction round one -> correction round two",
       "events": [
-        {"op": "open", "finding_id": "C-01", "work_unit": "3"},
-        {"op": "open", "finding_id": "C-02", "work_unit": "4"},
-        {"op": "correction", "work_unit": "4", "round": 1, "finding_ids": ["C-01"]},
-        {"op": "correction", "work_unit": "4", "round": 2, "finding_ids": ["C-02"]}
+        {"op": "open", "finding_id": "R-01", "work_unit": "3"},
+        {"op": "open", "finding_id": "R-02", "work_unit": "4"},
+        {"op": "correction", "work_unit": "4", "round": 1, "finding_ids": ["R-01"]},
+        {"op": "correction", "work_unit": "4", "round": 2, "finding_ids": ["R-02"]}
       ],
-      "request": {"finding_ids": ["C-01", "C-02"]},
-      "expected": {"ledger": ["C-01:OPEN", "C-02:OPEN"], "open": ["C-01", "C-02"], "correction": {"4": ["C-01", "C-02"]}, "request": ["C-01", "C-02"], "status_actions": ["C-01:opened", "C-02:opened"]}
+      "request": {"finding_ids": ["R-01", "R-02"]},
+      "expected": {"ledger": ["R-01:OPEN", "R-02:OPEN"], "open": ["R-01", "R-02"], "correction": {"4": ["R-01", "R-02"]}, "request": ["R-01", "R-02"], "status_actions": ["R-01:opened", "R-02:opened"]}
     },
     {
       "commit": "047934f",
       "trigger": "converge correction finding history",
       "transition": "open -> Codex response -> reviewer closure",
       "events": [
-        {"op": "open", "finding_id": "C-01", "work_unit": "4"},
-        {"op": "respond", "finding_id": "C-01", "work_unit": "4"},
-        {"op": "close", "finding_id": "C-01", "work_unit": "4"},
-        {"op": "correction", "work_unit": "4", "finding_ids": ["C-01"]}
+        {"op": "open", "finding_id": "R-01", "work_unit": "4"},
+        {"op": "respond", "finding_id": "R-01", "work_unit": "4"},
+        {"op": "close", "finding_id": "R-01", "work_unit": "4"},
+        {"op": "correction", "work_unit": "4", "finding_ids": ["R-01"]}
       ],
-      "request": {"finding_ids": ["C-01"]},
-      "expected": {"ledger": ["C-01:CLOSED"], "open": [], "correction": {"4": ["C-01"]}, "request": ["C-01:CLOSED"], "status_actions": ["C-01:opened", "C-01:status_changed"]}
+      "request": {"finding_ids": ["R-01"]},
+      "expected": {"ledger": ["R-01:CLOSED"], "open": [], "correction": {"4": ["R-01"]}, "request": ["R-01:CLOSED"], "status_actions": ["R-01:opened", "R-01:status_changed"]}
     },
     {
       "commit": "5a654d3",
       "trigger": "carry correction finding lineages",
       "transition": "origin work unit -> correction response and closure",
       "events": [
-        {"op": "open", "finding_id": "C-04", "work_unit": "3"},
-        {"op": "correction", "work_unit": "4", "finding_ids": ["C-04"]},
-        {"op": "respond", "finding_id": "C-04", "work_unit": "4"},
-        {"op": "close", "finding_id": "C-04", "work_unit": "4"}
+        {"op": "open", "finding_id": "R-04", "work_unit": "3"},
+        {"op": "correction", "work_unit": "4", "finding_ids": ["R-04"]},
+        {"op": "respond", "finding_id": "R-04", "work_unit": "4"},
+        {"op": "close", "finding_id": "R-04", "work_unit": "4"}
       ],
-      "request": {"finding_ids": ["C-04"]},
-      "expected": {"ledger": ["C-04:CLOSED"], "open": [], "correction": {"4": ["C-04"]}, "request": ["C-04:CLOSED"], "status_actions": ["C-04:opened", "C-04:status_changed"]}
+      "request": {"finding_ids": ["R-04"]},
+      "expected": {"ledger": ["R-04:CLOSED"], "open": [], "correction": {"4": ["R-04"]}, "request": ["R-04:CLOSED"], "status_actions": ["R-04:opened", "R-04:status_changed"]}
     },
     {
       "commit": "ade231f",
       "trigger": "diagnose a reused historical finding identifier",
       "transition": "the first opening remains canonical and the conflicting opening stays visible",
       "events": [
-        {"op": "open", "finding_id": "C-01", "work_unit": "2", "summary": "Historical lineage"},
-        {"op": "open", "finding_id": "C-01", "work_unit": "3", "summary": "Active lineage"},
-        {"op": "close", "finding_id": "C-01", "work_unit": "2"}
+        {"op": "open", "finding_id": "R-01", "work_unit": "2", "summary": "Historical lineage"},
+        {"op": "open", "finding_id": "R-01", "work_unit": "3", "summary": "Active lineage"},
+        {"op": "close", "finding_id": "R-01", "work_unit": "2"}
       ],
       "request": {"work_unit": "3"},
-      "expected": {"ledger": ["C-01:CLOSED"], "lineages": ["2:C-01:CLOSED"], "open": [], "correction": {}, "request": [], "request_by_work_unit": {"2": ["C-01:CLOSED"], "3": []}, "status_actions": ["C-01:opened", "C-01:opened", "C-01:status_changed"], "diagnostics": ["C-01"]}
+      "expected": {"ledger": ["R-01:CLOSED"], "lineages": ["2:R-01:CLOSED"], "open": [], "correction": {}, "request": [], "request_by_work_unit": {"2": ["R-01:CLOSED"], "3": []}, "status_actions": ["R-01:opened", "R-01:opened", "R-01:status_changed"], "diagnostics": ["R-01"]}
     },
     {
       "commit": "286f5b2",
       "trigger": "close finding-state contract gaps",
       "transition": "closed finding rejects a later implementer response",
       "events": [
-        {"op": "open", "finding_id": "C-05", "work_unit": "2"},
-        {"op": "close", "finding_id": "C-05", "work_unit": "2"},
-        {"op": "respond", "finding_id": "C-05", "work_unit": "2"}
+        {"op": "open", "finding_id": "R-05", "work_unit": "2"},
+        {"op": "close", "finding_id": "R-05", "work_unit": "2"},
+        {"op": "respond", "finding_id": "R-05", "work_unit": "2"}
       ],
       "request": {},
       "expected": {"error": "RECORD-TYPE-MISMATCH"}
@@ -94,26 +94,26 @@
       "trigger": "recover pending slice review findings",
       "transition": "advanced slice review durable before closure mirror checkpoint",
       "events": [
-        {"op": "work", "work_unit": "2", "round": 4, "open_ids": ["C-06"]},
-        {"op": "open", "finding_id": "C-06", "work_unit": "2"},
-        {"op": "review", "work_unit": "2", "round": 2, "verdict": "denied", "finding_ids": ["C-06"]},
-        {"op": "close", "finding_id": "C-06", "work_unit": "2"}
+        {"op": "work", "work_unit": "2", "round": 4, "open_ids": ["R-06"]},
+        {"op": "open", "finding_id": "R-06", "work_unit": "2"},
+        {"op": "review", "work_unit": "2", "round": 2, "verdict": "denied", "finding_ids": ["R-06"]},
+        {"op": "close", "finding_id": "R-06", "work_unit": "2"}
       ],
       "request": {"work_unit": "2"},
-      "expected": {"ledger": ["C-06:CLOSED"], "open": [], "correction": {}, "request": ["C-06:CLOSED"], "status_actions": ["C-06:opened", "C-06:status_changed"]}
+      "expected": {"ledger": ["R-06:CLOSED"], "open": [], "correction": {}, "request": ["R-06:CLOSED"], "status_actions": ["R-06:opened", "R-06:status_changed"]}
     },
     {
       "commit": "d24511e",
       "trigger": "preserve omitted findings on denied native reviews",
       "transition": "denial closes one lineage and preserves an omitted open finding",
       "events": [
-        {"op": "open", "finding_id": "C-07", "work_unit": "2"},
-        {"op": "open", "finding_id": "C-08", "work_unit": "2", "class": "FINDING"},
-        {"op": "review", "work_unit": "2", "verdict": "denied", "finding_ids": ["C-07"]},
-        {"op": "close", "finding_id": "C-07", "work_unit": "2"}
+        {"op": "open", "finding_id": "R-07", "work_unit": "2"},
+        {"op": "open", "finding_id": "R-08", "work_unit": "2", "class": "FINDING"},
+        {"op": "review", "work_unit": "2", "verdict": "denied", "finding_ids": ["R-07"]},
+        {"op": "close", "finding_id": "R-07", "work_unit": "2"}
       ],
       "request": {"work_unit": "2", "open_only": true},
-      "expected": {"ledger": ["C-07:CLOSED", "C-08:OPEN"], "open": ["C-08"], "correction": {}, "request": ["C-08"], "status_actions": ["C-07:opened", "C-08:opened", "C-07:status_changed"]}
+      "expected": {"ledger": ["R-07:CLOSED", "R-08:OPEN"], "open": ["R-08"], "correction": {}, "request": ["R-08"], "status_actions": ["R-07:opened", "R-08:opened", "R-07:status_changed"]}
     }
   ]
 }

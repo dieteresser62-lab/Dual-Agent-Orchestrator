@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import asdict, replace
 
 import pytest
+import artifact_models
 
 from artifact_models import (
     AgentResultPayload,
@@ -43,8 +46,10 @@ from artifact_replay import (
     project_work_unit_reviewers,
     replay_artifacts as replay_artifacts_checked,
     replay_findings,
+    validate_provider_record_binding,
 )
 from contracts import FindingResponseDecision, FindingStatus
+from provider_identity import ProviderIdentity
 from workflow_state import Reviewer, WorkflowStep, init_workflow_state
 
 
@@ -60,24 +65,24 @@ def replay_artifacts(records, expected_run_id, **kwargs):  # type: ignore[no-unt
 
 def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         "ready",
         test_files,
-        "native-codex-v2",
-        "native-codex-request-" + "b" * 64,
+        "native-codex-v3",
+        "native-implementer-request-" + "b" * 64,
         "c" * 64,
     )
 
 
 def _review(work_unit_id: str, evidence: str) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         "approved",
         (),
         evidence,
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         "native-review-request-" + "b" * 64,
         "c" * 64,
     )
@@ -107,9 +112,9 @@ def _append(
         _append(
             records,
             "run-profile",
-            RunProfilePayload(
-                RoleProfilePayload("implementer-model", "medium"),
-                RoleProfilePayload("reviewer-model", "high"),
+            bound_run_profile(
+                bound_role_profile("implementer-model", "medium"),
+                bound_role_profile("reviewer-model", "high"),
             ),
         )
     record = ArtifactRecord.create(
@@ -145,9 +150,9 @@ def _chain() -> tuple[ArtifactRecord, ...]:
     _append(
         records,
         "run-profile",
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
     )
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
@@ -192,6 +197,21 @@ def _assert_code(records: tuple[ArtifactRecord, ...], code: ReplayDiagnosticCode
     assert caught.value.code is code
 
 
+def test_foreign_typed_profile_blocks_replay_before_projection() -> None:
+    chain = _chain()
+    profile = chain[1].payload
+    assert isinstance(profile, RunProfilePayload)
+    object.__setattr__(profile, "reducer_version", "foreign-reducer")
+
+    with pytest.raises(ArtifactReplayError) as raised:
+        replay_artifacts(chain, "run-replay")
+
+    assert raised.value.code is ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL
+    assert "foreign-reducer" in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+    assert "matching older orchestrator release" in str(raised.value)
+
+
 def test_replay_is_deterministic_and_does_not_mutate_input() -> None:
     chain = _chain()
     before = tuple(record.canonical_json() for record in chain)
@@ -215,9 +235,9 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
         execution_mode="PLAN_ONLY",
         audit_report_path=None,
     )
-    profile = RunProfilePayload(
-        implementer=RoleProfilePayload("gpt-5.6-sol", "max"),
-        reviewer=RoleProfilePayload("opus", "max"),
+    profile = bound_run_profile(
+        implementer=bound_role_profile("gpt-5.6-sol", "max"),
+        reviewer=bound_role_profile("opus", "max"),
     )
     _append(records, "run-identity", identity)
     _append(records, "run-profile", profile)
@@ -250,9 +270,9 @@ def test_pre_r1_chain_without_complete_run_binding_is_rejected(missing: str) -> 
         _append(
             records,
             "run-profile",
-            RunProfilePayload(
-                RoleProfilePayload("implementer-model", "medium"),
-                RoleProfilePayload("reviewer-model", "high"),
+            bound_run_profile(
+                bound_role_profile("implementer-model", "medium"),
+                bound_role_profile("reviewer-model", "high"),
             ),
         )
 
@@ -282,7 +302,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "2", "codex_implementation", "in_progress"
+            "1", "in_progress", "2", "implementer_implementation", "in_progress"
         ),
         revision=3,
     )
@@ -290,11 +310,11 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
     _append(records, "work-unit-2", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            "R-01",
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -310,12 +330,12 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "review-2",
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "2",
             "denied",
-            ("C-01",),
+            ("R-01",),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "d" * 64,
             "e" * 64,
         ),
@@ -324,7 +344,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "2", "codex_correction", "in_progress"
+            "1", "in_progress", "2", "implementer_correction", "in_progress"
         ),
         revision=4,
     )
@@ -347,23 +367,23 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         ),
     }
     mirror = {
-        "cursor": asdict(ReplayedWorkflowCursor("1", "2", "codex_correction")),
+        "cursor": asdict(ReplayedWorkflowCursor("1", "2", "implementer_correction")),
         "slice_statuses": (("1", "in_progress"), ("2", "pending")),
         "work_units": (
             asdict(ReplayedWorkUnitState("1", "1", "completed", "completed")),
-            asdict(ReplayedWorkUnitState("2", "1", "in_progress", "codex_correction")),
+            asdict(ReplayedWorkUnitState("2", "1", "in_progress", "implementer_correction")),
         ),
         "policies": (
             asdict(WorkflowPolicyPayload("1", 0, 4)),
             asdict(WorkflowPolicyPayload("2", 1, 4)),
         ),
-        "reviewers": (("1", None), ("2", "claude")),
+        "reviewers": (("1", None), ("2", "reviewer")),
     }
 
     assert canonical_json(projected) == canonical_json(mirror)
     assert project_work_unit_reviewers(tuple(records)) == (
         ("1", None),
-        ("2", Role.CLAUDE),
+        ("2", Role.REVIEWER),
     )
 
 
@@ -373,7 +393,7 @@ def test_replay_projects_r3_slice_boundaries_without_flattening_groups() -> None
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_implementation", "in_progress"
+            "1", "in_progress", "1", "implementer_implementation", "in_progress"
         ),
     )
     grouped = SliceBoundaryPayload(
@@ -387,7 +407,7 @@ def test_replay_projects_r3_slice_boundaries_without_flattening_groups() -> None
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "2", "in_progress", "2", "codex_implementation", "in_progress"
+            "2", "in_progress", "2", "implementer_implementation", "in_progress"
         ),
         revision=2,
     )
@@ -414,7 +434,7 @@ def test_slice_boundary_revision_preserves_start_and_monotonically_extends_group
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_implementation", "in_progress"
+            "1", "in_progress", "1", "implementer_implementation", "in_progress"
         ),
     )
     _append(
@@ -457,7 +477,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_plan", "in_progress"  # allowlist:provider -- persisted step vocabulary
+            "1", "in_progress", "1", "implementer_plan", "in_progress"
         ),
     )
 
@@ -473,21 +493,21 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
     assert project_work_unit_reviewers(tuple(records)) == state_reviewers()
 
     state = state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,  # allowlist:provider -- reviewer projection fixture
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01",),
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
     )
     _append(
         records,
         "review-1",
         ReviewPayload(
-            Role.CLAUDE,  # allowlist:provider -- reviewer projection fixture
+            Role.REVIEWER,
             "1",
             "denied",
-            ("C-01",),
+            ("R-01",),
             None,
-            "native-claude-review-v2",  # allowlist:provider -- closed transport fixture
+            "native-claude-review-v3",  # allowlist:provider -- transport: closed transport fixture
             "native-review-request-" + "f" * 64,
             "d" * 64,
         ),
@@ -500,11 +520,11 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -518,11 +538,11 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     )
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -534,11 +554,11 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     )
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="status_changed",
             severity=FindingSeverity.BLOCKER,
             finding_status="closed",
@@ -563,11 +583,11 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
         for number in (1, 2):
             _append(
                 records,
-                f"finding-C-{number:02d}",
+                f"finding-R-{number:02d}",
                 FindingTransitionPayload(
-                    finding_id=f"C-{number:02d}",
-                    reporter=Role.CLAUDE,
-                    actor=Role.CLAUDE,
+                    finding_id=f"R-{number:02d}",
+                    reporter=Role.REVIEWER,
+                    actor=Role.REVIEWER,
                     action="opened",
                     severity=FindingSeverity.FINDING,
                     finding_status="open",
@@ -581,11 +601,11 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
             )
     _append(
         verbose,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.FINDING,
             finding_status="open",
@@ -607,7 +627,7 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
         item.finding_id
         for item in verbose_findings
         if item.status is FindingStatus.OPEN
-    ) == ("C-01", "C-02")
+    ) == ("R-01", "R-02")
 
 
 def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> None:
@@ -615,11 +635,11 @@ def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> No
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            "C-01",
-            Role.CLAUDE,
-            Role.CLAUDE,
+            "R-01",
+            Role.REVIEWER,
+            Role.REVIEWER,
             "opened",
             FindingSeverity.BLOCKER,
             "open",
@@ -639,11 +659,11 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -658,11 +678,11 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     _append(records, "work-unit-2", WorkUnitPayload("1", 2, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CODEX,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.IMPLEMENTER,
             action="responded",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -679,7 +699,7 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     with pytest.raises(ArtifactReplayError) as caught:
         replay_findings(replay, "2")
     assert caught.value.code is ReplayDiagnosticCode.RECORD_REFERENCE_MISSING
-    assert len(replay_findings(replay, finding_ids=("C-01",))[0].responses) == 1
+    assert len(replay_findings(replay, finding_ids=("R-01",))[0].responses) == 1
     assert len(replay_findings(replay)[0].responses) == 1
 
 
@@ -758,23 +778,40 @@ def test_replay_rejects_activity_that_references_a_later_work_unit() -> None:
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
 
 
+def test_replay_rejects_provider_measurement_before_run_profile() -> None:
+    identity, profile = _chain()[:2]
+    measurement = ArtifactRecord.create(
+        run_id="run-replay", logical_id="early-measurement", revision=1,
+        fingerprint=FP, predecessor_ids=(identity.record_id,),
+        created_at="2026-08-21T10:00:02+00:00", idempotency_key="early-measurement",
+        payload=ProviderInputMeasurementPayload(
+            "claude", Role.REVIEWER, "reviewer_slice_review", "1", "a" * 64,  # allowlist:provider -- transport: provider-before-profile regression
+            "b" * 64, "c" * 64, "d" * 64,
+            (ProviderInputComponentPayload("prompt", 3, 3),),
+            3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
+        ),
+    )
+    _assert_code((identity, measurement, profile), ReplayDiagnosticCode.RECORD_MISSING)
+
+
 def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start() -> None:
     records: list[ArtifactRecord] = []
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     measurement = _append(
         records,
         "measurement-1",
-        ProviderInputMeasurementPayload(
-            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", "a" * 64,
+        ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1", "a" * 64,
             "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
         ),
     )
-    started_payload = ProviderAttemptPayload(
-        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+    started_payload = ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
         "provider-operation-01", "a" * 64, measurement.record_id, "c" * 64, 1,
         "started", "2026-08-21T10:00:01+00:00", None, None, None, None,
+        model="reviewer-model", effort="high",
+        profile_name=records[1].payload.reviewer.profile_name,
+        binary_identity=records[1].payload.reviewer.binary_identity,
     )
     _append(records, "attempt-1", started_payload)
     _append(
@@ -787,6 +824,14 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
         revision=2,
     )
     assert replay_artifacts(records, "run-replay").records == tuple(records)
+
+    for changed in (
+        replace(started_payload, profile_name="alias"),
+        replace(started_payload, model="foreign-model"),
+        replace(started_payload, binary_identity=ProviderIdentity.dry_run("other")),
+    ):
+        with pytest.raises(ArtifactReplayError, match="provider record differs from run profile"):
+            validate_provider_record_binding(changed, records[1].payload)
 
     terminal_only = [records[0], records[1], records[2], records[3], records[5]]
     terminal_only[4] = replace(
@@ -874,7 +919,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
     _append(
         records,
         "workflow-transition",
-        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+        WorkflowTransitionPayload("1", "in_progress", "1", "implementer_plan", "in_progress"),
     )
     transition = GateTransitionPayload(
         work_unit_id="1",
@@ -898,7 +943,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
         work_unit_id="1",
         gate_record_id=gate.record_id,
         paths=("tests/test_gate.py",),
-        resume_step="claude_slice_review",
+        resume_step="reviewer_slice_review",
     )
     binding = _append(
         records,
@@ -914,7 +959,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
     projected = replay.gate_decisions[0]
     assert projected.work_unit_id == "1"
     assert projected.paths == ("tests/test_gate.py",)
-    assert projected.resume_step == "claude_slice_review"
+    assert projected.resume_step == "reviewer_slice_review"
     assert projected.authority is Role.USER
     assert projected.gate_created_at == gate.created_at
     assert projected.gate_record_id == gate.record_id
@@ -926,7 +971,7 @@ def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference
     _append(
         records,
         "workflow-transition",
-        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+        WorkflowTransitionPayload("1", "in_progress", "1", "implementer_plan", "in_progress"),
     )
     partial = GateTransitionPayload(
         "1", "clear", "none", None, None, (), None, None, ()
@@ -941,7 +986,7 @@ def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference
     _append(
         records,
         "gate-decision-1",
-        GateDecisionPayload("1", "ar1-" + "d" * 64, (), "codex_plan"),
+        GateDecisionPayload("1", "ar1-" + "d" * 64, (), "implementer_plan"),
         fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "c" * 64),
     )
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)

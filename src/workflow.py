@@ -14,7 +14,7 @@ from typing import Callable, Iterable, Mapping, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     QuotaWaitPolicy,
@@ -61,8 +61,8 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     FindingClass,
@@ -522,12 +522,12 @@ class WorkflowContext:
 
 
 @dataclass(frozen=True)
-class CodexInvocation:
+class ImplementerInvocation:
     work_unit_id: int
     step: WorkflowStep
     round_number: int
     prompt: str
-    native_request: workflow_requests.NativeCodexRequestBundle | None = None
+    native_request: workflow_requests.NativeImplementerRequestBundle | None = None
     previous_findings: tuple[FindingRecord, ...] = ()
     request_sequence: int | None = None
 
@@ -588,7 +588,7 @@ class ReviewerInvocation:
             object.__setattr__(self, "request_sequence", self.round_number)
         elif self.request_sequence < 1:
             raise ValueError("review request sequence must be 1-based")
-        if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
+        if self.native_request is not None and self.reviewer is not AgentRole.REVIEWER:
             raise ValueError("native review requests are supported only for Claude")
 
 
@@ -612,7 +612,7 @@ class WorkflowCommitRequest:
     slice_id: int
     fingerprint: str
     attestation: ValidationAttestation
-    claude_review: ContractResult
+    reviewer_review: ContractResult
     findings: tuple[FindingRecord, ...]
     red_state_followup_slice: str | None = None
 
@@ -641,16 +641,16 @@ class WorkflowDriver(Protocol):
         _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
-    def invoke_codex(
-        self, invocation: CodexInvocation
-    ) -> str | NativeAgentCodexOutput: ...
+    def invoke_implementer(
+        self, invocation: ImplementerInvocation
+    ) -> str | NativeAgentImplementerOutput: ...
 
-    def recover_pending_native_codex(  # allowlist:provider -- canonical capability
+    def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        contract: CodexStepContract,  # allowlist:provider -- typed boundary
+        invocation: ImplementerInvocation,
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None: ...  # allowlist:provider -- typed boundary
+    ) -> NativeAgentImplementerOutput | None: ...
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
@@ -736,9 +736,9 @@ class WorkflowDriver(Protocol):
         fingerprint: str,
     ) -> str: ...
 
-    def persist_native_codex_contract(  # allowlist:provider -- canonical capability
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
@@ -771,7 +771,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "commit_slice",
         "detect_test_changes",
         "evaluate_slice_finding_convergence",
-        "invoke_codex",  # allowlist:provider -- canonical capability
+        "invoke_implementer",
         "invoke_reviewer",
         "persist_gate_decision",
         "close_unknown_provider_attempt",
@@ -780,12 +780,12 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "write_invocation_failure_diagnostic",
         "persist_scope_extension",
         "scope_extension_source_request_id",
-        "persist_native_codex_contract",  # allowlist:provider -- canonical capability
+        "persist_native_implementer_contract",
         "persist_native_review_contract",
         "persist_review_packet",
         "persist_validation_attestation",
         "persist_validation_request",
-        "recover_pending_native_codex",  # allowlist:provider -- canonical capability
+        "recover_pending_native_implementer",
         "recover_pending_native_reviewer",
         "recover_pending_native_reviewer_before_policy",
         "recover_pending_validation_attestation",
@@ -849,15 +849,15 @@ class WorkflowHistory:
     findings: tuple[FindingRecord, ...] = ()
     events: tuple[AuditEvent, ...] = ()
     attestations: tuple[ValidationAttestation, ...] = ()
-    last_claude_fingerprint: str | None = None
-    latest_claude_review: ContractResult | None = None
+    last_reviewer_fingerprint: str | None = None
+    latest_reviewer_review: ContractResult | None = None
     active_review_packet: ReviewPacket | None = None
 
     def __post_init__(self) -> None:
         if self.work_unit_id < 1:
             raise ValueError("workflow history work_unit_id must be 1-based")
-        if self.last_claude_fingerprint is not None and not SHA256_PATTERN.fullmatch(
-            self.last_claude_fingerprint
+        if self.last_reviewer_fingerprint is not None and not SHA256_PATTERN.fullmatch(
+            self.last_reviewer_fingerprint
         ):
             raise ValueError("last Claude fingerprint must be a SHA-256 digest")
         finding_ids = tuple(item.finding_id for item in self.findings)
@@ -872,8 +872,8 @@ class WorkflowHistory:
             "work_unit_id": self.work_unit_id,
             "findings": [_finding_to_dict(item) for item in self.findings],
             "attestations": [_attestation_to_dict(item) for item in self.attestations],
-            "last_claude_fingerprint": self.last_claude_fingerprint,
-            "latest_claude_review": _review_to_dict(self.latest_claude_review),
+            "last_reviewer_fingerprint": self.last_reviewer_fingerprint,
+            "latest_reviewer_review": _review_to_dict(self.latest_reviewer_review),
         }
         if self.active_review_packet is not None:
             packet = self.active_review_packet
@@ -892,7 +892,7 @@ class WorkflowHistory:
             raise ValueError("workflow history must be an object")
         expected = {
             "work_unit_id", "findings", "attestations",
-            "last_claude_fingerprint", "latest_claude_review",
+            "last_reviewer_fingerprint", "latest_reviewer_review",
         }
         allowed = {*expected, "active_review_packet"}
         if not expected.issubset(raw) or not set(raw).issubset(allowed):
@@ -922,11 +922,11 @@ class WorkflowHistory:
             attestations=tuple(
                 _attestation_from_dict(item) for item in _json_list(raw["attestations"])
             ),
-            last_claude_fingerprint=(
-                None if raw["last_claude_fingerprint"] is None
-                else str(raw["last_claude_fingerprint"])
+            last_reviewer_fingerprint=(
+                None if raw["last_reviewer_fingerprint"] is None
+                else str(raw["last_reviewer_fingerprint"])
             ),
-            latest_claude_review=_review_from_dict(raw["latest_claude_review"]),
+            latest_reviewer_review=_review_from_dict(raw["latest_reviewer_review"]),
             active_review_packet=active_review_packet,
         )
 
@@ -1337,7 +1337,7 @@ class WorkflowRunResult:
         remaining = project_open_set(self.history.findings).finding_ids
         round_limit_reached = (
             self.state.current_work_unit.round_number
-            >= self.state.current_work_unit.max_codex_returns
+            >= self.state.current_work_unit.max_implementer_returns
         )
         return (
             "SLICE-REVIEW-DENIED | "
@@ -1397,7 +1397,7 @@ def workflow_rejection_finding_ids(
 ) -> tuple[str, ...]:
     """Return the open IDs carried by a terminal reviewer denial, if any."""
 
-    review = history.latest_claude_review  # allowlist:provider -- canonical history field
+    review = history.latest_reviewer_review
     if (
         state.current_work_unit.status is not WorkUnitStatus.COMPLETED
         or state.current_step is not WorkflowStep.COMPLETED
@@ -1436,7 +1436,7 @@ def _uses_correction_finding_authority(state: WorkflowState) -> bool:
     """Return whether this round must resolve Findings from records."""
 
     return (
-        state.current_step is WorkflowStep.CODEX_CORRECTION
+        state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION
         or state.current_work_unit.round_number > 1
     )
 
@@ -1497,7 +1497,7 @@ def _validate_plan_measurement_support(
 
 
 class WorkflowEngine:
-    """Additive state-v3 engine for the Codex/Claude chain."""
+    """Additive state-v3 engine for the implementer/reviewer chain."""
 
     def __init__(
         self,
@@ -1685,8 +1685,8 @@ class WorkflowEngine:
             if state.current_step is not resume_step:
                 active_history = replace(
                     active_history,
-                    last_claude_fingerprint=None,
-                    latest_claude_review=None,
+                    last_reviewer_fingerprint=None,
+                    latest_reviewer_review=None,
                 )
                 self.driver.checkpoint(state, active_history)
 
@@ -1700,24 +1700,24 @@ class WorkflowEngine:
             context = self._bind_context_to_current_unit(state, context, active_history)
             step = state.current_step
             if step in (
-                WorkflowStep.CODEX_PLAN,
-                WorkflowStep.CODEX_PLAN_REVISION,
-                WorkflowStep.CODEX_IMPLEMENTATION,
-                WorkflowStep.CODEX_CORRECTION,
+                WorkflowStep.IMPLEMENTER_PLAN,
+                WorkflowStep.IMPLEMENTER_PLAN_REVISION,
+                WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+                WorkflowStep.IMPLEMENTER_CORRECTION,
             ):
-                state, active_history = self._run_codex(
+                state, active_history = self._run_implementer(
                     state, context, active_history
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
                 continue
             if step in (
-                WorkflowStep.CLAUDE_PLAN_REVIEW,
-                WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.REVIEWER_PLAN_REVIEW,
+                WorkflowStep.REVIEWER_SLICE_REVIEW,
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
             ):
                 state, active_history = self._run_review(
-                    state, context, active_history, AgentRole.CLAUDE
+                    state, context, active_history, AgentRole.REVIEWER
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
@@ -1760,8 +1760,8 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "pre-policy native reviewer recovery returned an invalid contract"
             )
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_plan_review = state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
         request_result = pending.output.result
         result = request_result
         finding_ledger = self._authoritative_finding_ledger(
@@ -1811,7 +1811,7 @@ class WorkflowEngine:
             state=state,
             context=context,
             history=history,
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             result=result,
             fingerprint=pending.fingerprint,
             round_number=pending.round_number,
@@ -1933,7 +1933,7 @@ class WorkflowEngine:
     def reframe_unexpected_path_stop_gate(
         self, state: WorkflowState
     ) -> WorkflowState:
-        """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
+        """Upgrade a legacy implementer UNEXPECTED-PATH stop to an exact user gate."""
         require_driver_capabilities(
             self.driver,
             methods=frozenset({"collect_changes"}),
@@ -1979,7 +1979,7 @@ class WorkflowEngine:
         if not unexpected:
             return resumed
         next_step = (
-            WorkflowStep.CLAUDE_PLAN_REVIEW
+            WorkflowStep.REVIEWER_PLAN_REVIEW
             if plan_validation_scope_stop
             else current.current_step
         )
@@ -2002,9 +2002,9 @@ class WorkflowEngine:
         history: WorkflowHistory,
     ) -> tuple[
         bool,
-        CodexStepContract,  # allowlist:provider -- typed boundary
-        CodexInvocation,  # allowlist:provider -- typed boundary
-        NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+        ImplementerStepContract,
+        ImplementerInvocation,
+        NativeAgentImplementerOutput | None,
         WorkflowHistory,
     ]:
         unit, context = (
@@ -2012,11 +2012,11 @@ class WorkflowEngine:
             self._context_with_scope_approval(state, context),
         )
         is_plan = state.current_step in (
-            WorkflowStep.CODEX_PLAN,
-            WorkflowStep.CODEX_PLAN_REVISION,
+            WorkflowStep.IMPLEMENTER_PLAN,
+            WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         )
         readiness = ReadinessMarker.PLAN if is_plan else ReadinessMarker.IMPLEMENTATION
-        contract = CodexStepContract(
+        contract = ImplementerStepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             readiness_marker=readiness,
             slice_id=f"{unit.slice_id:02d}",
@@ -2024,7 +2024,7 @@ class WorkflowEngine:
             request_sequence=unit.request_sequence,
             require_test_files_record=not is_plan,
             expected_test_files=context.expected_test_files if not is_plan else (),
-            # R-10 gates after implementation readiness and before review. Codex must be
+            # R-10 gates after implementation readiness and before review. The implementer must be
             # able to report test paths before a user approval exists.
             test_changes_approved=True,
             require_slice_plan=is_plan and context.require_slice_plan,
@@ -2034,17 +2034,17 @@ class WorkflowEngine:
             enforce_expected_test_files=not context.dynamic_test_scope,
         )
         request_kind = (
-            workflow_requests.NativeCodexRequestKind.PLAN
+            workflow_requests.NativeImplementerRequestKind.PLAN
             if is_plan
-            else workflow_requests.NativeCodexRequestKind.CORRECTION
-            if state.current_step is WorkflowStep.CODEX_CORRECTION
-            else workflow_requests.NativeCodexRequestKind.IMPLEMENTATION
+            else workflow_requests.NativeImplementerRequestKind.CORRECTION
+            if state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION
+            else workflow_requests.NativeImplementerRequestKind.IMPLEMENTATION
         )
         is_correction_request = (
-            request_kind is workflow_requests.NativeCodexRequestKind.CORRECTION
+            request_kind is workflow_requests.NativeImplementerRequestKind.CORRECTION
         )
         history = self._bind_correction_request_history(state, history)
-        additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
+        additional_authorized_paths = self._fingerprint_bound_implementer_scope_paths(
             state
         )
         current_slice_diff: str | None = None
@@ -2064,7 +2064,7 @@ class WorkflowEngine:
             # asking the driver to reconstruct the same delta a second time
             # would add another mutable input surface.
             current_slice_diff = correction_changes.full_diff
-        native_request = workflow_requests.native_codex_request(
+        native_request = workflow_requests.native_implementer_request(
             state=state,
             context=context,
             history=history,
@@ -2076,7 +2076,7 @@ class WorkflowEngine:
             correction_fingerprint=correction_fingerprint,
             correction_findings=history.findings if is_correction_request else None,
         )
-        invocation = CodexInvocation(
+        invocation = ImplementerInvocation(
             unit.work_unit_id,
             state.current_step,
             unit.round_number,
@@ -2086,7 +2086,7 @@ class WorkflowEngine:
             previous_findings=history.findings,
         )
         recovered = (
-            self.driver.recover_pending_native_codex(  # allowlist:provider
+            self.driver.recover_pending_native_implementer(
                 invocation, contract, history
             )
             if native_request is not None
@@ -2098,7 +2098,7 @@ class WorkflowEngine:
             )
             if authoritative_history.findings != history.findings:
                 history = authoritative_history
-                native_request = workflow_requests.native_codex_request(
+                native_request = workflow_requests.native_implementer_request(
                     state=state,
                     context=context,
                     history=history,
@@ -2110,7 +2110,7 @@ class WorkflowEngine:
                     correction_fingerprint=correction_fingerprint,
                     correction_findings=history.findings,
                 )
-                invocation = CodexInvocation(
+                invocation = ImplementerInvocation(
                     unit.work_unit_id,
                     state.current_step,
                     unit.round_number,
@@ -2177,7 +2177,7 @@ class WorkflowEngine:
             )
         return context
 
-    def _run_codex(
+    def _run_implementer(
         self,
         state: WorkflowState,
         context: WorkflowContext,
@@ -2190,8 +2190,8 @@ class WorkflowEngine:
             state,
             history,
             context,
-            AgentRole.CODEX,
-            lambda: recovered or self.driver.invoke_codex(invocation),
+            AgentRole.IMPLEMENTER,
+            lambda: recovered or self.driver.invoke_implementer(invocation),
         )
         return self._apply_agent_output(
             state,
@@ -2208,17 +2208,17 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory,
         is_plan: bool,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+        invocation: ImplementerInvocation,
+        output: NativeAgentImplementerOutput | None,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         if output is None:
             return state, history
-        if not isinstance(output, NativeAgentCodexOutput):
+        if not isinstance(output, NativeAgentImplementerOutput):
             raise WorkflowContractError("Codex returned a non-native result")
         result = output.result
         output_text = output.canonical_json
         self._persist_structured(
-            self.driver.persist_native_codex_contract,  # allowlist:provider
+            self.driver.persist_native_implementer_contract,
             output,
             invocation.request_sequence,
             history.findings,
@@ -2308,9 +2308,9 @@ class WorkflowEngine:
             if halted:
                 return state, history
         next_step = (
-            WorkflowStep.CLAUDE_PLAN_REVIEW
+            WorkflowStep.REVIEWER_PLAN_REVIEW
             if is_plan
-            else WorkflowStep.CLAUDE_SLICE_REVIEW
+            else WorkflowStep.REVIEWER_SLICE_REVIEW
         )
         state = state.with_current_step(next_step)
         self.driver.checkpoint(state, history)
@@ -2321,7 +2321,7 @@ class WorkflowEngine:
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         stop_request = output.result.stop_request
         assert stop_request is not None
@@ -2368,7 +2368,7 @@ class WorkflowEngine:
                     "for a genuine implementation blocker or product decision."
                 ),
             )
-            return self._run_codex(validation_handoff, handoff_context, history)
+            return self._run_implementer(validation_handoff, handoff_context, history)
         state = self._halt_for_stop_request(state, context, stop_request)
         self.driver.checkpoint(state, history)
         return state, history
@@ -2378,7 +2378,7 @@ class WorkflowEngine:
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         stop_request: StopRequest,
         scope_approval: ApprovedScopeExtension,
     ) -> tuple[WorkflowState, WorkflowHistory]:
@@ -2455,14 +2455,14 @@ class WorkflowEngine:
                 f"{remediation_instruction}"
             ),
         )
-        return self._run_codex(expanded, expanded_context, history)
+        return self._run_implementer(expanded, expanded_context, history)
 
     def _merge_implementer_output_findings(
         self,
         state: WorkflowState,
         history: WorkflowHistory,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        invocation: ImplementerInvocation,
+        output: NativeAgentImplementerOutput,
     ) -> WorkflowHistory:
         """Merge fresh or recovered output without mixing its ledger cuts."""
 
@@ -2503,7 +2503,7 @@ class WorkflowEngine:
                 context=context,
             )
             if unexpected:
-                next_step = WorkflowStep.CLAUDE_PLAN_REVIEW
+                next_step = WorkflowStep.REVIEWER_PLAN_REVIEW
                 state = state.await_user_gate(
                     reason=GateReason.UNEXPECTED_FILE,
                     detail=(
@@ -2547,7 +2547,7 @@ class WorkflowEngine:
                     detail,
                 )
                 state = state.mark_side_effect_completed(repair_key)
-                state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+                state = state.with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
                 self.driver.checkpoint(state, history)
                 assert failure_policy is not None
                 if (
@@ -2580,13 +2580,13 @@ class WorkflowEngine:
                         f"Validator error: {detail}\n"
                         f"{repair_action}\n"
                         "Keep the approved task scope unchanged and follow the complete "
-                        "parser-derived codex_contract.plan_artifact_format_contract "
+                        "parser-derived implementer_contract.plan_artifact_format_contract "
                         "included in this request. Emit the "
                         "normal PLAN_READY and "
                         "single PLAN_ONLY SLICE_PLAN records; do not request user input."
                     ),
                 )
-                repaired_state, repaired_history = self._run_codex(
+                repaired_state, repaired_history = self._run_implementer(
                     state, repair_context, history
                 )
                 return repaired_state, repaired_history, True
@@ -2981,10 +2981,10 @@ class WorkflowEngine:
         history: WorkflowHistory, reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
-        if reviewer is not AgentRole.CLAUDE:
+        if reviewer is not AgentRole.REVIEWER:
             raise WorkflowExecutionError("only Claude may execute review steps")
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_plan_review = state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
         history = self._bind_correction_request_history(state, history)
         start_commit = state.branch_review_base_commit if is_final_review else (
             state.current_slice.start_commit or state.branch_base
@@ -3224,12 +3224,12 @@ class WorkflowEngine:
             )
             own_ids = tuple(item.finding_id for item in result.own_open_findings)
             return_step = (
-                WorkflowStep.CODEX_PLAN_REVISION
+                WorkflowStep.IMPLEMENTER_PLAN_REVISION
                 if unit.kind is WorkUnitKind.PLAN
-                else WorkflowStep.CODEX_CORRECTION
+                else WorkflowStep.IMPLEMENTER_CORRECTION
             )
             state = state.record_review_denial(
-                reviewer=Reviewer.CLAUDE,
+                reviewer=Reviewer.REVIEWER,
                 open_findings=own_ids,
                 return_step=return_step,
                 progress_made=correction_progress,
@@ -3331,11 +3331,11 @@ class WorkflowEngine:
         context: WorkflowContext,
         role: AgentRole,
         invoke: Callable[
-            [], str | NativeAgentCodexOutput | NativeAgentReviewOutput
+            [], str | NativeAgentImplementerOutput | NativeAgentReviewOutput
         ],
     ) -> tuple[
         WorkflowState,
-        str | NativeAgentCodexOutput | NativeAgentReviewOutput | None,
+        str | NativeAgentImplementerOutput | NativeAgentReviewOutput | None,
     ]:
         """Invoke one fixed role, persisting every failure before any optional wait."""
         while True:
@@ -3640,11 +3640,11 @@ class WorkflowEngine:
             "findings": result.findings,
             "events": (*history.events, event),
         }
-        if result.reviewer is not AgentRole.CLAUDE:
+        if result.reviewer is not AgentRole.REVIEWER:
             raise WorkflowExecutionError("review history accepts only Claude results")
         if track_slice_approval:
-            updates["last_claude_fingerprint"] = fingerprint
-            updates["latest_claude_review"] = result
+            updates["last_reviewer_fingerprint"] = fingerprint
+            updates["latest_reviewer_review"] = result
         return replace(history, **updates)
 
     def _commit(
@@ -3705,7 +3705,7 @@ class WorkflowEngine:
             ),
             None,
         )
-        claude = history.latest_claude_review
+        review = history.latest_reviewer_review
         validation_authorized = attestation is not None and (
             attestation.passed
             or (
@@ -3715,21 +3715,21 @@ class WorkflowEngine:
         )
         reviews_current = (
             validation_authorized
-            and claude is not None
-            and claude.approval is True
-            and claude.validation == attestation
+            and review is not None
+            and review.approval is True
+            and review.validation == attestation
         )
         if not reviews_current:
             review_step = (
-                WorkflowStep.CLAUDE_PLAN_REVIEW
+                WorkflowStep.REVIEWER_PLAN_REVIEW
                 if state.current_work_unit.kind is WorkUnitKind.PLAN
-                else WorkflowStep.CLAUDE_SLICE_REVIEW
+                else WorkflowStep.REVIEWER_SLICE_REVIEW
             )
             state = state.with_current_step(review_step)
             history = replace(
                 history,
-                last_claude_fingerprint=None,
-                latest_claude_review=None,
+                last_reviewer_fingerprint=None,
+                latest_reviewer_review=None,
             )
             self.driver.checkpoint(state, history)
             return WorkflowRunResult(state, history)
@@ -3760,7 +3760,7 @@ class WorkflowEngine:
                     slice_id=state.current_slice_id,
                     fingerprint=changes.fingerprint,
                     attestation=attestation,
-                    claude_review=claude,
+                    reviewer_review=review,
                     findings=history.findings,
                     red_state_followup_slice=context.red_state_followup_slice,
                 )
@@ -3806,19 +3806,19 @@ class WorkflowEngine:
             if unit.has_completed_side_effect(reset_key):
                 return state, history, False
             state = state.mark_side_effect_completed(reset_key)
-            state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+            state = state.with_current_step(WorkflowStep.IMPLEMENTER_PLAN_REVISION)
             history = replace(
                 history,
-                last_claude_fingerprint=None,
-                latest_claude_review=None,
+                last_reviewer_fingerprint=None,
+                latest_reviewer_review=None,
             )
             self.driver.checkpoint(state, history)
             return state, history, False
         original_step = state.current_step
         resume_step = (
-            WorkflowStep.CODEX_CORRECTION
-            if original_step is WorkflowStep.CODEX_CORRECTION
-            else WorkflowStep.CODEX_IMPLEMENTATION
+            WorkflowStep.IMPLEMENTER_CORRECTION
+            if original_step is WorkflowStep.IMPLEMENTER_CORRECTION
+            else WorkflowStep.IMPLEMENTER_IMPLEMENTATION
         )
         state = state.await_user_gate(
             reason=GateReason.ANCHOR_CHANGE,
@@ -4265,10 +4265,10 @@ class WorkflowEngine:
             f"REVIEW DIFF\n{review_diff}{final_dimensions}"
         )
 
-    def _fingerprint_bound_codex_scope_paths(
+    def _fingerprint_bound_implementer_scope_paths(
         self, state: WorkflowState
     ) -> tuple[str, ...]:
-        """Expose only the latest exact resume-gate path approval to Codex."""
+        """Expose only the latest exact resume-gate path approval to the implementer."""
         decision = next(
             (
                 item

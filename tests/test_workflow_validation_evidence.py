@@ -153,7 +153,7 @@ def test_engine_facades_delegate_without_owning_leaf_decisions() -> None:
             "run_current_work_unit",
             "_invoke_role",
             "_prepare_agent_dispatch",
-            "_run_codex",
+            "_run_implementer",
             "_apply_agent_output",
             "_collect_review_dispatch_changes",
             "_collect_review_dispatch_attestation",

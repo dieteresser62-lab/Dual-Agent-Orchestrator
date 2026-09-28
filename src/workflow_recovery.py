@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
 
 from agent_runtime import (
-    NativeAgentCodexOutput as NativeAgentImplementerOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     RecoveredFindingComparison,
@@ -42,13 +42,14 @@ from artifact_models import (
 from artifact_replay import (
     ArtifactReplayError,
     ArtifactReplayResult,
+    ReplayedSideEffect,
     project_workflow_state,
     replay_artifacts,
 )
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract as ImplementerStepContract,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     StepContract,
@@ -62,13 +63,13 @@ from finding_reducer import (
 )
 from gates import matches_path_patterns
 from git_service import inspect_commit_tree, inspect_repository
-from native_codex_contract import (
-    canonical_native_codex_json as canonical_native_implementer_json,
-    parse_bound_native_codex_contract_result as parse_bound_native_implementer_result,
+from native_implementer_contract import (
+    canonical_native_implementer_json,
+    parse_bound_native_implementer_contract_result as parse_bound_native_implementer_result,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle as NativeImplementerRequestBundle,
-    validate_native_codex_provider_response as validate_native_implementer_response,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
+    validate_native_implementer_provider_response as validate_native_implementer_response,
 )
 from native_review_contract import (
     BoundNativeReviewContext,
@@ -81,6 +82,7 @@ from native_review_request import (
     validate_native_review_provider_response,
     validate_native_review_provider_response_for_context,
 )
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
     Reconciliation,
@@ -96,7 +98,7 @@ from side_effects import (
 )
 from state_io import atomic_write_file
 from workflow import (
-    CodexInvocation as ImplementerInvocation,
+    ImplementerInvocation,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     WorkflowContext,
@@ -104,6 +106,7 @@ from workflow import (
     WorkflowHistory,
 )
 from workflow_state import (
+    AgentFailureKind,
     GateReason,
     NATIVE_CLAUDE_REVIEW_TRANSPORT as NATIVE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT as NATIVE_IMPLEMENTER_TRANSPORT,
@@ -117,8 +120,68 @@ from workflow_state import (
 logger = logging.getLogger(__name__)
 
 
+def _bound_provider(state: WorkflowState, slot: str) -> str:
+    binding = getattr(state, "protocol_binding", None)
+    profile = getattr(binding, f"{slot}_profile", None)
+    return getattr(profile, "provider", None) or (
+        OPENAI_PROVIDER if slot == "implementer" else ANTHROPIC_PROVIDER
+    )
+
+
+def _review_provider(state: WorkflowState) -> str:
+    slot = "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer"
+    return _bound_provider(state, slot)
+
+
 ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
-_IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
+_IMPLEMENTER_ARTIFACT_ROLE = Role.IMPLEMENTER
+
+
+def _completed_implementer_responses(
+    chain: tuple[ArtifactRecord, ...],
+    effects: tuple[ReplayedSideEffect, ...],
+    invocation: ImplementerInvocation,
+) -> tuple[ReplayedSideEffect, ...]:
+    """Distinguish terminal provider failures from durable raw responses."""
+    responses = tuple(
+        item for item in effects
+        if item.result is not None
+        and re.fullmatch(r"[0-9a-f]{64}", item.result) is not None
+    )
+    failures = tuple(
+        item for item in effects
+        if item.result is not None and item.result.startswith("failed:")
+    )
+    if any(
+        item.result is not None and item not in responses and item not in failures
+        for item in effects
+    ) or any(
+        re.fullmatch(
+            "failed:(?:" + "|".join(kind.value for kind in AgentFailureKind) + ")",
+            item.result,
+        ) is None
+        for item in failures
+    ):
+        raise WorkflowExecutionError(
+            "native agent raw-response ledger has an invalid content digest"
+        )
+    for item in failures:
+        if not any(
+            isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.phase == "failed"
+            and record.payload.role is _IMPLEMENTER_ARTIFACT_ROLE
+            and record.payload.work_unit_id == str(invocation.work_unit_id)
+            and record.payload.operation == invocation.step.value
+            and record.payload.input_digest == item.operation[2]
+            and record.payload.binding_fingerprint == item.operation[3]
+            and record.payload.attempt_number == int(item.operation[5])
+            and item.result == f"failed:{record.payload.failure_kind}"
+            for record in chain
+        ):
+            raise WorkflowExecutionError(
+                "native agent raw-response failure lacks its terminal attempt"
+            )
+    return responses
 
 
 @dataclass(frozen=True)
@@ -273,7 +336,6 @@ class WorkflowRecoveryDependencies:
     persist_implementer_contract: PersistImplementerContract
     persist_review_contract: PersistReviewContract
     store_implementer_output: Callable[[str], None]
-    agent_profile: Callable[[str], tuple[str, str]]
 
 
 class WorkflowRecovery:
@@ -288,6 +350,7 @@ class WorkflowRecovery:
         response_anchor: ArtifactRecord,
         *,
         role: Role,
+        provider_name: str,
         run_id: str,
         work_unit_id: int,
         operation: str,
@@ -300,7 +363,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
                 operation_instance=f"request:{request_sequence}",
@@ -310,7 +373,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
                 operation_instance=f"round:{request_sequence}",
@@ -320,7 +383,7 @@ class WorkflowRecovery:
             logical_provider_operation_id(
                 run_id=run_id,
                 work_unit_id=str(work_unit_id),
-                provider=role,
+                provider=provider_name,
                 operation=operation,
                 binding_fingerprint=response_anchor.fingerprint.sha256,
             ),
@@ -329,7 +392,6 @@ class WorkflowRecovery:
             item
             for item in chain[:response_index]
             if isinstance(item.payload, ProviderAttemptPayload)
-            and item.payload.provider is role
             and item.payload.role is role
             and item.payload.work_unit_id == str(work_unit_id)
             and item.payload.operation == operation
@@ -514,7 +576,8 @@ class WorkflowRecovery:
         attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- canonical reviewer role
+            role=Role.REVIEWER,
+            provider_name=_review_provider(state),
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -552,10 +615,11 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
+        profile: str = ANTHROPIC_PROVIDER,
     ) -> ContractResult:
         try:
             validate_native_review_provider_response_for_context(
-                document, native_context
+                document, native_context, profile=profile
             )
             return parse_bound_native_contract_result(
                 document,
@@ -626,7 +690,8 @@ class WorkflowRecovery:
         request_attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- canonical reviewer role
+            role=Role.REVIEWER,
+            provider_name=_review_provider(state),
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -662,7 +727,8 @@ class WorkflowRecovery:
                 validate_native_review_provider_response(document, bundle)
             else:
                 validate_native_review_provider_response_for_context(
-                    document, native_context
+                    document, native_context,
+                    profile=_review_provider(state),
                 )
             result = parse_bound_native_contract_result(
                 document,
@@ -891,7 +957,7 @@ class WorkflowRecovery:
             raise WorkflowExecutionError("provider attempt has no bound fingerprint")
         if (
             bootstrap.payload.input_digest != measurement.input_digest
-            or bootstrap.payload.provider.value != measurement.provider
+            or bootstrap.payload.provider != measurement.provider
             or bootstrap.payload.operation != measurement.operation
         ):
             raise WorkflowExecutionError("provider attempt measurement context diverged")
@@ -1004,14 +1070,17 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "provider operation already occurred; recover its durable response instead of starting again"
             )
-        model, effort = self._dependencies.agent_profile(measurement.provider)
+        if replay.run_profile is None:
+            raise WorkflowExecutionError("provider attempt has no bound run profile")
+        slot = "final_reviewer" if measurement.operation == "reviewer_final_review" else bootstrap.payload.role.value
+        profile = getattr(replay.run_profile, slot)
         started = bridge.start_provider_attempt(
             measurement_record=bootstrap,
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
             operation_instance=operation_instance,
-            model=model,
-            effort=effort,
+            model=profile.model,
+            effort=profile.effort,
         )
         return started, spec, response_path
 
@@ -1048,6 +1117,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=response_role,
+            provider_name=_bound_provider(state, "implementer"),
             run_id=state.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
@@ -1117,7 +1187,7 @@ class WorkflowRecovery:
             item
             for item in chain[:response_index]
             if isinstance(item.payload, ProviderAttemptPayload)
-            and item.payload.provider is response_role
+            and item.payload.role is response_role
             and item.payload.work_unit_id == str(invocation.work_unit_id)
             and item.payload.operation == invocation.step.value
             and item.payload.phase == "started"
@@ -1158,6 +1228,7 @@ class WorkflowRecovery:
             chain,
             response_anchor,
             role=response_role,
+            provider_name=_bound_provider(state, "implementer"),
             run_id=invocation.native_request.bound_context.context.run_id,
             work_unit_id=invocation.work_unit_id,
             operation=invocation.step.value,
@@ -1255,7 +1326,7 @@ class WorkflowRecovery:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == _IMPLEMENTER_ARTIFACT_ROLE.value
+            and item.operation[0] == _bound_provider(state, "implementer")
             and item.operation[1] == invocation.step.value
             and item.operation[4] in instances
         )
@@ -1276,19 +1347,9 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "native agent raw-response binding does not match its persisted request"
             )
-        provider_effects = tuple(
-            item
-            for item in related_effects
-            if item.result is not None
-            and re.fullmatch(r"[0-9a-f]{64}", item.result) is not None
+        provider_effects = _completed_implementer_responses(
+            chain, related_effects, invocation
         )
-        if any(
-            item.result is not None and item not in provider_effects
-            for item in related_effects
-        ):
-            raise WorkflowExecutionError(
-                "native agent raw-response ledger has an invalid content digest"
-            )
         if not provider_effects:
             return None
         if len(provider_effects) != 1:
@@ -1346,7 +1407,7 @@ class WorkflowRecovery:
         logical_operation_id = logical_provider_operation_id(
             run_id=state.run_id,
             work_unit_id=str(invocation.work_unit_id),
-            provider=_IMPLEMENTER_ARTIFACT_ROLE,
+            provider=_bound_provider(state, "implementer"),
             operation=invocation.step.value,
             binding_fingerprint=effect.operation[3],
             operation_instance=effect.operation[4],
@@ -1355,7 +1416,6 @@ class WorkflowRecovery:
             record
             for record in chain
             if isinstance(record.payload, ProviderAttemptPayload)
-            and record.payload.provider is _IMPLEMENTER_ARTIFACT_ROLE
             and record.payload.role is _IMPLEMENTER_ARTIFACT_ROLE
             and record.payload.work_unit_id == str(invocation.work_unit_id)
             and record.payload.operation == invocation.step.value
@@ -1459,7 +1519,7 @@ class WorkflowRecovery:
         )
         candidate = self._dependencies.canonical_agent_result(candidates, logical)
         persisted_content = self._dependencies.content_text(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=invocation.work_unit_id,
             request_sequence=invocation.request_sequence,
             operation=invocation.step.value,
@@ -1583,7 +1643,7 @@ class WorkflowRecovery:
         record = candidate
         payload = record.payload
         if (
-            payload.role is not Role.CODEX
+            payload.role is not Role.IMPLEMENTER
             or payload.work_unit_id != str(invocation.work_unit_id)
             or payload.transport_schema != NATIVE_IMPLEMENTER_TRANSPORT
             or payload.request_id != recovery_bound.request_id
@@ -1594,7 +1654,7 @@ class WorkflowRecovery:
             )
         expected_payload = agent_result_payload(
             result,
-            role=AgentRole.CODEX,
+            role=AgentRole.IMPLEMENTER,
             work_unit_id=invocation.work_unit_id,
             transport_schema=NATIVE_IMPLEMENTER_TRANSPORT,
             request_id=recovery_bound.request_id,
@@ -1655,14 +1715,14 @@ class WorkflowRecovery:
             and history.active_review_packet.fingerprint
             == record.fingerprint.sha256
             else ()
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
             else context.expected_test_files
         )
         approval_marker = (
             ApprovalMarker.PLAN
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_PLAN_REVIEW
             else ApprovalMarker.FINAL_REVIEW
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
             else ApprovalMarker.SLICE
         )
         payload = record.payload
@@ -1689,7 +1749,7 @@ class WorkflowRecovery:
             work_unit_id=str(unit.work_unit_id),
             operation=state.current_step.value,
             diff_fingerprint=record.fingerprint.sha256,
-            reviewer=AgentRole.CLAUDE,
+            reviewer=AgentRole.REVIEWER,
             approval_marker=approval_marker,
             slice_id=(
                 "DISCOVERY"
@@ -1723,6 +1783,7 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
+        profile: str = ANTHROPIC_PROVIDER,
     ) -> ContractResult:
         document = json.loads(canonical)
         if not isinstance(document, dict):
@@ -1733,6 +1794,7 @@ class WorkflowRecovery:
             payload,
             request_digest,
             request_ledger,
+            profile,
         )
 
     def recover_pending_native_reviewer_before_policy(
@@ -1754,9 +1816,9 @@ class WorkflowRecovery:
             != NATIVE_REVIEW_TRANSPORT
             or state.current_step
             not in {
-                WorkflowStep.CLAUDE_PLAN_REVIEW,
-                WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,
+                WorkflowStep.REVIEWER_PLAN_REVIEW,
+                WorkflowStep.REVIEWER_SLICE_REVIEW,
+                WorkflowStep.REVIEWER_FINAL_REVIEW,
             }
             or self._dependencies.active_state().run_id != state.run_id
             or self._dependencies.active_state().current_work_unit_id != unit.work_unit_id
@@ -1805,7 +1867,7 @@ class WorkflowRecovery:
                 record.payload,
                 (ReviewPayload, FinalReviewCompletedPayload),
             )
-            or record.payload.reviewer is not Role.CLAUDE
+            or record.payload.reviewer is not Role.REVIEWER
             or record.payload.work_unit_id != str(unit.work_unit_id)
             or record.payload.transport_schema != NATIVE_REVIEW_TRANSPORT
             or not record.logical_id.startswith(logical_prefix)
@@ -1876,6 +1938,7 @@ class WorkflowRecovery:
             request_replay,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
+        profile = _review_provider(state)
         try:
             result = self._parse_pending_native_reviewer_response(
                 canonical,
@@ -1883,6 +1946,7 @@ class WorkflowRecovery:
                 payload,
                 request_digest,
                 request_ledger,
+                profile,
             )
         except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
             raise WorkflowExecutionError(
@@ -1947,7 +2011,7 @@ class WorkflowRecovery:
             state is None
             or bridge is None
             or bundle is None
-            or invocation.reviewer is not AgentRole.CLAUDE
+            or invocation.reviewer is not AgentRole.REVIEWER
             or state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_REVIEW_TRANSPORT
@@ -1977,7 +2041,7 @@ class WorkflowRecovery:
         if record is not None:
             assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
             if (
-                payload.reviewer is not Role.CLAUDE
+                payload.reviewer is not Role.REVIEWER
                 or payload.work_unit_id != str(invocation.work_unit_id)
                 or payload.transport_schema != NATIVE_REVIEW_TRANSPORT
                 or payload.response_sha256 is None

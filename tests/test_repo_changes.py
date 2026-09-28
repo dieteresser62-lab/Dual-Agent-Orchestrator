@@ -212,7 +212,7 @@ def test_rendered_review_contract_cannot_change_guard_or_packet_bytes(
         "validation passed",
     )
     first_result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,

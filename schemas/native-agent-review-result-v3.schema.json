@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "native-agent-review-result-v3",
+  "title": "Native agent review result v2",
+  "type": "object",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/review_result"
+    },
+    {
+      "$ref": "#/$defs/stop_request"
+    }
+  ],
+  "$defs": {
+    "common": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "native-agent-review-result-v3"
+        },
+        "result_type": {
+          "enum": [
+            "review_result",
+            "stop_request"
+          ]
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^native-review-request-[0-9a-f]{64}$"
+        },
+        "reviewer": {
+          "enum": [
+            "reviewer"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "result_type",
+        "request_id",
+        "reviewer"
+      ]
+    },
+    "safe_path": {
+      "type": "string",
+      "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "prose_acceptance": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "prose"
+        },
+        "text": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "acceptance_test": {
+      "$ref": "#/$defs/prose_acceptance"
+    },
+    "finding": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
+        },
+        "finding_class": {
+          "enum": [
+            "BLOCKER",
+            "FINDING"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "acceptance_test": {
+          "$ref": "#/$defs/acceptance_test"
+        },
+        "affected_paths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safe_path"
+          }
+        }
+      },
+      "required": [
+        "finding_id",
+        "finding_class",
+        "summary",
+        "acceptance_test",
+        "affected_paths"
+      ],
+      "additionalProperties": false
+    },
+    "status_change": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "CLOSED"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 3000
+        }
+      },
+      "required": [
+        "finding_id",
+        "status",
+        "rationale"
+      ],
+      "additionalProperties": false
+    },
+    "anchor": {
+      "type": "object",
+      "properties": {
+        "anchor_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$"
+        },
+        "input_fixture": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "expected": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "tolerance": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "anchor_id",
+        "input_fixture",
+        "expected",
+        "tolerance"
+      ],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "dimensions": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "largest_residual_risk": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "break_condition": {
+          "type": "string",
+          "pattern": "^[^\\x00]*$",
+          "minLength": 1,
+          "maxLength": 3000
+        }
+      },
+      "required": [
+        "dimensions",
+        "largest_residual_risk",
+        "break_condition"
+      ],
+      "additionalProperties": false
+    },
+    "review_result": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "const": "native-agent-review-result-v3"
+            },
+            "result_type": {
+              "const": "review_result"
+            },
+            "request_id": {
+              "type": "string",
+              "pattern": "^native-review-request-[0-9a-f]{64}$"
+            },
+            "reviewer": {
+              "enum": [
+                "reviewer"
+              ]
+            },
+            "decision": {
+              "enum": [
+                "approved",
+                "denied"
+              ]
+            },
+            "new_findings": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/finding"
+              }
+            },
+            "status_changes": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "$ref": "#/$defs/status_change"
+              }
+            },
+            "anchors": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/anchor"
+              }
+            },
+            "review_evidence": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/evidence"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pre_mortem": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^\\x00]*$",
+                  "minLength": 1,
+                  "maxLength": 3000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schema_version",
+            "result_type",
+            "request_id",
+            "reviewer",
+            "decision",
+            "new_findings",
+            "status_changes",
+            "anchors",
+            "review_evidence",
+            "pre_mortem"
+          ],
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "properties": {
+                "new_findings": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "status_changes": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "review_evidence": {
+                  "$ref": "#/$defs/evidence"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "stop_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "const": "native-agent-review-result-v3"
+            },
+            "result_type": {
+              "const": "stop_request"
+            },
+            "request_id": {
+              "type": "string",
+              "pattern": "^native-review-request-[0-9a-f]{64}$"
+            },
+            "reviewer": {
+              "enum": [
+                "reviewer"
+              ]
+            },
+            "rule_id": {
+              "type": "string",
+              "pattern": "^[^\\x00]*$",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "rationale": {
+              "type": "string",
+              "pattern": "^[^\\x00]*$",
+              "minLength": 1,
+              "maxLength": 3000
+            },
+            "remediation_paths": {
+              "type": "array",
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          },
+          "required": [
+            "schema_version",
+            "result_type",
+            "request_id",
+            "reviewer",
+            "rule_id",
+            "rationale",
+            "remediation_paths"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import hashlib
 from pathlib import Path
 import subprocess
@@ -73,9 +75,9 @@ def _bridge(tmp_path: Path, run_id: str = "side-effect-run") -> ArtifactBridge:
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -427,8 +429,8 @@ def test_provider_start_guard_uses_the_attempt_specific_response_path(
     _initialize_ledger(bridge)
     measurement = ProviderInputMeasurement(
         provider="claude",
-        role="claude",
-        operation="claude_slice_review",
+        role="reviewer",
+        operation="reviewer_slice_review",
         binding_fingerprint="b" * 64,
         input_digest="c" * 64,
         policy_digest="d" * 64,
@@ -456,7 +458,7 @@ def test_provider_start_guard_uses_the_attempt_specific_response_path(
     )
     bootstrap = bridge.append(
         payload,
-        logical_id="provider-input-2-claude_slice_review",
+        logical_id="provider-input-2-reviewer_slice_review",
         idempotency_key="provider-input:test",
         fingerprint_sha256=DIGEST,
     )

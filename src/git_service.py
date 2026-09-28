@@ -103,7 +103,7 @@ class CommitAuthorization:
     slice_id: int
     diff_fingerprint: str
     attestation: ValidationAttestation
-    claude_review: ContractResult
+    reviewer_review: ContractResult
     findings: tuple[FindingRecord, ...] = ()
     red_state_followup_slice: str | None = None
     review_record: ArtifactRecord | None = None
@@ -993,7 +993,7 @@ def _validate_authorization(
     authorization: CommitAuthorization,
     current_fingerprint: str,
 ) -> None:
-    review_result = authorization.claude_review
+    review_result = authorization.reviewer_review
     if authorization.diff_fingerprint != current_fingerprint:
         raise GitTransactionError("commit authorization fingerprint is stale")
     attestation = authorization.attestation
@@ -1031,7 +1031,7 @@ def _validate_authorization(
         for finding in project_open_set(authorization.findings).findings
     ):
         raise GitTransactionError("commit requires no globally open blockers")
-    for expected_role, result in ((AgentRole.CLAUDE, review_result),):
+    for expected_role, result in ((AgentRole.REVIEWER, review_result),):
         if result.reviewer is not expected_role:
             raise GitTransactionError(f"commit requires the {expected_role.value} review role")
         if (

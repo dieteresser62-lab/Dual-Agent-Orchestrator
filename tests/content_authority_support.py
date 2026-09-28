@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import json
 import shlex
 
 from artifact_bridge import ArtifactBridge
@@ -26,6 +27,61 @@ from artifact_models import (
     stable_record_id,
 )
 from content_authority import ValidationCapture, validation_output_digest
+
+
+# Slice 8b wire cut: reconstruct the prior canonical request solely from the
+# seven renamed values/keys and its newly bound response-schema digest.
+_PRIOR_WIRE_NAMES = {
+    "implementer_plan_revision": "codex_plan_revision",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_implementation": "codex_implementation",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_correction": "codex_correction",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_plan": "codex_plan",  # allowlist:provider -- historical wire proof: inverse map
+    "reviewer_plan_review": "claude_plan_review",  # allowlist:provider -- historical wire proof: inverse map
+    "reviewer_slice_review": "claude_slice_review",  # allowlist:provider -- historical wire proof: inverse map
+    "reviewer_final_review": "claude_final_review",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_profile": "codex_profile",  # allowlist:provider -- historical wire proof: inverse map
+    "reviewer_profile": "claude_profile",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_return_count": "codex_return_count",  # allowlist:provider -- historical wire proof: inverse map
+    "max_implementer_returns": "max_codex_returns",  # allowlist:provider -- historical wire proof: inverse map
+    "last_reviewer_fingerprint": "last_claude_fingerprint",  # allowlist:provider -- historical wire proof: inverse map
+    "latest_reviewer_review": "latest_claude_review",  # allowlist:provider -- historical wire proof: inverse map
+    "implementer_contract": "codex_contract",  # allowlist:provider -- historical wire proof: inverse map
+}
+
+
+def prior_role_wire_values(value: object, field: str = "") -> object:
+    """Reconstruct historical wire values in an otherwise unchanged document."""
+    if isinstance(value, dict):
+        return {
+            _PRIOR_WIRE_NAMES.get(key, key): prior_role_wire_values(item, key)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [prior_role_wire_values(item, field) for item in value]
+    if isinstance(value, str):
+        for new, old in _PRIOR_WIRE_NAMES.items():
+            value = value.replace(new, old)
+        if field in {"role", "reviewer", "reporter", "actor", "requested_by"}:
+            value = {"implementer": "codex", "reviewer": "claude"}.get(value, value)  # allowlist:provider -- historical wire proof: inverse map
+    return value
+
+
+def prior_role_wire_document(
+    current: dict[str, object], *, prior_schema_sha256: str | None = None,
+) -> dict[str, object]:
+    """Reverse only Slice 8b wire names and rebind the prior request ID."""
+    old = prior_role_wire_values(current)
+    assert isinstance(old, dict)
+    if prior_schema_sha256 is not None:
+        contract = old["response_contract"]
+        assert isinstance(contract, dict)
+        contract["schema_sha256"] = prior_schema_sha256
+    request_id = old.pop("request_id")
+    assert isinstance(request_id, str)
+    prefix = request_id.rsplit("-", 1)[0] + "-"
+    binding = json.dumps(old, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    old["request_id"] = prefix + hashlib.sha256(binding.encode("utf-8")).hexdigest()
+    return old
 
 
 def validation_history_mirror(
@@ -261,7 +317,7 @@ def append_provider_decision_authority(
             prior_operation,
             payload.request_id,
             blob.sha256,
-            "review_result" if role is Role.CLAUDE else "agent_result",
+            "review_result" if role is Role.REVIEWER else "agent_result",
             blob.bytes,
             blob,
         ),

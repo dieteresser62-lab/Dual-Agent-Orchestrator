@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
+import agent_adapters
 
 from agent_adapters import (
     REVIEW_PACKET_CHUNK_CHARS,
@@ -12,28 +16,29 @@ from agent_adapters import (
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
-    _write_review_manifest,
     build_agent_registry,
+    build_slot_agent_registry,
 )
+from reviewer_input import _write_review_manifest
 from agent_config import AgentSettings
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     ReadinessMarker,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
-from native_codex_request import NativeCodexEvidenceInput, NativeCodexRequestSpec, build_native_codex_request
+from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from native_implementer_request import NativeImplementerEvidenceInput, NativeImplementerRequestSpec, build_native_implementer_request
 from native_review_contract import NativeReviewContext
 from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 from prompts import (
     GERMAN_DOCUMENT_LANGUAGE_RULE,
-    NATIVE_CLAUDE_SYSTEM_POLICY,
-    NATIVE_CODEX_SYSTEM_POLICY,
+    NATIVE_REVIEWER_SYSTEM_POLICY,
+    NATIVE_IMPLEMENTER_SYSTEM_POLICY,
 )
 
 
@@ -48,7 +53,7 @@ def _settings(role: str) -> AgentSettings:
 
 
 def _codex_bundle(*, assignment: str = "Create the plan."):
-    contract = CodexStepContract(
+    contract = ImplementerStepContract(
         name="plan",
         readiness_marker=ReadinessMarker.PLAN,
         slice_id="01",
@@ -56,25 +61,39 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
-    context = NativeCodexContext(
+
+
+    context = NativeImplementerContext(
         run_id="run-native",
         work_unit_id="1",
-        operation="codex_plan",
+        operation="implementer_plan",
         current_fingerprint="a" * 64,
-        request_kind=NativeCodexRequestKind.PLAN,
+        request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
     )
-    return build_native_codex_request(
-        NativeCodexRequestSpec(
+    return build_native_implementer_request(
+        NativeImplementerRequestSpec(
             context=context,
             target_branch="feature/native",
             base_commit="b" * 40,
             authorized_paths=("docs/internal/plan.md",),
             assignment=assignment,
             work_context="Use the typed request.",
-            evidence=(NativeCodexEvidenceInput("policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY),),
+            evidence=(NativeImplementerEvidenceInput("policy", "system_policy", NATIVE_IMPLEMENTER_SYSTEM_POLICY),),
         )
     )
+
+
+def test_implementer_preparation_failure_removes_runtime_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = NativeCodexAdapter(_settings("codex"))  # allowlist:provider -- transport: exercise the concrete adapter
+    def fail_capabilities(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("capability check failed")
+    monkeypatch.setattr(agent_adapters, "assert_provider_capabilities", fail_capabilities)
+    with pytest.raises(RuntimeError, match="capability check failed"):
+        adapter.prepare_native_provider_input(_codex_bundle())  # allowlist:provider -- transport: bound request fixture
+    assert adapter.invocation.runtime_dir is None or not adapter.invocation.runtime_dir.exists()
 
 
 def _review_bundle():
@@ -89,9 +108,9 @@ def _review_bundle():
     context = NativeReviewContext(
         run_id="run-native",
         work_unit_id="1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint="c" * 64,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="01",
         round_number=1,
@@ -111,9 +130,142 @@ def _review_bundle():
 
 
 def test_registry_constructs_only_native_adapters() -> None:
-    registry = build_agent_registry({"codex": _settings("codex"), "claude": _settings("claude")})
-    assert type(registry["codex"]) is NativeCodexAdapter
-    assert type(registry["claude"]) is NativeClaudeReviewAdapter
+    registry = build_agent_registry({"implementer": _settings("codex"), "reviewer": _settings("claude"), "final_reviewer": _settings("claude")})
+    assert type(registry["implementer"]) is NativeCodexAdapter
+    assert type(registry["reviewer"]) is NativeClaudeReviewAdapter
+    assert type(registry["final_reviewer"]) is NativeClaudeReviewAdapter
+    assert registry["reviewer"] is not registry["final_reviewer"]
+    assert registry["reviewer"].invocation is not registry["final_reviewer"].invocation
+    registry["final_reviewer"].env["FINAL_ONLY"] = "1"
+    assert "FINAL_ONLY" not in registry["reviewer"].env
+
+
+def test_registry_uses_each_synthetically_admitted_slot_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    import agent_adapters
+    from agent_roles import AgentSlot
+
+    slots = {
+        "implementer": AgentSettings("vendor_a", "a", "model-a", 10, "high", profile_name="one"),
+        "reviewer": AgentSettings("vendor_b", "b", "model-b", 20, "medium", profile_name="two"),
+        "final_reviewer": AgentSettings("vendor_c", "c", "model-c", 30, "low", profile_name="three"),
+    }
+    observed = []
+
+    class Admitted:
+        def require_occupancy(self, occupancy):
+            assert occupancy == {slot: slots[slot.value].name for slot in AgentSlot}
+
+    def pair(provider, role, *, slot, settings, certifications):
+        observed.append((slot.value, role.value, provider, settings.profile_name))
+        assert isinstance(certifications, Admitted)
+        return SimpleNamespace(settings=settings)
+
+    monkeypatch.setattr(agent_adapters, "create_agent_pair", pair)
+    registry = build_slot_agent_registry(slots, certifications=Admitted())
+    assert set(registry) == set(slots)
+    assert observed == [
+        ("implementer", "implementer", "vendor_a", "one"),
+        ("reviewer", "reviewer", "vendor_b", "two"),
+        ("final_reviewer", "reviewer", "vendor_c", "three"),
+    ]
+
+
+def test_toml_usd_setting_is_emitted_in_claude_command() -> None:
+    settings = AgentSettings("claude", "claude", "opus", None, "high", 5.0)
+    adapter = NativeClaudeReviewAdapter(settings)
+    prepared = adapter.prepare_native_provider_input(_review_bundle())
+    assert prepared.command[prepared.command.index("--max-budget-usd") + 1] == "5.0"
+
+
+def test_import_does_not_resolve_settings_or_construct_registry() -> None:
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import agent_config; "
+        "agent_config.default_agent_settings = lambda: (_ for _ in ()).throw(AssertionError('import built registry')); "
+        "import agent_adapters; "
+        "assert 'AGENT_REGISTRY' not in vars(agent_adapters)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_invocation_data_is_replaced_and_independent() -> None:
+    first = NativeClaudeReviewAdapter(_settings("claude"))
+    second = NativeClaudeReviewAdapter(_settings("claude"))
+    first.prepare_native_provider_input(_review_bundle())
+    second.prepare_native_provider_input(_review_bundle())
+    first_state = first.invocation
+    second_state = second.invocation
+    assert first_state is not second_state
+    assert first_state.reviewer_input is not second_state.reviewer_input
+    first_state.metadata["sentinel"] = 1
+    assert "sentinel" not in second_state.metadata
+    first.prepare_native_provider_input(_review_bundle())
+    assert first.invocation is not first_state
+    assert "sentinel" not in first.invocation.metadata
+    assert first_state.runtime_dir is None
+    first.cleanup()
+    second.cleanup()
+
+
+def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    adapter.prepare_native_provider_input(_review_bundle())
+    active = adapter.invocation
+    adapter.metadata = {"usage": {"input_tokens": 11}}
+    adapter.cleanup()
+    assert adapter.invocation is active
+    assert adapter.metadata == {"usage": {"input_tokens": 11}}
+    assert adapter.invocation.runtime_dir is None
+    adapter.prepare_native_provider_input(_review_bundle())
+    assert adapter.invocation is not active
+    assert adapter.metadata == {}
+    adapter.cleanup()
+
+
+@pytest.mark.parametrize("provider,expected_command,expected_components", [
+    (
+        "codex",
+        "7b25254cce9d482ceae43a8c9459093b17219c4588cf9e4917eb6449a888cdfc",
+        "c2650774782b0a5419577ef1f70d981d3a4186ed79b7338c6b76cb4f08163ba7",
+    ),
+    (
+        "claude",
+        "5ed0c3eb1b0d482f43687fdad58e3c91f06352644ac9f79d2e6fee937eb4bbfc",
+        "9251537e4303a1c600ac7711e34608ce289c831face267ba890a2b34225001f2",
+    ),
+])
+def test_transport_command_environment_and_components_match_start_head(
+    provider: str, expected_command: str, expected_components: str,
+) -> None:
+    # Slice 8b wire cut: component digests include the newly bound request bytes.
+    # Captured from HEAD 7064367 using the same helpers; only random runtime
+    # directory names are replaced with a fixed token before hashing.
+    adapter = (
+        NativeCodexAdapter(_settings(provider))
+        if provider == "codex"
+        else NativeClaudeReviewAdapter(_settings(provider))
+    )
+    bundle = _codex_bundle() if provider == "codex" else _review_bundle()
+    prepared = adapter.prepare_native_provider_input(bundle)
+    runtime = str(adapter.invocation.runtime_dir)
+
+    def digest(value: object) -> str:
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
+    assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
+        "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
+    )
+    assert digest([(item.name, item.content) for item in prepared.components]) == expected_components
+    adapter.cleanup()
 
 
 def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
@@ -128,7 +280,7 @@ def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
     codex.bind_reviewer_workspace(tmp_path, tmp_path / "snapshot")
 
 
-def test_native_codex_prepares_schema_request_and_assets(tmp_path: Path) -> None:
+def test_native_implementer_prepares_schema_request_and_assets(tmp_path: Path) -> None:
     adapter = NativeCodexAdapter(_settings("codex"))
     bundle = _codex_bundle()
     repository = tmp_path / "repository"
@@ -147,13 +299,13 @@ def test_native_codex_prepares_schema_request_and_assets(tmp_path: Path) -> None
     assert "--output-schema" in prepared.command
     assert prepared.command[prepared.command.index("--sandbox") + 1] == "read-only"
     assert {item.name for item in prepared.components} >= {"stdin_prompt", "response_schema"}
-    assert NATIVE_CODEX_SYSTEM_POLICY in prepared.stdin_text
+    assert NATIVE_IMPLEMENTER_SYSTEM_POLICY in prepared.stdin_text
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in prepared.stdin_text
     assert NativeCodexAdapter.required_hosts == ("chatgpt.com", "api.openai.com")
     adapter.cleanup()
 
 
-def test_native_codex_transports_assignment_without_inlining_root_roles(
+def test_native_implementer_transports_assignment_without_inlining_root_roles(
     tmp_path: Path,
 ) -> None:
     assignment = "S6-TRANSPORT-SENTINEL: create the declared work-plan artifact."
@@ -188,7 +340,7 @@ def test_native_codex_transports_assignment_without_inlining_root_roles(
     adapter.cleanup()
 
 
-def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
+def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
     adapter = NativeCodexAdapter(_settings("codex"))
     bundle = _codex_bundle()
     repository = tmp_path / "repository"
@@ -204,7 +356,7 @@ def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
         ),
     )
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": bundle.bound_context.request_id,
         "result_type": "plan_result",
         "ready": True,
@@ -219,11 +371,11 @@ def test_native_codex_extracts_only_bound_result(tmp_path: Path) -> None:
         }],
         "finding_dispositions": [],
     }
-    assert adapter._last_message_file is not None
-    adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
+    assert adapter.invocation.last_message_file is not None
+    adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     assert json.loads(adapter.extract_output("", "", {}))["request_id"] == bundle.bound_context.request_id
-    document["request_id"] = "native-codex-request-" + "0" * 64
-    adapter._last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
+    document["request_id"] = "native-implementer-request-" + "0" * 64
+    adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     with pytest.raises(AgentOutputError, match="request_id"):
         adapter.extract_output("", "", {})
     adapter.cleanup()
@@ -254,15 +406,15 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
     names = {item.name for item in prepared.components}
     assert {"packet_manifest", "system_policy", "response_schema", "start_directive"} <= names
     policy = next(item.content for item in prepared.components if item.name == "system_policy")
-    assert policy == NATIVE_CLAUDE_SYSTEM_POLICY
+    assert policy == NATIVE_REVIEWER_SYSTEM_POLICY
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in policy
     assert prepared.command[prepared.command.index("--system-prompt") + 1] == policy
     assert "--json-schema" in prepared.command
     result = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -333,7 +485,7 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
 
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     prepared = adapter.prepare_native_provider_input(bundle)
-    manifest = adapter._review_manifest_file
+    manifest = adapter.invocation.reviewer_input.manifest_file
     assert manifest is not None
     manifest_text = manifest.read_text(encoding="utf-8")
     assert "concatenate its numbered parts without separators" in manifest_text
@@ -348,8 +500,8 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
     assert all(f"content_ref={binding['content_ref']}" in row for row in evidence_rows)
 
     delivered_paths = [Path(row.split("`")[1]) for row in rows]
-    assert delivered_paths[:len(request_rows)] == list(adapter._review_packet_files)
-    assert delivered_paths[len(request_rows):] == list(adapter._native_evidence_files)
+    assert delivered_paths[:len(request_rows)] == list(adapter.invocation.reviewer_input.request_files)
+    assert delivered_paths[len(request_rows):] == list(adapter.invocation.reviewer_input.evidence_files)
     assert all(
         len(path.read_text(encoding="utf-8")) <= REVIEW_PACKET_CHUNK_CHARS
         for path in (manifest, *delivered_paths)
@@ -358,7 +510,7 @@ def test_reviewer_receives_large_single_line_evidence_in_bound_parts() -> None:
         data = path.read_bytes()
         assert f"bytes={len(data)}" in row
         assert f"sha256={hashlib.sha256(data).hexdigest()}" in row
-    reconstructed = b"".join(path.read_bytes() for path in adapter._native_evidence_files)
+    reconstructed = b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files)
     assert reconstructed == content.encode("utf-8")
     assert len(reconstructed) == binding["byte_count"]
     assert hashlib.sha256(reconstructed).hexdigest() == binding["sha256"]
@@ -383,8 +535,8 @@ def test_reviewer_evidence_unicode_boundary_is_byte_exact() -> None:
     )
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     adapter.prepare_native_provider_input(bundle)
-    assert len(adapter._native_evidence_files) == 2
-    assert b"".join(path.read_bytes() for path in adapter._native_evidence_files) == content.encode("utf-8")
+    assert len(adapter.invocation.reviewer_input.evidence_files) == 2
+    assert b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files) == content.encode("utf-8")
     adapter.cleanup()
 
 
@@ -406,10 +558,10 @@ def test_reviewer_keeps_evidence_at_inline_limit_inline() -> None:
     assert bundle.document["evidence_manifest"][0]["content"] == content
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     adapter.prepare_native_provider_input(bundle)
-    assert adapter._native_evidence_files == ()
+    assert adapter.invocation.reviewer_input.evidence_files == ()
     assert all(
         len(path.read_text(encoding="utf-8")) <= REVIEW_PACKET_CHUNK_CHARS
-        for path in (adapter._review_manifest_file, *adapter._review_packet_files)
+        for path in (adapter.invocation.reviewer_input.manifest_file, *adapter.invocation.reviewer_input.request_files)
     )
     adapter.cleanup()
 
@@ -466,7 +618,7 @@ def test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts(
     )
     adapter = NativeClaudeReviewAdapter(_settings("claude"))
     prepared = adapter.prepare_native_provider_input(bundle)
-    manifest = adapter._review_manifest_file
+    manifest = adapter.invocation.reviewer_input.manifest_file
     assert manifest is not None
     index_text = manifest.read_text(encoding="utf-8")
     pages = [
@@ -480,9 +632,9 @@ def test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts(
         for line in page.read_text(encoding="utf-8").splitlines()
         if line.startswith("- `")
     ]
-    assert listed == [*adapter._review_packet_files, *adapter._native_evidence_files]
+    assert listed == [*adapter.invocation.reviewer_input.request_files, *adapter.invocation.reviewer_input.evidence_files]
     assert all(len(path.read_text(encoding="utf-8")) <= 5_000 for path in (manifest, *pages, *listed))
-    assert b"".join(path.read_bytes() for path in adapter._native_evidence_files) == content.encode("utf-8")
+    assert b"".join(path.read_bytes() for path in adapter.invocation.reviewer_input.evidence_files) == content.encode("utf-8")
     directive = next(item.content for item in prepared.components if item.name == "start_directive")
     assert f"({1 + len(pages) + len(listed)} Read calls total)" in directive
     adapter.cleanup()
@@ -514,7 +666,7 @@ def test_reviewer_packet_components_stable_across_runtime_dirs(
     adapters = [NativeClaudeReviewAdapter(_settings("claude")) for _ in range(2)]
     try:
         prepared = [adapter.prepare_native_provider_input(bundle) for adapter in adapters]
-        manifests = [adapter._review_manifest_file for adapter in adapters]
+        manifests = [adapter.invocation.reviewer_input.manifest_file for adapter in adapters]
         assert all(manifest is not None for manifest in manifests)
         assert manifests[0].parent != manifests[1].parent
 
@@ -546,8 +698,8 @@ def test_reviewer_packet_components_stable_across_runtime_dirs(
             measure_provider_input(
                 item,
                 provider="claude",
-                role="claude",
-                operation="claude_slice_review",
+                role="reviewer",
+                operation="reviewer_slice_review",
                 binding_fingerprint="c" * 64,
                 policy=default_provider_input_budget_policy(),
             ).input_digest

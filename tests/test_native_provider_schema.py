@@ -10,8 +10,10 @@ import pytest
 
 import native_provider_schema
 from agent_config import MODEL_FAMILIES, add_agent_arguments, resolve_agent_settings
+from contracts import AgentRole
 from native_provider_schema import (
     NativeProviderSchemaError,
+    OPENAI_PROVIDER,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
     assert_projected_provider_schema,
     assert_provider_capabilities,
@@ -117,7 +119,7 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         )
     }
     assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
-    assert len(registered_exceptions("codex")) == 7
+    assert len(registered_exceptions("codex")) == 6
     assert len(registered_exceptions("claude")) == 6
 
 
@@ -139,19 +141,16 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     parser = argparse.ArgumentParser()
     add_agent_arguments(parser)
     settings = resolve_agent_settings(parser.parse_args([]), {})
-    binding_defaults = {
-        field.name: field.default for field in dataclasses.fields(ProtocolBinding)
-    }
     setup_defaults = inspect.signature(_fresh_state).parameters
     expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
-    for role in ("codex", "claude"):
-        assert expected[role][0] in MODEL_FAMILIES[role].values()
-        assert (settings[role].model, settings[role].effort) == expected[role]
-        for default in (
-            binding_defaults[f"{role}_profile"],
-            setup_defaults[f"{role}_profile"].default,
-        ):
-            assert (default.model, default.effort) == expected[role]
+    for role, provider in (("implementer", "codex"), ("reviewer", "claude")):
+        role_field = AgentRole(role).name.lower() + "_profile"
+        assert expected[provider][0] in MODEL_FAMILIES[provider].values()
+        assert (settings[role].model, settings[role].effort) == expected[provider]
+        binding_field = next(field for field in dataclasses.fields(ProtocolBinding) if field.name == role_field)
+        default = binding_field.default_factory()
+        assert (default.model, default.effort) == expected[provider]
+        assert setup_defaults[role_field].default is None
 
 
 def test_model_and_effort_are_recorded_but_do_not_bind_the_transport() -> None:
@@ -269,14 +268,22 @@ def test_defensive_projection_does_not_mutate_reader_schema() -> None:
     }
     before = copy.deepcopy(base)
 
-    projected = defensive_provider_projection(
-        base,
-        provider="codex",
-        required_features=("closed_object",),
-    )
-
+    with pytest.raises(NativeProviderSchemaError, match="non-portable"):
+        defensive_provider_projection(
+            base, provider=OPENAI_PROVIDER, required_features=("closed_object",)
+        )
     assert base == before
-    assert "pattern" not in projected["properties"]["path"]
+    base["properties"]["path"]["pattern"] = r"^[^/\x00]+$"
+    with pytest.raises(NativeProviderSchemaError, match="no local compensation"):
+        defensive_provider_projection(
+            base, provider=OPENAI_PROVIDER, required_features=("closed_object",)
+        )
+    projected = defensive_provider_projection(
+        base, provider="codex", required_features=("closed_object",),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=("/properties/items/uniqueItems",),
+    )
+    assert projected["properties"]["path"]["pattern"] == r"^[^/\x00]+$"
     assert "uniqueItems" not in projected["properties"]["items"]
 
 

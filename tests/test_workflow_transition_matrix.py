@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import ast
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -119,10 +121,10 @@ TRANSITION_ORACLE = (
         "plan-denial-round-2",
         "plan-review-denied",
         "plan",
-        "codex_plan_revision",
+        "implementer_plan_revision",
         2,
-        ("C-01:open:blocker",),
-        ("C-01",),
+        ("R-01:open:blocker",),
+        ("R-01",),
         1,
         1,
         1,
@@ -135,7 +137,7 @@ TRANSITION_ORACLE = (
         "plan-to-slice",
         "plan-approved",
         "slice",
-        "codex_implementation",
+        "implementer_implementation",
         1,
         (),
         (),
@@ -151,10 +153,10 @@ TRANSITION_ORACLE = (
         "slice-denial-round-2",
         "slice-review-denied",
         "slice",
-        "codex_correction",
+        "implementer_correction",
         2,
-        ("C-01:open:blocker",),
-        ("C-01",),
+        ("R-01:open:blocker",),
+        ("R-01",),
         2,
         1,
         1,
@@ -167,10 +169,10 @@ TRANSITION_ORACLE = (
         "mirror-before-checkpoint",
         "slice-review-denied-mirror-persisted",
         "slice",
-        "codex_correction",
+        "implementer_correction",
         2,
-        ("C-01:open:blocker",),
-        ("C-01",),
+        ("R-01:open:blocker",),
+        ("R-01",),
         2,
         1,
         1,
@@ -199,7 +201,7 @@ TRANSITION_ORACLE = (
         "slice-boundary-policy-gate",
         "slice-boundary-head-drift",
         "slice",
-        "codex_implementation",
+        "implementer_implementation",
         1,
         (),
         (),
@@ -215,7 +217,7 @@ TRANSITION_ORACLE = (
         "scope-user-gate",
         "scope-violation",
         "slice",
-        "claude_slice_review",
+        "reviewer_slice_review",
         1,
         (),
         (),
@@ -463,7 +465,7 @@ GATE_SOURCE_MAP = (
         ("workflow_failure_recording.persist_invocation_failure",),
         ("invocation-failure",),
         (
-            r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
+            r"role=(?:implementer|reviewer) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
             r"kind=[a-z_]+ resume=.+ auto=(?:true|false) continuations=[0-9]+ "
             r"provider=.+"
         ),
@@ -1367,7 +1369,7 @@ def _invocation_failure(state: WorkflowState) -> InvocationFailureRecord:
     return InvocationFailureRecord(
         invocation_id="matrix-invocation",
         idempotency_key="matrix-invocation-key",
-        role="codex",
+        role="implementer",
         failure_kind=AgentFailureKind.PROCESS,
         provider_text="provider process stopped",
         received_at="2026-08-27T10:00:30+00:00",
@@ -1544,9 +1546,9 @@ def _state() -> WorkflowState:
         target_branch="feature/transition-matrix",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
         timestamp="2026-08-27T10:00:00+00:00",
     ).bind_slice_plan(
@@ -1563,7 +1565,7 @@ def _slice_state() -> WorkflowState:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             updated_at="2026-08-27T10:00:03+00:00",
         )
         .bind_current_slice_git_boundary(
@@ -1588,7 +1590,7 @@ def _finding(
         status=status,
         summary=f"Summary for {finding_id}",
         acceptance_test=f"Acceptance for {finding_id}",
-        origin=FindingOrigin("FINAL", round_number, AgentRole.CLAUDE),
+        origin=FindingOrigin("FINAL", round_number, AgentRole.REVIEWER),
         status_rationale=("Verified closed." if status is FindingStatus.CLOSED else None),
     )
 
@@ -1643,22 +1645,22 @@ def _assert_case(case_id: str, actual: TransitionOracleRow) -> None:
 
 
 def _exercise_transition_oracle(tmp_path: Path) -> None:
-    c01_open = _finding("C-01", FindingClass.BLOCKER, FindingStatus.OPEN)
+    c01_open = _finding("R-01", FindingClass.BLOCKER, FindingStatus.OPEN)
     c01_closed = replace(
         c01_open,
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    c02_closed = _finding("C-02", FindingClass.FINDING, FindingStatus.CLOSED)
+    c02_closed = _finding("R-02", FindingClass.FINDING, FindingStatus.CLOSED)
     c03_open = _finding(
-        "C-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
+        "R-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
     )
     c03_closed = replace(
         c03_open,
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    historical = _finding("C-99", FindingClass.FINDING, FindingStatus.OPEN)
+    historical = _finding("R-99", FindingClass.FINDING, FindingStatus.OPEN)
 
     def assert_case(
         case_id: str,
@@ -1693,11 +1695,11 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         )
 
     plan_round_two = _state().with_current_step(
-        WorkflowStep.CLAUDE_PLAN_REVIEW
+        WorkflowStep.REVIEWER_PLAN_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01",),
+        return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
         updated_at="2026-08-27T10:00:01+00:00",
     )
@@ -1719,11 +1721,11 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
     )
 
     slice_round_two = slice_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_CORRECTION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01",),
+        return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         progress_made=True,
         updated_at="2026-08-27T10:00:05+00:00",
     )
@@ -1785,7 +1787,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
     assert boundary_gate.current_work_unit.gate.resume_step is None
 
     scope_gate = slice_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
         detail="UNEXPECTED-PATH | canonical changes contain src/extra.py",
@@ -2165,7 +2167,7 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
         fingerprint="5" * 64,
     ) is bootstrap
     restored = bootstrap.resume_after_invocation_halt()
-    assert restored.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert restored.current_step is WorkflowStep.IMPLEMENTER_IMPLEMENTATION
     assert restored.current_work_unit.round_number == 1
 
 
@@ -2304,12 +2306,12 @@ def _bind_record_authoritative_fixture(
         review = append_provider_decision_authority(
             bridge,
             ReviewPayload(
-                Role.CLAUDE,
+                Role.REVIEWER,
                 str(slice_unit.work_unit_id),
                 "approved",
                 (),
                 None,
-                "native-claude-review-v2",
+                "native-claude-review-v3",
                 "native-review-request-" + hashlib.sha256(
                     f"{state.run_id}:{slice_record.slice_id}".encode("utf-8")
                 ).hexdigest(),
@@ -2324,7 +2326,7 @@ def _bind_record_authoritative_fixture(
             logical_id=f"matrix-review-{slice_record.slice_id}",
             idempotency_key=f"matrix-review:{slice_record.slice_id}",
             fingerprint_sha256=fingerprint,
-            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
         )
         bridge.append(
             BindingPayload(
@@ -2360,7 +2362,7 @@ def _bind_record_authoritative_fixture(
                 finding,
                 work_unit_id=state.current_work_unit_id,
                 action="status_changed",
-                actor=AgentRole.CLAUDE,
+                actor=AgentRole.REVIEWER,
                 rationale=finding.status_rationale,
             )
     projected = resolve_resume_state(driver.root, state.run_id).state
@@ -2384,9 +2386,9 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
         target_branch="feature/transition-matrix",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     ).bind_slice_plan(
         (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
@@ -2397,7 +2399,7 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
@@ -2454,9 +2456,8 @@ def _append_completed_provider_attempt(
     """Persist one real, completed provider call for the transition fixture."""
 
     measurement = bridge.append(
-        ProviderInputMeasurementPayload(
-            Role.CLAUDE,
-            Role.CLAUDE,
+        ProviderInputMeasurementPayload("claude",
+            Role.REVIEWER,
             "claude_transition_matrix_review",
             str(work_unit_id),
             "9" * 64,
@@ -2487,8 +2488,6 @@ def _append_completed_provider_attempt(
         measurement_record=measurement,
         binding_fingerprint="9" * 64,
         work_unit_id=work_unit_id,
-        model="sonnet",
-        effort="high",
     )
     bridge.finish_provider_attempt(
         started,
@@ -2598,14 +2597,14 @@ def _ledger_case(
     bridge = driver._artifact_bridge
     assert bridge is not None
 
-    c01 = _finding("C-01", FindingClass.BLOCKER, FindingStatus.OPEN)
-    c02_open = _finding("C-02", FindingClass.FINDING, FindingStatus.OPEN)
+    c01 = _finding("R-01", FindingClass.BLOCKER, FindingStatus.OPEN)
+    c02_open = _finding("R-02", FindingClass.FINDING, FindingStatus.OPEN)
     c02_closed = replace(
         c02_open,
         status=FindingStatus.CLOSED,
         status_rationale="Verified closed.",
     )
-    historical = _finding("C-99", FindingClass.FINDING, FindingStatus.OPEN)
+    historical = _finding("R-99", FindingClass.FINDING, FindingStatus.OPEN)
     for finding in (c01, c02_open):
         _append_finding(
             bridge,
@@ -2622,12 +2621,12 @@ def _ledger_case(
         c02_closed,
         work_unit_id=final_state.current_work_unit_id,
         action="status_changed",
-        actor=AgentRole.CLAUDE,
+        actor=AgentRole.REVIEWER,
         rationale="Verified closed.",
     )
 
     c03 = _finding(
-        "C-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
+        "R-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
     )
     _append_finding(
         bridge,
@@ -2635,11 +2634,11 @@ def _ledger_case(
         work_unit_id=final_state.current_work_unit_id,
     )
     round_two = final_state.with_current_step(
-        WorkflowStep.CLAUDE_SLICE_REVIEW
+        WorkflowStep.REVIEWER_SLICE_REVIEW
     ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01", "C-03"),
-        return_step=WorkflowStep.CODEX_CORRECTION,
+        reviewer=Reviewer.REVIEWER,
+        open_findings=("R-01", "R-03"),
+        return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
         progress_made=True,
     )
     round_two = _bind_record_authoritative_fixture(driver, round_two)
@@ -2662,10 +2661,10 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     assert finding_record_count == 5
 
     assert _ledger_literal(replay_findings(replay)) == (
-        "C-01:open:blocker",
-        "C-02:closed:finding",
-        "C-03:open:blocker",
-        "C-99:open:finding",
+        "R-01:open:blocker",
+        "R-02:closed:finding",
+        "R-03:open:blocker",
+        "R-99:open:finding",
     )
     assert _ledger_literal(
         driver.authoritative_native_findings(state, correction_mirror)
@@ -2673,10 +2672,10 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     assert _ledger_literal(
         driver.carry_forward_native_findings(state, correction_mirror)
     ) == (
-        "C-01:open:blocker",
-        "C-02:closed:finding",
-        "C-03:open:blocker",
-        "C-99:open:finding",
+        "R-01:open:blocker",
+        "R-02:closed:finding",
+        "R-03:open:blocker",
+        "R-99:open:finding",
     )
 
     # Rebinding a manipulated projection is cache-only: it neither duplicates
@@ -2701,7 +2700,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     ) == _ledger_literal(full_ledger)
 
     # Projection arguments cannot add or hide findings: records stay decisive.
-    missing_record = _finding("C-04", FindingClass.BLOCKER, FindingStatus.OPEN)
+    missing_record = _finding("R-04", FindingClass.BLOCKER, FindingStatus.OPEN)
     assert _ledger_literal(
         driver.carry_forward_native_findings(
             state, (*correction_mirror, missing_record)
@@ -2721,9 +2720,9 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     orphan.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -2740,7 +2739,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         orphan_finding,
         work_unit_id=state.current_work_unit_id,
         action="status_changed",
-        actor=AgentRole.CLAUDE,
+        actor=AgentRole.REVIEWER,
         rationale="Closed without an opening record.",
     )
     with pytest.raises(ArtifactReplayError, match="RECORD-REFERENCE-MISSING"):
@@ -2750,10 +2749,10 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
 
     # Keep the independently expected full ledger visibly bound to this case.
     assert _ledger_literal(full_ledger) == (
-        "C-01:open:blocker",
-        "C-02:closed:finding",
-        "C-03:open:blocker",
-        "C-99:open:finding",
+        "R-01:open:blocker",
+        "R-02:closed:finding",
+        "R-03:open:blocker",
+        "R-99:open:finding",
     )
 
 

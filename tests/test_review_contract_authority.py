@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import pytest
 
 from artifact_bridge import ArtifactBridge
@@ -52,9 +54,9 @@ def _bridge(tmp_path, run_id: str) -> ArtifactBridge:  # type: ignore[no-untyped
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -99,32 +101,32 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     attestation = _attestation(bridge)
     bridge.append(
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.FINDING,
             finding_status="open",
             rationale="Cross-cutting follow-up remains visible.",
             work_unit_id="7",
             summary="Retain the cross-cutting review note.",
-            acceptance_test="The next Slice keeps C-01 visible.",
+            acceptance_test="The next Slice keeps R-01 visible.",
             origin_slice_id="7",
             origin_round_number=3,
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding-C-01-opened",
+        logical_id="finding-R-01",
+        idempotency_key="finding-R-01-opened",
         fingerprint_sha256=FINGERPRINT,
     )
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="7",
             verdict="approved",
-            finding_ids=("C-01",),
+            finding_ids=("R-01",),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "a" * 64,
             response_sha256="b" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -138,7 +140,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
         logical_id="review-claude-7-3",
         idempotency_key="review-claude-7-3",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         anchors=(
             ReviewAnchor(
                 "anchor-r7",
@@ -164,7 +166,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     assert contract.record_id == review.record_id
     assert contract.work_unit_id == "7"
     assert contract.round_number == 3
-    assert contract.result.reviewer is AgentRole.CLAUDE
+    assert contract.result.reviewer is AgentRole.REVIEWER
     assert contract.result.approval is True
     assert contract.result.test_files == ("tests/test_review_contract_authority.py",)
     assert contract.result.pre_mortem == (
@@ -177,7 +179,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     assert contract.result.validation.passed
     assert project_latest_review(replay, bridge.store.read_blob, "7") == contract.result
     assert project_latest_review(replay, bridge.store.read_blob, "8") is None
-    assert all(record.record_type.value != "latest_claude_review" for record in chain)
+    assert all(record.record_type.value != "latest_reviewer_review" for record in chain)
 
 
 def test_review_contract_preserves_specific_finding_reducer_diagnostic(
@@ -195,12 +197,12 @@ def test_review_contract_preserves_specific_finding_reducer_diagnostic(
     append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="7",
             verdict="approved",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "f" * 64,
             response_sha256="a" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -213,7 +215,7 @@ def test_review_contract_preserves_specific_finding_reducer_diagnostic(
         logical_id="review-claude-7-1",
         idempotency_key="review-claude-7-1",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     chain = bridge.store.load_chain()
     replay = replay_artifacts(chain, bridge.store.run_id)
@@ -247,12 +249,12 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
-            reviewer=Role.CLAUDE,
+            reviewer=Role.REVIEWER,
             work_unit_id="8",
             verdict="stop",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "c" * 64,
             response_sha256="e" * 64,
             stop_request=ReviewStopRequestPayload(
@@ -264,7 +266,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
         logical_id="review-claude-8-1",
         idempotency_key="review-claude-8-1",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     chain = bridge.store.load_chain()
     replay = replay_artifacts(
@@ -324,7 +326,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
         created_at="2026-08-31T12:00:00+00:00",
         idempotency_key="post-review-diagnostic",
         payload=DiagnosticPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "8",
             1,
             "0" * 64,

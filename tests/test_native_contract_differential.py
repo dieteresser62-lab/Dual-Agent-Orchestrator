@@ -12,10 +12,11 @@ import sys
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from contracts import (
     AgentRole,
     ApprovalMarker,
-    CodexStepContract,
+    ImplementerStepContract,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -26,14 +27,20 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
-from native_codex_contract import (
-    BoundNativeCodexContext,
-    NativeCodexContext,
-    NativeCodexRequestKind,
-    native_codex_provider_response_schema,
-    parse_bound_native_codex_contract_result,
+from native_implementer_contract import (
+    BoundNativeImplementerContext,
+    NativeImplementerContext,
+    NativeImplementerRequestKind,
+    canonical_native_implementer_json,
+    native_implementer_provider_response_schema,
+    parse_bound_native_implementer_contract_result,
 )
-from native_provider_schema import defensive_provider_projection, registered_exceptions
+from native_implementer_request import (
+    NativeImplementerEvidenceInput,
+    NativeImplementerRequestSpec,
+    build_native_implementer_request,
+)
+from native_provider_schema import NativeProviderSchemaError, defensive_provider_projection, registered_exceptions
 from native_review_contract import (
     BoundNativeReviewContext,
     NativeReviewContext,
@@ -55,28 +62,59 @@ _PROVIDER_FEATURES = {
     "claude": ("closed_object", "min_max_items", "nested_any_of", "nested_one_of"),
 }
 _EXPECTED_PROJECTION_COMPENSATIONS = {
-    ("codex", "/$defs/correction_result/properties/test_files/uniqueItems", "uniqueItems"):
-        ("regex_lookaround_and_unique_items", True),
-    ("codex", "/$defs/implementation_result/properties/test_files/uniqueItems", "uniqueItems"):
-        ("regex_lookaround_and_unique_items", True),
-    ("codex", "/$defs/planned_slice/properties/scope_paths/uniqueItems", "uniqueItems"):
-        ("regex_lookaround_and_unique_items", True),
-    ("codex", "/$defs/safe_path/pattern", "pattern"):
-        (
-            "regex_lookaround_and_unique_items",
-            r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\u0000\r\n]{1,1000}$",
-        ),
-    ("codex", "/$defs/safe_text/pattern", "pattern"): (
-        "regex_lookaround",
-        r"^(?=.*\S)[^\u0000]{1,12000}$",
-    ),
-    ("codex", "/$defs/stop_result/properties/remediation_paths/uniqueItems", "uniqueItems"):
-        ("regex_lookaround_and_unique_items", True),
+    ("codex", "/$defs/correction_result/properties/test_files/uniqueItems", "uniqueItems"): ("unique_items", True),
+    ("codex", "/$defs/implementation_result/properties/test_files/uniqueItems", "uniqueItems"): ("unique_items", True),
+    ("codex", "/$defs/planned_slice/properties/scope_paths/uniqueItems", "uniqueItems"): ("unique_items", True),
+    ("codex", "/$defs/stop_result/properties/remediation_paths/uniqueItems", "uniqueItems"): ("unique_items", True),
 }
 
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def test_implementer_request_and_response_bytes_match_pre_rename_baseline() -> None:
+    # Digests were measured from the same inputs at f6bb5cc, before the API rename.
+    spec = NativeImplementerRequestSpec(
+        context=_codex_bound(NativeImplementerRequestKind.PLAN).context,
+        target_branch="feature/differential",
+        base_commit="b" * 40,
+        authorized_paths=("docs/internal/plan.md",),
+        assignment="Differential request.",
+        work_context="Byte contract.",
+        evidence=(
+            NativeImplementerEvidenceInput(
+                "e01", "work_plan", "Plan content.", "docs/internal/plan.md"
+            ),
+        ),
+    )
+    bundle = build_native_implementer_request(spec)
+    # Slice 8b wire cut: inverse fields recreate the f6bb5cc document digest.
+    prior = prior_role_wire_document(bundle.document)
+    assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
+        "b404fa788123edb66cb5c3f3a738cc1a74273b2889b49d0b0c498362c447584b"
+    )
+    assert hashlib.sha256(bundle.canonical_json.encode()).hexdigest() == (
+        "aff21578956132f6307544b389ed981430fa7298179bdd1f7faf0b8dbb941e54"
+    )
+    assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
+        "8bf937f092c712f02515ebd9c8edc905c9bb64b893a619b485d057d88fb687e4"
+    )
+    response_digests = {
+        NativeImplementerRequestKind.PLAN: (
+            "073af2daf6532165d2315978071587da29d69364c9a81043d43f0f3d8d120dd0"
+        ),
+        NativeImplementerRequestKind.IMPLEMENTATION: (
+            "db9c87da6ad8be418a52f1ca094e88173cf5b9e0b272cb690b188c8d70557c18"
+        ),
+        NativeImplementerRequestKind.CORRECTION: (
+            "9bbc364817140cd528f714fcee228572c718b67109a010b64b7b343716e06ca2"
+        ),
+    }
+    for kind, expected in response_digests.items():
+        bound = _codex_bound(kind)
+        canonical = canonical_native_implementer_json(_codex_response(bound))
+        assert hashlib.sha256(canonical.encode()).hexdigest() == expected
 
 
 def _projection_losses(
@@ -137,6 +175,14 @@ def _assert_projection_compensated(
             reader,
             provider=provider,
             required_features=_PROVIDER_FEATURES[provider],
+            compensated_features=("uniqueItems",),
+            compensated_unique_item_paths=(
+                "/$defs/planned_slice/properties/scope_paths/uniqueItems",
+                "/$defs/planned_slice/properties/acceptance_criteria/uniqueItems",
+                "/$defs/implementation_result/properties/test_files/uniqueItems",
+                "/$defs/correction_result/properties/test_files/uniqueItems",
+                "/$defs/stop_result/properties/remediation_paths/uniqueItems",
+            ),
         )
         losses = _projection_losses(reader, writer)
         actual[provider] = losses
@@ -181,81 +227,81 @@ def _finding(
     finding_class: FindingClass = FindingClass.BLOCKER,
 ) -> FindingRecord:
     return FindingRecord(
-        "C-01",
+        "R-01",
         finding_class,
         FindingStatus.OPEN,
         "Close the bound contract.",
         "A focused regression passes.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
-def _codex_bound(kind: NativeCodexRequestKind) -> BoundNativeCodexContext:
+def _codex_bound(kind: NativeImplementerRequestKind) -> BoundNativeImplementerContext:
     readiness = {
-        NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
-        NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.PLAN: ReadinessMarker.PLAN,
+        NativeImplementerRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
     }[kind]
-    context = NativeCodexContext(
+    context = NativeImplementerContext(
         run_id="differential-codex",
         work_unit_id=f"work-{kind.value}",
         operation=f"codex_{kind.value}",
         current_fingerprint=FINGERPRINT,
         request_kind=kind,
-        contract=CodexStepContract(
+        contract=ImplementerStepContract(
             name=f"differential-{kind.value}",
             readiness_marker=readiness,
             slice_id="01",
             round_number=1,
             require_test_files_record=kind in {
-                NativeCodexRequestKind.IMPLEMENTATION,
-                NativeCodexRequestKind.CORRECTION,
+                NativeImplementerRequestKind.IMPLEMENTATION,
+                NativeImplementerRequestKind.CORRECTION,
             },
             expected_test_files=(
                 ("tests/test_native_contract_differential.py",)
                 if kind
                 in {
-                    NativeCodexRequestKind.IMPLEMENTATION,
-                    NativeCodexRequestKind.CORRECTION,
+                    NativeImplementerRequestKind.IMPLEMENTATION,
+                    NativeImplementerRequestKind.CORRECTION,
                 }
                 else ()
             ),
             test_changes_approved=True,
-            require_slice_plan=kind is NativeCodexRequestKind.PLAN,
+            require_slice_plan=kind is NativeImplementerRequestKind.PLAN,
             plan_artifact_path=(
                 "docs/internal/plan.md"
-                if kind is NativeCodexRequestKind.PLAN
+                if kind is NativeImplementerRequestKind.PLAN
                 else None
             ),
         ),
         previous_findings=(
-            (_finding(),) if kind is NativeCodexRequestKind.CORRECTION else ()
+            (_finding(),) if kind is NativeImplementerRequestKind.CORRECTION else ()
         ),
     )
-    return BoundNativeCodexContext(
-        context, "native-codex-request-" + "b" * 64, "b" * 64
+    return BoundNativeImplementerContext(
+        context, "native-implementer-request-" + "b" * 64, "b" * 64
     )
 
 
-def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
+def _codex_response(bound: BoundNativeImplementerContext) -> dict[str, object]:
     kind = bound.context.request_kind
     common: dict[str, object] = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": bound.request_id,
         "ready": True,
         "finding_dispositions": (
             [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "decision": "accepted",
                     "rationale": "The focused regression closes the defect.",
                 }
             ]
-            if kind is NativeCodexRequestKind.CORRECTION
+            if kind is NativeImplementerRequestKind.CORRECTION
             else []
         ),
     }
-    if kind is NativeCodexRequestKind.PLAN:
+    if kind is NativeImplementerRequestKind.PLAN:
         return {
             **common,
             "result_type": "plan_result",
@@ -272,8 +318,8 @@ def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
             ],
         }
     if kind in {
-        NativeCodexRequestKind.IMPLEMENTATION,
-        NativeCodexRequestKind.CORRECTION,
+        NativeImplementerRequestKind.IMPLEMENTATION,
+        NativeImplementerRequestKind.CORRECTION,
     }:
         return {
             **common,
@@ -308,12 +354,12 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         run_id="differential-claude",
         work_unit_id=f"work-{form}",
         operation={
-            ApprovalMarker.PLAN: "claude_plan_review",
-            ApprovalMarker.SLICE: "claude_slice_review",
-            ApprovalMarker.FINAL_REVIEW: "claude_final_review",
+            ApprovalMarker.PLAN: "reviewer_plan_review",
+            ApprovalMarker.SLICE: "reviewer_slice_review",
+            ApprovalMarker.FINAL_REVIEW: "reviewer_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval_marker=marker,
         slice_id="FINAL" if form == "final_review" else "01",
         round_number=2 if convergence else 1,
@@ -342,10 +388,10 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
 def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
     if bound.context.approval_marker is ApprovalMarker.FINAL_REVIEW:
         return {
-            "schema_version": "native-agent-review-result-v2",
+            "schema_version": "native-agent-review-result-v3",
             "result_type": "final_review_completed",
             "request_id": bound.request_id,
-            "reviewer": "claude",
+            "reviewer": "reviewer",
             "scan_complete": True,
             "new_findings": [],
             "occurrences": [],
@@ -357,16 +403,16 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
             "pre_mortem": "A later provider version could change its schema subset.",
         }
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bound.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": (
             [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "status": "CLOSED",
                     "rationale": "The focused regression closes the defect.",
                     "closure": {"kind": "fixed"},
@@ -387,12 +433,12 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
 
 def test_all_writer_forms_accept_their_local_domain_result() -> None:
     actual: list[dict[str, str]] = []
-    for kind in NativeCodexRequestKind:
+    for kind in NativeImplementerRequestKind:
         bound = _codex_bound(kind)
         response = _codex_response(bound)
-        writer = native_codex_provider_response_schema(bound.context)
+        writer = native_implementer_provider_response_schema(bound.context)
         validate_schema_document({"result": response}, writer)
-        parse_bound_native_codex_contract_result(response, bound)
+        parse_bound_native_implementer_contract_result(response, bound)
         actual.append(
             {
                 "provider": "codex",
@@ -423,13 +469,13 @@ def test_all_writer_forms_accept_their_local_domain_result() -> None:
 def test_provider_projection_losses_are_exact_and_locally_compensated() -> None:
     actual = _assert_projection_compensated(
         {
-            "codex": ROOT / "schemas/native-agent-codex-result-v2.schema.json",
-            "claude": ROOT / "schemas/native-agent-review-result-v2.schema.json",
+            "codex": ROOT / "schemas/native-agent-implementer-result-v3.schema.json",
+            "claude": ROOT / "schemas/native-agent-review-result-v3.schema.json",
         },
         EXCEPTION_TABLE,
         collect_root=ROOT,
     )
-    assert len(actual["codex"]) == 6
+    assert len(actual["codex"]) == 4
     assert actual["claude"] == []
 
 
@@ -439,12 +485,12 @@ def test_seventh_projection_loss_is_rejected_without_compensation(
     copied_schemas = tmp_path / "schemas"
     copied_schemas.mkdir()
     readers = {
-        "codex": copied_schemas / "native-agent-codex-result-v2.schema.json",
-        "claude": copied_schemas / "native-agent-review-result-v2.schema.json",
+        "codex": copied_schemas / "native-agent-implementer-result-v3.schema.json",
+        "claude": copied_schemas / "native-agent-review-result-v3.schema.json",
     }
     real_readers = {
-        "codex": ROOT / "schemas/native-agent-codex-result-v2.schema.json",
-        "claude": ROOT / "schemas/native-agent-review-result-v2.schema.json",
+        "codex": ROOT / "schemas/native-agent-implementer-result-v3.schema.json",
+        "claude": ROOT / "schemas/native-agent-review-result-v3.schema.json",
     }
     real_bytes = {
         path: path.read_bytes() for path in (*real_readers.values(), EXCEPTION_TABLE)
@@ -460,7 +506,7 @@ def test_seventh_projection_loss_is_rejected_without_compensation(
     ] = True
     readers["codex"].write_text(json.dumps(mutated), encoding="utf-8")
 
-    with pytest.raises(AssertionError, match="unregistered provider projection loss"):
+    with pytest.raises(NativeProviderSchemaError, match="no local compensation"):
         _assert_projection_compensated(
             readers, copied_exceptions, collect_root=None
         )
@@ -498,21 +544,21 @@ def test_deliberately_loosened_writer_rule_trips_the_red_control() -> None:
 def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> None:
     template = _review_bound("convergence")
     closed = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.FINDING,
         FindingStatus.CLOSED,
         "Already resolved.",
         "Keep it closed.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Resolved earlier.",
     )
     open_finding = FindingRecord(
-        "C-02",
+        "R-02",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Current blocker.",
         "Close the current blocker.",
-        FindingOrigin("01", 2, AgentRole.CLAUDE),
+        FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
     context = replace(
         template.context,
@@ -527,7 +573,7 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
         {
             "status_changes": [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "status": "OPEN",
                     "rationale": "Reopen the resolved finding.",
                     "closure": None,
@@ -556,21 +602,21 @@ def test_closed_own_finding_mutations_are_rejected_by_writer_and_domain() -> Non
 def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> None:
     template = _review_bound("initial_slice")
     closed = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.CLOSED,
         "Already resolved.",
         "Keep it closed.",
-        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Resolved earlier.",
     )
     open_finding = FindingRecord(
-        "C-02",
+        "R-02",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Current blocker.",
         "Close the current blocker.",
-        FindingOrigin("01", 2, AgentRole.CLAUDE),
+        FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
     context = replace(template.context, previous_findings=(closed, open_finding))
     bound = BoundNativeReviewContext(
@@ -583,7 +629,7 @@ def test_denial_cannot_satisfy_blocker_state_by_reopening_closed_blocker() -> No
         new_findings=[],
         status_changes=[
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "status": "OPEN",
                 "rationale": "Reopen it to make denial pass.",
                 "closure": None,

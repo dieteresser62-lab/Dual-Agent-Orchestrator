@@ -137,7 +137,7 @@ def _authorization(
         slice_id=9,
         diff_fingerprint=fingerprint,
         attestation=attestation,
-        claude_review=review(AgentRole.CLAUDE, claude_approval),
+        reviewer_review=review(AgentRole.REVIEWER, claude_approval),
     )
 
 
@@ -610,7 +610,7 @@ def test_commit_blocks_stale_or_negative_review_without_mutating_index(
     (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
     authorization = _authorization(repository, head, claude_approval=False)
 
-    with pytest.raises(GitTransactionError, match="approving claude"):
+    with pytest.raises(GitTransactionError, match="approving reviewer"):
         commit_slice(
             repository_root=repository,
             boundary=boundary,
@@ -787,9 +787,9 @@ def test_active_cutover_rejects_commit_for_exit_violation(
     append(WorkUnitPayload("9", 1, ("base.txt",)))
     append(
         FindingTransitionPayload(
-            finding_id="C-01",
-            reporter=Role.CLAUDE,
-            actor=Role.CLAUDE,
+            finding_id="R-01",
+            reporter=Role.REVIEWER,
+            actor=Role.REVIEWER,
             action="opened",
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
@@ -1062,8 +1062,8 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
     authorized = replace(
         authorization,
         attestation=failing,
-        claude_review=replace(
-            authorization.claude_review,
+        reviewer_review=replace(
+            authorization.reviewer_review,
             validation=failing,
             red_state_followup_slice="Slice 10",
         ),
@@ -1093,9 +1093,9 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
         created_at="2026-08-30T10:00:00+00:00",
         idempotency_key="review-red-state",
         payload=review_payload(
-            authorized.claude_review,
+            authorized.reviewer_review,
             work_unit_id="1",
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id=f"native-review-request-{'b' * 64}",
             response_sha256="c" * 64,
         ),
@@ -1271,4 +1271,3 @@ def test_ambiguous_base_branch_stops_and_names_its_candidates(
         match=rf"candidates: {listed}; set \[repository\] base_branch",
     ):
         resolve_base_branch(repository)
-

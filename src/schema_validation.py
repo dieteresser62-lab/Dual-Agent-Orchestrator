@@ -13,6 +13,15 @@ import json
 import re
 from typing import Any, Mapping
 
+from schema_patterns import (
+    ANY_LINE_VISIBLE_PATTERN,
+    FIRST_LINE_VISIBLE_PATTERN,
+    VISIBLE_LINE_PATTERN,
+    has_visible_text,
+    matches_portable_pattern,
+    portable_pattern_violations,
+)
+
 
 class SchemaDefinitionError(ValueError):
     """A bundled schema uses an unsupported or invalid definition."""
@@ -29,7 +38,7 @@ class SchemaMismatch(Exception):
 _SCHEMA_ANNOTATIONS = {"$schema", "$id", "title", "description"}
 _SCHEMA_KEYWORDS = {
     "$ref", "$defs", "type", "enum", "const", "pattern", "format",
-    "minLength", "maxLength", "minimum", "maximum", "required", "properties",
+    "minLength", "maxLength", "minimum", "exclusiveMinimum", "maximum", "required", "properties",
     "additionalProperties", "items", "minItems", "maxItems", "uniqueItems",
     "allOf", "anyOf", "oneOf", "if", "then", "else",
 }
@@ -105,6 +114,12 @@ def _check_schema_node(node: Any, root: Mapping[str, Any], location: str) -> Non
         raise SchemaDefinitionError(
             f"unsupported schema keyword at {location}: {sorted(unknown)[0]}"
         )
+    if "pattern" in node:
+        violations = portable_pattern_violations(node["pattern"])
+        if violations:
+            raise SchemaDefinitionError(
+                f"non-portable pattern at {location}: {', '.join(violations)}"
+            )
     reference = node.get("$ref")
     if reference is not None:
         if not isinstance(reference, str) or not reference.startswith("#/"):
@@ -197,8 +212,11 @@ def _validate_schema_node(
                 path, f"must contain at most {schema['maxLength']} character(s)"
             )
         pattern = schema.get("pattern")
-        if pattern is not None and re.search(pattern, value) is None:
+        if pattern is not None and not matches_portable_pattern(pattern, value):
             raise SchemaMismatch(path, f"does not match pattern {pattern!r}")
+        if pattern in {FIRST_LINE_VISIBLE_PATTERN, ANY_LINE_VISIBLE_PATTERN, VISIBLE_LINE_PATTERN}:
+            if not has_visible_text(value, first_line=pattern == FIRST_LINE_VISIBLE_PATTERN):
+                raise SchemaMismatch(path, "must contain visible non-NUL text")
         if schema.get("format") == "date-time":
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -207,9 +225,11 @@ def _validate_schema_node(
             if parsed.tzinfo is None:
                 raise SchemaMismatch(path, "timestamp must include a timezone")
 
-    if isinstance(value, int) and not isinstance(value, bool):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             raise SchemaMismatch(path, f"must be at least {schema['minimum']}")
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            raise SchemaMismatch(path, f"must be greater than {schema['exclusiveMinimum']}")
         if "maximum" in schema and value > schema["maximum"]:
             raise SchemaMismatch(path, f"must be at most {schema['maximum']}")
 

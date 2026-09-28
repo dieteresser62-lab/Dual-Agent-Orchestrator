@@ -2,6 +2,11 @@
   "schema_version": "engine-dispatch-static-pre-b51-v1",
   "source_commit": "b762dde73296b94a61f028328d09409a07922f2e",
   "source_blob": "6eef6884f82c4ae0b184f40bc4222384562d0351",
+  "active_name_changes": {
+    "NativeAgentCodexOutput": "NativeAgentImplementerOutput",
+    "_run_codex": "_run_implementer",
+    "AgentRole.CLAUDE": "AgentRole.REVIEWER"
+  },
   "layers": [
     {
       "function": "workflow.py::WorkflowEngine._run_codex",

@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 import hashlib
@@ -34,6 +34,7 @@ from schema_validation import (
     validate_schema_document,
 )
 from finding_order import sorted_finding_ids
+from finding_identity import FINDING_ID_PATTERN, FINDING_ID_PREFIX
 from path_policy import PathClass
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
@@ -44,9 +45,14 @@ from rejected_response_shape import (
     rejected_native_response_shape_document,
     rejected_native_response_shape_from_document,
 )
+from provider_identity import ProviderIdentity
+from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-role-wire-v1"
+)
+PRE_ROLE_WIRE_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
 )
 PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION = (
@@ -74,11 +80,18 @@ PRE_AFFECTED_PATHS_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-joint-67-68-v1"
 )
 PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
-LEGACY_CHAIN_VERIFIER = "scripts/verify_legacy_chain.py"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
-_FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
-_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
+_FINDING_ID_RE = FINDING_ID_PATTERN
+_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v3.schema.json"
+
+
+def foreign_reducer_diagnostic(found: object, *, subject: str = "run profile reducer_version") -> str:
+    return (
+        f"{subject} {found!r} is unsupported for resume with installed reducer "
+        f"{STATE_PROJECTION_REDUCER_VERSION!r}; resume or inspect this run with "
+        "the matching older orchestrator release"
+    )
 
 
 class ArtifactValidationError(ValueError):
@@ -130,10 +143,19 @@ class FingerprintKind(StrEnum):
 
 
 class Role(StrEnum):
-    CODEX = "codex"
-    CLAUDE = "claude"
+    IMPLEMENTER = "implementer"
+    REVIEWER = "reviewer"
     ORCHESTRATOR = "orchestrator"
     USER = "user"
+
+
+def _agent_provider_role_matches(provider: str, role: Role) -> bool:
+    return (
+        isinstance(provider, str)
+        and provider in {OPENAI_PROVIDER, ANTHROPIC_PROVIDER}
+        and isinstance(role, Role)
+        and role in {Role.IMPLEMENTER, Role.REVIEWER}
+    )
 
 
 class FindingSeverity(StrEnum):
@@ -218,6 +240,19 @@ class RunIdentityPayload:
 class RoleProfilePayload:
     model: str
     effort: str
+    provider: str
+    binary: str
+    timeout_seconds: int
+    manufacturer: str
+    capability_sha256: str
+    transport_sha256: str
+    rights_sha256: str
+    policy_sha256: str
+    certification_sha256: str
+    binary_identity: ProviderIdentity
+    binary_identity_sha256: str
+    max_budget_usd: float | None = None
+    profile_name: str = dataclass_field(kw_only=True)
 
     def __post_init__(self) -> None:
         _require_text(self.model, "model")
@@ -225,6 +260,22 @@ class RoleProfilePayload:
             raise ArtifactValidationError("model must be canonical")
         if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ArtifactValidationError("effort is unsupported")
+        for label in ("provider", "binary", "manufacturer", "profile_name"):
+            value = getattr(self, label)
+            if not isinstance(value, str) or not value.strip():
+                raise ArtifactValidationError(f"{label} is invalid")
+        for label in ("capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256", "certification_sha256"):
+            value = getattr(self, label)
+            _require_sha256(value, label)
+        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
+            raise ArtifactValidationError("profile timeout is invalid")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise ArtifactValidationError("profile binary identity is invalid")
+        _require_sha256(self.binary_identity_sha256, "binary_identity_sha256")
+        if self.binary_identity_sha256 != self.binary_identity.digest:
+            raise ArtifactValidationError("profile binary identity digest differs")
+        if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
+            raise ArtifactValidationError("profile USD budget is invalid")
 
 
 
@@ -257,6 +308,7 @@ class RunProfilePayload:
     base_branch: str | None = None
     archive_run_directory: str | None = None
     post_merge_hook_enabled: bool = True
+    final_reviewer: RoleProfilePayload = dataclass_field(kw_only=True)
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -265,14 +317,13 @@ class RunProfilePayload:
             raise ArtifactValidationError("implementer profile is invalid")
         if not isinstance(self.reviewer, RoleProfilePayload):
             raise ArtifactValidationError("reviewer profile is invalid")
+        if not isinstance(self.final_reviewer, RoleProfilePayload):
+            raise ArtifactValidationError("final reviewer profile is invalid")
         _require_sha256(
             self.orchestrator_code_version, "orchestrator_code_version"
         )
         if self.reducer_version != STATE_PROJECTION_REDUCER_VERSION:
-            raise ArtifactValidationError(
-                "run profile reducer_version is unsupported for resume; "
-                f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
-            )
+            raise ArtifactValidationError(foreign_reducer_diagnostic(self.reducer_version))
         if not isinstance(self.merge_completed_branch, bool):
             raise ArtifactValidationError("run profile merge_completed_branch must be boolean")
         if self.base_branch is not None and (
@@ -287,14 +338,14 @@ class RunProfilePayload:
 
 
 _WORKFLOW_STEPS = {
-    "codex_plan",  # allowlist:provider -- persisted protocol vocabulary
-    "claude_plan_review",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_plan_revision",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_implementation",  # allowlist:provider -- persisted protocol vocabulary
-    "claude_slice_review",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_correction",  # allowlist:provider -- persisted protocol vocabulary
+    "implementer_plan",
+    "reviewer_plan_review",
+    "implementer_plan_revision",
+    "implementer_implementation",
+    "reviewer_slice_review",
+    "implementer_correction",
     "slice_commit",
-    "claude_final_review",  # allowlist:provider -- persisted protocol vocabulary
+    "reviewer_final_review",
     "completed",
 }
 _SLICE_STATUSES = {
@@ -621,15 +672,15 @@ class AgentResultPayload:
         if self.outcome not in {"ready", "not_ready", "stopped"}:
             raise ArtifactValidationError("agent result outcome is invalid")
         _require_paths(self.test_files, allow_empty=True)
-        if self.transport_schema != "native-codex-v2":
+        if self.transport_schema != "native-codex-v3":
             raise ArtifactValidationError("agent result transport_schema is unsupported")
-        if self.role is not Role.CODEX:
+        if self.role is not Role.IMPLEMENTER:
             raise ArtifactValidationError(
-                "native Codex result transport requires role=codex"
+                "native Codex result transport requires role=implementer"
             )
         if (
             not isinstance(self.request_id, str)
-            or re.fullmatch(r"native-codex-request-[0-9a-f]{64}", self.request_id)
+            or re.fullmatch(r"native-implementer-request-[0-9a-f]{64}", self.request_id)
             is None
         ):
             raise ArtifactValidationError("native Codex result request_id is invalid")
@@ -706,8 +757,8 @@ class ReviewPayload:
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
     def __post_init__(self) -> None:
-        if self.reviewer is not Role.CLAUDE:
-            raise ArtifactValidationError("reviewer must be claude")
+        if self.reviewer is not Role.REVIEWER:
+            raise ArtifactValidationError("reviewer must be reviewer")
         _require_identifier(self.work_unit_id, "work_unit_id")
         if self.verdict not in {"approved", "denied", "stop"}:
             raise ArtifactValidationError("review verdict is invalid")
@@ -754,7 +805,7 @@ class ReviewPayload:
             raise ArtifactValidationError(
                 "review stop verdict and structured stop request differ"
             )
-        if self.transport_schema != "native-claude-review-v2":
+        if self.transport_schema != "native-claude-review-v3":
             raise ArtifactValidationError("review transport_schema is unsupported")
         if (
             not isinstance(self.request_id, str)
@@ -857,9 +908,9 @@ class FinalReviewCompletedPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_COMPLETED
 
     def __post_init__(self) -> None:
-        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+        if self.reviewer is not Role.REVIEWER:
             raise ArtifactValidationError(
-                "final review completion reviewer must be claude"  # allowlist:provider -- diagnostic role
+                "final review completion reviewer must be reviewer"
             )
         if self.scan_complete is not True:
             raise ArtifactValidationError(
@@ -894,7 +945,7 @@ class FinalReviewCompletedPayload:
             "validation_attestation_record_id",
         )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
-        if self.transport_schema != "native-claude-review-v2":  # allowlist:provider -- persisted protocol vocabulary
+        if self.transport_schema != "native-claude-review-v3":  # allowlist:provider -- transport: persisted protocol vocabulary
             raise ArtifactValidationError(
                 "final review completion transport_schema is unsupported"
             )
@@ -990,8 +1041,8 @@ class FindingTransitionPayload:
 
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "finding_id")
-        if self.reporter is not Role.CLAUDE:
-            raise ArtifactValidationError("finding reporter must be claude")
+        if self.reporter is not Role.REVIEWER:
+            raise ArtifactValidationError("finding reporter must be reviewer")
         if self.action not in {
             "opened", "responded", "status_changed", "escalated",
         }:
@@ -1009,10 +1060,10 @@ class FindingTransitionPayload:
             raise ArtifactValidationError(
                 "finding escalation requires an open BLOCKER transition"
             )
-        if self.action == "responded" and self.actor is not Role.CODEX:
-            raise ArtifactValidationError("only codex may record a finding response")
+        if self.action == "responded" and self.actor is not Role.IMPLEMENTER:
+            raise ArtifactValidationError("only implementer may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
-            raise ArtifactValidationError("a codex response cannot close a finding")
+            raise ArtifactValidationError("an implementer response cannot close a finding")
         if (
             self.action == "responded"
             and self.severity is FindingSeverity.BLOCKER
@@ -1310,7 +1361,7 @@ class ProviderInputComponentPayload:
 
 @dataclass(frozen=True, slots=True)
 class ProviderInputMeasurementPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1337,7 +1388,7 @@ class ProviderInputMeasurementPayload:
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_INPUT_MEASUREMENT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("measurement provider and role must identify one agent")
         _require_identifier(self.operation, "measurement operation")
         _require_identifier(self.work_unit_id, "measurement work_unit_id")
@@ -1422,7 +1473,7 @@ class ProviderUsagePayload:
 
 @dataclass(frozen=True, slots=True)
 class ProviderAttemptPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1439,6 +1490,9 @@ class ProviderAttemptPayload:
     usage: ProviderUsagePayload | None
     model: str = "unknown"
     effort: str = "unknown"
+    slot: str = ""
+    profile_name: str = "scripted"
+    binary_identity: ProviderIdentity | None = None
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_ATTEMPT
 
     @property
@@ -1446,7 +1500,18 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        slot = self.slot or ("final_reviewer" if self.operation == "reviewer_final_review" else self.role.value)
+        object.__setattr__(self, "slot", slot)
+        if self.binary_identity is None:
+            object.__setattr__(self, "binary_identity", ProviderIdentity.dry_run(slot))
+        if slot not in {"implementer", "reviewer", "final_reviewer"} or (
+            slot == "implementer" and self.role is not Role.IMPLEMENTER
+        ) or (slot != "implementer" and self.role is not Role.REVIEWER):
+            raise ArtifactValidationError("provider attempt slot and role differ")
+        _require_text(self.profile_name, "provider attempt profile_name")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise ArtifactValidationError("provider attempt binary identity is invalid")
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("attempt provider and role must identify one agent")
         _require_identifier(self.operation, "attempt operation")
         _require_identifier(self.work_unit_id, "attempt work_unit_id")
@@ -1647,7 +1712,7 @@ class SideEffectPayload:
 
 @dataclass(frozen=True, slots=True)
 class FinalReviewPreflightPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1664,7 +1729,7 @@ class FinalReviewPreflightPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_PREFLIGHT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("preflight provider and role must identify one agent")
         _require_identifier(self.operation, "preflight operation")
         _require_identifier(self.work_unit_id, "preflight work_unit_id")
@@ -2101,7 +2166,7 @@ class InvocationFailurePayload:
             )
         automatic_review_form = (
             self.failure_kind == "output"
-            and self.role is Role.CLAUDE  # allowlist:provider -- bound reviewer role
+            and self.role is Role.REVIEWER
             and self.diagnostic_code in {
                 "NATIVE-REVIEW-FORM",
                 STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -2111,7 +2176,7 @@ class InvocationFailurePayload:
         )
         automatic_implementer_form = (
             self.failure_kind == "output"
-            and self.role is Role.CODEX  # allowlist:provider -- implementer role
+            and self.role is Role.IMPLEMENTER
             and self.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and self.step.startswith(f"{self.role.value}_")
         )
@@ -2194,7 +2259,7 @@ def _validate_native_response_failure_feedback(
                 "invocation failure native implementer rejection is invalid"
             )
         if not (
-            payload.role is Role.CODEX  # allowlist:provider -- implementer role
+            payload.role is Role.IMPLEMENTER
             and payload.failure_kind == "output"
             and payload.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and payload.step.startswith(f"{payload.role.value}_")
@@ -2328,6 +2393,9 @@ ArtifactPayload: TypeAlias = (
 def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     """Serialize one payload while preserving its optional-field wire shape."""
     raw = asdict(payload)
+    if isinstance(payload, RunProfilePayload):
+        for slot in ("implementer", "reviewer", "final_reviewer"):
+            raw[slot]["binary_identity"]["interpreter_args"] = list(raw[slot]["binary_identity"]["interpreter_args"])
     if (isinstance(payload, RunProfilePayload)
         and payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION):
         raw.pop("merge_completed_branch", None)
@@ -2565,6 +2633,11 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
     schema self-check rejects unknown keywords, preventing an unsupported
     extension from being accepted silently.
     """
+    if document.get("schema_version") != SCHEMA_VERSION:
+        raise ArtifactValidationError(
+            f"UNSUPPORTED-PROTOCOL: record schema_version {document.get('schema_version')!r} "
+            "requires the matching older orchestrator release"
+        )
     payload = document.get("payload")
     if (
         document.get("record_type") == RecordType.RUN_PROFILE.value
@@ -2572,10 +2645,7 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
         and isinstance(payload.get("reducer_version"), str)
         and payload["reducer_version"] != STATE_PROJECTION_REDUCER_VERSION
     ):
-        raise ArtifactValidationError(
-            "run profile reducer_version is unsupported for resume; "
-            f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
-        )
+        raise ArtifactValidationError(foreign_reducer_diagnostic(payload["reducer_version"]))
     schema = _validated_schema()
     try:
         validate_schema_document(document, schema)
@@ -2608,14 +2678,15 @@ _PAYLOAD_READERS: dict[
             data["audit_report_path"],
         ),
     RecordType.RUN_PROFILE: lambda data: RunProfilePayload(
-            RoleProfilePayload(**data["implementer"]),
-            RoleProfilePayload(**data["reviewer"]),
+            RoleProfilePayload(**{**data["implementer"], "binary_identity": ProviderIdentity.from_dict(data["implementer"]["binary_identity"])}),
+            RoleProfilePayload(**{**data["reviewer"], "binary_identity": ProviderIdentity.from_dict(data["reviewer"]["binary_identity"])}),
             data["orchestrator_code_version"],
             data["reducer_version"],
             data.get("merge_completed_branch", False),
             data.get("base_branch"),
             data.get("archive_run_directory"),
             data.get("post_merge_hook_enabled", False),
+            final_reviewer=RoleProfilePayload(**{**data["final_reviewer"], "binary_identity": ProviderIdentity.from_dict(data["final_reviewer"]["binary_identity"])}),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],
@@ -2920,7 +2991,7 @@ _PAYLOAD_READERS: dict[
         data["outcome"], data["final_binding_id"],
     ),
     RecordType.PROVIDER_INPUT_MEASUREMENT: lambda data: ProviderInputMeasurementPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["input_digest"], data["policy_digest"],
             tuple(ProviderInputComponentPayload(item["name"], item["chars"], item["bytes"]) for item in data["components"]),
             data["total_chars"], data["total_bytes"], data["safety_limit_chars"], data["safety_limit_bytes"],
@@ -2929,19 +3000,20 @@ _PAYLOAD_READERS: dict[
             tuple(data["violated_dimensions"]), data["char_overage"], data["byte_overage"], data["largest_component"],
         ),
     RecordType.PROVIDER_ATTEMPT: lambda data: ProviderAttemptPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["logical_operation_id"], data["binding_fingerprint"], data["measurement_record_id"],
             data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
             ProviderUsagePayload(**data["usage"]) if data["usage"] is not None else None,
-            data["model"], data["effort"],
+            data["model"], data["effort"], data["slot"], data["profile_name"],
+            ProviderIdentity.from_dict(data["binary_identity"]),
         ),
     RecordType.SIDE_EFFECT: lambda data: SideEffectPayload(
             data["effect_key"], data["effect_class"], data["work_unit_id"],
             tuple(data["operation"]), data["phase"], data["result"],
         ),
     RecordType.FINAL_REVIEW_PREFLIGHT: lambda data: FinalReviewPreflightPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["measurement_record_id"],
             data["outcome"], data["category"], data["error_code"], tuple(data["affected_record_ids"]),
             tuple(data["affected_paths"]), data["remediation"],
@@ -2974,7 +3046,8 @@ def _json_value(value: Any) -> Any:
 
 
 def _require_text(value: str, name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
+    from schema_patterns import has_visible_text
+    if not has_visible_text(value):
         raise ArtifactValidationError(f"{name} must be a non-empty string")
 
 
@@ -2991,7 +3064,9 @@ def _require_record_id(value: str, name: str) -> None:
 
 def _require_finding_id(value: str, name: str) -> None:
     if not isinstance(value, str) or _FINDING_ID_RE.fullmatch(value) is None:
-        raise ArtifactValidationError(f"{name} must be a canonical C-* finding ID")
+        raise ArtifactValidationError(
+            f"{name} must be a canonical {FINDING_ID_PREFIX}* finding ID"
+        )
 
 
 def _require_sha256(value: str, name: str) -> None:
@@ -3040,10 +3115,10 @@ def _require_utc_timestamp(value: str, name: str) -> None:
 
 
 def _require_path(value: str) -> None:
+    from path_policy import is_canonical_repository_relative_path
     if not isinstance(value, str) or not value or "\\" in value:
         raise ArtifactValidationError("paths must be non-empty POSIX paths")
-    path = PurePosixPath(value)
-    if path.is_absolute() or value != path.as_posix() or any(part in {"", ".", ".."} for part in path.parts):
+    if not is_canonical_repository_relative_path(value):
         raise ArtifactValidationError(f"path is not canonical repository-relative POSIX: {value!r}")
 
 

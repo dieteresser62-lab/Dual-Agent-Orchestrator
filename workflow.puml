@@ -8,7 +8,7 @@ skinparam activity {
   DiamondBorderColor #334155
 }
 
-title Resumable Structured-v2 Codex-Claude Workflow
+title Resumable structured-v2 role workflow
 
 start
 :Watch inbox for stable Markdown task;
@@ -49,13 +49,13 @@ if (Approved IMPLEMENT handoff?) then (yes)
   :Verify APPROVED_PLAN_COMMIT and imported slices;
 else (plan required)
   partition "Plan" {
-    :Codex returns native JSON SLICE_PLAN result;
+    :Implementer returns native JSON SLICE_PLAN result;
     :Validate task scope and plan/handoff contract;
     :Run deterministic plan checks;
-    :Claude reviews the bound plan fingerprint;
+    :Reviewer reviews the bound plan fingerprint;
     while (PLAN_APPROVAL is NO?) is (yes)
       :Codex returns a native JSON plan correction;
-      :Refresh bound evidence and Claude reviews again;
+      :Refresh bound evidence and Reviewer reviews again;
     endwhile (no)
     if (Manual plan gate enabled?) then (yes)
       :Persist fingerprint-bound plan gate;
@@ -70,16 +70,16 @@ endif
 while (A planned slice remains?) is (yes)
   partition "Bounded slice" {
     :Create Slice audit document and persist exact scope;
-    :Codex implements and returns native JSON readiness;
+    :Implementer implements and returns native JSON readiness;
     :Append validated records before any workflow decision;
     :Dual-write the State-v3 mirror and prove semantic equality;
     :Collect canonical diff and run validation once per fingerprint;
-    :Claude reviews the complete Slice diff from the immutable Slice start;
+    :Reviewer reviews the complete Slice diff from the immutable Slice start;
     while (An open blocker remains in this Slice?) is (yes)
-      :Codex answers every open finding once: solve a BLOCKER, solve or reject a FINDING;
+      :Implementer answers every open finding once: solve a BLOCKER, solve or reject a FINDING;
       :Reject an accepted disposition without a fingerprint-changing change;
       :Validate the new fingerprint;
-      :Claude reviews the complete Slice diff again;
+      :Reviewer reviews the complete Slice diff again;
       :An unclosed ordinary FINDING becomes a BLOCKER by canonical reduction;
       if (Round closed a known finding or proved remediation?) then (no)
         :End the Slice negatively without a commit;
@@ -93,14 +93,14 @@ while (A planned slice remains?) is (yes)
       :Revalidate the persisted boundary and fingerprint;
     else (automatic default)
     endif
-    :Stage exact Claude-approved paths;
+    :Stage exact reviewer-approved paths;
     :Create and verify local Slice NN commit;
   }
 endwhile (no)
 
 partition "Acceptance review (last work unit of the same run)" {
   :Validate and attest the branch fingerprint;
-  :Claude reads the complete diff from git merge-base <base-branch> <target-branch>;
+  :Reviewer reads the complete diff from git merge-base <base-branch> <target-branch>;
   :Report only new findings or recurrences of known signatures;
   if (Work remains?) then (yes)
     if (Acceptance-review limit reached?) then (yes)

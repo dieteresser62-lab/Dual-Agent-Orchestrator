@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
+        "request_id": "native-implementer-request-d5ee9c3972a558c6b5d00e8dc326104ba4d969909de3dfe8fc9751bb39fafe9c",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
-          "role": "codex",
+          "role": "implementer",
           "work_unit_id": 1,
           "request_sequence": 1,
-          "operation": "codex_implementation",
-          "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
-          "response_sha256": "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab",
+          "operation": "implementer_implementation",
+          "request_id": "native-implementer-request-d5ee9c3972a558c6b5d00e8dc326104ba4d969909de3dfe8fc9751bb39fafe9c",
+          "response_sha256": "1b78a9ea73300fa8dced16b0c660b74a6b751ab37dc16a611de668006a10c4e3",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },
@@ -146,15 +146,15 @@
       "state": {
         "approved": true,
         "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "request_id": "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30",
+        "request_id": "native-review-request-69a79fdd74c2a606827a6df1a75fa408a40bd02251d233cedfb4a060d08be24b",
         "round_number": 1,
         "content_binding": {
-          "role": "claude",
+          "role": "reviewer",
           "work_unit_id": 1,
           "request_sequence": 1,
-          "operation": "claude_slice_review",
-          "request_id": "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30",
-          "response_sha256": "1b0cbd085b9a1245aab05c32043535257c932ff03375cedfa7d30b480e26aee4",
+          "operation": "reviewer_slice_review",
+          "request_id": "native-review-request-69a79fdd74c2a606827a6df1a75fa408a40bd02251d233cedfb4a060d08be24b",
+          "response_sha256": "d76c1aaba450fe56f75ad6eb5eddd299241280e4f17b66805635be718bdbd7d3",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

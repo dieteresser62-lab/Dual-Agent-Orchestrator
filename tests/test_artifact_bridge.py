@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -11,10 +13,24 @@ import artifact_store as artifact_store_module
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
+    logical_provider_operation_id,
     finding_payload, review_payload, review_payload_matches_complete_result,
     review_payload_matches_result,
     validation_request_payload,
 )
+
+
+def test_logical_operation_requires_actual_provider_not_role_default() -> None:
+    with pytest.raises(TypeError, match="bound provider name"):
+        logical_provider_operation_id(
+            run_id="run", work_unit_id="1", provider=Role.IMPLEMENTER,
+            operation="implementer_plan", binding_fingerprint="a" * 64,
+        )
+    operation = logical_provider_operation_id(
+        run_id="run", work_unit_id="1", provider="claude",  # allowlist:provider -- transport: swapped occupancy regression
+        operation="implementer_plan", binding_fingerprint="a" * 64,
+    )
+    assert operation.startswith("provider-operation-")
 from artifact_models import (
     ArtifactRecord, ArtifactValidationError, CorrectionWorkUnitPayload,
     FindingSeverity, FindingTransitionPayload,
@@ -52,9 +68,9 @@ def _bound_bridge(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     setup.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -66,12 +82,12 @@ def _bound_bridge(
 
 def test_finding_payload_preserves_legacy_shape_and_native_authority() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Persist the complete native finding snapshot.",
         acceptance_test="Replay rebuilds the request without state or Markdown.",
-        origin=FindingOrigin("01", 2, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 2, AgentRole.REVIEWER),
     )
 
     legacy = finding_payload(finding)
@@ -302,7 +318,7 @@ def test_bridge_rejects_legacy_correction_work_unit_under_cutover_reducer(
 
     with pytest.raises(ArtifactReplayError, match="legacy correction_work_unit"):
         bridge.append(
-            CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("C-01",)),
+            CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("R-01",)),
             logical_id="work-unit-3",
             idempotency_key="correction-work-unit:3:round:1",
             fingerprint_sha256=DIGEST,
@@ -380,7 +396,7 @@ def test_validation_request_mapping_keeps_matrix_argv() -> None:
 
 def test_native_review_mapping_preserves_request_and_response_binding() -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -395,12 +411,12 @@ def test_native_review_mapping_preserves_request_and_response_binding() -> None:
     payload = review_payload(
         result,
         work_unit_id=1,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
 
-    assert payload.transport_schema == "native-claude-review-v2"
+    assert payload.transport_schema == "native-claude-review-v3"
     assert payload.request_id == f"native-review-request-{'b' * 64}"
     assert payload.response_sha256 == "c" * 64
 
@@ -409,7 +425,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
     tmp_path: Path,
 ) -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -433,7 +449,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
         review_payload(
             result,
             work_unit_id=1,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id=f"native-review-request-{'b' * 64}",
             response_sha256="c" * 64,
         ),
@@ -462,7 +478,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
 
 def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=False,
         stopped=False,
         stop_request=None,
@@ -478,12 +494,12 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
         anchors=(),
     )
     legacy = ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         "1",
         "denied",
         (),
         "first | embedded | second | third",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         f"native-review-request-{'b' * 64}",
         "c" * 64,
     )
@@ -504,24 +520,24 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
 
 def test_request_bound_review_payload_matches_only_its_complete_ledger_projection() -> None:
     carried = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A prior finding remains in the complete ledger.",
         acceptance_test="The compact review need not receive it again.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         status_rationale="Closed before this review.",
     )
     reviewed = FindingRecord(
-        finding_id="C-79",
+        finding_id="R-79",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="The compact request includes this finding.",
-        acceptance_test="The request-bound payload names C-79.",
-        origin=FindingOrigin("35", 1, AgentRole.CLAUDE),
+        acceptance_test="The request-bound payload names R-79.",
+        origin=FindingOrigin("35", 1, AgentRole.REVIEWER),
     )
     request_result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=True,
         stopped=False,
         stop_request=None,
@@ -539,7 +555,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
     payload = review_payload(
         request_result,
         work_unit_id=36,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
@@ -559,19 +575,19 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
 
 def test_legacy_lexical_review_payload_matches_natural_result_projection() -> None:
     base = FindingRecord(
-        finding_id="C-62",
+        finding_id="R-62",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Historical finding.",
         acceptance_test="The chain remains replayable.",
-        origin=FindingOrigin("42", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("42", 1, AgentRole.REVIEWER),
     )
     findings = tuple(
         replace(base, finding_id=finding_id)
-        for finding_id in ("C-62", "C-71", "C-101", "C-105")
+        for finding_id in ("R-62", "R-71", "R-101", "R-105")
     )
     result = ContractResult(
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         approval=False,
         stopped=False,
         stop_request=None,
@@ -585,30 +601,61 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
     payload = review_payload(
         result,
         work_unit_id=42,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
     legacy = replace(
         payload,
-        finding_ids=("C-101", "C-105", "C-62", "C-71"),
+        finding_ids=("R-101", "R-105", "R-62", "R-71"),
     )
 
     assert review_payload_matches_result(legacy, result)
     assert review_payload_matches_complete_result(legacy, result)
     assert not review_payload_matches_result(
-        replace(legacy, finding_ids=("C-105", "C-101", "C-62", "C-71")),
+        replace(legacy, finding_ids=("R-105", "R-101", "R-62", "R-71")),
         result,
     )
 
 
 def _measurement() -> ProviderInputMeasurementPayload:
-    return ProviderInputMeasurementPayload(
-        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", DIGEST,
+    return ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1", DIGEST,
         "b" * 64, "c" * 64, "d" * 64,
         (ProviderInputComponentPayload("prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
     )
+
+
+def test_provider_records_follow_the_run_profile_occupancy(tmp_path: Path) -> None:
+    """An alternate synthetic qualification binds its own provider records."""
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "alternate-occupancy"))
+    bridge.append(
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity", idempotency_key="run-identity",
+        fingerprint_sha256=DIGEST, fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    implementation = bound_role_profile("implementation-model", "high", provider="claude", manufacturer="synthetic-b", certification_sha256="1" * 64)
+    review = bound_role_profile("review-model", "high", provider="codex", manufacturer="synthetic-a", certification_sha256="2" * 64)
+    final = replace(review, certification_sha256="3" * 64)
+    bridge.append(
+        bound_run_profile(implementation, review, final_reviewer=final),
+        logical_id="run-profile", idempotency_key="run-profile",
+        fingerprint_sha256=DIGEST, fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    own = replace(_measurement(), provider="codex")
+    bridge.append(
+        own, logical_id="measurement-own", idempotency_key="measurement-own",
+        fingerprint_sha256=DIGEST,
+    )
+    assert replay_artifacts(bridge.store.load_chain(), "alternate-occupancy").run_profile.reviewer.provider == "codex"
+    with pytest.raises(ArtifactReplayError, match="slot=reviewer.*differs from run profile"):
+        bridge.append(
+            _measurement(), logical_id="measurement-wrong", idempotency_key="measurement-wrong",
+            fingerprint_sha256=DIGEST,
+        )
+    tampered = replace(bridge.store.load_chain()[-1], payload=_measurement())
+    with pytest.raises(ArtifactReplayError, match="slot=reviewer.*differs from run profile"):
+        replay_artifacts((*bridge.store.load_chain()[:-1], tampered), "alternate-occupancy")
 
 
 def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -> None:
@@ -628,7 +675,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
 
     first = bridge.start_provider_attempt(
         measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
-        model="sonnet", effort="high",
+        model="reviewer-model", effort="high",
     )
     terminal = bridge.finish_provider_attempt(
         first, duration_seconds=1.5, failure_kind=None,
@@ -640,7 +687,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     )
     second = bridge.start_provider_attempt(
         measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
-        model="sonnet", effort="high",
+        model="reviewer-model", effort="high",
     )
 
     assert isinstance(first.payload, ProviderAttemptPayload)
@@ -650,7 +697,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     assert terminal.idempotency_key.endswith(":1:terminal")
     assert second.payload.attempt_number == 2
     assert second.payload.phase == "started"
-    assert first.payload.model == terminal.payload.model == "sonnet"
+    assert first.payload.model == terminal.payload.model == "reviewer-model"
     assert first.payload.effort == terminal.payload.effort == "high"
     assert bridge.store.load_chain()[-1] == second
 

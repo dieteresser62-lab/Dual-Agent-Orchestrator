@@ -15,7 +15,7 @@ from artifact_models import (
     GateDecisionPayload,
     GateTransitionPayload, PlanPayload, ReviewPayload, ReviewValidationBindingPayload,
     ScopeExtensionPayload,
-    SideEffectPayload, ValidationAttestationPayload, ValidationContentPayload,
+    SideEffectPayload, ProviderAttemptPayload, ValidationAttestationPayload, ValidationContentPayload,
     WorkflowCompletionPayload, WorkflowEventPayload, WorkUnitPayload,
 )
 from artifact_replay import ArtifactReplayResult
@@ -421,7 +421,22 @@ def render_overall(facts: AuditFacts, *, task: str, branch: str) -> str:
         for item in final.new_findings:
             new.extend((f"### {item.finding_id} – {_cell(item.summary)}", "", f"Klasse: {'Blocker' if item.severity.value == 'BLOCKER' else 'Befund'} · Stand: offen", "", "Befund:", _quote(item.summary), "", "Akzeptanztest:", _quote(item.acceptance_test), ""))
         acceptance = "\n".join(("Abnahmereview abgeschlossen.", "", "Geprüft:", _quote(final.review_evidence.dimensions), "", "Größtes Restrisiko:", _quote(final.review_evidence.largest_residual_risk), "", "Bruchbedingung:", _quote(final.review_evidence.break_condition), "", "Vorab-Risikoanalyse:", _quote(final.pre_mortem), "", *new)).strip()
-    bodies = {"meta": f"Aufgabe: {task} · Zielbranch: `{branch}` · Lauf: `{facts.records[0].run_id}` · Stand: {stand}", "overview": "\n".join(overview), "findings": "\n".join(finding_rows), "holds": "\n".join(holds) if holds else "Keine.", "acceptance-review": acceptance}
+    attempts = [record.payload for record in facts.records
+                if isinstance(record.payload, ProviderAttemptPayload) and record.payload.phase == "started"]
+    attempt_lines = ["", "Provider-Attempts:", "", "| Slot | Rolle | Provider | Profil | Modell | Effort | Binary-Identität |",
+                     "|---|---|---|---|---|---|---|"]
+    for attempt in attempts:
+        identity = attempt.binary_identity
+        assert identity is not None
+        attempt_lines.append(
+            f"| {_cell(attempt.slot)} | {_cell(attempt.role.value)} | {_cell(attempt.provider)} | "
+            f"{_cell(attempt.profile_name)} | {_cell(attempt.model)} | {_cell(attempt.effort)} | "
+            f"{_cell(identity.kind)}: {_cell(identity.entry_path)} (`{identity.digest}`) |"
+        )
+    if not attempts:
+        attempt_lines.append("| – | – | – | – | – | – | Keine. |")
+    meta = f"Aufgabe: {task} · Zielbranch: `{branch}` · Lauf: `{facts.records[0].run_id}` · Stand: {stand}" + "\n".join(attempt_lines)
+    bodies = {"meta": meta, "overview": "\n".join(overview), "findings": "\n".join(finding_rows), "holds": "\n".join(holds) if holds else "Keine.", "acceptance-review": acceptance}
     pieces = [f"# Gesamtaudit – {task}", ""]
     for key, heading in OVERALL_SECTIONS:
         pieces.append(managed_section(key, heading, body=bodies[key]))

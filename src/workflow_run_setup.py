@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Callable
 
 from artifact_models import PlanPayload
+from agent_roles import AgentSlot, role_for_slot
+from role_certification import load_role_certifications, CertificationError
 from git_service import (
     inspect_repository,
     require_committed_file_at_head,
@@ -33,10 +35,11 @@ from workflow_state import (
     AgentProfileBinding,
     GateDecisionRecord,
     GateReason,
-    NATIVE_CLAUDE_REVIEW_TRANSPORT,  # allowlist:provider -- transport constant
-    NATIVE_CODEX_RESULT_TRANSPORT,  # allowlist:provider -- transport constant
+    NATIVE_CLAUDE_REVIEW_TRANSPORT,  # allowlist:provider -- transport: transport constant
+    NATIVE_CODEX_RESULT_TRANSPORT,  # allowlist:provider -- transport: transport constant
     ProtocolBinding,
     ProtocolMode,
+    scripted_profile_binding,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -291,8 +294,9 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
-    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high"),
-    claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high"),
+    implementer_profile: AgentProfileBinding | None = None,
+    reviewer_profile: AgentProfileBinding | None = None,
+    final_reviewer_profile: AgentProfileBinding | None = None,
     max_rounds_per_loop: int = 6,
     base_branch: str | None = None,
 ) -> WorkflowState:
@@ -326,11 +330,12 @@ def _fresh_state(
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
             mode=ProtocolMode.STRUCTURED_V2,
-            schema_version="2",
+            schema_version="3",
             claude_review_transport=NATIVE_CLAUDE_REVIEW_TRANSPORT,
             codex_result_transport=NATIVE_CODEX_RESULT_TRANSPORT,
-            codex_profile=codex_profile,
-            claude_profile=claude_profile,
+            implementer_profile=implementer_profile or scripted_profile_binding("implementer"),
+            reviewer_profile=reviewer_profile or scripted_profile_binding("reviewer"),
+            final_reviewer_profile=final_reviewer_profile or scripted_profile_binding("final_reviewer"),
         ),
         max_rounds_per_loop=max_rounds_per_loop,
     )
@@ -348,7 +353,7 @@ def _fresh_state(
         state = state.start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         )
     return state
 
@@ -362,24 +367,100 @@ def _apply_resumed_agent_profiles(
     if binding is None:
         raise StateSchemaError("structured resume requires persisted agent profiles")
     explicit = set(getattr(args, "agent_profile_overrides", ()))
-    settings = dict(args.agent_settings)
+    if not hasattr(args, "slot_settings"):
+        raise StateSchemaError("slot_settings missing: resolved TOML profile binding is required")
+    slots = dict(args.slot_settings)
+    if set(slots) != {slot.value for slot in AgentSlot}:
+        raise StateSchemaError("slot_settings missing a required role slot")
+    certifications = load_role_certifications()
+    recorded = {slot: getattr(binding, f"{slot.value}_profile") for slot in AgentSlot}
+    try:
+        certifications.require_occupancy({slot: recorded[slot].provider for slot in AgentSlot})
+    except CertificationError as exc:
+        raise StateSchemaError(f"AGENT-PROFILE-DIFF | {exc}") from exc
     for role, profile in (
-        ("codex", binding.codex_profile),
-        ("claude", binding.claude_profile),
+        ("implementer", binding.implementer_profile),
+        ("reviewer", binding.reviewer_profile),
+        ("final_reviewer", binding.final_reviewer_profile),
     ):
-        current = settings[role]
-        for field in ("model", "effort"):
-            if (role, field) in explicit and getattr(current, field) != getattr(profile, field):
+        current = slots[role]
+        slot = AgentSlot(role)
+        try:
+            certificate = certifications.require(profile.provider, role_for_slot(slot), slot)
+        except CertificationError as exc:
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification changed") from exc
+        if (profile.manufacturer != certificate.manufacturer
+            or profile.capability_sha256 != certificate.capability_sha256
+            or profile.transport_sha256 != certificate.transport_sha256
+            or profile.rights_sha256 != certificate.rights_sha256
+            or profile.policy_sha256 != certificate.policy_sha256
+            or profile.certification_sha256 != certificate.digest):
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
+        for field, profile_field in (("binary", "binary"), ("model", "model"), ("timeout", "timeout_seconds"), ("effort", "effort")):
+            selected = getattr(current, "timeout_seconds" if field == "timeout" else field)
+            recorded_value = getattr(profile, profile_field)
+            if field == "timeout":
+                selected = selected or 0
+            if (role, field) in explicit and selected != recorded_value:
                 raise StateSchemaError(
                     "AGENT-PROFILE-DIFF | explicit "
                     f"{role} {field} differs from the immutable persisted profile"
                 )
-        settings[role] = replace(
+        slots[role] = replace(
             current,
+            name=profile.provider,
+            profile_name=profile.profile_name,
+            binary=profile.binary,
             model=profile.model,
             effort=profile.effort,
+            timeout_seconds=profile.timeout_seconds or None,
+            max_budget_usd=profile.max_budget_usd,
         )
-    args.agent_settings = settings
+    identities = _capture_slot_identities(
+        slots, scripted=bool(getattr(args, "scripted_provider_identity", False)),
+        strict_dns=bool(getattr(args, "strict_preflight", False)),
+    )
+    for role, profile in (
+        ("implementer", binding.implementer_profile),
+        ("reviewer", binding.reviewer_profile),
+        ("final_reviewer", binding.final_reviewer_profile),
+    ):
+        if identities[role] != profile.binary_identity or identities[role].digest != profile.binary_identity_sha256:
+            raise StateSchemaError(
+                f"AGENT-PROFILE-DIFF | slot={role} path={profile.binary_identity.entry_path}: "
+                "binary identity drift; restore the recorded binary or start a new run"
+            )
+    args.slot_settings = slots
+    args.slot_identities = identities
+
+
+def _capture_slot_identities(
+    slots: dict[str, object], *, scripted: bool = False, strict_dns: bool = False,
+):
+    """Probe each selected binary before a RunProfile or resumed attempt is accepted."""
+    from agent_adapters import build_slot_agent_registry
+    from agent_runtime import verify_agent_capabilities
+    from provider_identity import ProviderIdentity
+
+    registry = build_slot_agent_registry(slots)
+    identities = {}
+    for slot in AgentSlot:
+        if scripted:
+            identities[slot.value] = ProviderIdentity.dry_run(slot.value)
+            continue
+        adapter = registry[slot.value]
+        try:
+            verify_agent_capabilities(adapter, strict_dns=strict_dns)
+        except Exception as exc:
+            raise StateSchemaError(
+                f"slot={slot.value} path={slots[slot.value].binary}: binary preflight failed: {exc}; "
+                "restore the configured binary or start a new run"
+            ) from exc
+        identity = getattr(adapter, "provider_identity", None)
+        if not isinstance(identity, ProviderIdentity) or identity.kind != "verified":
+            raise StateSchemaError(f"slot={slot.value}: binary preflight returned no verified identity")
+        identities[slot.value] = identity
+    return identities
 
 
 def _current_gate_approval(state: WorkflowState) -> GateDecisionRecord | None:
@@ -412,7 +493,7 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
     if (
         state.execution_mode != TaskMode.PLAN_ONLY.value
         or state.current_work_unit.kind is not WorkUnitKind.SLICE
-        or state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION
+        or state.current_step is not WorkflowStep.IMPLEMENTER_IMPLEMENTATION
         or state.current_work_unit_id != 2
         or len(state.work_units) != 2
     ):
@@ -449,8 +530,8 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
         for key in (
             "findings",
             "attestations",
-            "last_claude_fingerprint",  # allowlist:provider -- canonical history field
-            "latest_claude_review",  # allowlist:provider -- canonical history field
+            "last_reviewer_fingerprint",
+            "latest_reviewer_review",
             "active_review_packet",
         )
     ):

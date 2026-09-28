@@ -10,8 +10,8 @@ from audit_document_contract import (
 
 
 MANAGED_SECTION_KEYS = (
-    "claude-review",  # allowlist:provider -- canonical managed marker
-    "codex-responses",  # allowlist:provider -- canonical managed marker
+    "claude-review",  # allowlist:provider -- stable audit marker: canonical managed marker
+    "codex-responses",  # allowlist:provider -- stable audit marker: canonical managed marker
     "validation-attestation",
     "test-approval-premortem",
     "findings",
@@ -20,8 +20,8 @@ MANAGED_SECTION_KEYS = (
 )
 
 MANAGED_SECTION_HEADINGS = {
-    "claude-review": "Review-Feedback von Claude",  # allowlist:provider -- canonical heading
-    "codex-responses": "Review-Antworten von Codex",  # allowlist:provider -- canonical heading
+    "claude-review": "Review-Feedback von Claude",  # allowlist:provider -- stable audit marker: canonical heading
+    "codex-responses": "Review-Antworten von Codex",  # allowlist:provider -- stable audit marker: canonical heading
     "validation-attestation": "Validierungsattestierung",  # allowlist:german
     "test-approval-premortem": "Testfreigabe und Pre-Mortem",  # allowlist:german
     "findings": "Findings-Lebenszyklus",  # allowlist:german
@@ -30,8 +30,8 @@ MANAGED_SECTION_HEADINGS = {
 }
 
 _LEGACY_WORK_PLAN_HEADINGS = {
-    "claude-review": "Review-Feedback von Claude",  # allowlist:provider -- legacy heading
-    "codex-responses": "Review-Antworten von Codex",  # allowlist:provider -- legacy heading
+    "claude-review": "Review-Feedback von Claude",  # allowlist:provider -- stable audit marker: legacy heading
+    "codex-responses": "Review-Antworten von Codex",  # allowlist:provider -- stable audit marker: legacy heading
     **{
         key: "Planstatus und formale Marker"
         for key in MANAGED_SECTION_KEYS[2:]

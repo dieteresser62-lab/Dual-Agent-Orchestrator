@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
@@ -9,7 +10,7 @@ from typing import Any, Mapping
 
 from acceptance_criteria import acceptance_criteria_from_documents
 from artifact_models import ArtifactValidationError
-from contracts import PlannedSlice
+from contracts import AgentRole, PlannedSlice
 import native_finding_decisions
 from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
 from rejected_response_shape import (
@@ -17,6 +18,7 @@ from rejected_response_shape import (
     rejected_native_response_shape_document,
     rejected_native_response_shape_from_document,
 )
+from provider_identity import ProviderIdentity
 
 
 STATE_VERSION = 3
@@ -48,14 +50,14 @@ class WorkUnitKind(str, Enum):
 
 
 class WorkflowStep(str, Enum):
-    CODEX_PLAN = "codex_plan"
-    CLAUDE_PLAN_REVIEW = "claude_plan_review"
-    CODEX_PLAN_REVISION = "codex_plan_revision"
-    CODEX_IMPLEMENTATION = "codex_implementation"
-    CLAUDE_SLICE_REVIEW = "claude_slice_review"
-    CODEX_CORRECTION = "codex_correction"
+    IMPLEMENTER_PLAN = "implementer_plan"
+    REVIEWER_PLAN_REVIEW = "reviewer_plan_review"
+    IMPLEMENTER_PLAN_REVISION = "implementer_plan_revision"
+    IMPLEMENTER_IMPLEMENTATION = "implementer_implementation"
+    REVIEWER_SLICE_REVIEW = "reviewer_slice_review"
+    IMPLEMENTER_CORRECTION = "implementer_correction"
     SLICE_COMMIT = "slice_commit"
-    CLAUDE_FINAL_REVIEW = "claude_final_review"
+    REVIEWER_FINAL_REVIEW = "reviewer_final_review"
     COMPLETED = "completed"
 
 
@@ -116,7 +118,7 @@ class AgentFailureKind(str, Enum):
 
 
 class Reviewer(str, Enum):
-    CLAUDE = "claude"
+    REVIEWER = "reviewer"
 
 
 NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
@@ -160,8 +162,11 @@ def is_native_review_output_retry(
     return (
         failure_kind is AgentFailureKind.OUTPUT
         and role in {reviewer.value for reviewer in Reviewer}
-        and step.value.startswith(f"{role}_")
-        and step.value.endswith("_review")
+        and step in {
+            WorkflowStep.REVIEWER_PLAN_REVIEW,
+            WorkflowStep.REVIEWER_SLICE_REVIEW,
+            WorkflowStep.REVIEWER_FINAL_REVIEW,
+        }
     )
 
 
@@ -171,8 +176,13 @@ def is_native_implementer_output_retry(
     """Whether state-v3 can represent the typed native-implementer retry path."""
     return (
         failure_kind is AgentFailureKind.OUTPUT
-        and role == "codex"
-        and step.value.startswith("codex_")
+        and role == AgentRole.IMPLEMENTER.value
+        and step in {
+            WorkflowStep.IMPLEMENTER_PLAN,
+            WorkflowStep.IMPLEMENTER_PLAN_REVISION,
+            WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+            WorkflowStep.IMPLEMENTER_CORRECTION,
+        }
     )
 
 
@@ -191,16 +201,29 @@ class ProtocolMode(str, Enum):
     STRUCTURED_V2 = "structured-v2"
 
 
-NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
-NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v2"
+NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v3"
+NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v3"
 
 
 @dataclass(frozen=True)
 class AgentProfileBinding:
-    """Immutable model and reasoning selection for one workflow role."""
+    """Immutable selected profile for one workflow slot."""
 
     model: str
     effort: str
+    provider: str
+    binary: str
+    timeout_seconds: int
+    manufacturer: str
+    capability_sha256: str
+    transport_sha256: str
+    rights_sha256: str
+    policy_sha256: str
+    certification_sha256: str
+    binary_identity: ProviderIdentity
+    binary_identity_sha256: str
+    max_budget_usd: float | None = None
+    profile_name: str = field(kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str) or not self.model.strip():
@@ -211,18 +234,69 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile model must be canonical")
         if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise WorkflowStateValidationError("agent profile effort is unsupported")
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise WorkflowStateValidationError("agent profile provider is invalid")
+        if not isinstance(self.profile_name, str) or not self.profile_name.strip():
+            raise WorkflowStateValidationError("agent profile name is invalid")
+        if not isinstance(self.binary, str) or not self.binary.strip():
+            raise WorkflowStateValidationError("agent profile binary is invalid")
+        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
+            raise WorkflowStateValidationError("agent profile timeout is invalid")
+        if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
+            raise WorkflowStateValidationError("agent profile USD budget is invalid")
+        if not isinstance(self.manufacturer, str) or not self.manufacturer.strip():
+            raise WorkflowStateValidationError("agent profile manufacturer is invalid")
+        for label in ("capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256", "certification_sha256"):
+            value = getattr(self, label)
+            if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
+                raise WorkflowStateValidationError(f"agent profile {label} is invalid")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise WorkflowStateValidationError("agent profile binary identity is invalid")
+        if not isinstance(self.binary_identity_sha256, str) or SHA256_PATTERN.fullmatch(self.binary_identity_sha256) is None:
+            raise WorkflowStateValidationError("agent profile binary identity SHA-256 is invalid")
+        if self.binary_identity_sha256 != self.binary_identity.digest:
+            raise WorkflowStateValidationError("agent profile binary identity digest differs")
 
-    def to_dict(self) -> dict[str, str]:
-        return {"model": self.model, "effort": self.effort}
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **{name: getattr(self, name) for name in self.__dataclass_fields__ if name != "binary_identity"},
+            "binary_identity": self.binary_identity.to_dict(),
+        }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
-        if set(raw) != {"model", "effort"}:
+        if not (set(cls.__dataclass_fields__) - {"max_budget_usd"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
             raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
-        return cls(
-            model=_string(raw["model"], f"{label} model"),
-            effort=_string(raw["effort"], f"{label} effort"),
-        )
+        try:
+            return cls(**{**raw, "binary_identity": ProviderIdentity.from_dict(raw["binary_identity"])})
+        except (TypeError, ValueError) as exc:
+            raise WorkflowStateValidationError(f"{label} has invalid identity: {exc}") from exc
+
+
+def scripted_profile_binding(slot: str) -> AgentProfileBinding:
+    """Fully bound scripted profile used by in-memory workflow fixtures."""
+    import argparse
+    from agent_config import resolve_agent_settings
+    from agent_roles import AgentSlot, role_for_slot
+    from role_certification import load_role_certifications
+
+    selected = AgentSlot(slot)
+    namespace = argparse.Namespace(**{
+        f"{name}_{field}": None
+        for name in (item.value for item in AgentSlot)
+        for field in ("binary", "model", "timeout", "effort")
+    })
+    config = resolve_agent_settings(namespace, {})[slot]
+    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected)
+    identity = ProviderIdentity.dry_run(slot)
+    return AgentProfileBinding(
+        config.model, config.effort, config.name, config.binary,
+        config.timeout_seconds or 0, cert.manufacturer,
+        cert.capability_sha256, cert.transport_sha256, cert.rights_sha256,
+        cert.policy_sha256, cert.digest, identity, identity.digest,
+        config.max_budget_usd,
+        profile_name=config.profile_name,
+    )
 
 
 @dataclass(frozen=True)
@@ -233,8 +307,9 @@ class ProtocolBinding:
     schema_version: str
     claude_review_transport: str | None = NATIVE_CLAUDE_REVIEW_TRANSPORT
     codex_result_transport: str | None = NATIVE_CODEX_RESULT_TRANSPORT
-    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-6-sol", "high")
-    claude_profile: AgentProfileBinding = AgentProfileBinding("opus", "high")
+    implementer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("implementer"))
+    reviewer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("reviewer"))
+    final_reviewer_profile: AgentProfileBinding = field(default_factory=lambda: scripted_profile_binding("final_reviewer"))
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ProtocolMode):
@@ -243,7 +318,7 @@ class ProtocolBinding:
         expected = {
             ProtocolMode.LEGACY_STATE_V3: "3",
             ProtocolMode.STRUCTURED_V1: "1",
-            ProtocolMode.STRUCTURED_V2: "2",
+            ProtocolMode.STRUCTURED_V2: "3",
         }[self.mode]
         if self.schema_version != expected:
             raise WorkflowStateValidationError(
@@ -274,6 +349,8 @@ class ProtocolBinding:
             raise WorkflowStateValidationError(
                 "structured-v2 requires the complete native Codex-Claude transport binding"
             )
+        if any(not isinstance(profile, AgentProfileBinding) for profile in (self.implementer_profile, self.reviewer_profile, self.final_reviewer_profile)):
+            raise WorkflowStateValidationError("protocol binding requires all three bound profiles")
 
     def to_dict(self) -> dict[str, object]:
         result = {"mode": self.mode.value, "schema_version": self.schema_version}
@@ -281,21 +358,27 @@ class ProtocolBinding:
             result["claude_review_transport"] = self.claude_review_transport
         if self.codex_result_transport is not None:
             result["codex_result_transport"] = self.codex_result_transport
-        result["codex_profile"] = self.codex_profile.to_dict()
-        result["claude_profile"] = self.claude_profile.to_dict()
+        result["implementer_profile"] = self.implementer_profile.to_dict()
+        result["reviewer_profile"] = self.reviewer_profile.to_dict()
+        result["final_reviewer_profile"] = self.final_reviewer_profile.to_dict()
         return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ProtocolBinding:
         keys = set(raw)
-        if not {"mode", "schema_version"}.issubset(keys) or not keys.issubset(
+        required = {"mode", "schema_version", "implementer_profile", "reviewer_profile", "final_reviewer_profile"}
+        missing = required - keys
+        if missing:
+            raise WorkflowStateValidationError(f"protocol binding missing {', '.join(sorted(missing))}")
+        if not keys.issubset(
             {
                 "mode",
                 "schema_version",
                 "claude_review_transport",
                 "codex_result_transport",
-                "codex_profile",
-                "claude_profile",
+                "implementer_profile",
+                "reviewer_profile",
+                "final_reviewer_profile",
             }
         ):
             raise WorkflowStateValidationError(
@@ -320,14 +403,15 @@ class ProtocolBinding:
                 if "codex_result_transport" in raw
                 else None
             ),
-            codex_profile=AgentProfileBinding.from_dict(
-                _mapping(raw.get("codex_profile"), "protocol codex_profile"),
-                "protocol codex_profile",
+            implementer_profile=AgentProfileBinding.from_dict(
+                _mapping(raw.get("implementer_profile"), "protocol implementer_profile"),
+                "protocol implementer_profile",
             ),
-            claude_profile=AgentProfileBinding.from_dict(
-                _mapping(raw.get("claude_profile"), "protocol claude_profile"),
-                "protocol claude_profile",
+            reviewer_profile=AgentProfileBinding.from_dict(
+                _mapping(raw.get("reviewer_profile"), "protocol reviewer_profile"),
+                "protocol reviewer_profile",
             ),
+            final_reviewer_profile=AgentProfileBinding.from_dict(_mapping(raw["final_reviewer_profile"], "protocol final_reviewer_profile"), "protocol final_reviewer_profile"),
         )
 
 
@@ -368,9 +452,9 @@ class InvocationFailureRecord:
             (self.technical_text, "invocation failure technical_text"),
         ):
             _require_non_empty(value, label)
-        if self.role not in {"codex", "claude"}:
+        if self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError(
-                "invocation failure role must be codex or claude"
+                "invocation failure role must be implementer or reviewer"
             )
         _require_timestamp(self.received_at, "invocation failure received_at")
         _require_positive_int(self.slice_id, "invocation failure slice_id")
@@ -1016,8 +1100,8 @@ class WorkUnitRecord:
     current_step: WorkflowStep
     round_number: int = 1
     request_sequence: int | None = None
-    codex_return_count: int = 0
-    max_codex_returns: int = DEFAULT_LOOP_ROUND_LIMIT
+    implementer_return_count: int = 0
+    max_implementer_returns: int = DEFAULT_LOOP_ROUND_LIMIT
     gate: GateRecord = GateRecord()
     reviewer: Reviewer | None = None
     open_findings: tuple[str, ...] = ()
@@ -1035,12 +1119,12 @@ class WorkUnitRecord:
             object.__setattr__(self, "request_sequence", self.round_number)
         assert self.request_sequence is not None
         _require_positive_int(self.request_sequence, "request_sequence")
-        _require_positive_int(self.max_codex_returns, "max_codex_returns")
-        if isinstance(self.codex_return_count, bool) or not isinstance(self.codex_return_count, int):
-            raise WorkflowStateValidationError("codex_return_count must be an integer")
-        if not 0 <= self.codex_return_count <= self.max_codex_returns:
-            raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
-        if self.round_number > self.max_codex_returns:
+        _require_positive_int(self.max_implementer_returns, "max_implementer_returns")
+        if isinstance(self.implementer_return_count, bool) or not isinstance(self.implementer_return_count, int):
+            raise WorkflowStateValidationError("implementer_return_count must be an integer")
+        if not 0 <= self.implementer_return_count <= self.max_implementer_returns:
+            raise WorkflowStateValidationError("implementer_return_count is outside its configured limit")
+        if self.round_number > self.max_implementer_returns:
             raise WorkflowStateValidationError("round_number exceeds its configured limit")
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
@@ -1098,7 +1182,7 @@ class WorkUnitRecord:
                     "invocation halt requires quota or instance_failure reason"
                 )
         if self.gate.reason is GateReason.ITERATION_LIMIT:
-            if self.codex_return_count != self.max_codex_returns:
+            if self.implementer_return_count != self.max_implementer_returns:
                 raise WorkflowStateValidationError(
                     "iteration-limit gate requires the configured Codex return limit"
                 )
@@ -1154,8 +1238,8 @@ class WorkUnitRecord:
             "current_step": self.current_step.value,
             "round_number": self.round_number,
             "request_sequence": self.request_sequence,
-            "codex_return_count": self.codex_return_count,
-            "max_codex_returns": self.max_codex_returns,
+            "implementer_return_count": self.implementer_return_count,
+            "max_implementer_returns": self.max_implementer_returns,
             "gate": self.gate.to_dict(),
             "reviewer": self.reviewer.value if self.reviewer is not None else None,
             "open_findings": list(self.open_findings),
@@ -1175,8 +1259,8 @@ class WorkUnitRecord:
                 "status",
                 "current_step",
                 "round_number",
-                "codex_return_count",
-                "max_codex_returns",
+                "implementer_return_count",
+                "max_implementer_returns",
                 "gate",
                 "reviewer",
                 "open_findings",
@@ -1253,11 +1337,11 @@ class WorkUnitRecord:
                 raw.get("request_sequence", raw["round_number"]),
                 "work_unit.request_sequence",
             ),
-            codex_return_count=_non_negative_int(
-                raw["codex_return_count"], "work_unit.codex_return_count"
+            implementer_return_count=_non_negative_int(
+                raw["implementer_return_count"], "work_unit.implementer_return_count"
             ),
-            max_codex_returns=_positive_int(
-                raw["max_codex_returns"], "work_unit.max_codex_returns"
+            max_implementer_returns=_positive_int(
+                raw["max_implementer_returns"], "work_unit.max_implementer_returns"
             ),
             gate=GateRecord.from_dict(_mapping(raw["gate"], "work_unit.gate")),
             reviewer=(
@@ -1278,7 +1362,7 @@ class WorkUnitRecord:
 
 def project_implementer_return_policy(unit: WorkUnitRecord) -> tuple[int, int]:
     """Map the provider-named state-v3 mirror fields to stable workflow roles."""
-    return unit.codex_return_count, unit.max_codex_returns  # allowlist:provider -- named R2 mirror projection
+    return unit.implementer_return_count, unit.max_implementer_returns
 
 
 @dataclass(frozen=True)
@@ -1313,7 +1397,9 @@ class BootstrapCheckFact:
         for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
             if not SHA256_PATTERN.fullmatch(value):
                 raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
-        if self.provider not in {"codex", "claude"} or self.role != self.provider:
+        from role_occupancy import provider_roles
+
+        if self.provider not in provider_roles() or self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError("bootstrap provider and role are invalid")
         _require_non_empty(self.operation, "bootstrap operation")
         _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")
@@ -1663,7 +1749,7 @@ class WorkflowState:
             kind=kind,
             status=WorkUnitStatus.IN_PROGRESS,
             current_step=step,
-            max_codex_returns=self.current_work_unit.max_codex_returns,
+            max_implementer_returns=self.current_work_unit.max_implementer_returns,
         )
         slices = tuple(
             target_slice if item.slice_id == slice_id else item for item in self.slices
@@ -1700,8 +1786,8 @@ class WorkflowState:
             slice_id=self.current_slice_id,
             kind=WorkUnitKind.FINAL_REVIEW,
             status=WorkUnitStatus.IN_PROGRESS,
-            current_step=WorkflowStep.CLAUDE_FINAL_REVIEW,
-            max_codex_returns=self.current_work_unit.max_codex_returns,
+            current_step=WorkflowStep.REVIEWER_FINAL_REVIEW,
+            max_implementer_returns=self.current_work_unit.max_implementer_returns,
         )
         return replace(
             self,
@@ -2213,9 +2299,9 @@ class WorkflowState:
         if not isinstance(progress_made, bool):
             raise WorkflowStateValidationError("review progress must be boolean")
         current = self.current_work_unit
-        next_count = current.codex_return_count + 1  # allowlist:provider -- persisted counter
+        next_count = current.implementer_return_count + 1
         continue_rounds = (
-            progress_made and current.round_number < current.max_codex_returns
+            progress_made and current.round_number < current.max_implementer_returns
         )
         updated_unit = replace(
             current,
@@ -2227,7 +2313,7 @@ class WorkflowState:
                 if continue_rounds
                 else current.request_sequence
             ),
-            codex_return_count=next_count,
+            implementer_return_count=next_count,
             gate=GateRecord(),
             reviewer=reviewer,
             open_findings=open_findings,
@@ -2798,8 +2884,8 @@ def init_workflow_state(
         slice_id=1,
         kind=WorkUnitKind.PLAN,
         status=WorkUnitStatus.IN_PROGRESS,
-        current_step=WorkflowStep.CODEX_PLAN,
-        max_codex_returns=max_rounds_per_loop,
+        current_step=WorkflowStep.IMPLEMENTER_PLAN,
+        max_implementer_returns=max_rounds_per_loop,
     )
     return WorkflowState(
         version=STATE_VERSION,

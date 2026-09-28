@@ -21,6 +21,7 @@ import crash_harness
 from test_orchestrator_runtime import (
     test_crashed_provider_ended_resumes_with_next_attempt as _ended_process_proof,
     test_crashed_provider_still_running_halts_with_pid as _running_process_proof,
+    test_crashed_provider_leader_exit_with_live_child_blocks_second_start as _leader_loss_proof,
     test_crashed_provider_without_identity_requires_gate_and_approval as _unknown_process_proof,
     test_resume_loop_dispatches_next_provider_attempt_in_same_invocation as _same_resume_proof,
     test_unknown_provider_gate_accepts_an_unchanged_repository as _unchanged_gate_proof,
@@ -57,13 +58,33 @@ MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v2.json"
 def test_provider_crash_after_started_before_response_has_all_resume_outcomes(
     tmp_path: Path, role: str,
 ) -> None:
-    for name in ("ended", "running", "unknown", "same_resume", "unchanged"):
+    for name in ("ended", "running", "leader-loss", "unknown", "same_resume", "unchanged"):
         (tmp_path / name).mkdir()
     _ended_process_proof(tmp_path / "ended", role)
     _running_process_proof(tmp_path / "running", role)
+    if role == "codex":
+        _leader_loss_proof(tmp_path / "leader-loss")
     _unknown_process_proof(tmp_path / "unknown", role)
     _same_resume_proof(tmp_path / "same_resume", role)
     _unchanged_gate_proof(tmp_path / "unchanged", role)
+
+
+def test_provider_group_crash_probes_reject_a_false_ended_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import provider_process
+
+    for boundary in (
+        "provider_group_after_start", "provider_group_after_identity",
+        "provider_group_leader_lost", "provider_group_after_cleanup",
+    ):
+        crash_harness._prove_provider_group_boundary(tmp_path, boundary)
+    monkeypatch.setattr(
+        provider_process, "observe_identity",
+        lambda _identity: provider_process.ProcessObservation(provider_process.ProcessStatus.ENDED),
+    )
+    with pytest.raises(CrashHarnessError, match="lost its fail-closed outcome"):
+        crash_harness._prove_provider_group_boundary(tmp_path, "provider_group_leader_lost")
 
 
 @pytest.mark.parametrize("effect", ("git_commit", "git_merge"))
@@ -287,7 +308,7 @@ def test_implementation_sources_include_untracked_and_exclude_ignored_or_unmatch
 def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> None:
     manifest = CrashHarnessManifest.load(MANIFEST)
 
-    assert manifest.scenario_version == "post-merge-hook-boundaries-v2"
+    assert manifest.scenario_version == "provider-groups-v3"
     assert manifest.effect_classes == LEDGER_ORDER
     assert set(manifest.effect_classes) == set(SIDE_EFFECT_CLASSES)
     assert manifest.boundary_matrix == {
@@ -304,7 +325,7 @@ def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> N
     }
     assert manifest.runtime_boundaries == RUNTIME_BOUNDARY_EFFECTS
     schema = json.loads(
-        (ROOT / "schemas/orchestrator-artifact-v2.schema.json").read_text(
+        (ROOT / "schemas/orchestrator-artifact-v3.schema.json").read_text(
             encoding="utf-8"
         )
     )
@@ -353,7 +374,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     result = json.loads(payload)
 
     assert result["schema_version"] == RESULT_SCHEMA_VERSION
-    assert result["scenario_version"] == "post-merge-hook-boundaries-v2"
+    assert result["scenario_version"] == "provider-groups-v3"
     assert result["repository_commit"] == "f" * 40
     assert result["mode"] == "provider-free"
     assert result["baseline_resolution"] == {
@@ -385,9 +406,9 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         len(CrashHarnessManifest.load(MANIFEST).boundary_matrix[effect_class])
         for effect_class in CrashHarnessManifest.load(MANIFEST).runtime_boundaries.values()
     ) - 10
-    assert len(singles) == 62
-    assert len(repeated) == 6
-    assert len(matrix) == 68
+    assert len(singles) == 86
+    assert len(repeated) == 10
+    assert len(matrix) == 96
     assert {
         (row["runtime_boundary"], row["effect_class"], row["phase"])
         for row in singles
@@ -494,7 +515,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         "network",
         "process",
     ]
-    assert all(item["resume_step"] == "codex_plan" for item in retries)
+    assert all(item["resume_step"] == "implementer_plan" for item in retries)
     assert all(item["evidence_count"] == 1 for item in retries)
     journeys = {item["scenario_id"]: item for item in result["journeys"]}
     assert set(journeys) == {
@@ -523,7 +544,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert journeys["multi-slice-correction-observation-resume"]["correction_round_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
-    ] == ["C-01:CLOSED", "C-02:OPEN"]
+    ] == ["R-01:CLOSED", "R-02:OPEN"]
     assert journeys["final-review-followup-document"][
         "source_execution_mode"
     ] == "IMPLEMENT"
@@ -608,7 +629,7 @@ def test_every_exact_canonical_baseline_record_cut_converges(tmp_path: Path) -> 
         assert store.load_chain() == canonical
         assert crash_harness.resolve_resume_state(
             case_root, run_id
-        ).state.current_step is crash_harness.WorkflowStep.CODEX_IMPLEMENTATION
+        ).state.current_step is crash_harness.WorkflowStep.IMPLEMENTER_IMPLEMENTATION
 
 
 def test_baseline_prefix_completion_rejects_later_workflow_fact(
@@ -815,13 +836,22 @@ def test_provider_split_path_executes_every_declared_runtime_boundary(tmp_path: 
 
     assert {row["runtime_boundary"] for row in rows} == {
         "slice_provider",
+        "provider_group_after_start",
+        "provider_group_after_identity",
+        "provider_group_leader_lost",
+        "provider_group_after_cleanup",
         "final_review_provider",
     }
     assert {row["phase"] for row in rows} == set(BOUNDARY_ORDER)
     assert all(
         {row["phase"] for row in rows if row["runtime_boundary"] == boundary}
         == set(BOUNDARY_ORDER)
-        for boundary in {"slice_provider", "final_review_provider"}
+        for boundary in {
+            "slice_provider", "provider_group_after_start",
+            "provider_group_after_identity", "provider_group_leader_lost",
+            "provider_group_after_cleanup",
+            "final_review_provider",
+        }
     )
     assert all(row["observed_crashes"] == 1 for row in rows)
     assert all(row["physical_execution_count"] == 1 for row in rows)

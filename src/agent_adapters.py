@@ -1,33 +1,40 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import shlex
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from agent_config import AgentSettings, default_agent_settings
+from agent_roles import AgentRoleName, AgentSlot, role_for_slot
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
-from prompts import NATIVE_CLAUDE_SYSTEM_POLICY
+from reviewer_input import (
+    REVIEW_PACKET_CHUNK_CHARS, ReviewerInputBundle, ReviewerInputError,
+    build_reviewer_input,
+)
+from role_binding import RoleBinding, binding_for_role
+from role_certification import (
+    CertificationError, CertificationErrorCode, CertificationTable,
+    load_role_certifications,
+)
 from native_review_contract import (
     NativeReviewContractError,
     canonical_native_review_json,
 )
 from native_review_request import (
     NativeReviewRequestBundle,
-    PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
 )
-from native_codex_contract import (
-    NativeCodexContractError,
-    canonical_native_codex_json,
+from native_implementer_contract import (
+    NativeImplementerContractError,
+    canonical_native_implementer_json,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
 )
 from native_provider_schema import (
     NativeProviderSchemaError,
@@ -36,11 +43,11 @@ from native_provider_schema import (
     normalize_transport_profile,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from provider_identity import ProviderIdentity
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
-REVIEW_PACKET_CHUNK_CHARS = 24_000
 CLAUDE_REVIEW_PACKET_CHUNK_CHARS = REVIEW_PACKET_CHUNK_CHARS
 CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
 PROVIDER_FAILURE_METRIC_KEYS = (
@@ -93,6 +100,20 @@ class CapabilitySpec:
     help_args: tuple[str, ...]
     supported_version_patterns: tuple[str, ...]
     required_help_flags: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class AgentInvocationData:
+    """Mutable files and results belonging to one provider invocation."""
+
+    runtime_dir: Path | None = None
+    env: dict[str, str] = field(default_factory=lambda: {"NO_COLOR": "1"})
+    metadata: dict[str, object] = field(default_factory=dict)
+    request_id: str | None = None
+    last_message_file: Path | None = None
+    response_schema_file: Path | None = None
+    reviewer_input: ReviewerInputBundle | None = None
+    bound_review_harness: Path | None = None
 
 
 class NativeCodexExecutionMode(StrEnum):
@@ -184,91 +205,6 @@ def _json_object(text: str, role: str) -> dict[str, object]:
     return value
 
 
-def _split_text_at_lines(text: str, max_chars: int) -> tuple[str, ...]:
-    """Split a review packet into bounded, lossless chunks readable in one call each."""
-    if max_chars < 1:
-        raise ValueError("review packet chunk size must be positive")
-    if not text:
-        return ("",)
-    chunks: list[str] = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
-            break
-        boundary = remaining.rfind("\n", 0, max_chars)
-        if boundary < 1:
-            boundary = max_chars
-        else:
-            boundary += 1
-        chunks.append(remaining[:boundary])
-        remaining = remaining[boundary:]
-    return tuple(chunks)
-
-
-def _write_review_manifest(
-    runtime_dir: Path, entries: list[tuple[str, Path, str, int, str | None, int | None]],
-) -> tuple[Path, tuple[Path, ...]]:
-    """Write a bounded manifest, paging its entries when one Read is insufficient."""
-    limit = REVIEW_PACKET_CHUNK_CHARS
-    instruction = (
-        "Read every listed file exactly once in order. Concatenate request chunks "
-        "without separators before interpreting the JSON request. For each evidence "
-        "content_ref, concatenate its numbered parts without separators before "
-        "evaluating the full-content sha256 and byte_count in the request."
-    )
-    lines = ["# Native review request manifest", "", instruction, ""]
-    for name, path, digest, byte_count, content_ref, part_number in entries:
-        relation = (
-            f" | content_ref={content_ref} | part={part_number}"
-            if content_ref is not None else ""
-        )
-        lines.append(
-            f"- `{path}` | component={name}{relation} | bytes={byte_count} | sha256={digest}"
-        )
-    manifest = runtime_dir / "native-review-manifest.md"
-    full_text = "\n".join(lines) + "\n"
-    if len(full_text) <= limit:
-        manifest.write_text(full_text, encoding="utf-8")
-        return manifest, ()
-
-    page_header = "# Native review manifest entries\n"
-    pages: list[Path] = []
-    page_lines: list[str] = []
-    for line in lines[4:]:
-        if len(page_header + line + "\n") > limit:
-            raise AgentOutputError("review manifest entry exceeds one Read")
-        candidate = page_header + "\n".join((*page_lines, line)) + "\n"
-        if len(candidate) > limit:
-            if not page_lines:
-                raise AgentOutputError("review manifest entry exceeds one Read")
-            page = runtime_dir / f"native-review-manifest-{len(pages) + 1:03d}.md"
-            page.write_text(page_header + "\n".join(page_lines) + "\n", encoding="utf-8")
-            pages.append(page)
-            page_lines = [line]
-        else:
-            page_lines.append(line)
-    if page_lines:
-        page = runtime_dir / f"native-review-manifest-{len(pages) + 1:03d}.md"
-        page.write_text(page_header + "\n".join(page_lines) + "\n", encoding="utf-8")
-        pages.append(page)
-    index_lines = [
-        "# Native review request manifest",
-        "",
-        "Read each manifest page once in order, then every file listed in those pages "
-        "once in order. " + instruction,
-        "",
-    ]
-    for page in pages:
-        data = page.read_bytes()
-        index_lines.append(
-            f"- `{page}` | bytes={len(data)} | sha256={hashlib.sha256(data).hexdigest()}"
-        )
-    index_text = "\n".join(index_lines) + "\n"
-    if len(index_text) > limit:
-        raise AgentOutputError("review manifest index exceeds one Read")
-    manifest.write_text(index_text, encoding="utf-8")
-    return manifest, tuple(pages)
 
 
 class AgentAdapter(Protocol):
@@ -282,6 +218,7 @@ class AgentAdapter(Protocol):
     required_hosts: tuple[str, ...]
     capability: CapabilitySpec
     capability_verified: bool
+    provider_identity: ProviderIdentity | None
     metadata: dict[str, object]
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
@@ -299,6 +236,19 @@ class AgentAdapter(Protocol):
     def cleanup(self) -> None: ...
 
 
+class NativeReviewAdapter(AgentAdapter, Protocol):
+    def prepare_native_provider_input(
+        self, bundle: NativeReviewRequestBundle,
+    ) -> PreparedProviderInput: ...
+
+
+class NativeImplementerAdapter(AgentAdapter, Protocol):
+    def prepare_native_provider_input(
+        self, bundle: NativeImplementerRequestBundle,
+        execution_boundary: NativeCodexExecutionBoundary | None = None,
+    ) -> PreparedProviderInput: ...
+
+
 class _BaseAdapter:
     reviewer = False
     required_hosts: tuple[str, ...] = ()
@@ -311,10 +261,25 @@ class _BaseAdapter:
         self.timeout = settings.timeout_seconds
         self.effort = settings.effort
         self.max_budget_usd = settings.max_budget_usd
-        self.env: dict[str, str] = {"NO_COLOR": "1"}
+        self.invocation = AgentInvocationData()
         self.capability_verified = False
-        self.metadata: dict[str, object] = {}
-        self._runtime_dir: Path | None = None
+        self.provider_identity: ProviderIdentity | None = None
+
+    @property
+    def env(self) -> dict[str, str]:
+        return self.invocation.env
+
+    @env.setter
+    def env(self, value: dict[str, str]) -> None:
+        self.invocation.env = value
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        return self.invocation.metadata
+
+    @metadata.setter
+    def metadata(self, value: dict[str, object]) -> None:
+        self.invocation.metadata = value
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         _ = source_root
@@ -336,17 +301,22 @@ class _BaseAdapter:
         raise NotImplementedError
 
     def _new_runtime_dir(self) -> Path:
+        bound_harness = self.invocation.bound_review_harness
         self._cleanup_runtime_dir()
-        self.metadata = {}
-        self._runtime_dir = Path(tempfile.mkdtemp(prefix=f"dao-{self.name}-runtime-"))
-        cache_dir = self._runtime_dir / "cache"
-        cache_dir.mkdir()
+        self.invocation = AgentInvocationData(bound_review_harness=bound_harness)
+        self.invocation.runtime_dir = Path(tempfile.mkdtemp(prefix=f"dao-{self.name}-runtime-"))
+        cache_dir = self.invocation.runtime_dir / "cache"
+        try:
+            cache_dir.mkdir()
+        except BaseException:
+            self._cleanup_runtime_dir()
+            raise
         self.env = {
             "NO_COLOR": "1",
-            "TMPDIR": str(self._runtime_dir),
+            "TMPDIR": str(self.invocation.runtime_dir),
             "XDG_CACHE_HOME": str(cache_dir),
         }
-        return self._runtime_dir
+        return self.invocation.runtime_dir
 
     def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
         _ = channel
@@ -378,12 +348,20 @@ class _BaseAdapter:
 
     def cleanup(self) -> None:
         self._cleanup_runtime_dir()
+        # Checked callers publish usage after run_agent's finally block.
+        # Keep this invocation's metadata until the next _new_runtime_dir,
+        # which replaces the entire state object before another provider call.
+        self.invocation.request_id = None
+        self.invocation.last_message_file = None
+        self.invocation.response_schema_file = None
+        self.invocation.reviewer_input = None
+        self.invocation.bound_review_harness = None
 
     def _cleanup_runtime_dir(self) -> None:
-        if self._runtime_dir is None:
+        if self.invocation.runtime_dir is None:
             return
-        shutil.rmtree(self._runtime_dir, ignore_errors=True)
-        self._runtime_dir = None
+        shutil.rmtree(self.invocation.runtime_dir, ignore_errors=True)
+        self.invocation.runtime_dir = None
 
 
 class NativeCodexAdapter(_BaseAdapter):
@@ -404,11 +382,14 @@ class NativeCodexAdapter(_BaseAdapter):
         ),
     )
 
-    def __init__(self, settings: AgentSettings | None = None) -> None:
-        super().__init__(settings or default_agent_settings()["codex"])
-        self._last_message_file: Path | None = None
-        self._native_request_id: str | None = None
-        self._response_schema_file: Path | None = None
+    def __init__(
+        self, settings: AgentSettings | None = None,
+        *, role_binding: RoleBinding | None = None,
+    ) -> None:
+        super().__init__(settings or default_agent_settings()["implementer"])
+        self.role_binding = role_binding or binding_for_role(AgentRoleName.IMPLEMENTER)
+        if self.role_binding.role is not AgentRoleName.IMPLEMENTER:
+            raise TypeError("native Codex adapter requires implementer role binding")
 
     def _provider_input_components(
         self, prompt: str, command: list[str]
@@ -446,24 +427,40 @@ class NativeCodexAdapter(_BaseAdapter):
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         _ = prompt
         raise RuntimeError(
-            "native Codex requests require a bound NativeCodexRequestBundle"
+            "native Codex requests require a bound NativeImplementerRequestBundle"
         )
 
     def prepare_native_provider_input(
         self,
-        bundle: NativeCodexRequestBundle,
+        bundle: NativeImplementerRequestBundle,
         execution_boundary: NativeCodexExecutionBoundary | None = None,
     ) -> PreparedProviderInput:
-        if not isinstance(bundle, NativeCodexRequestBundle):
-            raise TypeError("native Codex adapter requires NativeCodexRequestBundle")
+        try:
+            return self._prepare_native_provider_input_unchecked(bundle, execution_boundary)
+        except BaseException:
+            self.cleanup()
+            raise
+
+    def _prepare_native_provider_input_unchecked(
+        self,
+        bundle: NativeImplementerRequestBundle,
+        execution_boundary: NativeCodexExecutionBoundary | None = None,  # allowlist:provider -- transport: typed preparation boundary
+    ) -> PreparedProviderInput:
+        if not isinstance(bundle, NativeImplementerRequestBundle):
+            raise TypeError("native Codex adapter requires NativeImplementerRequestBundle")
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(
             PROJECT_ROOT
         )
+        if (
+            boundary.mode is NativeCodexExecutionMode.PRODUCTION
+            and boundary.sandbox_mode != self.role_binding.permissions["sandbox"]
+        ):
+            raise AgentOutputError("native Codex production boundary differs from role rights")
         runtime_dir = self._new_runtime_dir()
-        self._last_message_file = runtime_dir / "last-message.json"
-        self._response_schema_file = runtime_dir / "response-schema.json"
+        self.invocation.last_message_file = runtime_dir / "last-message.json"
+        self.invocation.response_schema_file = runtime_dir / "response-schema.json"
         response_schema_json = bundle.provider_response_schema_json
-        self._response_schema_file.write_text(response_schema_json, encoding="utf-8")
+        self.invocation.response_schema_file.write_text(response_schema_json, encoding="utf-8")
         for asset in bundle.evidence_assets:
             target = boundary.evidence_asset_root.joinpath(*Path(asset.path).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -475,7 +472,7 @@ class NativeCodexAdapter(_BaseAdapter):
                     )
             else:
                 target.write_text(asset.content, encoding="utf-8")
-        self._native_request_id = bundle.bound_context.request_id
+        self.invocation.request_id = bundle.bound_context.request_id
         command = (
             self.cli_binary,
             "exec",
@@ -491,9 +488,9 @@ class NativeCodexAdapter(_BaseAdapter):
             "never",
             "--json",
             "--output-schema",
-            str(self._response_schema_file),
+            str(self.invocation.response_schema_file),
             "--output-last-message",
-            str(self._last_message_file),
+            str(self.invocation.last_message_file),
             "-",
         )
         try:
@@ -525,9 +522,9 @@ class NativeCodexAdapter(_BaseAdapter):
         _ = stdout
         _ = stderr
         _ = extra_files
-        if self._last_message_file is None or not self._last_message_file.is_file():
+        if self.invocation.last_message_file is None or not self.invocation.last_message_file.is_file():
             raise AgentOutputError("native Codex produced no last-message file")
-        raw = self._last_message_file.read_text(encoding="utf-8").strip()
+        raw = self.invocation.last_message_file.read_text(encoding="utf-8").strip()
         try:
             document = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -542,25 +539,21 @@ class NativeCodexAdapter(_BaseAdapter):
                 "native Codex result must use the closed provider envelope"
             )
         document = document["result"]
-        if self._native_request_id is None:
+        if self.invocation.request_id is None:
             raise AgentOutputError("native Codex adapter has no bound request id")
-        if document.get("request_id") != self._native_request_id:
+        if document.get("request_id") != self.invocation.request_id:
             raise AgentOutputError("native Codex response request_id differs from request")
+        if document.get("schema_version") != self.role_binding.contract:
+            raise AgentOutputError("native Codex response differs from role contract")
         try:
-            return canonical_native_codex_json(document)
-        except NativeCodexContractError as exc:
+            return canonical_native_implementer_json(document)
+        except NativeImplementerContractError as exc:
             raise AgentOutputError(
                 "native Codex response violates the local result schema",
                 provider_data=document,
                 technical_text=f"{exc.code.value}: {exc.detail}",
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
-
-    def cleanup(self) -> None:
-        super().cleanup()
-        self._native_request_id = None
-        self._response_schema_file = None
-
 
 class NativeClaudeReviewAdapter(_BaseAdapter):
     """Claude reviewer transport whose output is the native review JSON object."""
@@ -594,6 +587,7 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         settings: AgentSettings | None = None,
         *,
         review_harness: Path = REVIEW_HARNESS,
+        role_binding: RoleBinding | None = None,
     ) -> None:
         if settings is None:
             raise TypeError(
@@ -601,19 +595,17 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
             )
         super().__init__(settings)
         self.review_harness = review_harness.resolve()
-        self._bound_review_harness: Path | None = None
-        self._review_manifest_file: Path | None = None
-        self._review_packet_files: tuple[Path, ...] = ()
-        self._native_evidence_files: tuple[Path, ...] = ()
-        self._native_request_id: str | None = None
+        self.role_binding = role_binding or binding_for_role(AgentRoleName.REVIEWER)
+        if self.role_binding.role is not AgentRoleName.REVIEWER:
+            raise TypeError("native Claude adapter requires reviewer role binding")
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         try:
             relative_harness = self.review_harness.relative_to(source_root.resolve())
         except ValueError:
-            self._bound_review_harness = self.review_harness
+            self.invocation.bound_review_harness = self.review_harness
         else:
-            self._bound_review_harness = snapshot_root / relative_harness
+            self.invocation.bound_review_harness = snapshot_root / relative_harness
 
     def build_capability_smoke_command(
         self,
@@ -625,7 +617,7 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
     ) -> tuple[list[str], bool]:
         """Build the explicit reviewer-harness diagnostic without a text contract."""
         runtime_dir = self._new_runtime_dir()
-        harness = self._bound_review_harness or self.review_harness
+        harness = self.invocation.bound_review_harness or self.review_harness
         harness_command = shlex.join(
             [
                 sys.executable,
@@ -716,170 +708,82 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         if not isinstance(bundle, NativeReviewRequestBundle):
             raise TypeError("native Claude adapter requires NativeReviewRequestBundle")
         runtime_dir = self._new_runtime_dir()
-        request_chunks = _split_text_at_lines(
-            bundle.canonical_json, REVIEW_PACKET_CHUNK_CHARS
-        )
-        self._review_packet_files = tuple(
-            runtime_dir / f"native-request-{index:03d}.json.part"
-            for index in range(1, len(request_chunks) + 1)
-        )
-        manifest_entries: list[tuple[str, Path, str, int, str | None, int | None]] = []
-        for index, (packet_file, chunk) in enumerate(
-            zip(self._review_packet_files, request_chunks, strict=True), start=1
-        ):
-            packet_file.write_text(chunk, encoding="utf-8")
-            manifest_entries.append(
-                (
-                    f"request_chunk_{index:03d}",
-                    packet_file,
-                    hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
-                    len(chunk.encode("utf-8")),
-                    None,
-                    None,
-                )
-            )
-
-        evidence_files: list[Path] = []
-        for asset in bundle.evidence_assets:
-            chunks = _split_text_at_lines(
-                asset.content, REVIEW_PACKET_CHUNK_CHARS
-            )
-            for index, chunk in enumerate(chunks, start=1):
-                target = runtime_dir.joinpath(*Path(asset.path).parts)
-                target = target.with_name(f"{target.name}.part-{index:03d}")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                encoded = chunk.encode("utf-8")
-                target.write_bytes(encoded)
-                evidence_files.append(target)
-                manifest_entries.append(
-                    (
-                        f"evidence_asset_{len(evidence_files):03d}",
-                        target,
-                        hashlib.sha256(encoded).hexdigest(),
-                        len(encoded),
-                        asset.path,
-                        index,
-                    )
-                )
-        self._native_evidence_files = tuple(evidence_files)
-        self._review_manifest_file, manifest_pages = _write_review_manifest(
-            runtime_dir, manifest_entries
-        )
-        read_call_budget = 1 + len(manifest_pages) + len(manifest_entries)
-        response_schema_json = bundle.provider_response_schema_json
-        policy = NATIVE_CLAUDE_SYSTEM_POLICY
-        boundary_evidence_withheld = any(
-            item.get("kind") == PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND
-            for item in bundle.document["evidence_manifest"]
-        )
-        if boundary_evidence_withheld:
-            directive = (
-                f"Read {self._review_manifest_file} exactly once, then its manifest "
-                "pages if any and every listed request or evidence file exactly once "
-                "in order before using additional Read calls for repository "
-                "paths required by the provider-input boundary notice. Review the "
-                "reconstructed native request and current read-only repository snapshot; "
-                "return only the schema-bound JSON result."
-            )
-        else:
-            directive = (
-                f"Read {self._review_manifest_file} exactly once, then its manifest "
-                "pages if any and every listed request or evidence file "
-                f"exactly once in order ({read_call_budget} Read calls total). Review the "
-                "reconstructed native request and return only the schema-bound JSON result."
-            )
-        command = [
-            self.cli_binary,
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            self.model,
-            "--effort",
-            self.effort,
-            "--tools",
-            "Read",
-            "--allowedTools",
-            "Read",
-            "--disallowedTools",
-            "Bash,Edit,Write,NotebookEdit,Grep,Glob",
-            "--permission-mode",
-            "dontAsk",
-            "--setting-sources",
-            "user",
-            "--safe-mode",
-            "--strict-mcp-config",
-            "--prompt-suggestions",
-            "false",
-            "--add-dir",
-            str(runtime_dir),
-            "--system-prompt",
-            policy,
-            "--json-schema",
-            response_schema_json,
-            "--no-session-persistence",
-            "--disable-slash-commands",
-        ]
-        if self.max_budget_usd is not None:
-            command.extend(["--max-budget-usd", str(self.max_budget_usd)])
-        command.append(directive)
         try:
-            profile = normalize_transport_profile("claude", command)
-            assert_provider_capabilities("claude", (), profile=profile)
-        except NativeProviderSchemaError as exc:
-            raise AgentOutputError(
-                "native Claude transport differs from its probed schema capability",
-                technical_text=str(exc),
-            ) from exc
-        runtime_path = str(runtime_dir)
-        runtime_prefix = f"dao-{self.name}-runtime-"
-        random_suffix = runtime_dir.name.removeprefix(runtime_prefix)
-        stable_runtime_path = str(
-            runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
-        )
-
-        def stable_paths(content: str) -> str:
-            return content.replace(runtime_path, stable_runtime_path)
-
-        components = [
-            ProviderInputComponent(
-                name,
-                path.read_text(encoding="utf-8"),
+            reviewer_input = build_reviewer_input(
+                bundle, runtime_dir, chunk_chars=REVIEW_PACKET_CHUNK_CHARS
             )
-            for name, path, _digest, _byte_count, _content_ref, _part in manifest_entries
-        ]
-        measured_manifest = stable_paths(
-            self._review_manifest_file.read_text(encoding="utf-8")
-        )
-        for index, path in enumerate(manifest_pages, start=1):
-            page_bytes = path.read_bytes()
-            measured_page = stable_paths(page_bytes.decode("utf-8"))
-            page_row = (
-                f"`{stable_paths(str(path))}` | bytes={len(page_bytes)} | sha256="
-            )
-            actual_row = page_row + hashlib.sha256(page_bytes).hexdigest()
-            if measured_manifest.count(actual_row) != 1:
-                raise AgentOutputError("review manifest page binding is missing or repeated")
-            measured_manifest = measured_manifest.replace(
-                actual_row,
-                page_row + hashlib.sha256(measured_page.encode("utf-8")).hexdigest(),
-            )
-            components.append(
-                ProviderInputComponent(f"packet_chunk_{index:03d}", measured_page)
-            )
-        components.extend(
-            (
-                ProviderInputComponent("packet_manifest", measured_manifest),
+            self.invocation.reviewer_input = reviewer_input
+            response_schema_json = bundle.provider_response_schema_json
+            policy = self.role_binding.policy
+            directive = reviewer_input.directive
+            command = [
+                self.cli_binary,
+                "-p",
+                "--output-format",
+                "json",
+                "--model",
+                self.model,
+                "--effort",
+                self.effort,
+                "--tools",
+                self.role_binding.permissions["tools"],
+                "--allowedTools",
+                self.role_binding.permissions["allowed_tools"],
+                "--disallowedTools",
+                self.role_binding.permissions["disallowed_tools"],
+                "--permission-mode",
+                self.role_binding.permissions["permission_mode"],
+                "--setting-sources",
+                "user",
+                "--safe-mode",
+                "--strict-mcp-config",
+                "--prompt-suggestions",
+                "false",
+                "--add-dir",
+                str(runtime_dir),
+                "--system-prompt",
+                policy,
+                "--json-schema",
+                response_schema_json,
+                "--no-session-persistence",
+                "--disable-slash-commands",
+            ]
+            if self.max_budget_usd is not None:
+                command.extend(["--max-budget-usd", str(self.max_budget_usd)])
+            command.append(directive)
+            try:
+                profile = normalize_transport_profile("claude", command)
+                assert_provider_capabilities("claude", (), profile=profile)
+            except NativeProviderSchemaError as exc:
+                raise AgentOutputError(
+                    "native Claude transport differs from its probed schema capability",
+                    technical_text=str(exc),
+                ) from exc
+            components = [
+                *reviewer_input.components,
                 ProviderInputComponent("system_policy", policy),
                 ProviderInputComponent("response_schema", response_schema_json),
-                ProviderInputComponent("start_directive", stable_paths(directive)),
+                ProviderInputComponent("start_directive", directive),
+            ]
+            # The directive contains the runtime path; normalize only its random suffix
+            # so the measured byte count is unchanged across invocations.
+            runtime_prefix = f"dao-{self.name}-runtime-"
+            random_suffix = runtime_dir.name.removeprefix(runtime_prefix)
+            stable_runtime_path = str(runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix)))
+            components[-1] = ProviderInputComponent(
+                "start_directive", directive.replace(str(runtime_dir), stable_runtime_path)
             )
-        )
-        self._native_request_id = bundle.bound_context.request_id
-        return PreparedProviderInput(
-            tuple(command), None, tuple(components),
-            allow_duplicate_indexed_content=True,
-        )
+            self.invocation.request_id = bundle.bound_context.request_id
+            return PreparedProviderInput(
+                tuple(command), None, tuple(components),
+                allow_duplicate_indexed_content=True,
+            )
+        except ReviewerInputError as exc:
+            self.cleanup()
+            raise AgentOutputError(str(exc)) from None
+        except BaseException:
+            self.cleanup()
+            raise
 
     def extract_output(
         self, stdout: str, stderr: str, extra_files: dict[str, str]
@@ -915,10 +819,12 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 "native Claude structured_output has no sole native result object",
                 provider_data=structured_output,
             )
-        if self._native_request_id is None:
+        if self.invocation.request_id is None:
             raise AgentOutputError("native Claude adapter has no bound request id")
-        if result.get("request_id") != self._native_request_id:
+        if result.get("request_id") != self.invocation.request_id:
             raise AgentOutputError("native Claude response request_id differs from request")
+        if result.get("schema_version") != self.role_binding.contract:
+            raise AgentOutputError("native Claude response differs from role contract")
         try:
             return canonical_native_review_json(result)
         except NativeReviewContractError as exc:
@@ -929,25 +835,55 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
-    def cleanup(self) -> None:
-        super().cleanup()
-        self._bound_review_harness = None
-        self._review_manifest_file = None
-        self._review_packet_files = ()
-        self._native_evidence_files = ()
-        self._native_request_id = None
+def create_agent_pair(
+    provider: str, role: AgentRoleName, *, slot: AgentSlot,
+    settings: AgentSettings, certifications: CertificationTable | None = None,
+) -> AgentAdapter:
+    """Authorize a slot before constructing a fresh transport with its role binding."""
+    if not isinstance(role, AgentRoleName) or not isinstance(slot, AgentSlot):
+        raise TypeError("provider pair requires typed role and slot")
+    if role is not role_for_slot(slot):
+        raise CertificationError(
+            CertificationErrorCode.NOT_CERTIFIED,
+            f"slot={slot.value} provider={provider}: missing qualification evidence for role={role.value}",
+        )
+    table = certifications if certifications is not None else load_role_certifications()
+    table.require(provider, role, slot)
+    if settings.name != provider:
+        raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
+    binding = binding_for_role(role)
+    if provider == "codex" and role is AgentRoleName.IMPLEMENTER:
+        return NativeCodexAdapter(settings, role_binding=binding)
+    if provider == "claude" and role is AgentRoleName.REVIEWER:
+        return NativeClaudeReviewAdapter(settings, role_binding=binding)
+    raise ValueError(
+        f"slot={slot.value} provider={provider}: missing transport/role rights binding"
+    )
 
 
 def build_agent_registry(
     settings: dict[str, AgentSettings] | None = None,
 ) -> dict[str, AgentAdapter]:
-    resolved = settings or default_agent_settings()
-    if set(resolved) != {"codex", "claude"}:
-        raise ValueError("agent settings must contain exactly codex and claude")
-    return {
-        "codex": NativeCodexAdapter(resolved["codex"]),
-        "claude": NativeClaudeReviewAdapter(resolved["claude"]),
+    """Create one adapter per slot from its selected provider and profile."""
+    resolved = settings if settings is not None else default_agent_settings()
+    return build_slot_agent_registry(resolved)
+
+
+def build_slot_agent_registry(
+    slots: dict[str, AgentSettings], *, certifications: CertificationTable | None = None,
+) -> dict[str, AgentAdapter]:
+    """Create the run's adapters solely from its resolved slot settings."""
+    if set(slots) != {slot.value for slot in AgentSlot}:
+        raise ValueError("slot_settings must contain implementer, reviewer and final_reviewer")
+    table = certifications or load_role_certifications()
+    table.require_occupancy({slot: slots[slot.value].name for slot in AgentSlot})
+    registry = {
+        slot.value: create_agent_pair(
+            slots[slot.value].name, role_for_slot(slot), slot=slot,
+            settings=slots[slot.value], certifications=table,
+        )
+        for slot in AgentSlot
     }
-
-
-AGENT_REGISTRY: dict[str, AgentAdapter] = build_agent_registry()
+    for slot in AgentSlot:
+        registry[slot.value].bound_slot = slot.value
+    return registry

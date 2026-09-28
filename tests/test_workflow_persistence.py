@@ -85,7 +85,7 @@ DRIVER_FACADES = {
     "_persist_native_agent_request_bundle": "_persist_native_agent_request_bundle",
     "persist_review_packet": "persist_review_packet",
     "_persist_provider_content": "_persist_provider_content",
-    "persist_native_codex_contract": "persist_native_implementer_contract",
+    "persist_native_implementer_contract": "persist_native_implementer_contract",
     "persist_native_review_contract": "persist_native_review_contract",
     "_persist_review_finding_transitions": "_persist_review_finding_transitions",
     "persist_contract_diagnostic": "persist_contract_diagnostic",
@@ -129,6 +129,49 @@ def test_changed_request_with_same_binding_requests_a_new_round() -> None:
     assert raised.value.current_input_digest == hashlib.sha256(
         current.encode("utf-8")
     ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("detail", "diagnostic"),
+    (
+        ("native implementer persistence lacks its immutable transport binding", "WORKFLOW_IMPLEMENTER_BINDING_MISSING"),
+        ("native review persistence lacks its immutable reviewer binding", "WORKFLOW_REVIEW_BINDING_MISSING"),
+        ("final review completion lacks its dedicated run binding", "WORKFLOW_FINAL_REVIEW_BINDING_MISSING"),
+    ),
+)
+def test_persistence_binding_errors_keep_specific_diagnostics(
+    detail: str, diagnostic: str,
+) -> None:
+    from orchestrator_diagnostics import OrchestratorDiagnostic
+    error = WorkflowExecutionError(detail)
+    assert error.orchestrator_diagnostic is OrchestratorDiagnostic[diagnostic]
+    assert detail in PERSISTENCE_PATH.read_text(encoding="utf-8")
+
+
+def test_literal_workflow_execution_details_are_enum_bound_or_reviewed_value_free() -> None:
+    from orchestrator_diagnostics import OrchestratorDiagnostic
+
+    allowlist = json.loads(
+        (ROOT / "tests/fixtures/workflow-execution-value-free-details.json").read_text(encoding="utf-8")
+    )
+    known = {member.value.removeprefix("workflow-execution: ") for member in OrchestratorDiagnostic}
+    observed: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "src").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        details = sorted({
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "WorkflowExecutionError"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value not in known
+        })
+        if details:
+            observed[path.name] = details
+    assert observed == allowlist
 
 
 def _tree(path: Path = PERSISTENCE_PATH, source: str | None = None) -> ast.Module:
@@ -295,7 +338,7 @@ def test_missing_provider_content_authority_fails_closed() -> None:
         match="provider content has no artifact authority",
     ):
         persistence._persist_provider_content(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=1,
             request_sequence=1,
             operation="implementation",
@@ -335,7 +378,7 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     canonical = '{"result":"ok"}'
 
     record = persistence._persist_provider_content(
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=2,
         request_sequence=3,
         operation="review",
@@ -352,16 +395,16 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     assert bridge.store.read_blob(payload.blob) == canonical.encode("utf-8")
 
 
-def test_final_correction_provider_content_key_is_canonical_and_idempotent(
+def test_implementation_provider_content_key_is_canonical_and_idempotent(
     tmp_path: Path,
 ) -> None:
     fields = {
-        "role": Role.CODEX,
-        "work_unit_id": 45,
+        "role": Role.IMPLEMENTER,
+        "work_unit_id": 4500,
         "request_sequence": 1,
-        "operation": "codex_final_correction",
+        "operation": "implementer_implementation",
         "request_id": (
-            "native-codex-request-"
+            "native-implementer-request-"
             "a18a0c6b0b7822fd97d5cf80b8e0fd57b18b84744ba8c2b4b656a45c3e8bd960"
         ),
         "response_sha256": (
@@ -373,10 +416,10 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
     second = provider_content_idempotency_key(**fields)
     distinct_inputs = (
         fields,
-        {**fields, "role": Role.CLAUDE},
-        {**fields, "work_unit_id": 46},
+        {**fields, "role": Role.REVIEWER},
+        {**fields, "work_unit_id": 4600},
         {**fields, "request_sequence": 2},
-        {**fields, "operation": "claude_slice_review"},
+        {**fields, "operation": "reviewer_slice_review"},
         {**fields, "request_id": "native-review-request-" + "b" * 64},
         {**fields, "response_sha256": "c" * 64},
     )
@@ -384,7 +427,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
         provider_content_idempotency_key(**item) for item in distinct_inputs
     }
     incident_key = (
-        "provider-content:codex:45:1:codex_final_correction:"
+        "provider-content:codex:4500:1:implementer_implementation:"
         f"{fields['request_id']}:{fields['response_sha256']}"
     )
 
@@ -393,7 +436,7 @@ def test_final_correction_provider_content_key_is_canonical_and_idempotent(
     assert len(first) < 200
     assert len(distinct_keys) == len(distinct_inputs)
     assert all(_IDENTIFIER_RE.fullmatch(key) for key in distinct_keys)
-    assert len(incident_key) == 201
+    assert len(incident_key) == 213
     assert _IDENTIFIER_RE.fullmatch(incident_key) is None
 
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "final-correction-content-key"))

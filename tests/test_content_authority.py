@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import hashlib
 import json
 import math
@@ -84,9 +86,9 @@ def _bind_store(store: ArtifactStore) -> None:
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -187,15 +189,15 @@ def _append_implementer_pair(
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    request_id = "native-codex-request-" + "b" * 64
+    request_id = "native-implementer-request-" + "b" * 64
     blob = store.put_blob(b'{"ready":true}')
     for index in range(content_count):
         bridge.append(
             ProviderContentPayload(
-                Role.CODEX,
+                Role.IMPLEMENTER,
                 "1",
                 content_round or invocation_round,
-                "codex_implementation",
+                "implementer_implementation",
                 request_id,
                 blob.sha256,
                 "agent_result",
@@ -208,15 +210,15 @@ def _append_implementer_pair(
         )
     bridge.append(
         AgentResultPayload(
-            Role.CODEX,
+            Role.IMPLEMENTER,
             "1",
             "ready",
             (),
-            "native-codex-v2",
+            "native-codex-v3",
             request_id,
             blob.sha256,
         ),
-        logical_id=f"agent-1-codex_implementation-{invocation_round}",
+        logical_id=f"agent-1-implementer_implementation-{invocation_round}",
         idempotency_key=f"agent-result:test:{invocation_round}",
         fingerprint_sha256=FINGERPRINT,
     )
@@ -285,9 +287,9 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
 ) -> None:
     canonical = json.dumps(
         {
-            "schema_version": "native-agent-codex-result-v2",
-            "result_type": "final_report_result",
-            "request_id": "native-codex-request-" + ("b" * 64),
+            "schema_version": "native-agent-implementer-result-v3",
+            "result_type": "implementation_result",
+            "request_id": "native-implementer-request-" + ("b" * 64),
             "ready": True,
             "finding_dispositions": [],
             "self_check": "accepted provider bytes with a unique sentinel",
@@ -299,13 +301,13 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
     driver = object.__new__(ProductionWorkflowDriver)
     driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
     record = driver._persist_provider_content(  # noqa: SLF001
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=1,
         request_sequence=1,
-        operation="codex_final_review",
-        request_id="native-codex-request-" + ("b" * 64),
+        operation="implementer_implementation",
+        request_id="native-implementer-request-" + ("b" * 64),
         canonical=canonical,
-        content_kind="final_report",
+        content_kind="agent_result",
         fingerprint=FINGERPRINT,
     )
 
@@ -434,14 +436,14 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
     store = ArtifactStore(tmp_path, "provider-round-recovery")
     driver = object.__new__(ProductionWorkflowDriver)
     driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
-    request_id = "native-codex-request-" + "b" * 64
+    request_id = "native-implementer-request-" + "b" * 64
     canonical = '{"request_id":"' + request_id + '","ready":true}'
     for request_sequence in (1, 2):
         driver._persist_provider_content(  # noqa: SLF001
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=7,
             request_sequence=request_sequence,
-            operation="codex_implementation",
+            operation="implementer_implementation",
             request_id=request_id,
             canonical=canonical,
             content_kind="agent_result",
@@ -449,10 +451,10 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
         )
 
     recovered = driver._provider_content_text(  # noqa: SLF001
-        role=Role.CODEX,
+        role=Role.IMPLEMENTER,
         work_unit_id=7,
         request_sequence=2,
-        operation="codex_implementation",
+        operation="implementer_implementation",
     )
 
     assert recovered is not None
@@ -528,10 +530,10 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
     blob = store.put_blob(b'{"approved":true}')
     bridge.append(
         ProviderContentPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "1",
             2,
-            "claude_slice_review",
+            "reviewer_slice_review",
             request_id,
             blob.sha256,
             "review_result",
@@ -544,12 +546,12 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
     )
     bridge.append(
         ReviewPayload(
-            Role.CLAUDE,
+            Role.REVIEWER,
             "1",
             "approved",
             (),
             "review round remains independently bound",
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             request_id,
             blob.sha256,
         ),

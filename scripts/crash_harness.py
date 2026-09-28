@@ -17,6 +17,8 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Mapping
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SOURCE_ROOT) not in sys.path:
@@ -47,7 +49,8 @@ from dry_run_scenarios import (
     ScriptedWorkflowDriver,
 )
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
-from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
+from provider_input_budget import PROVIDER_ROLES, ProviderInputComponentSize, ProviderInputMeasurement
+import provider_process
 from side_effects import (
     Reconciliation,
     ReconciliationOutcome,
@@ -91,6 +94,10 @@ BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
 RUNTIME_BOUNDARY_EFFECTS = {
     "slice_commit": "git_commit",
     "slice_provider": "provider_start",
+    "provider_group_after_start": "provider_start",
+    "provider_group_after_identity": "provider_start",
+    "provider_group_leader_lost": "provider_start",
+    "provider_group_after_cleanup": "provider_start",
     "implementation_handoff": "file_write",
     "queue_finalization": "queue_move",
     "slice_validation": "internal",
@@ -103,6 +110,45 @@ RUNTIME_BOUNDARY_EFFECTS = {
     "post_merge_after_process_start": "post_merge_hook",
     "post_merge_after_process_end": "post_merge_hook",
 }
+
+
+def _prove_provider_group_boundary(root: Path, boundary: str) -> None:
+    """Exercise the process evidence consulted when a provider start is replayed."""
+    if boundary not in {
+        "provider_group_after_start", "provider_group_after_identity",
+        "provider_group_leader_lost", "provider_group_after_cleanup",
+    }:
+        return
+    identity = provider_process.ProcessIdentity("test-boot", 711, 41, 711, 711)
+    if boundary == "provider_group_after_start":
+        status = provider_process.observe_process(root / "absent-provider.json", "effect").status
+        expected = provider_process.ProcessStatus.UNKNOWN
+    else:
+        class ProcEntries:
+            def __enter__(self):
+                return iter([SimpleNamespace(name="712")] if boundary == "provider_group_leader_lost" else [])
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        def stat_for(pid: int) -> provider_process.ProcStat | None:
+            if boundary == "provider_group_after_identity" and pid == 711:
+                return provider_process.ProcStat("S", 41, 711, 711)
+            if boundary == "provider_group_leader_lost" and pid == 712:
+                return provider_process.ProcStat("S", 42, 711, 711)
+            return None
+
+        with (patch.object(provider_process, "_boot_id", return_value="test-boot"),
+              patch.object(provider_process, "_proc_stat", side_effect=stat_for),
+              patch.object(provider_process.os, "scandir", return_value=ProcEntries())):
+            status = provider_process.observe_identity(identity).status
+        expected = (
+            provider_process.ProcessStatus.ENDED
+            if boundary == "provider_group_after_cleanup"
+            else provider_process.ProcessStatus.RUNNING
+        )
+    if status is not expected:
+        raise CrashHarnessError(f"provider group boundary {boundary} lost its fail-closed outcome")
 
 HOOK_RUNTIME_BOUNDARIES = frozenset({
     "post_merge_with_merge", "post_merge_without_merge",
@@ -163,11 +209,11 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
     def carry_forward_native_findings(self, state, findings):  # type: ignore[no-untyped-def]
         return self._record_driver.carry_forward_native_findings(state, findings)
 
-    def recover_pending_native_codex(self, invocation, contract, history):  # type: ignore[no-untyped-def]  # allowlist:provider
-        recovered = self._record_driver.recover_pending_native_codex(  # allowlist:provider
+    def recover_pending_native_implementer(self, invocation, contract, history):  # type: ignore[no-untyped-def]  # allowlist:provider
+        recovered = self._record_driver.recover_pending_native_implementer(  # allowlist:provider
             invocation, contract, history
         )
-        return recovered or super().recover_pending_native_codex(  # allowlist:provider
+        return recovered or super().recover_pending_native_implementer(  # allowlist:provider
             invocation, contract, history
         )
 
@@ -199,7 +245,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             fingerprint, expected_commands, attestation_id
         )
 
-    def persist_native_codex_contract(self, output, request_sequence, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
+    def persist_native_implementer_contract(self, output, request_sequence, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
         state = self._record_driver.active_state
         if state is None:
             raise CrashHarnessError("scripted implementer result has no active record state")
@@ -209,13 +255,13 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
             if item.work_unit_id == state.current_work_unit_id
             and item.request_sequence == state.current_work_unit.request_sequence
         )
-        self._record_driver.persist_native_codex_contract(  # allowlist:provider
+        self._record_driver.persist_native_implementer_contract(  # allowlist:provider
             output,
             request_sequence,
             previous_findings,
             recovery_fingerprint=fingerprint,
         )
-        super().persist_native_codex_contract(  # allowlist:provider
+        super().persist_native_implementer_contract(  # allowlist:provider
             output, request_sequence, previous_findings
         )
 
@@ -296,7 +342,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
                 attestation_record.payload.content_record_id,
             )
             or not review_payload_matches_complete_result(
-                current_review.payload, request.claude_review  # allowlist:provider
+                current_review.payload, request.reviewer_review
             )
         ):
             raise CrashHarnessError("scripted commit lacks its record-bound approval")
@@ -496,12 +542,12 @@ def _production_state(root: Path, run_id: str) -> WorkflowState:
         task_digest=FINGERPRINT,
         task_scope_patterns=("src/harness.py",),
         target_branch="feature/state-authority-consolidation",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp=FIXED_TIME,
     ).complete_current_work_unit(updated_at=FIXED_TIME).start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- persisted step
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,  # allowlist:provider -- persisted step
         updated_at=FIXED_TIME,
     ).bind_current_slice_git_boundary(
         start_commit=FIRST_SLICE_START_COMMIT,
@@ -543,7 +589,7 @@ def _production_baseline(
     driver.bind_work_unit(state)
     resolution = resolve_resume_state(root, run_id)
     _require_measured_first_slice_start_commit(resolution.state)
-    if resolution.state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION:  # allowlist:provider
+    if resolution.state.current_step is not WorkflowStep.IMPLEMENTER_IMPLEMENTATION:  # allowlist:provider
         raise CrashHarnessError("production baseline projected a foreign cursor")
     return ArtifactBridge(
         ArtifactStore(root, run_id), now=lambda: FIXED_TIME
@@ -625,7 +671,7 @@ def _provider_context(
 ) -> tuple[ProductionWorkflowDriver, object, Path]:
     measurement = ProviderInputMeasurement(
         provider=spec.operation[0],
-        role=spec.operation[0],
+        role=PROVIDER_ROLES[spec.operation[0]],
         operation=spec.operation[1],
         binding_fingerprint=spec.operation[3],
         input_digest=spec.operation[2],
@@ -698,6 +744,7 @@ def _run_baseline_stop_case(
     run_id = "s5-ledger"
     case_root = root / f"{run_id}-{phase.value}-{requested_crashes}"
     case_root.mkdir(parents=True, exist_ok=False)
+    _prove_provider_group_boundary(case_root, runtime_boundary)
     injector = CrashInjector("ledger", phase, requested_crashes)
     attempts = 0
     production_resume_attempts = 0
@@ -930,8 +977,6 @@ def _run_crash_case(
                     binding_fingerprint=spec.operation[3],
                     work_unit_id=spec.work_unit_id,
                     operation_instance=spec.operation[4],
-                    model="provider-free",
-                    effort="medium",
                 )
                 response.parent.mkdir(parents=True, exist_ok=True)
                 response.write_bytes(b"s5-provider-response")
@@ -1136,7 +1181,7 @@ def _run_post_merge_case(
             def codex(_driver, invocation):  # allowlist:provider -- scripted implementer
                 target = repository / "src/one.py"
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if invocation.step.value == "codex_plan":  # allowlist:provider -- persisted step
+                if invocation.step.value == "implementer_plan":  # allowlist:provider -- persisted step
                     target.write_text("value = 0\n", encoding="utf-8")
                     return _native_plan_output(
                         invocation, summary="add value",
@@ -1146,13 +1191,13 @@ def _run_post_merge_case(
                 return _native_implementation_output(invocation)
 
             def review(driver, invocation):
-                if invocation.step.value == "claude_final_review":  # allowlist:provider -- persisted step
+                if invocation.step.value == "reviewer_final_review":  # allowlist:provider -- persisted step
                     return _native_final_review_output(
                         driver, invocation, finding_id=None,
                     )
                 return _native_review_approval(invocation)
 
-            ProductionWorkflowDriver.invoke_codex = codex  # allowlist:provider -- scripted adapter
+            ProductionWorkflowDriver.invoke_implementer = codex  # allowlist:provider -- scripted adapter
             ProductionWorkflowDriver.invoke_reviewer = review
             if phase == "after_process_start":
                 real_popen = workflow_completion.subprocess.Popen
@@ -1760,7 +1805,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     if (
         "The final branch review found a follow-up defect." not in followup_content
         or "src/second.py" not in followup_content
-        or "C-02" in followup_content
+        or "R-02" in followup_content
         or long_run_id in followup_content
     ):
         raise CrashHarnessError(
@@ -1780,14 +1825,14 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         or long.result.state.execution_mode != "IMPLEMENT"
         or long.result.state.approved_plan_commit != plan_commit
         or long.result.state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
-        or tuple(item.finding_id for item in findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in findings) != ("R-01", "R-02")
         or journey_resolutions["long"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("combined long-run did not close its complete ledger")
     if (
         not second_long.result.workflow_completed
-        or tuple(item.finding_id for item in second_findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in second_findings) != ("R-01", "R-02")
         or journey_resolutions["independent"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
@@ -1839,8 +1884,8 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
                 f"{item.finding_id}:{item.status.value}" for item in second_findings
             ],
             "correction_round_count": sum(
-                call.startswith("agent:codex:")  # allowlist:provider -- scripted role trace
-                and call.endswith(":codex_correction")  # allowlist:provider -- typed step
+                call.startswith("agent:implementer:")
+                and call.endswith(":implementer_correction")
                 for call in second_long.calls
             ),
             "approved_plan_commit": second_long.result.state.approved_plan_commit,
@@ -1896,18 +1941,18 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
             branch_base="a" * 40,
             first_slice_start_commit=FIRST_SLICE_START_COMMIT,
             slice_count=1,
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
             timestamp=FIXED_TIME,
         )
         automatic = kind in {AgentFailureKind.QUOTA, AgentFailureKind.NETWORK}
         failure = InvocationFailureRecord(
             invocation_id=f"s5-{kind.value}-1",
-            idempotency_key=f"s5:1:codex_plan:{kind.value}",  # allowlist:provider
-            role="codex",  # allowlist:provider -- typed role vocabulary
+            idempotency_key=f"s5:1:implementer_plan:{kind.value}",  # allowlist:provider
+            role="implementer",  # allowlist:provider -- typed role vocabulary
             failure_kind=kind,
             provider_text=f"redacted {kind.value} diagnostic",
             received_at=FIXED_TIME,
-            step=WorkflowStep.CODEX_PLAN,  # allowlist:provider -- typed workflow step
+            step=WorkflowStep.IMPLEMENTER_PLAN,  # allowlist:provider -- typed workflow step
             slice_id=1,
             work_unit_id=1,
             diagnostic_exit_code=2 if kind is AgentFailureKind.QUOTA else 3,
@@ -1940,7 +1985,7 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
         resumed = halted.resume_after_invocation_halt(updated_at=FIXED_TIME)
         if (
             resumed.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS
-            or resumed.current_step is not WorkflowStep.CODEX_PLAN  # allowlist:provider
+            or resumed.current_step is not WorkflowStep.IMPLEMENTER_PLAN  # allowlist:provider
             or resumed.current_work_unit.invocation_failures != (failure,)
         ):
             raise CrashHarnessError(f"typed {kind.value} continuation lost evidence")

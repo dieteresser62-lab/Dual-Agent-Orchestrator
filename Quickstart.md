@@ -20,7 +20,7 @@ codex --version
 claude --version
 ```
 
-Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md).
+Der Orchestrator läuft unter Linux oder WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md). Implementer (standardmäßig Codex), Reviewer und Final-Reviewer (standardmäßig Claude) werden über `[roles]` und `[agent_profiles]` in `orchestrator.toml` besetzt.
 
 ## 2. Zielrepository prüfen
 
@@ -64,7 +64,7 @@ echte Produktentscheidung zu unterschiedlichen Ergebnissen führen würde.
 
 Falls du den Namen festlegen möchtest, ergänze optional beispielsweise `TARGET_BRANCH: feature/mein-vorhaben`.
 
-Du musst keine Pfade, Slices, Akzeptanzkriterien, Risiken oder Tests vorgeben. Fehlen formale Ausführungsmarker und ein Scope-Abschnitt, leitet der Orchestrator sicher einen `PLAN_ONLY`-Auftrag ab. Aus `meine-idee.md` entsteht der Arbeitsplan `docs/internal/meine-idee-arbeitsplan.md`; zunächst ist nur dieser Planpfad beschreibbar. Codex übersetzt die Idee anhand des Repositorys in einen konkreten, von Claude geprüften Arbeitsplan. Direkter Implementierungsscope wird niemals aus freier Prosa geraten.
+Du musst keine Pfade, Slices, Akzeptanzkriterien, Risiken oder Tests vorgeben. Fehlen formale Ausführungsmarker und ein Scope-Abschnitt, leitet der Orchestrator sicher einen `PLAN_ONLY`-Auftrag ab. Aus `meine-idee.md` entsteht der Arbeitsplan `docs/internal/meine-idee-arbeitsplan.md`; zunächst ist nur dieser Planpfad beschreibbar. Der Implementer übersetzt die Idee anhand des Repositorys in einen konkreten, vom Reviewer geprüften Arbeitsplan. Direkter Implementierungsscope wird niemals aus freier Prosa geraten.
 
 Verwende pro Idee einen eindeutigen Dateinamen. Teilweise formale Mischformen werden fail-closed abgelehnt: Sobald beispielsweise `ORCHESTRATOR_MODE`, `WORK_PLAN_PATH`, `APPROVED_PLAN_COMMIT`, `TASK_SCOPE` oder ein Scope-Abschnitt vorkommt, muss der vollständige formale Vertrag stimmen. Geheimnisse oder Zugangsdaten gehören nicht in die Aufgabendatei.
 
@@ -90,17 +90,17 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 
 1. Der Watcher übernimmt die älteste stabile Markdown-Datei aus `inbox/` und bereitet ihren Zielbranch vor.
 2. Der informelle Intake erzeugt einen eng begrenzten `PLAN_ONLY`-Vertrag und ein digestgebundenes Gesamtaudit unter `docs/internal/`.
-3. Codex erstellt den Arbeitsplan. Der Orchestrator prüft dessen Slice-/Pfadvertrag noch vor den Reviewern und gibt eine reparierbare Strukturabweichung automatisch genau einmal an Codex zurück. Erst der handoff-fähige Planfingerprint geht an Claude.
+3. Der Implementer erstellt den Arbeitsplan. Der Orchestrator prüft dessen Slice-/Pfadvertrag noch vor dem Reviewer und gibt eine reparierbare Strukturabweichung automatisch genau einmal an den Implementer zurück. Erst der handoff-fähige Planfingerprint geht an den Reviewer.
 4. Nach der Planfreigabe commitet der Orchestrator den Plan lokal und erzeugt automatisch die zugehörige `-implement.md`-Aufgabe.
 5. Derselbe Watch-Prozess übernimmt den Handoff unmittelbar und beginnt ohne zweite Planungsrunde mit Slice 1.
-6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Codex implementiert, der Orchestrator validiert, Claude reviewt und der Orchestrator erstellt den lokalen Slice-Commit.
+6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Der Implementer setzt um, der Orchestrator validiert, der Reviewer prüft und der Orchestrator erstellt den lokalen Slice-Commit.
 7. Technische Korrekturen an bereits freigegebenen Vorgängerslices können über eine eng geprüfte `REMEDIATION_PATHS`-Erweiterung automatisch in den laufenden Slice aufgenommen werden.
-8. Nach dem letzten Slice liest Claude im Abnahmereview den vollständigen Branch ab seinem Abzweigpunkt vom Hauptbranch des Repositorys. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
+8. Nach dem letzten Slice liest der Final-Reviewer den vollständigen Branch ab seinem Abzweigpunkt vom Hauptbranch des Repositorys. Er meldet dort nur neue Findings oder das erneute Auftreten bekannter Signaturen und fordert keine Sonderkorrektur an.
 9. Findet der Abnahmereview Restarbeit, erzeugt der Orchestrator daraus eine gewöhnliche neue Inbox-Aufgabe, und der gesamte Prozess beginnt von vorn — Planung, Umsetzung, Prüfung, Commit. Findet er nichts mehr, endet der Lauf mit Exitcode 0 und die Aufgabe wird nach `outbox/done/` verschoben. Der Zyklus ist durch `max_acceptance_reviews` begrenzt (Vorgabe 6).
 
 Plan-, Teständerungs-, Slice-Commit- und Umfangs-Gates sind standardmäßig aus; eine angemeldete Umfangserweiterung genehmigt der Orchestrator selbst. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
-Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich beides beim Start wählen, etwa `run_task --watch --codex-effort xhigh --claude-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
+Der Implementer nutzt standardmäßig Codex mit Sol (`gpt-6-sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus; der Standard-Effort ist `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich dies beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
 
 Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
 
@@ -143,7 +143,7 @@ Die Aufgabenidentität, `.orchestrator/state.json` und Checkpoints führen dense
 
 Direkt vor jedem Providerprozess vermisst der Orchestrator die vollständig serialisierte Eingabe gegen das für Provider, Rolle und Operation konfigurierte Zeichen- und UTF-8-Bytebudget. Vor den branchweiten Finalaufrufen folgt zusätzlich ein agentenfreies Preflight über Recordkette, State-Spiegel, Findings, Attestierung und autorisierte Pfade. Ein Halt mit Gategrund `bootstrap_check` und Exitcode 4 bedeutet deshalb keine menschliche Freigabe und keinen Providerfehler. Lies Fehlercode, Größen beziehungsweise betroffene Records/Pfade in Log und Auditansicht, behebe die Ursache und starte denselben Resume-Befehl erneut. Der Watcher behält dabei Run-ID und Rollenstep bei, erhöht keinen Attempt-Zähler und erzeugt keine `.poison`-Datei.
 
-Neue Workflows sind unveränderlich an `structured-v2` gebunden. Für sie liegt die technische Wahrheit der abgebildeten Entscheidungen unter `.orchestrator/artifacts/<run-id>/records/`. `state.json` und Checkpoints sind der geprüfte Betriebsspiegel, `head.json` ist nur ein rekonstruierbarer Cache, und die Markdown-Dateien unter `docs/internal/` sind menschenlesbare Auditansichten. Agentenmarker werden weiterhin als Eingabe geparst, steuern aber erst nach validierter Record-Persistenz und semantischem Vergleich eine Entscheidung.
+Neue Workflows sind unveränderlich an `structured-v2` gebunden. Für sie liegt die technische Wahrheit der abgebildeten Entscheidungen unter `.orchestrator/artifacts/<run-id>/records/`. `state.json` und Checkpoints sind der geprüfte Betriebsspiegel, `head.json` ist nur ein rekonstruierbarer Cache, und die Markdown-Dateien unter `docs/internal/` sind menschenlesbare Auditansichten. Native JSON-Resultate werden gegen das requestgebundene Writerschema und den Domänenvertrag geprüft, bevor ihre Records eine Entscheidung tragen.
 
 Historische `legacy-state-v3`- und `structured-v1`-Läufe werden mit `UNSUPPORTED-PROTOCOL` fail-closed abgewiesen und weder migriert noch als Fallback verwendet. Meldet Resume eine fehlende, beschädigte oder zum Spiegel widersprüchliche Recordkette, notiere Lauf- und Record-ID, prüfe `.orchestrator/logs/` und stelle die zusammengehörigen Records oder den passenden Spiegel aus einer vertrauenswürdigen Sicherung wieder her. Bearbeite weder Records noch `state.json` manuell und erfinde keine Freigabe zur Umgehung des fail-closed Halts.
 

@@ -19,16 +19,93 @@
       "input": {
         "implementer": {
           "model": "gpt-5.6-sol",
-          "effort": "max"
+          "effort": "max",
+          "provider": "codex",
+          "binary": "codex",
+          "timeout_seconds": 0,
+          "manufacturer": "openai",
+          "capability_sha256": "d57db52e04c2492e642512a6927ed4bac1e60a5b62bace486876c18ad21356fc",
+          "transport_sha256": "97479378d347198221372b5e1adce013f4187fd8811178225fe60564c1047c02",
+          "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+          "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
+          "certification_sha256": "04abf2e647605ca38db83be0e1d930c1bac13533bf4e24dcb19015dfc555beb6",
+          "binary_identity": {
+            "entry_path": "dry-run:implementer",
+            "real_path": "dry-run:implementer",
+            "version": "dry-run",
+            "sha256": "4ef64246a016d6af5b1af1fd0b12901040897fd848a87cc6f73904d33bd3b364",
+            "interpreter_entry_path": null,
+            "interpreter_real_path": null,
+            "interpreter_version": null,
+            "interpreter_args": [],
+            "interpreter_sha256": null,
+            "kind": "dry_run"
+          },
+          "binary_identity_sha256": "5550788e2f76a3ba8343801118426205cb7980c327f6577ec9865180e2ed248f",
+          "max_budget_usd": null,
+          "profile_name": "implementation"
         },
         "reviewer": {
           "model": "opus",
-          "effort": "max"
+          "effort": "max",
+          "provider": "claude",
+          "binary": "claude",
+          "timeout_seconds": 0,
+          "manufacturer": "anthropic",
+          "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+          "transport_sha256": "2ea6376d95c6e012529277f7907a91d52907a43ee5835155a9e1f15da1a61cc4",
+          "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+          "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
+          "certification_sha256": "07c602ac6595c18ed1b58d58b3bb56c5ed6173140a685b51276eb15f263e01db",
+          "binary_identity": {
+            "entry_path": "dry-run:reviewer",
+            "real_path": "dry-run:reviewer",
+            "version": "dry-run",
+            "sha256": "b8979280b38a4d3d2e289ad8f1512317ac4c568c6025c2d1c4d81f4adff9b75f",
+            "interpreter_entry_path": null,
+            "interpreter_real_path": null,
+            "interpreter_version": null,
+            "interpreter_args": [],
+            "interpreter_sha256": null,
+            "kind": "dry_run"
+          },
+          "binary_identity_sha256": "4af124463d1b266fe4a8ab7f27591e5d155e3427042990b162ad1332c687e588",
+          "max_budget_usd": null,
+          "profile_name": "review"
         },
         "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
         "merge_completed_branch": true,
-        "base_branch": "main"
+        "base_branch": "main",
+        "post_merge_hook_enabled": true,
+        "final_reviewer": {
+          "model": "opus",
+          "effort": "max",
+          "provider": "claude",
+          "binary": "claude",
+          "timeout_seconds": 0,
+          "manufacturer": "anthropic",
+          "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
+          "transport_sha256": "2ea6376d95c6e012529277f7907a91d52907a43ee5835155a9e1f15da1a61cc4",
+          "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
+          "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
+          "certification_sha256": "51ca820cfe26d54e013fad58d4cbbac025052ce7514294980720a4f0046880ce",
+          "binary_identity": {
+            "kind": "dry_run",
+            "entry_path": "dry-run:final_reviewer",
+            "real_path": "dry-run:final_reviewer",
+            "version": "dry-run",
+            "sha256": "f184cdb89ac8e2ff53277ff05c4be5b288b9ff2fe115a07b3e8c177f2e074bff",
+            "interpreter_entry_path": null,
+            "interpreter_real_path": null,
+            "interpreter_version": null,
+            "interpreter_args": [],
+            "interpreter_sha256": null
+          },
+          "binary_identity_sha256": "50aa3f1ca7abf969597879e719ba9888cefb7dc53cd36fd83651596b396a9ffb",
+          "max_budget_usd": null,
+          "profile_name": "review"
+        }
       }
     },
     {
@@ -38,7 +115,7 @@
         "slice_id": "1",
         "slice_status": "in_progress",
         "work_unit_id": "work-01",
-        "step": "codex_implementation",
+        "step": "implementer_implementation",
         "work_unit_status": "in_progress"
       }
     },
@@ -87,7 +164,7 @@
       "input": {
         "work_unit_id": "work-01",
         "slice_id": "1",
-        "source_request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "stop_rule_id": "SCOPE-EXTENSION-REQUESTED",
         "rationale": "The current Slice requires its documentation path.",
         "additions": [
@@ -137,7 +214,7 @@
           "src/artifact_models.py"
         ],
         "open_finding_ids": [
-          "C-01"
+          "R-01"
         ]
       }
     },
@@ -151,7 +228,7 @@
           "src/artifact_models.py"
         ],
         "finding_ids": [
-          "C-01"
+          "R-01"
         ]
       }
     },
@@ -159,14 +236,14 @@
       "record_type": "agent_result",
       "expected_class": "AgentResultPayload",
       "input": {
-        "role": "codex",
+        "role": "implementer",
         "work_unit_id": "work-01",
         "outcome": "ready",
         "test_files": [
           "tests/test_payload_dispatch.py"
         ],
-        "transport_schema": "native-codex-v2",
-        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "transport_schema": "native-codex-v3",
+        "request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "slice_plan": [
           {
@@ -183,7 +260,7 @@
       "record_type": "diagnostic",
       "expected_class": "DiagnosticPayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "work_unit_id": "work-01",
         "attempt": 1,
         "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -194,12 +271,12 @@
       "record_type": "review",
       "expected_class": "ReviewPayload",
       "input": {
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "work_unit_id": "work-01",
         "verdict": "stop",
         "finding_ids": [],
         "evidence": null,
-        "transport_schema": "native-claude-review-v2",
+        "transport_schema": "native-claude-review-v3",
         "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "review_evidence": {
@@ -225,7 +302,7 @@
       "record_type": "final_review_completed",
       "expected_class": "FinalReviewCompletedPayload",
       "input": {
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "work_unit_id": "work-final",
         "new_findings": [],
         "occurrences": [],
@@ -237,7 +314,7 @@
         "pre_mortem": "An unreviewed path could hide a regression.",
         "validation_attestation_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444",
         "reviewed_head_commit": "2222222222222222222222222222222222222222",
-        "transport_schema": "native-claude-review-v2",
+        "transport_schema": "native-claude-review-v3",
         "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "scan_complete": true
@@ -271,9 +348,9 @@
       "record_type": "finding_transition",
       "expected_class": "FindingTransitionPayload",
       "input": {
-        "finding_id": "C-01",
-        "reporter": "claude",
-        "actor": "claude",
+        "finding_id": "R-01",
+        "reporter": "reviewer",
+        "actor": "reviewer",
         "action": "opened",
         "severity": "FINDING",
         "finding_status": "open",
@@ -372,11 +449,11 @@
       "record_type": "provider_content",
       "expected_class": "ProviderContentPayload",
       "input": {
-        "role": "codex",
+        "role": "implementer",
         "work_unit_id": "work-01",
         "round_number": 1,
-        "operation": "codex_implementation",
-        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "operation": "implementer_implementation",
+        "request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "content_kind": "agent_result",
         "content_bytes": 3,
@@ -438,7 +515,7 @@
         "paths": [
           "tests/test_payload_dispatch.py"
         ],
-        "resume_step": "claude_slice_review"
+        "resume_step": "reviewer_slice_review"
       }
     },
     {
@@ -459,7 +536,7 @@
       "input": {
         "invocation_id": "invocation-01",
         "idempotency_key": "invoke:01",
-        "role": "codex",
+        "role": "implementer",
         "failure_kind": "process",
         "failure_class": "resumable_halt",
         "diagnostic_code": "AGENT-PROCESS",
@@ -471,7 +548,7 @@
         "technical_text_bytes": 9,
         "received_at": "2026-09-05T10:00:00+00:00",
         "decision_at_utc": "2026-09-05T10:00:01+00:00",
-        "step": "codex_implementation",
+        "step": "implementer_implementation",
         "slice_id": "1",
         "work_unit_id": "work-01",
         "diagnostic_exit_code": 3,
@@ -491,7 +568,7 @@
       "record_type": "quota_pause",
       "expected_class": "QuotaPausePayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "retry_at": "2026-09-05T10:01:00+00:00"
       }
@@ -500,7 +577,7 @@
       "record_type": "transient_retry",
       "expected_class": "TransientRetryPayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "retry_at": "2026-09-05T10:01:00+00:00",
         "attempt": 1
@@ -528,8 +605,8 @@
       "expected_class": "ProviderInputMeasurementPayload",
       "input": {
         "provider": "codex",
-        "role": "codex",
-        "operation": "codex_implementation",
+        "role": "implementer",
+        "operation": "implementer_implementation",
         "work_unit_id": "work-01",
         "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -563,8 +640,8 @@
       "expected_class": "ProviderAttemptPayload",
       "input": {
         "provider": "codex",
-        "role": "codex",
-        "operation": "codex_implementation",
+        "role": "implementer",
+        "operation": "implementer_implementation",
         "work_unit_id": "work-01",
         "logical_operation_id": "provider-operation-01",
         "binding_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -588,7 +665,21 @@
           "cost_usd": 0.01
         },
         "model": "gpt-5.6-sol",
-        "effort": "max"
+        "effort": "max",
+        "slot": "implementer",
+        "profile_name": "implementation",
+        "binary_identity": {
+          "entry_path": "dry-run:implementer",
+          "real_path": "dry-run:implementer",
+          "version": "dry-run",
+          "sha256": "4ef64246a016d6af5b1af1fd0b12901040897fd848a87cc6f73904d33bd3b364",
+          "interpreter_entry_path": null,
+          "interpreter_real_path": null,
+          "interpreter_version": null,
+          "interpreter_args": [],
+          "interpreter_sha256": null,
+          "kind": "dry_run"
+        }
       }
     },
     {
@@ -610,8 +701,8 @@
       "expected_class": "FinalReviewPreflightPayload",
       "input": {
         "provider": "claude",
-        "role": "claude",
-        "operation": "claude_final_review",
+        "role": "reviewer",
+        "operation": "reviewer_final_review",
         "work_unit_id": "work-01",
         "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

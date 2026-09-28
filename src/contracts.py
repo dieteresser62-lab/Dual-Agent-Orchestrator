@@ -15,21 +15,23 @@ from content_authority import (
     validation_output_digest,
 )
 from finding_order import sorted_finding_ids
+from finding_identity import FINDING_ID_EXAMPLE, FINDING_ID_PATTERN
 from native_finding_decisions import (
     NativeFindingClosure,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from path_policy import is_canonical_repository_relative_path
 
 
-SOURCE_FINDING_ID_PATTERN = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
+SOURCE_FINDING_ID_PATTERN = FINDING_ID_PATTERN
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
 
 
 class AgentRole(str, Enum):
-    CODEX = "codex"
-    CLAUDE = "claude"
+    IMPLEMENTER = "implementer"
+    REVIEWER = "reviewer"
 
 
 class ApprovalMarker(str, Enum):
@@ -119,8 +121,8 @@ class FindingOrigin:
             raise ValueError("finding origin requires a slice id")
         if self.round_number < 1:
             raise ValueError("finding origin round must be 1-based")
-        if self.reporter is not AgentRole.CLAUDE:
-            raise ValueError("finding reporter must be claude")
+        if self.reporter is not AgentRole.REVIEWER:
+            raise ValueError("finding reporter must be reviewer")
 
 
 @dataclass(frozen=True)
@@ -162,15 +164,7 @@ class FindingRecord:
                 raise ValueError(
                     "finding affected paths must be canonical repository-relative POSIX paths"
                 )
-            path = PurePosixPath(raw_path)
-            if (
-                not raw_path
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or any(part in {"", ".", ".."} for part in path.parts)
-            ):
+            if not is_canonical_repository_relative_path(raw_path):
                 raise ValueError(
                     "finding affected paths must be canonical repository-relative POSIX paths"
                 )
@@ -394,14 +388,9 @@ class StopRequest:
         if normalized != self.remediation_paths:
             raise ValueError("remediation paths must be sorted and unique")
         for raw_path in normalized:
-            path = PurePosixPath(raw_path)
             if (
-                not raw_path.strip()
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or path.parts[0] == ".orchestrator"
+                not is_canonical_repository_relative_path(raw_path)
+                or PurePosixPath(raw_path).parts[0] == ".orchestrator"
             ):
                 raise ValueError(
                     "remediation paths must be canonical repository-relative POSIX paths "
@@ -461,8 +450,8 @@ class StepContract:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("step contract requires a name")
-        if self.reviewer is not AgentRole.CLAUDE:
-            raise ValueError("review step requires claude")
+        if self.reviewer is not AgentRole.REVIEWER:
+            raise ValueError("review step requires reviewer")
         if not self.slice_id.strip():
             raise ValueError("step contract requires a slice id")
         if self.round_number < 1:
@@ -482,6 +471,8 @@ class StepContract:
             if self.validation_attestation.diff_fingerprint != self.review_fingerprint:
                 raise ValueError("validation attestation fingerprint does not match review")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
+        if any(not is_canonical_repository_relative_path(path) for path in normalized):
+            raise ValueError("expected test files contain an unsafe repository path")
         object.__setattr__(self, "expected_test_files", normalized)
         if self.red_state_followup_slice is not None and not self.red_state_followup_slice.strip():
             raise ValueError("red-state exception requires a named follow-up slice")
@@ -624,14 +615,9 @@ class PlannedSlice:
             raise ValueError(diagnostic.detail)
         normalized = self.scope_paths
         for raw_path in normalized:
-            path = PurePosixPath(raw_path)
             if (
-                not raw_path.strip()
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or path.parts[0] == ".orchestrator"
+                not is_canonical_repository_relative_path(raw_path)
+                or PurePosixPath(raw_path).parts[0] == ".orchestrator"
             ):
                 raise ValueError(
                     "planned slice paths must be canonical repository-relative POSIX paths outside .orchestrator"
@@ -649,7 +635,7 @@ def planned_slice_path_diagnostic(
 
 
 @dataclass(frozen=True)
-class CodexStepContract:
+class ImplementerStepContract:
     name: str
     readiness_marker: ReadinessMarker
     slice_id: str
@@ -679,6 +665,8 @@ class CodexStepContract:
         elif self.request_sequence < 1:
             raise ValueError("Codex request sequence must be 1-based")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
+        if any(not is_canonical_repository_relative_path(path) for path in normalized):
+            raise ValueError("expected test files contain an unsafe repository path")
         object.__setattr__(self, "expected_test_files", normalized)
         if normalized and not self.require_test_files_record:
             raise ValueError("expected test files require a TEST_FILES_TOUCHED record")
@@ -693,14 +681,9 @@ class CodexStepContract:
         if self.require_slice_plan and self.readiness_marker is not ReadinessMarker.PLAN:
             raise ValueError("slice planning records are reserved for Codex plan steps")
         if self.plan_artifact_path is not None:
-            path = PurePosixPath(self.plan_artifact_path)
             if (
                 not self.require_slice_plan
-                or not self.plan_artifact_path.strip()
-                or path.is_absolute()
-                or "\\" in self.plan_artifact_path
-                or ".." in path.parts
-                or self.plan_artifact_path != path.as_posix()
+                or not is_canonical_repository_relative_path(self.plan_artifact_path)
             ):
                 raise ValueError(
                     "plan artifact path requires a canonical plan-step SLICE_PLAN"
@@ -710,7 +693,7 @@ class CodexStepContract:
 
 
 @dataclass(frozen=True)
-class CodexContractResult:
+class ImplementerContractResult:
     ready: bool | None
     stopped: bool
     stop_request: StopRequest | None
@@ -724,8 +707,8 @@ class CodexContractResult:
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:
     match = SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id)
     if not match:
-        raise ValueError(f"invalid finding id '{finding_id}' (expected C-01)")
-    if reporter is not AgentRole.CLAUDE:
+        raise ValueError(f"invalid finding id '{finding_id}' (expected {FINDING_ID_EXAMPLE})")
+    if reporter is not AgentRole.REVIEWER:
         raise ValueError(
             f"finding id '{finding_id}' does not match reporter {reporter.value}"
         )

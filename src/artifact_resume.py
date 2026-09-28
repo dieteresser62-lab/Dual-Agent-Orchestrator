@@ -48,6 +48,11 @@ class ArtifactResumeError(ValueError):
         super().__init__(f"{code.value}{location}: {message}")
 
 
+def _is_foreign_store_protocol(error: ArtifactStoreError) -> bool:
+    detail = str(error)
+    return "UNSUPPORTED-PROTOCOL" in detail or "matching older orchestrator release" in detail
+
+
 @dataclass(frozen=True, slots=True)
 class ResumeResolution:
     state: WorkflowState
@@ -220,10 +225,14 @@ def resolve_resume_state(
                 )
             chain = store.current_chain()
     except ArtifactStoreError as exc:
+        unsupported = _is_foreign_store_protocol(exc)
         raise ArtifactResumeError(
-            f"structured-v2 record chain for run {run_id!r} is invalid: {exc}; "
-            "repair or restore the append-only records before resuming",
-            code=ReplayDiagnosticCode.RECORD_UNKNOWN,
+            (f"structured-v2 record chain for run {run_id!r} uses an unsupported protocol: {exc}"
+             if unsupported else
+             f"structured-v2 record chain for run {run_id!r} is invalid: {exc}; "
+             "repair or restore the append-only records before resuming"),
+            code=(ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL if unsupported
+                  else ReplayDiagnosticCode.RECORD_UNKNOWN),
         ) from exc
     if not chain:
         raise ArtifactResumeError(

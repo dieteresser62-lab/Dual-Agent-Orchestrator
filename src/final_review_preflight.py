@@ -37,7 +37,7 @@ from workflow_state import (
 )
 
 
-FINAL_REVIEW_OPERATIONS = frozenset({"claude_final_review"})
+FINAL_REVIEW_OPERATIONS = frozenset({"reviewer_final_review"})
 _TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
     RecordType.FINAL_REVIEW_PREFLIGHT,

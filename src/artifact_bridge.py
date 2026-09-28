@@ -15,6 +15,7 @@ import hashlib
 import logging
 from typing import Callable, Iterable
 
+
 from artifact_models import (
     AgentResultPayload,
     ArtifactPayload,
@@ -23,6 +24,7 @@ from artifact_models import (
     FinalReviewCompletedPayload,
     FinalReviewFindingPayload,
     FinalReviewOccurrencePayload,
+    FinalReviewPreflightPayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -34,6 +36,7 @@ from artifact_models import (
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
+    RunProfilePayload,
     ProviderUsagePayload,
     RecordType,
     GatePayload,
@@ -42,6 +45,7 @@ from artifact_models import (
     ReviewStopRequestPayload,
     ReviewEvidencePayload,
     Role,
+    STATE_PROJECTION_REDUCER_VERSION,
     SideEffectPayload,
     SliceSpec,
     TaskPayload,
@@ -55,7 +59,7 @@ from artifact_models import (
 from artifact_store import ArtifactStore
 from contracts import (
     AgentRole,
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingRecord,
     FindingResponseDecision,
@@ -74,6 +78,7 @@ from artifact_replay import (
     ReplayDiagnosticCode,
     _validate_work_unit_revision,
     replay_artifacts,
+    validate_provider_record_binding,
 )
 
 
@@ -190,7 +195,7 @@ def plan_payload(
 
 
 def agent_result_payload(
-    result: CodexContractResult,
+    result: ImplementerContractResult,
     *,
     role: AgentRole,
     work_unit_id: int | str,
@@ -538,7 +543,7 @@ def provider_input_measurement_payload(
     relevant_record_head: str,
 ) -> ProviderInputMeasurementPayload:
     return ProviderInputMeasurementPayload(
-        provider=Role(measurement.provider),
+        provider=measurement.provider,
         role=Role(measurement.role),
         operation=measurement.operation,
         work_unit_id=str(work_unit_id),
@@ -574,6 +579,14 @@ class ArtifactBridge:
     store: ArtifactStore
     now: Callable[[], str] = _now
 
+    def _require_bound_provider(self, payload: ArtifactPayload, chain: tuple[ArtifactRecord, ...]) -> None:
+        if not isinstance(payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)):
+            return
+        profile = next((record.payload for record in chain if isinstance(record.payload, RunProfilePayload)), None)
+        if profile is None:
+            raise ArtifactBridgeError("provider record requires an earlier run profile")
+        validate_provider_record_binding(payload, profile)
+
     def append(
         self,
         payload: ArtifactPayload,
@@ -588,10 +601,11 @@ class ArtifactBridge:
                 ReplayDiagnostic(
                     ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
                     "legacy correction_work_unit records cannot be written under "
-                    "the installed reducer; inspect historical chains with "
-                    "scripts/verify_legacy_chain.py",
+                    f"the installed reducer {STATE_PROJECTION_REDUCER_VERSION!r}; "
+                    "resume or inspect this run with the matching older orchestrator release",
                 )
             )
+        self._require_bound_provider(payload, self.store.current_chain())
         fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)
         context = self.store.append_context(
             record_type=payload.record_type,
@@ -679,6 +693,8 @@ class ArtifactBridge:
             return persisted
 
         chain = self.store.current_chain()
+        for payload, *_ in entries:
+            self._require_bound_provider(payload, chain)
         revisions = {
             (record.record_type, record.logical_id): record.revision
             for record in chain
@@ -892,13 +908,23 @@ class ArtifactBridge:
     ) -> ArtifactRecord:
         """Persist one physical provider start after all local preflights pass."""
         chain = self.store.current_chain()
-        replay_artifacts(chain, self.store.run_id)
+        replay = replay_artifacts(chain, self.store.run_id)
         if (
             measurement_record not in chain
             or not isinstance(measurement_record.payload, ProviderInputMeasurementPayload)
         ):
             raise ArtifactBridgeError("provider attempt measurement is not in the accepted chain")
         measurement = measurement_record.payload
+        slot = "final_reviewer" if measurement.operation == "reviewer_final_review" else measurement.role.value
+        if replay.run_profile is None:
+            raise ArtifactBridgeError("provider attempt requires a bound run profile")
+        profile = getattr(replay.run_profile, slot)
+        if measurement.provider != profile.provider:
+            raise ArtifactBridgeError(f"slot={slot}: attempt provider differs from run profile")
+        if ((model != "unknown" and model != profile.model)
+            or (effort != "unknown" and effort != profile.effort)):
+            raise ArtifactBridgeError(f"slot={slot}: attempt model or effort differs from run profile")
+        model, effort = profile.model, profile.effort
         if str(work_unit_id) != measurement.work_unit_id:
             raise ArtifactBridgeError("provider attempt work unit differs from its measurement")
         if operation_instance is not None and not operation_instance.strip():
@@ -956,7 +982,7 @@ class ArtifactBridge:
         for record in prior:
             payload = record.payload
             comparisons = (
-                ("provider", payload.provider.value, measurement.provider.value),
+                ("provider", payload.provider, measurement.provider),
                 ("role", payload.role.value, measurement.role.value),
                 ("operation", payload.operation, measurement.operation),
                 ("work_unit_id", payload.work_unit_id, measurement.work_unit_id),
@@ -1018,6 +1044,9 @@ class ArtifactBridge:
             usage=None,
             model=model,
             effort=effort,
+            slot=slot,
+            profile_name=profile.profile_name,
+            binary_identity=profile.binary_identity,
         )
         record = self.append(
             payload,
@@ -1027,7 +1056,7 @@ class ArtifactBridge:
         )
         logger.info(
             "provider attempt started provider=%s operation=%s logical_operation_id=%s attempt=%d status=started",
-            measurement.provider.value,
+            measurement.provider,
             measurement.operation,
             logical_operation_id,
             attempt_number,
@@ -1094,6 +1123,9 @@ class ArtifactBridge:
             usage=usage,
             model=started.model,
             effort=started.effort,
+            slot=started.slot,
+            profile_name=started.profile_name,
+            binary_identity=started.binary_identity,
         )
         record = self.append(
             payload,
@@ -1103,7 +1135,7 @@ class ArtifactBridge:
         )
         logger.info(
             "provider attempt terminal provider=%s operation=%s logical_operation_id=%s attempt=%d status=%s",
-            started.provider.value,
+            started.provider,
             started.operation,
             started.logical_operation_id,
             started.attempt_number,
@@ -1113,21 +1145,24 @@ class ArtifactBridge:
 
 
 def logical_provider_operation_id(
-    *, run_id: str, work_unit_id: str, provider: Role, operation: str,
+    *, run_id: str, work_unit_id: str, provider: str, operation: str,
     binding_fingerprint: str, operation_instance: str | None = None,
 ) -> str:
+    if type(provider) is not str:
+        raise TypeError("logical provider operation requires the bound provider name")
+    provider_name = provider
     digest = hashlib.sha256(
         canonical_json(
             [
                 run_id,
                 work_unit_id,
-                provider.value,
+                provider_name,
                 operation,
                 binding_fingerprint,
                 operation_instance,
             ]
             if operation_instance is not None
-            else [run_id, work_unit_id, provider.value, operation, binding_fingerprint]
+            else [run_id, work_unit_id, provider_name, operation, binding_fingerprint]
         )
     ).hexdigest()
     return f"provider-operation-{digest}"

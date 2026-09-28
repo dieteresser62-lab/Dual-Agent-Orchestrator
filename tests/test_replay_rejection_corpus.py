@@ -69,7 +69,7 @@ BASELINE = ROOT / "tests/fixtures/replay-rejection-corpus-v1.json"
 RUN_ID = "b40-rejection-corpus"
 FP_A = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 FP_B = Fingerprint(FingerprintKind.IMPLEMENTATION, "b" * 64)
-REQUEST_ID = "native-codex-request-" + "c" * 64
+REQUEST_ID = "native-implementer-request-" + "c" * 64
 RESPONSE_SHA = "d" * 64
 VALIDATION_PASSES = (
     "_validate_workflow_transitions_and_events",
@@ -135,7 +135,7 @@ def _transition(
     work_unit_id: str = "1",
     *,
     slice_id: str = "1",
-    step: str = "codex_implementation",
+    step: str = "implementer_implementation",
 ) -> WorkflowTransitionPayload:
     return WorkflowTransitionPayload(
         slice_id, "in_progress", work_unit_id, step, "in_progress"
@@ -163,11 +163,11 @@ def _event(
 
 def _agent(work_unit_id: str = "1") -> AgentResultPayload:
     return AgentResultPayload(
-        Role.CODEX,
+        Role.IMPLEMENTER,
         work_unit_id,
         "ready",
         (),
-        "native-codex-v2",
+        "native-codex-v3",
         REQUEST_ID,
         RESPONSE_SHA,
     )
@@ -177,12 +177,12 @@ def _review(
     work_unit_id: str = "1", *, finding_ids: tuple[str, ...] = ()
 ) -> ReviewPayload:
     return ReviewPayload(
-        Role.CLAUDE,
+        Role.REVIEWER,
         work_unit_id,
         "approved",
         finding_ids,
         "checked",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         "native-review-request-" + "c" * 64,
         RESPONSE_SHA,
     )
@@ -192,7 +192,7 @@ def _failure(
     *,
     invocation_id: str = "invocation-1",
     work_unit_id: str = "1",
-    step: str = "codex_implementation",
+    step: str = "implementer_implementation",
     slice_id: str = "1",
     failure_kind: str = "quota",
     resume_at: str = "2026-09-03T10:01:00+00:00",
@@ -203,7 +203,7 @@ def _failure(
     return InvocationFailurePayload(
         invocation_id,
         f"invoke:{invocation_id}",
-        Role.CODEX,
+        Role.IMPLEMENTER,
         failure_kind,
         "transient",
         "AGENT-INVOCATION",
@@ -320,11 +320,10 @@ def _append_attestation(
 
 
 def _measurement(
-    *, operation: str = "codex_implementation", input_digest: str = "1" * 64
+    *, operation: str = "implementer_implementation", input_digest: str = "1" * 64
 ) -> ProviderInputMeasurementPayload:
-    return ProviderInputMeasurementPayload(
-        Role.CODEX,
-        Role.CODEX,
+    return ProviderInputMeasurementPayload("codex",
+        Role.IMPLEMENTER,
         operation,
         "1",
         "a" * 64,
@@ -352,16 +351,15 @@ def _measurement(
 def _attempt(
     measurement: ArtifactRecord,
     *,
-    operation: str = "codex_implementation",
+    operation: str = "implementer_implementation",
     logical_operation_id: str = "provider-operation-1",
     attempt_number: int = 1,
     phase: str = "started",
 ) -> ProviderAttemptPayload:
     assert isinstance(measurement.payload, ProviderInputMeasurementPayload)
     terminal = phase != "started"
-    return ProviderAttemptPayload(
-        Role.CODEX,
-        Role.CODEX,
+    return ProviderAttemptPayload("codex",
+        Role.IMPLEMENTER,
         operation,
         "1",
         logical_operation_id,
@@ -385,10 +383,10 @@ def _provider_pair(
     content = _append(
         records,
         ProviderContentPayload(
-            Role.CODEX,
+            Role.IMPLEMENTER,
             "1",
             1,
-            "codex_implementation",
+            "implementer_implementation",
             REQUEST_ID,
             RESPONSE_SHA,
             content_kind,
@@ -399,7 +397,7 @@ def _provider_pair(
     decision = _append(
         records,
         _agent(),
-        logical_id="agent-1-codex_implementation-1",
+        logical_id="agent-1-implementer_implementation-1",
     )
     return content, decision
 
@@ -447,12 +445,17 @@ def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
     )
 
 
-def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
+def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     records: list[ArtifactRecord] = []
 
-    if line in {3020, 3021, 3022, 3023}:
+    if case_id in {
+        "scope-extension-has-no-prior-stopped-implementer-result",
+        "scope-extension-has-no-prior-slice-boundary",
+        "scope-extension-is-not-followed-atomically-by-a-slice-boundary",
+        "scope-extension-boundary-omits-the-approved-addition",
+    }:
         _append(records, _transition())
-        if line != 3021:
+        if case_id != "scope-extension-has-no-prior-slice-boundary":
             _append(
                 records,
                 SliceBoundaryPayload(
@@ -460,11 +463,11 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 ),
                 logical_id="slice-boundary-1",
             )
-        if line != 3020:
+        if case_id != "scope-extension-has-no-prior-stopped-implementer-result":
             _append(
                 records,
                 replace(_agent(), outcome="stopped"),
-                logical_id="agent-1-codex_implementation-1",
+                logical_id="agent-1-implementer_implementation-1",
             )
         _append(
             records,
@@ -478,10 +481,10 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             ),
             logical_id="scope-extension-1",
         )
-        if line not in {3022}:
+        if case_id != "scope-extension-is-not-followed-atomically-by-a-slice-boundary":
             groups = (
                 (("src/a.py",),)
-                if line == 3023
+                if case_id == "scope-extension-boundary-omits-the-approved-addition"
                 else (("docs/a.md",), ("src/a.py",))
             )
             _append(
@@ -490,7 +493,11 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 logical_id="slice-boundary-1",
                 revision=2,
             )
-    elif line in {3017, 3018, 3019}:
+    elif case_id in {
+        "final-review-completion-references-a-missing-validation-attestation",
+        "final-review-completion-fingerprint-differs-from-its-attestation",
+        "final-review-completion-is-recorded-outside-an-implement-run",
+    }:
         _append(
             records,
             RunIdentityPayload(
@@ -498,18 +505,22 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 "feature/b40",
                 "1" * 40,
                 "2" * 40,
-                "PLAN_ONLY" if line == 3019 else "IMPLEMENT",
+                (
+                    "PLAN_ONLY"
+                    if case_id == "final-review-completion-is-recorded-outside-an-implement-run"
+                    else "IMPLEMENT"
+                ),
                 None,
             ),
         )
         attestation = _append_attestation(
             records,
-            fingerprint=FP_B if line == 3018 else FP_A,
+            fingerprint=FP_B if case_id == "final-review-completion-fingerprint-differs-from-its-attestation" else FP_A,
         )
         _append(
             records,
             FinalReviewCompletedPayload(
-                reviewer=Role.CLAUDE,
+                reviewer=Role.REVIEWER,
                 work_unit_id="1",
                 new_findings=(),
                 occurrences=(),
@@ -520,176 +531,233 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 ),
                 pre_mortem="pre mortem",
                 validation_attestation_record_id=(
-                    "ar1-" + "9" * 64 if line == 3017 else attestation.record_id
+                    "ar1-" + "9" * 64
+                    if case_id == "final-review-completion-references-a-missing-validation-attestation"
+                    else attestation.record_id
                 ),
                 reviewed_head_commit="2" * 40,
-                transport_schema="native-claude-review-v2",
+                transport_schema="native-claude-review-v3",
                 request_id="native-review-request-" + "c" * 64,
                 response_sha256=RESPONSE_SHA,
                 scan_complete=True,
             ),
         )
-    elif line == 1416:
+    elif case_id == "two-transitions-move-work-unit-1-from-slice-1-to-slice-2":
         _append(records, _transition(slice_id="1"))
         _append(records, _transition(slice_id="2"))
-    elif line == 1424:
+    elif case_id == "workflow-policy-without-an-earlier-work-unit-transition":
         _append(records, WorkflowPolicyPayload("1", 0, 4))
-    elif line == 1431:
+    elif case_id == "slice-boundary-without-an-earlier-transition-for-its-slice":
         _append(records, SliceBoundaryPayload("1", "1" * 40, (("src/a.py",),), "2" * 64))
-    elif line == 1445:
+    elif case_id == "second-slice-boundary-changes-the-immutable-start-commit":
         _append(records, _transition())
         _append(records, SliceBoundaryPayload("1", "1" * 40, (("src/a.py",),), "2" * 64))
         _append(records, SliceBoundaryPayload("1", "3" * 40, (("src/a.py",),), "2" * 64))
-    elif line == 1454:
+    elif case_id == "two-workflow-events-reference-the-same-transition":
         domain = _append(records, _transition())
         _event("transition", domain, work_unit_id="1", records=records)
         _event("transition", domain, work_unit_id="1", records=records)
-    elif line == 1466:
+    elif case_id == "workflow-event-references-a-record-outside-the-supplied-chain":
         missing = _append(records, _transition())
         records.clear()
         _event("transition", missing, work_unit_id="1", records=records)
-    elif line == 1483:
+    elif case_id == "run-event-references-a-workflow-transition":
         domain = _append(records, _transition())
         _event("run", domain, work_unit_id=None, records=records)
-    elif line == 1490:
+    elif case_id == "run-event-fingerprint-differs-from-the-referenced-run-identity":
         domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         _event("run", domain, work_unit_id=None, fingerprint=FP_B, records=records)
-    elif line == 1498:
+    elif case_id == "run-event-carries-a-work-unit-identity":
         domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         event = _event("run", domain, work_unit_id=None, records=records)
         object.__setattr__(event.payload, "work_unit_id", "1")
-    elif line == 1508:
+    elif case_id == "transition-event-carries-another-slice-than-its-transition":
         domain = _append(records, _transition())
         _event("transition", domain, work_unit_id="1", slice_id="2", records=records)
-    elif line == 1515:
+    elif case_id == "review-event-carries-another-work-unit-than-its-review":
         domain = _append(records, _review("1"), logical_id="review-claude-1-1")
         _event("review", domain, work_unit_id="2", round_number=1, records=records)
-    elif line == 1530:
+    elif case_id == "invocation-failure-record-has-a-malformed-logical-identity":
         _append(records, _transition())
         _append_failure(records, _failure(), logical_id="malformed")
-    elif line == 1540:
+    elif case_id == "invocation-failure-has-no-earlier-work-unit-transition":
         _append_failure(records, _failure())
-    elif line == 1557:
-        _append(records, _transition(step="codex_plan"))
+    elif case_id == "invocation-failure-step-differs-from-the-active-transition":
+        _append(records, _transition(step="implementer_plan"))
         _append_failure(records, _failure())
-    elif line == 1566:
+    elif case_id == "invocation-failure-record-fingerprint-differs-from-retry-binding":
         _append(records, _transition())
         _append_failure(records, _failure(fingerprint="b" * 64))
-    elif line == 1572:
+    elif case_id == "two-invocation-failures-carry-the-same-invocation-id":
         _append(records, _transition())
         failure = _failure()
         _append_failure(records, failure)
         _append_failure(records, failure, revision=2)
-    elif line == 1585:
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="malformed")
-    elif line == 1593:
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="quota-pause-missing")
-    elif line == 1616:
+    elif case_id == "quota-transition-has-a-malformed-logical-identity":
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="malformed")
+    elif case_id == "quota-transition-has-no-earlier-invocation-failure":
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:01:00+00:00"), logical_id="quota-pause-missing")
+    elif case_id == "quota-transition-retry-time-differs-from-invocation-decision":
         _append(records, _transition())
         _append_failure(records, _failure())
-        _append(records, QuotaPausePayload(Role.CODEX, "a" * 64, "2026-09-03T10:02:00+00:00"), logical_id="quota-pause-invocation-1")
-    elif line in {1627, 1635, 1645}:
+        _append(records, QuotaPausePayload(Role.IMPLEMENTER, "a" * 64, "2026-09-03T10:02:00+00:00"), logical_id="quota-pause-invocation-1")
+    elif case_id in {
+        "gate-transition-logical-identity-differs-from-its-work-unit",
+        "gate-transition-carries-paths-without-active-test-fingerprint",
+        "gate-transition-has-no-earlier-work-unit-transition",
+    }:
         gate = _gate_transition()
         logical_id = "gate-transition-1"
-        if line == 1627:
+        if case_id == "gate-transition-logical-identity-differs-from-its-work-unit":
             logical_id = "gate-transition-wrong"
         gate_record = _append(records, gate, logical_id=logical_id)
-        if line == 1635:
+        if case_id == "gate-transition-carries-paths-without-active-test-fingerprint":
             object.__setattr__(
                 gate_record.payload,
                 "active_test_paths",
                 ("tests/test_b40.py",),
             )
-    elif line in {1657, 1667, 1673, 1679, 1686}:
+    elif case_id in {
+        "gate-decision-has-no-transition-for-its-work-unit",
+        "gate-decision-references-a-missing-gate-record",
+        "gate-decision-references-a-pending-gate-record",
+        "gate-decision-fingerprint-differs-from-gate-record",
+        "two-gate-decisions-bind-the-same-work-unit-and-gate",
+    }:
         transition = _append(records, _transition())
         _ = transition
         gate_record: ArtifactRecord | None = None
-        if line != 1657:
+        if case_id != "gate-decision-has-no-transition-for-its-work-unit":
             gate_record = _append(
                 records,
-                GatePayload("b40", "pending" if line == 1673 else "approved", Role.USER, "reviewed"),
+                GatePayload(
+                    "b40",
+                    "pending"
+                    if case_id == "gate-decision-references-a-pending-gate-record"
+                    else "approved",
+                    Role.USER,
+                    "reviewed",
+                ),
             )
         gate_id = gate_record.record_id if gate_record is not None else "ar1-" + "4" * 64
-        if line == 1667:
+        if case_id == "gate-decision-references-a-missing-gate-record":
             gate_id = "ar1-" + "4" * 64
-        decision_fp = FP_B if line == 1679 else FP_A
-        _append(records, GateDecisionPayload("404" if line == 1657 else "1", gate_id, (), None), fingerprint=decision_fp)
-        if line == 1686:
+        decision_fp = FP_B if case_id == "gate-decision-fingerprint-differs-from-gate-record" else FP_A
+        _append(
+            records,
+            GateDecisionPayload(
+                "404" if case_id == "gate-decision-has-no-transition-for-its-work-unit" else "1",
+                gate_id,
+                (),
+                None,
+            ),
+            fingerprint=decision_fp,
+        )
+        if case_id == "two-gate-decisions-bind-the-same-work-unit-and-gate":
             _append(records, GateDecisionPayload("1", gate_id, (), None), revision=2)
-    elif line == 1706:
+    elif case_id == "two-validation-content-records-bind-the-same-result":
         target = "ar1-" + "4" * 64
         output, _ = _validation_parts()
         for index in range(2):
             _append(records, ValidationContentPayload(f"validation-{index}", target, "validation-matrix-v1", "e" * 64, "duplicate result", (output,)))
-    elif line == 1716:
+    elif case_id == "attestation-lacks-authoritative-validation-content":
         _append_attestation(records)
         return RejectionInput(tuple(records), require_content_authority=True)
-    elif line in {1733, 1751}:
+    elif case_id in {
+        "validation-content-and-attestation-disagree-on-content-record",
+        "attestation-result-digest-differs-from-exact-output-content",
+    }:
         content, attestation = _append_validation_pair(records)
-        if line == 1733:
+        if case_id == "validation-content-and-attestation-disagree-on-content-record":
             object.__setattr__(attestation.payload, "content_record_id", "ar1-" + "4" * 64)
         else:
             result = attestation.payload.results[0]
             object.__setattr__(attestation.payload, "results", (replace(result, output_sha256="4" * 64),))
         return RejectionInput(tuple(records), require_content_authority=True)
-    elif line == 1761:
+    elif case_id == "non-tail-validation-content-has-no-attestation":
         output, _ = _validation_parts()
         _append(records, ValidationContentPayload("validation-1", "ar1-" + "4" * 64, "validation-matrix-v1", "e" * 64, "orphan", (output,)))
         _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
-    elif line == 1781:
+    elif case_id == "native-agent-decision-lacks-request-binding":
         payload = _agent()
         decision = _append(records, payload)
         object.__setattr__(decision.payload, "request_id", None)
-    elif line == 1814:
+    elif case_id == "native-decision-logical-id-has-no-numeric-round":
         _append(records, _agent(), logical_id="agent-without-round")
         return RejectionInput(tuple(records), require_content_authority=True)
-    elif line == 1834:
-        _append(records, _agent(), logical_id="agent-1-codex_implementation-1")
+    elif case_id == "native-decision-has-no-matching-provider-content-record":
+        _append(records, _agent(), logical_id="agent-1-implementer_implementation-1")
         return RejectionInput(tuple(records), require_content_authority=True)
-    elif line == 1864:
+    elif case_id == "provider-content-kind-differs-from-its-native-decision":
         _provider_pair(records, content_kind="final_report")
-    elif line == 1874:
+    elif case_id == "non-tail-provider-content-has-no-native-decision":
         blob = BlobReference(RESPONSE_SHA, 3)
-        _append(records, ProviderContentPayload(Role.CODEX, "1", 1, "codex_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
+        _append(records, ProviderContentPayload(Role.IMPLEMENTER, "1", 1, "implementer_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
         _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
-    elif line == 1906:
+    elif case_id == "review-anchor-references-a-missing-review":
         _append(records, ReviewAnchorPayload("ar1-" + "4" * 64, ()), logical_id="review-anchors-missing")
-    elif line == 1912:
+    elif case_id == "two-anchor-records-bind-the-same-review":
         review = _append(records, _review(), logical_id="review-claude-1-1")
         _append_review_anchor(records, review)
         _append_review_anchor(records, review, revision=2)
-    elif line == 1937:
+    elif case_id == "review-validation-binding-references-missing-facts":
         _append(records, ReviewValidationBindingPayload("ar1-" + "4" * 64, "ar1-" + "5" * 64), logical_id="review-validation-missing")
-    elif line in {1946, 1952}:
+    elif case_id in {
+        "review-validation-binding-fingerprint-differs-from-both-facts",
+        "two-validation-bindings-reference-the-same-review",
+    }:
         attestation = _append_attestation(records)
         review = _append(records, _review(), logical_id="review-claude-1-1")
-        _append_review_validation(records, review, attestation, fingerprint=FP_B if line == 1946 else FP_A)
-        if line == 1952:
+        _append_review_validation(
+            records,
+            review,
+            attestation,
+            fingerprint=(
+                FP_B
+                if case_id == "review-validation-binding-fingerprint-differs-from-both-facts"
+                else FP_A
+            ),
+        )
+        if case_id == "two-validation-bindings-reference-the-same-review":
             _append_review_validation(records, review, attestation, revision=2)
-    elif line in {2003, 2009, 2014}:
+    elif case_id in {
+        "authoritative-review-lacks-its-anchor-list-record",
+        "authoritative-review-lacks-its-validation-binding",
+        "review-finding-ids-differ-from-the-transition-prefix",
+    }:
         attestation: ArtifactRecord | None = None
-        if line == 2014:
+        if case_id == "review-finding-ids-differ-from-the-transition-prefix":
             attestation = _append_attestation(records)
-        review = _append(records, _review(finding_ids=("C-01",) if line == 2014 else ()), logical_id="review-claude-1-1")
-        if line in {2009, 2014}:
+        finding_ids = (
+            ("R-01",)
+            if case_id == "review-finding-ids-differ-from-the-transition-prefix"
+            else ()
+        )
+        review = _append(
+            records, _review(finding_ids=finding_ids), logical_id="review-claude-1-1"
+        )
+        if case_id in {
+            "authoritative-review-lacks-its-validation-binding",
+            "review-finding-ids-differ-from-the-transition-prefix",
+        }:
             _append_review_anchor(records, review)
-        if line == 2014:
+        if case_id == "review-finding-ids-differ-from-the-transition-prefix":
             assert attestation is not None
             _append_review_validation(records, review, attestation)
         return RejectionInput(tuple(records), require_review_authority=True)
-    elif line == 2029:
+    elif case_id == "review-packet-logical-identity-differs-from-content-fingerprint":
         blob = BlobReference("6" * 64, 3)
         _append(records, ReviewPacketPayload("1", "a" * 64, "slice", ("src/a.py",), "7" * 64, 3, blob), logical_id="review-packet-wrong", fingerprint=FP_A)
-    elif line == 2059:
+    elif case_id == "work-unit-revision-changes-slice-and-rewinds-round":
         _append(records, WorkUnitPayload("1", 2, ("src/a.py",)), logical_id="work-unit-1")
         _append(records, WorkUnitPayload("2", 1, ("src/a.py",)), logical_id="work-unit-1", revision=2)
-    elif line == 2228:
+    elif case_id == "diagnostic-after-first-work-unit-references-work-unit-404":
         _append(records, WorkUnitPayload("1", 1, ("src/a.py",)), logical_id="work-unit-1")
         from artifact_models import DiagnosticPayload
-        _append(records, DiagnosticPayload(Role.CODEX, "404", 1, "a" * 64, "missing work unit"))
-    elif line == 2240:
+        _append(records, DiagnosticPayload(Role.IMPLEMENTER, "404", 1, "a" * 64, "missing work unit"))
+    elif case_id == "commit-binding-references-a-missing-validation-attestation":
         _append(records, BindingPayload("commit", "deadbeef", "ar1-" + "4" * 64, ("ar1-" + "5" * 64,)))
-    elif line == 2245:
+    elif case_id == "commit-binding-fingerprint-differs-from-validation-attestation":
         attestation = _append_attestation(records)
         _append(
             records,
@@ -701,10 +769,10 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             ),
             fingerprint=FP_B,
         )
-    elif line == 2254:
+    elif case_id == "commit-binding-references-a-missing-approval-review":
         attestation = _append_attestation(records)
         _append(records, BindingPayload("commit", "deadbeef", attestation.record_id, ("ar1-" + "4" * 64,)))
-    elif line == 2259:
+    elif case_id == "commit-binding-fingerprint-differs-from-approval-review":
         attestation = _append_attestation(records)
         review = _append(
             records,
@@ -718,9 +786,9 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 "commit", "deadbeef", attestation.record_id, (review.record_id,)
             ),
         )
-    elif line == 2267:
+    elif case_id == "workflow-completion-references-a-missing-final-binding":
         _append(records, WorkflowCompletionPayload("completed", "ar1-" + "4" * 64))
-    elif line == 2272:
+    elif case_id == "workflow-completion-fingerprint-differs-from-final-binding":
         attestation = _append_attestation(records)
         review = _append(records, _review(), logical_id="review-claude-1-1")
         binding = _append(
@@ -734,16 +802,15 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             WorkflowCompletionPayload("completed", binding.record_id),
             fingerprint=FP_B,
         )
-    elif line == 2280:
-        _append(records, FinalReviewPreflightPayload(Role.CODEX, Role.CODEX, "codex_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
-    elif line == 2285:
+    elif case_id == "final-preflight-references-a-missing-measurement":
+        _append(records, FinalReviewPreflightPayload("claude", Role.REVIEWER, "reviewer_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
+    elif case_id == "final-preflight-fingerprint-differs-from-its-measurement":
         measurement = _append(records, _measurement())
         _append(
             records,
-            FinalReviewPreflightPayload(
-                Role.CODEX,
-                Role.CODEX,
-                "codex_final_review",
+            FinalReviewPreflightPayload("claude",
+                Role.REVIEWER,
+                "reviewer_final_review",
                 "1",
                 "a" * 64,
                 "b" * 64,
@@ -757,109 +824,169 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             ),
             fingerprint=FP_B,
         )
-    elif line == 2298:
+    elif case_id == "provider-attempt-fingerprint-differs-from-its-measurement":
         measurement = _append(records, _measurement())
         _append(records, _attempt(measurement), fingerprint=FP_B)
-    elif line in {2293, 2307, 2331, 2340, 2345, 2354, 2360, 2371}:
-        if line == 2293:
+    elif case_id in {
+        "provider-attempt-references-a-measurement-outside-the-chain",
+        "provider-attempt-operation-differs-from-bound-measurement",
+        "provider-attempt-numbering-starts-at-two",
+        "provider-attempt-has-three-physical-revisions",
+        "provider-attempt-begins-with-terminal-phase",
+        "second-provider-attempt-changes-immutable-operation",
+        "second-provider-attempt-revision-remains-in-started-phase",
+        "provider-terminal-revision-changes-its-measurement-and-operation",
+    }:
+        if case_id == "provider-attempt-references-a-measurement-outside-the-chain":
             fake = ArtifactRecord.create(run_id=RUN_ID, logical_id="measurement-missing", revision=1, fingerprint=FP_A, predecessor_ids=(), created_at="2026-09-03T09:00:00+00:00", idempotency_key="missing", payload=_measurement())
             _append(records, _attempt(fake))
-        elif line == 2307:
+        elif case_id == "provider-attempt-operation-differs-from-bound-measurement":
             measurement = _append(records, _measurement())
-            _append(records, _attempt(measurement, operation="codex_plan"))
-        elif line == 2331:
+            _append(records, _attempt(measurement, operation="implementer_plan"))
+        elif case_id == "provider-attempt-numbering-starts-at-two":
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement, attempt_number=2))
-        elif line == 2340:
+        elif case_id == "provider-attempt-has-three-physical-revisions":
             measurement = _append(records, _measurement())
             for index in range(3):
                 _append(records, _attempt(measurement), logical_id=f"attempt-{index}", revision=index + 1)
-        elif line == 2345:
+        elif case_id == "provider-attempt-begins-with-terminal-phase":
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement, phase="succeeded"), revision=1)
-        elif line == 2354:
-            first_measurement = _append(records, _measurement(operation="codex_implementation"))
-            _append(records, _attempt(first_measurement, operation="codex_implementation", attempt_number=1))
-            second_measurement = _append(records, _measurement(operation="codex_plan", input_digest="2" * 64))
-            _append(records, _attempt(second_measurement, operation="codex_plan", attempt_number=2))
-        elif line == 2360:
+        elif case_id == "second-provider-attempt-changes-immutable-operation":
+            first_measurement = _append(records, _measurement(operation="implementer_implementation"))
+            _append(records, _attempt(first_measurement, operation="implementer_implementation", attempt_number=1))
+            second_measurement = _append(records, _measurement(operation="implementer_plan", input_digest="2" * 64))
+            _append(records, _attempt(second_measurement, operation="implementer_plan", attempt_number=2))
+        elif case_id == "second-provider-attempt-revision-remains-in-started-phase":
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement), logical_id="attempt-start", revision=1)
             _append(records, _attempt(measurement), logical_id="attempt-terminal", revision=2)
         else:
-            first_measurement = _append(records, _measurement(operation="codex_implementation"))
+            first_measurement = _append(records, _measurement(operation="implementer_implementation"))
             _append(records, _attempt(first_measurement), logical_id="attempt-start", revision=1)
-            second_measurement = _append(records, _measurement(operation="codex_plan", input_digest="2" * 64))
-            _append(records, _attempt(second_measurement, operation="codex_plan", phase="succeeded"), logical_id="attempt-terminal", revision=2)
-    elif line in {2379, 2388, 2395, 2405, 2418}:
+            second_measurement = _append(records, _measurement(operation="implementer_plan", input_digest="2" * 64))
+            _append(records, _attempt(second_measurement, operation="implementer_plan", phase="succeeded"), logical_id="attempt-terminal", revision=2)
+    elif case_id in {
+        "side-effect-has-three-physical-phases",
+        "side-effect-begins-with-a-result-phase",
+        "side-effect-intent-logical-identity-differs-from-its-key",
+        "second-side-effect-revision-remains-an-intent",
+        "side-effect-result-changes-the-intent-logical-identity",
+    }:
         intent_payload = _side_effect()
         expected_logical = "side-effect-" + hashlib.sha256(intent_payload.effect_key.encode("utf-8")).hexdigest()[:32]
-        if line == 2379:
+        if case_id == "side-effect-has-three-physical-phases":
             for index in range(3):
                 _append(records, intent_payload, logical_id=f"effect-{index}", revision=index + 1)
-        elif line == 2388:
+        elif case_id == "side-effect-begins-with-a-result-phase":
             _append(records, _side_effect(phase="result"), logical_id=expected_logical)
-        elif line == 2395:
+        elif case_id == "side-effect-intent-logical-identity-differs-from-its-key":
             _append(records, intent_payload, logical_id="side-effect-wrong")
         else:
             _append(records, intent_payload, logical_id=expected_logical)
-            if line == 2405:
+            if case_id == "second-side-effect-revision-remains-an-intent":
                 _append(records, intent_payload, logical_id=expected_logical, revision=2)
             else:
                 _append(records, _side_effect(phase="result"), logical_id="side-effect-other", revision=2)
-    elif line == 2315:
+    elif case_id == "resume-check-expected-head-differs-from-immediate-predecessor":
         _append(records, ResumeCheckPayload("ar1-" + "4" * 64, "a" * 64, "matched"))
     else:
-        raise AssertionError(f"missing B40 rejection input for source line {line}")
+        raise AssertionError(f"missing B40 rejection input for case {case_id}")
 
     return RejectionInput(tuple(records))
-
 
 def _load_baseline() -> dict[str, object]:
     document = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert isinstance(document, dict)
     assert set(document) == {"schema_version", "entries", "unreachable"}
     assert document["schema_version"] == "replay-rejection-corpus-v1"
-    unreachable = document["unreachable"]
-    assert isinstance(unreachable, list)
-    assert all(
-        isinstance(entry, dict)
-        and set(entry) == {"line", "barrier", "reason"}
-        and isinstance(entry["line"], int)
-        and isinstance(entry["barrier"], str)
-        and isinstance(entry["reason"], str)
-        for entry in unreachable
-    )
     entries = document["entries"]
-    assert isinstance(entries, list)
-    unreachable_case_ids = {"site-1498", "site-1635", "site-1781"}
-    assert {entry["line"] for entry in unreachable} == {
-        entry["line"]
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("case_id") in unreachable_case_ids
-    }
+    assert isinstance(entries, list) and len(entries) == 78
+    fields = {"case_id", "input", "function", "guard", "code", "message_expression", "message"}
+    assert all(isinstance(entry, dict) and set(entry) == fields
+               and all(isinstance(value, str) and value for value in entry.values())
+               for entry in entries)
+    case_ids = [entry["case_id"] for entry in entries]
+    assert len(set(case_ids)) == len(case_ids)
+    unreachable = document["unreachable"]
+    assert isinstance(unreachable, list) and len(unreachable) == 3
+    assert all(isinstance(entry, dict)
+               and set(entry) == {"case_id", "barrier", "reason"}
+               and all(isinstance(value, str) and value for value in entry.values())
+               for entry in unreachable)
+    assert {entry["case_id"] for entry in unreachable} <= set(case_ids)
+    assert len({entry["case_id"] for entry in unreachable}) == 3
     return document
 
 
 def _entries() -> tuple[dict[str, object], ...]:
-    entries = _load_baseline()["entries"]
-    assert isinstance(entries, list) and len(entries) == 78
-    assert all(
-        isinstance(entry, dict)
-        and set(entry) == {"case_id", "input", "code", "line", "message"}
-        and isinstance(entry["case_id"], str)
-        and isinstance(entry["input"], str)
-        and isinstance(entry["code"], str)
-        and isinstance(entry["line"], int)
-        and isinstance(entry["message"], str)
-        for entry in entries
-    )
-    return tuple(entries)
+    return tuple(_load_baseline()["entries"])
+
+
+def _anchor(entry: dict[str, object]) -> tuple[str, str, str, str]:
+    return (str(entry["function"]), str(entry["guard"]),
+            str(entry["code"]), str(entry["message_expression"]))
+
+
+def _source_emissions() -> tuple[dict[str, object], ...]:
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
+    emissions: list[dict[str, object]] = []
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef) or not (
+            function.name.startswith("_validate_")
+            or function.name == "_index_validation_content"
+        ):
+            continue
+        parents = {
+            child: parent
+            for parent in ast.walk(function)
+            for child in ast.iter_child_nodes(parent)
+        }
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in {"_fail", "_same_fingerprint"}:
+                continue
+            current: ast.AST = node
+            guards: list[str] = []
+            while current in parents:
+                current = parents[current]
+                if isinstance(current, ast.If):
+                    guards.append(ast.unparse(current.test))
+            guard = next((item for item in guards if "isinstance(payload," in item), None)
+            guard = guard or (guards[0] if guards else "")
+            if node.func.id == "_fail":
+                code = node.args[0]
+                assert isinstance(code, ast.Attribute)
+                diagnostic = code.attr.replace("_", "-")
+                expression = ast.unparse(node.args[1])
+            else:
+                diagnostic = "RECORD-FINGERPRINT-MISMATCH"
+                expression = "fingerprint of " + ast.unparse(node.args[1])
+            emissions.append({
+                "function": function.name,
+                "guard": guard,
+                "code": diagnostic,
+                "message_expression": expression,
+                "line": node.lineno,
+            })
+    return tuple(emissions)
+
+
+def _source_line(entry: dict[str, object]) -> int:
+    matches = [
+        int(source["line"])
+        for source in _source_emissions()
+        if _anchor(source) == _anchor(entry)
+    ]
+    assert len(matches) == 1, entry["case_id"]
+    return matches[0]
 
 
 def _capture(
     validator: Callable[..., str | None], case: RejectionInput
-) -> tuple[ArtifactReplayError, int]:
+) -> tuple[ArtifactReplayError, dict[str, object]]:
     try:
         validator(
             case.records,
@@ -869,15 +996,17 @@ def _capture(
             allow_incomplete_review_tail=case.allow_incomplete_review_tail,
         )
     except ArtifactReplayError as error:
+        sites = {(str(site["function"]), int(site["line"])): site
+                 for site in _source_emissions()}
+        matches: list[dict[str, object]] = []
         traceback: TracebackType | None = error.__traceback__
-        call_lines: list[int] = []
-        emission_lines = {line for line, _ in _source_emissions()}
         while traceback is not None:
-            if traceback.tb_lineno in emission_lines:
-                call_lines.append(traceback.tb_lineno)
+            key = (traceback.tb_frame.f_code.co_name, traceback.tb_lineno)
+            if key in sites:
+                matches.append(sites[key])
             traceback = traceback.tb_next
-        assert len(call_lines) == 1
-        return error, call_lines[0]
+        assert len(matches) == 1, matches
+        return error, matches[0]
     raise AssertionError("rejection corpus input was unexpectedly accepted")
 
 
@@ -886,42 +1015,22 @@ def _assert_entry(
     *,
     validator: Callable[..., str | None] = artifact_replay._validate_payload_references,
 ) -> None:
-    case_id = str(entry["case_id"])
-    assert case_id.startswith("site-")
-    error, line = _capture(validator, _case(int(case_id.removeprefix("site-"))))
+    error, source = _capture(validator, _case(str(entry["case_id"])))
     assert error.code.value == entry["code"]
     assert error.diagnostic.message == entry["message"]
-    assert line == entry["line"]
-
-
-def _source_emissions() -> tuple[tuple[int, str], ...]:
-    tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
-    functions = tuple(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and (node.name.startswith("_validate_") or node.name == "_index_validation_content")
-    )
-    emissions = []
-    for function in functions:
-        for node in ast.walk(function):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-                continue
-            if node.func.id == "_fail":
-                code = node.args[0]
-                assert isinstance(code, ast.Attribute)
-                emissions.append((node.lineno, code.attr.replace("_", "-")))
-            elif node.func.id == "_same_fingerprint":
-                emissions.append((node.lineno, "RECORD-FINGERPRINT-MISMATCH"))
-    return tuple(sorted(emissions))
+    assert _anchor(source) == _anchor(entry), entry["case_id"]
 
 
 def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     entries = _entries()
-    expected = tuple((int(entry["line"]), str(entry["code"])) for entry in entries)
-    assert _source_emissions() == expected
+    sources = _source_emissions()
+    source_anchors = [_anchor(source) for source in sources]
+    fixture_anchors = [_anchor(entry) for entry in entries]
+    assert len(sources) == len(entries) == 78
+    assert len(set(source_anchors)) == len(source_anchors), "ambiguous source emission"
+    assert len(set(fixture_anchors)) == len(fixture_anchors), "ambiguous corpus anchor"
+    assert set(source_anchors) == set(fixture_anchors)
     assert len({entry["case_id"] for entry in entries}) == 78
-    assert len({entry["line"] for entry in entries}) == 78
     assert Counter(entry["code"] for entry in entries) == {
         "RECORD-FINGERPRINT-MISMATCH": 33,
         "RECORD-REFERENCE-MISSING": 26,
@@ -929,10 +1038,7 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
         "RECORD-MISSING": 9,
         "RECORD-TYPE-MISMATCH": 2,
     }
-    # All rejection sites are reducer-reachable. Three deliberately duplicated
-    # defences cannot be produced by schema-valid persisted bytes; their cases
-    # mutate an already validated object so the independent reducer check stays
-    # executable and their ingress unreachability remains explicit.
+    # Three schema-unreachable defences remain exercised by mutated objects.
     assert len(_load_baseline()["unreachable"]) == 3
 
 
@@ -989,9 +1095,11 @@ def test_every_reachable_rejection_emission_has_a_bound_input(
 def test_equal_code_site_swap_is_detected_by_the_corpus() -> None:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
     entries = {str(entry["case_id"]): entry for entry in _entries()}
-    left_entry = entries["site-1424"]
-    right_entry = entries["site-1431"]
-    target_lines = {int(left_entry["line"]), int(right_entry["line"])}
+    left_entry = entries["workflow-policy-without-an-earlier-work-unit-transition"]
+    right_entry = entries["slice-boundary-without-an-earlier-transition-for-its-slice"]
+    left_line = _source_line(left_entry)
+    right_line = _source_line(right_entry)
+    target_lines = {left_line, right_line}
     function = next(
         node
         for node in tree.body
@@ -1013,7 +1121,7 @@ def test_equal_code_site_swap_is_detected_by_the_corpus() -> None:
         and isinstance(node.func, ast.Name)
         and node.func.id == "_fail"
     }
-    left, right = calls[int(left_entry["line"])], calls[int(right_entry["line"])]
+    left, right = calls[left_line], calls[right_line]
     left.args[1], right.args[1] = right.args[1], left.args[1]
     validator_function = next(
         node
@@ -1031,10 +1139,9 @@ def test_equal_code_site_swap_is_detected_by_the_corpus() -> None:
         (left_entry, right_entry),
         (right_entry, left_entry),
     ):
-        case_line = int(str(entry["case_id"]).removeprefix("site-"))
-        error, actual_line = _capture(mutant, _case(case_line))
+        error, actual_source = _capture(mutant, _case(str(entry["case_id"])))
         assert error.code.value == entry["code"]
-        assert actual_line == entry["line"]
+        assert actual_source["function"] == entry["function"]
         assert error.diagnostic.message == other_entry["message"]
         assert error.diagnostic.message != entry["message"]
 

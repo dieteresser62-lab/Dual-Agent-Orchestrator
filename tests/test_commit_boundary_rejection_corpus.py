@@ -529,7 +529,7 @@ def _run_upper(
         slice_id=1,
         fingerprint=FINGERPRINT,
         attestation=attestation,
-        claude_review=SimpleNamespace(verdict="approved"),
+        reviewer_review=SimpleNamespace(verdict="approved"),
         findings=(),
         red_state_followup_slice=red_state,
     )

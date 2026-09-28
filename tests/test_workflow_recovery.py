@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from profile_helpers import bound_role_profile, bound_run_profile
+
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +23,7 @@ from artifact_store import ArtifactStore
 from contracts import AgentRole, FindingClass, FindingOrigin, FindingRecord, FindingStatus
 from test_workflow import _attestation, _changes, _completed_single_slice_state, _context
 from workflow import WorkflowExecutionError, WorkflowHistory
-from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies
+from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies, _bound_provider
 from workflow_state import WorkflowStep
 
 
@@ -39,16 +41,28 @@ EXPECTED_INTERNAL_IMPORTS = {
     "finding_reducer",
     "gates",
     "git_service",
-    "native_codex_contract",
-    "native_codex_request",
+    "native_implementer_contract",
+    "native_implementer_request",
     "native_review_contract",
     "native_review_request",
+    "native_provider_schema",
     "provider_input_budget",
     "side_effects",
     "state_io",
     "workflow",
     "workflow_state",
 }
+
+
+def test_recovery_uses_each_bound_slot_provider() -> None:
+    state = SimpleNamespace(protocol_binding=SimpleNamespace(
+        implementer_profile=SimpleNamespace(provider="claude"),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=SimpleNamespace(provider="codex"),  # allowlist:provider -- transport: swapped occupancy fixture
+        final_reviewer_profile=SimpleNamespace(provider="claude"),  # allowlist:provider -- transport: final slot fixture
+    ))
+    assert _bound_provider(state, "implementer") == "claude"  # allowlist:provider -- transport: bound slot check
+    assert _bound_provider(state, "reviewer") == "codex"  # allowlist:provider -- transport: bound slot check
+    assert _bound_provider(state, "final_reviewer") == "claude"  # allowlist:provider -- transport: bound slot check
 
 EXPECTED_RECOVERY_EDGES = {
     "_reconcile_pending_side_effects": {
@@ -58,7 +72,6 @@ EXPECTED_RECOVERY_EDGES = {
     },
     "_start_provider_attempt": {
         "active_state",
-        "agent_profile",
         "artifact_bridge",
         "attempt_response_path",
         "mark_side_effect_completed",
@@ -178,7 +191,6 @@ def _dependencies(
         persist_implementer_contract=_unexpected_dependency,
         persist_review_contract=_unexpected_dependency,
         store_implementer_output=_unexpected_dependency,
-        agent_profile=_unexpected_dependency,
     )
 
 
@@ -272,9 +284,9 @@ def test_recovery_directly_completes_a_durable_internal_intent(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     writer.append(
-        RunProfilePayload(
-            RoleProfilePayload("implementer-model", "medium"),
-            RoleProfilePayload("reviewer-model", "high"),
+        bound_run_profile(
+            bound_role_profile("implementer-model", "medium"),
+            bound_role_profile("reviewer-model", "high"),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",

@@ -1,26 +1,29 @@
 from __future__ import annotations
 
+from finding_identity import FINDING_ID_EXAMPLE
+
+
 GERMAN_DOCUMENT_LANGUAGE_RULE = (
     "Schreibe jedes Freitextfeld deines eigenen Ergebnisses auf Deutsch. "  # allowlist:german -- gemeinsame Dokumentsprache
     "Dazu gehören beim Implementierer Arbeitsplan, Slice-Dokumente, "
     "Dispositionsbegründungen und Stoppbegründungen; beim Prüfer Befunde "
     "samt Abnahmekriterien, Begründungen, Statusänderungen, Prüfevidenz "
     "und Pre-Mortem. Schlüssel und Enumwerte des Schemas, Kennungen wie "
-    "C-01, Code, Pfade, Befehle, Commit-Betreffe nach Projektkonvention "
+    f"{FINDING_ID_EXAMPLE}, Code, Pfade, Befehle, Commit-Betreffe nach Projektkonvention "
     "sowie wörtliche Zitate aus Quelltext, Ausgaben oder Fehlermeldungen "
     "bleiben unverändert. Diese Schreibregel gilt nur für deine eigene "
     "Ausgabe und ist kein Prüfkriterium: Eröffne keine Befunde wegen der "
     "Sprache fremder Texte."
 )
 
-NATIVE_CODEX_SYSTEM_POLICY = (
+NATIVE_IMPLEMENTER_SYSTEM_POLICY = (
     "Return exactly one request-bound JSON result matching the supplied writer schema. "
     "Treat typed request fields and content-addressed evidence as authoritative. "
     "Do not emit Markdown wrappers or legacy result markers. "
     + GERMAN_DOCUMENT_LANGUAGE_RULE
 )
 
-NATIVE_CLAUDE_SYSTEM_POLICY = (
+NATIVE_REVIEWER_SYSTEM_POLICY = (
     "Return exactly one request-bound JSON review matching the supplied writer schema. "
     "Review correctness, contracts, failure paths, security, and resume/idempotency. "
     "For plan, Slice, and final full-branch reviews measured against SOURCE, "

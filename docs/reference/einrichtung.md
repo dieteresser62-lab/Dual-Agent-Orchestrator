@@ -79,8 +79,9 @@ und er nimmt dort die Aufgaben aus einem Eingangsordner.
     └── AGENTS.md         was die Agenten über das Projekt wissen sollen
 ```
 
-Zwei KI-Agenten arbeiten darin: **Codex** plant und programmiert, **Claude**
-prüft. Der Orchestrator führt die Tests aus und legt die Ergebnisse als lokale
+Der **Implementer** (standardmäßig Codex) plant und programmiert; **Reviewer**
+und **Final-Reviewer** (standardmäßig Claude) prüfen. `[roles]` und
+`[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung. Der Orchestrator führt die Tests aus und legt die Ergebnisse als lokale
 Commits auf einem eigenen Branch ab. Nach befundfreier Abnahme führt er
 standardmäßig einen lokalen Merge in den Basisbranch aus. Er pusht nie; den
 Merge können Sie in der Konfiguration abschalten.
@@ -93,7 +94,7 @@ Merge können Sie in der Konfiguration abschalten.
 
 | Was | Mindestens | Prüfen mit |
 |---|---|---|
-| Linux, macOS oder Windows mit WSL2 | – | natives Windows wird nicht unterstützt |
+| Linux oder Windows mit WSL2 und lesbarem `/proc` | – | andere Plattformen werden nicht unterstützt |
 | Python | 3.11 | `python3 --version` |
 | Git | – | `git --version` |
 | eine Git-Identität | – | `git config user.name` und `git config user.email` |
@@ -319,6 +320,25 @@ python3 -m pytest tests/ -q      # oder: npm test
 > Ein Testbefehl, der schon vor dem ersten Arbeitspaket rot ist, macht jedes
 > Arbeitspaket rot. Reparieren Sie ihn vorher.
 
+Die beiden Vorlagen nutzen die in dieser Version mitgelieferte Besetzung. Ein
+separater Finalslot wird in der Zielrepo-TOML so aktiviert:
+
+```toml
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "final_review"
+
+[agent_profiles.final_review]
+provider = "claude"
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+```
+
+`--final-reviewer-model` und `RUN_TASK_FINAL_REVIEWER_MODEL` überschreiben
+diesen Slot; ohne ihn erbt der Finalreviewer das Reviewerprofil.
+
 ### 2.4 Den Agenten das Projekt erklären: `AGENTS.md`
 
 Die Datei `AGENTS.md` im Projektordner bekommt Codex bei jedem Auftrag mit
@@ -403,7 +423,7 @@ Der Orchestrator führt die Tests mit genau dieser Umgebung aus.
 > beide Agenten Effort `high`. Für eine knifflige Aufgabe:
 >
 > ```bash
-> run_task --watch --codex-effort xhigh --claude-effort max --verbose
+> run_task --watch --implementer-effort xhigh --reviewer-effort max --verbose
 > ```
 >
 > Für eine einfache Aufgabe geht es mit `medium` oder `low` schneller und
@@ -787,11 +807,10 @@ fremden Branch gleichen Namens übernimmt der Orchestrator nie.
 ### 4.2 Konfiguration
 
 Vorrang: Kommandozeile vor `RUN_TASK_*`-Umgebungsvariablen vor
-`orchestrator.toml` vor eingebautem Standard. Modell, Effort, Timeout und
-Claude-Budget stehen bewusst nicht in der Projektdatei.
+`orchestrator.toml` des Zielrepositorys vor den mitgelieferten TOML-Profilen. Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen erbt das Projekt die mitgelieferte Besetzung; explizite Rollenoptionen und Umgebungsvariablen überschreiben Profilfelder. Das Claude-Budget steht unter `agent_profiles.<name>.provider_options.claude.max_budget_usd`.
 
 Die Prozesse von Implementierer und Prüfer haben ohne ausdrückliche Angabe kein
-Zeitlimit. `--codex-timeout` und `--claude-timeout` sowie die entsprechenden
+Zeitlimit. `--implementer-timeout` und `--reviewer-timeout` sowie die entsprechenden
 `RUN_TASK_*_TIMEOUT`-Variablen akzeptieren positive Sekundenwerte für ein hartes
 Limit; `0` bedeutet ausdrücklich kein Limit. Das Testlimit des separaten
 Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) und die Validierungszeitlimits sind
@@ -820,12 +839,12 @@ dieses Repositorys.
 
 ### 4.3 Modelle und CLI-Versionen
 
-| | Codex (Implementierer) | Claude (Prüfer) |
+| | Codex (Standard-Implementer) | Claude (Standard-Reviewer und Final-Reviewer) |
 |---|---|---|
 | Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
 | Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |
-| Option | `--codex-model`, `--codex-effort` | `--claude-model`, `--claude-effort` |
-| Umgebung | `RUN_TASK_CODEX_MODEL`, `RUN_TASK_CODEX_EFFORT` | `RUN_TASK_CLAUDE_MODEL`, `RUN_TASK_CLAUDE_EFFORT` |
+| Option | `--implementer-model`, `--implementer-effort` | `--reviewer-model`, `--reviewer-effort` |
+| Umgebung | `RUN_TASK_IMPLEMENTER_MODEL`, `RUN_TASK_IMPLEMENTER_EFFORT` | `RUN_TASK_REVIEWER_MODEL`, `RUN_TASK_REVIEWER_EFFORT` |
 
 Die Claude-Aliase zeigen immer auf das neueste Modell ihrer Familie; bei Codex
 nennt der Orchestrator das neueste Modell je Familie ausdrücklich. Andere Werte

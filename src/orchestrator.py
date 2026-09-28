@@ -21,11 +21,11 @@ from agent_adapters import (
 )
 from agent_runtime import (
     AgentInvocationError,
-    NativeAgentCodexOutput,
+    NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     OrchestratorConfig,
     ProviderAttemptLifecycle,
-    run_native_codex_agent_checked,
+    run_native_implementer_agent_checked,
     run_native_review_agent_checked,
 )
 from artifact_bridge import (
@@ -62,14 +62,14 @@ from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
 )
-from native_codex_contract import validate_native_correction_fingerprint  # allowlist:provider -- native result boundary
+from native_implementer_contract import validate_native_correction_fingerprint
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
     AgentRole,
-    CodexContractResult,
-    CodexStepContract,
+    ImplementerContractResult,
+    ImplementerStepContract,
     ContractResult,
     FindingRecord,
     StepContract,
@@ -121,7 +121,7 @@ from state_io import (
 )
 from task_contract import TaskMode
 from workflow import (
-    CodexInvocation,
+    ImplementerInvocation,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
@@ -326,6 +326,12 @@ class ProductionWorkflowDriver:
         self._side_effect_boundary_observer = side_effect_boundary_observer
         self._reported_code_version_changes: set[tuple[str, str]] = set()
 
+    def _adapter_for_slot(self, slot: str):
+        try:
+            return self.agents[slot]
+        except KeyError as exc:
+            raise WorkflowExecutionError(f"slot={slot}: adapter is missing") from exc
+
     def _recovery_boundary(self) -> WorkflowRecovery:
         """Bind driver-owned state to one recovery operation explicitly."""
 
@@ -342,14 +348,10 @@ class ProductionWorkflowDriver:
                 canonical_agent_result=self._canonical_native_agent_result,
                 load_agent_request_bundle=self._load_native_agent_request_bundle,
                 content_text=self._provider_content_text,
-                persist_implementer_contract=self.persist_native_codex_contract,
+                persist_implementer_contract=self.persist_native_implementer_contract,
                 persist_review_contract=self.persist_native_review_contract,
                 store_implementer_output=lambda content: setattr(
                     self, "last_codex_output", content
-                ),
-                agent_profile=lambda name: (
-                    self.agents[name].model,
-                    self.agents[name].effort,
                 ),
             )
         )
@@ -961,7 +963,7 @@ class ProductionWorkflowDriver:
             record
             for record in bridge.store.current_chain()
             if isinstance(record.payload, ProviderAttemptPayload)
-            and record.payload.provider.value == spec.operation[0]
+            and record.payload.provider == spec.operation[0]
             and record.payload.operation == spec.operation[1]
             and record.payload.work_unit_id == spec.work_unit_id
             and record.payload.input_digest == spec.operation[2]
@@ -991,7 +993,7 @@ class ProductionWorkflowDriver:
             observation = observe_process(durable_response_path, spec.effect_key)
             if observation.status is ProcessStatus.RUNNING:
                 raise SideEffectReconciliationError(
-                    f"provider process PID {observation.pid} is still running; "
+                    f"provider process group led by PID {observation.pid} is still running; "
                     "no second attempt may start"
                 )
             if observation.status is ProcessStatus.UNKNOWN:
@@ -1089,7 +1091,7 @@ class ProductionWorkflowDriver:
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.phase == "started"
             and record.payload.work_unit_id == item.work_unit_id
-            and record.payload.provider.value == item.operation[0]
+            and record.payload.provider == item.operation[0]
             and record.payload.operation == item.operation[1]
             and record.payload.input_digest == item.operation[2]
             and record.payload.binding_fingerprint == item.operation[3]
@@ -1166,7 +1168,7 @@ class ProductionWorkflowDriver:
         self._replace_existing_run_id = None
         self.active_state = projected
 
-    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+    def invoke_implementer(self, invocation: ImplementerInvocation) -> NativeAgentImplementerOutput:
         state = self.active_state
         if (
             state is None
@@ -1181,19 +1183,19 @@ class ProductionWorkflowDriver:
                 "native Codex invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.CODEX.value]
+        native_adapter = self._adapter_for_slot("implementer")
         if not isinstance(native_adapter, NativeCodexAdapter):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
             )
         self._persist_native_agent_request_bundle(invocation)
-        raw_path = self._native_codex_response_path(invocation)
-        output = run_native_codex_agent_checked(
+        raw_path = self._native_implementer_response_path(invocation)
+        output = run_native_implementer_agent_checked(
                 adapter=native_adapter,
                 bundle=invocation.native_request,
                 raw_response_path=raw_path,
                 config=self.config,
-                write_file=self._write_native_codex_raw_response,
+                write_file=self._write_native_implementer_raw_response,
                 shorten=_shorten,
                 operation=invocation.step.value,
                 binding_fingerprint=(
@@ -1217,7 +1219,7 @@ class ProductionWorkflowDriver:
                     else None
                 ),
                 accepted_output_callback=lambda accepted: (
-                    self.persist_native_codex_contract(
+                    self.persist_native_implementer_contract(
                         accepted,
                         invocation.request_sequence,
                         invocation.previous_findings,
@@ -1317,7 +1319,7 @@ class ProductionWorkflowDriver:
             ) from exc
         return projected
 
-    def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
+    def _native_implementer_response_path(self, invocation: ImplementerInvocation) -> Path:
         state = self.active_state
         if state is None:
             raise WorkflowExecutionError("native Codex response has no active state")
@@ -1530,12 +1532,12 @@ class ProductionWorkflowDriver:
                 current_fingerprint=fingerprint,
                 contract=replace(
                     context.contract,
-                    round_number=request_document["codex_contract"][  # allowlist:provider -- canonical field
+                    round_number=request_document["implementer_contract"][
                         "round_number"
                     ],
-                    request_sequence=request_document["codex_contract"].get(  # allowlist:provider -- canonical field
+                    request_sequence=request_document["implementer_contract"].get(
                         "request_sequence",
-                        request_document["codex_contract"]["round_number"],  # allowlist:provider -- canonical field
+                        request_document["implementer_contract"]["round_number"],
                     ),
                 ),
             )
@@ -1581,13 +1583,13 @@ class ProductionWorkflowDriver:
     def _write_native_agent_raw_response(self, path: Path, content: str) -> None:
         self._write_side_effect_file(path, content, normalized_text=False)
 
-    def _write_native_codex_raw_response(self, path: Path, content: str) -> None:
+    def _write_native_implementer_raw_response(self, path: Path, content: str) -> None:
         self._write_native_agent_raw_response(path, content)
 
     def _native_agent_response_files(
-        self, invocation: CodexInvocation
+        self, invocation: ImplementerInvocation
     ) -> tuple[Path, ...]:
-        base = self._native_codex_response_path(invocation)
+        base = self._native_implementer_response_path(invocation)
         candidates = [base] if base.is_file() else []
         candidates.extend(
             path
@@ -1607,7 +1609,7 @@ class ProductionWorkflowDriver:
         if (
             state is None
             or invocation.native_request is None
-            or invocation.reviewer is not AgentRole.CLAUDE
+            or invocation.reviewer is not AgentRole.REVIEWER
             or state.protocol_binding is None
             or state.protocol_binding.claude_review_transport
             != NATIVE_CLAUDE_REVIEW_TRANSPORT
@@ -1616,7 +1618,7 @@ class ProductionWorkflowDriver:
                 "native Claude invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.CLAUDE.value]
+        native_adapter = self._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
         if not isinstance(native_adapter, NativeClaudeReviewAdapter):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
@@ -1805,12 +1807,12 @@ class ProductionWorkflowDriver:
             )
         return canonical
 
-    def recover_pending_native_codex(
+    def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,
-        contract: CodexStepContract,
+        invocation: ImplementerInvocation,
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentCodexOutput | None:
+    ) -> NativeAgentImplementerOutput | None:
         return self._recovery_boundary().recover_pending_native_implementer(
             invocation,
             contract,
@@ -1864,19 +1866,19 @@ class ProductionWorkflowDriver:
                 return state.current_slice.start_fingerprint
             raise
 
-    def persist_native_codex_contract(
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentCodexOutput,
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
         *,
         recovery_fingerprint: str | None = None,
     ) -> None:
         state = self.active_state
-        if state is not None and state.current_step is WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- canonical step
+        if state is not None and state.current_step is WorkflowStep.IMPLEMENTER_CORRECTION:
             if output.context is None:
                 raise WorkflowExecutionError(
-                    "native Codex correction persistence lacks its request context"  # allowlist:provider -- canonical role
+                    "native Codex correction persistence lacks its request context"  # allowlist:provider -- schema-bound diagnostic
                 )
             validate_native_correction_fingerprint(
                 output.result,

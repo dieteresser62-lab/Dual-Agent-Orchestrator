@@ -75,11 +75,11 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
         first_slice_start_commit="a" * 40,
         slice_count=2,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit="a" * 40,
         scope_paths=("src/engine.py",),
@@ -87,7 +87,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
     ).complete_current_slice(commit_ref="b" * 40).start_work_unit(
         slice_id=2,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         slice_start_commit="b" * 40,
     ).bind_current_slice_git_boundary(
         start_commit="b" * 40,
@@ -846,7 +846,7 @@ def test_workflow_result_completes_after_all_slice_commits() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail="S-001 | operator decision required",
@@ -874,7 +874,7 @@ def test_legacy_bootstrap_denial_maps_to_resumable_watch_halt() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(
         detail="PROVIDER-INPUT-BUDGET | chars=101/100",
         fingerprint="b" * 64,
@@ -887,7 +887,7 @@ def test_legacy_bootstrap_denial_maps_to_resumable_watch_halt() -> None:
     assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
     assert halted.exit_code == 4
     assert halted.status == "awaiting_resume"
-    assert halted.step == WorkflowStep.CODEX_PLAN.value
+    assert halted.step == WorkflowStep.IMPLEMENTER_PLAN.value
     assert halted.gate_reason == GateReason.BOOTSTRAP_CHECK.value
     assert halted.failure_detail == "PROVIDER-INPUT-BUDGET | chars=101/100"
 
@@ -926,7 +926,7 @@ def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
             run_id=args.watch_run_id,
             disposition=WatchTaskDisposition.RESUMABLE_HALT,
             status=status,
-            step="claude_slice_review",
+            step="reviewer_slice_review",
             work_unit_id=2,
             gate_reason=gate_reason,
         )
@@ -1054,7 +1054,7 @@ def test_recorded_final_review_rejection_is_archived_without_resume(
         )
         records.mkdir(parents=True)
         (records / "0001.json").write_text("{}\n", encoding="utf-8")
-        detail = "FINAL-REVIEW-DENIED | remaining open findings: C-85"
+        detail = "FINAL-REVIEW-DENIED | remaining open findings: R-85"
         return WatchTaskResult(
             exit_code=5,
             run_id=args.watch_run_id,
@@ -1234,7 +1234,7 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
             args.watch_run_id,
             WatchTaskDisposition.RESUMABLE_HALT,
             "awaiting_user_decision",
-            "codex_implementation",
+            "implementer_implementation",
             2,
             "test_change",
         )
@@ -1298,7 +1298,7 @@ def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
             run_id=args.watch_run_id,
             disposition=WatchTaskDisposition.RESUMABLE_HALT,
             status="awaiting_resume",
-            step="codex_final_review",
+            step="reviewer_final_review",
             work_unit_id=4,
             gate_reason=GateReason.BOOTSTRAP_CHECK.value,
             failure_detail="FINAL-REVIEW-PREFLIGHT | restore matching records",
@@ -1620,7 +1620,7 @@ def test_changed_paused_task_halts_without_retry_or_poison(tmp_path: Path) -> No
             args.watch_run_id,
             WatchTaskDisposition.RESUMABLE_HALT,
             "awaiting_user_decision",
-            "codex_implementation",
+            "implementer_implementation",
             2,
             "test_change",
         )

@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from content_authority_support import prior_role_wire_values
 from artifact_models import technical_text_evidence
 from contracts import PlannedSlice
 from plan_handoff import PlanHandoffError
@@ -373,6 +374,13 @@ def _static_facts(tree: ast.Module) -> dict[str, object]:
 
 
 def _args(**overrides: object) -> SimpleNamespace:
+    from agent_config import AgentSettings
+    from provider_identity import ProviderIdentity
+    slots = {
+        "implementer": AgentSettings("codex", "codex", "codex-anchor", None, "medium"),
+        "reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+        "final_reviewer": AgentSettings("claude", "claude", "claude-anchor", None, "high"),
+    }
     values: dict[str, object] = {
         "plan_only": None,
         "work_plan": None,
@@ -388,6 +396,9 @@ def _args(**overrides: object) -> SimpleNamespace:
             "codex": SimpleNamespace(model="codex-anchor", effort="medium"),
             "claude": SimpleNamespace(model="claude-anchor", effort="high"),
         },
+        "slot_settings": slots,
+        "slot_identities": {slot: ProviderIdentity.dry_run(slot) for slot in slots},
+        "scripted_provider_identity": True,
         "agent_output": "none",
         "agent_output_max_chars": 1000,
         "agent_live_stream": False,
@@ -438,7 +449,7 @@ def _slice_state(task: Path, *, count: int = 1, bound: bool = True) -> WorkflowS
     state = _planned_state(task, count=count).start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
     )
     return (
         state.bind_current_slice_git_boundary(
@@ -494,7 +505,7 @@ def _initial_state(task: Path, kind: str) -> WorkflowState:
             start_commit="c" * 40,
             scope_paths=("src/correction.py",),
             start_fingerprint="2" * 64,
-            finding_ids=("C-01",),
+            finding_ids=("R-01",),
         )
     if kind == "pending_slice":
         return _slice_state(task, count=2).complete_current_slice(
@@ -509,12 +520,12 @@ def _initial_state(task: Path, kind: str) -> WorkflowState:
         state = _base_state(task)
         failure = InvocationFailureRecord(
             invocation_id="b48-quota",
-            idempotency_key="transition-run:1:codex_plan:codex",
-            role="codex",
+            idempotency_key="transition-run:1:implementer_plan:codex",
+            role="implementer",
             failure_kind=AgentFailureKind.QUOTA,
             provider_text="usage cap reached",
             received_at="2026-09-04T00:00:00+00:00",
-            step=WorkflowStep.CODEX_PLAN,
+            step=WorkflowStep.IMPLEMENTER_PLAN,
             slice_id=1,
             work_unit_id=1,
             diagnostic_exit_code=2,
@@ -728,7 +739,11 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         monkeypatch.chdir(scenario_root)
         monkeypatch.setattr(workflow_production, "new_run_id", lambda: "candidate")
         monkeypatch.setattr(workflow_production, "watch_run_has_records", lambda *_args: False)
-        monkeypatch.setattr(workflow_production, "build_agent_registry", lambda _settings: {})
+        monkeypatch.setattr(workflow_production, "_capture_slot_identities", lambda slots, **_kwargs: {slot: args.slot_identities[slot] for slot in slots})
+        monkeypatch.setattr(workflow_production, "build_slot_agent_registry", lambda _settings: {
+            slot: SimpleNamespace(provider_identity=None, capability_verified=False)
+            for slot in ("implementer", "reviewer", "final_reviewer")
+        })
         monkeypatch.setattr(workflow_production, "require_production_workflow_loop_driver", lambda _driver: None)
         monkeypatch.setattr(workflow_production, "WorkflowEngine", lambda _driver: engine)
         monkeypatch.setattr(workflow_production, "_create_production_state", lambda **_kwargs: initial)
@@ -842,8 +857,10 @@ def test_provider_free_transition_corpus_matches_pre_cut_baseline(
     assert actual["source_blob"] == baseline["source_blob"]
     scenarios = actual["scenarios"]
     assert [item["scenario_id"] for item in scenarios] == baseline["scenario_order"]
+    # Slice 8b wire cut: every prior digest must be recovered by inverse naming alone.
     assert {
-        item["scenario_id"]: _canonical_sha256(item) for item in scenarios
+        item["scenario_id"]: _canonical_sha256(prior_role_wire_values(item))
+        for item in scenarios
     } == baseline["scenario_sha256"]
 
 

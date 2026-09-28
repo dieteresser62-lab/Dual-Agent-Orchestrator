@@ -45,10 +45,10 @@ from error_classification import (
     enforce_record_start_boundary,
 )
 from final_review_preflight import FinalReviewPreflightDenied
-from native_codex_contract import (
-    NATIVE_CODEX_RESPONSE_RETRY_CODES,
-    NativeCodexContractError,
-    NativeCodexErrorCode,
+from native_implementer_contract import (
+    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
     NativeImplementerRejectionSource,
 )
 from native_review_contract import (
@@ -124,8 +124,8 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         slice_count=1,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = object.__new__(ProductionWorkflowDriver)
@@ -142,11 +142,11 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         created_at="2026-08-29T10:00:00+00:00",
         idempotency_key="provider-content:invalid-recovery",
         payload=ProviderContentPayload(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id=str(state.current_work_unit_id),
             round_number=1,
             operation=state.current_step.value,
-            request_id="native-codex-request-" + "b" * 64,
+            request_id="native-implementer-request-" + "b" * 64,
             response_sha256=blob.sha256,
             content_kind="agent_result",
             content_bytes=len(raw),
@@ -173,7 +173,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         ),
     )
     return _capture(
-        lambda: driver.recover_pending_native_codex(
+        lambda: driver.recover_pending_native_implementer(
             invocation, None, WorkflowHistory(state.current_work_unit_id)
         )
     )
@@ -190,12 +190,12 @@ def _divergent_recovery_records() -> BaseException:
         created_at="2026-08-29T10:00:00+00:00",
         idempotency_key="native:divergent-recovery",
         payload=AgentResultPayload(
-            role=Role.CODEX,
+            role=Role.IMPLEMENTER,
             work_unit_id="1",
             outcome="ready",
             test_files=(),
-            transport_schema="native-codex-v2",
-            request_id="native-codex-request-" + "b" * 64,
+            transport_schema="native-codex-v3",
+            request_id="native-implementer-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
     )
@@ -214,8 +214,8 @@ def _incomplete_final_attestation() -> BaseException:
     return ArtifactReplayError(
         ReplayDiagnostic(
             ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
-            "legacy final-review chain is read-only; inspect it with "
-            "scripts/verify_legacy_chain.py",
+            "legacy final-review chain is read-only under the installed reducer; "
+            "resume or inspect this run with the matching older orchestrator release",
         )
     )
 
@@ -228,7 +228,7 @@ def _mismatched_persisted_request(tmp_path: Path) -> BaseException:
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = object.__new__(ProductionWorkflowDriver)
     driver.root = tmp_path
@@ -260,7 +260,7 @@ def _checkpoint_failure_with_prior_quota(tmp_path: Path) -> BaseException:
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = object.__new__(ProductionWorkflowDriver)
     driver.active_state = None
@@ -334,7 +334,7 @@ def test_central_inventory_classifies_all_project_error_types_exactly_once() -> 
         for error_type in ERROR_CLASSIFICATIONS
     }
 
-    assert len(named_errors) == 49
+    assert len(named_errors) == 51
     assert registered == project_exceptions
     assert project_exceptions - named_errors == {
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",
@@ -364,6 +364,21 @@ def test_halt_diagnostic_inventory_rejects_a_missing_error_class_rule() -> None:
 
     with pytest.raises(AssertionError):
         _assert_halt_diagnostic_coverage(extended, _HALT_DIAGNOSTIC_BY_CODE)
+
+
+def test_foreign_reducer_diagnostic_is_a_typed_resumable_halt() -> None:
+    detail = artifact_models.foreign_reducer_diagnostic("foreign-reducer")
+    error = ArtifactReplayError(
+        ReplayDiagnostic(ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL, detail)
+    )
+
+    classified = classify_exception(error)
+
+    assert "foreign-reducer" in classified.detail
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in classified.detail
+    assert "matching older orchestrator release" in classified.detail
+    assert classified.failure_class is FailureClass.RESUMABLE_HALT
+    assert classified.diagnostic_code == "ARTIFACT-REPLAY"
 
 
 def test_wrapped_typed_cause_keeps_its_transient_class() -> None:
@@ -427,13 +442,13 @@ def test_local_review_schema_failure_is_not_retried_as_model_output() -> None:
     assert classified.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
 
 
-@pytest.mark.parametrize("code", tuple(NativeCodexErrorCode))
-def test_native_codex_rejections_distinguish_context_from_model_response(
-    code: NativeCodexErrorCode,
+@pytest.mark.parametrize("code", tuple(NativeImplementerErrorCode))
+def test_native_implementer_rejections_distinguish_context_from_model_response(
+    code: NativeImplementerErrorCode,
 ) -> None:
-    classified = classify_exception(NativeCodexContractError(code, "rejected"))
+    classified = classify_exception(NativeImplementerContractError(code, "rejected"))
 
-    if code is NativeCodexErrorCode.CONTEXT_INVALID:
+    if code is NativeImplementerErrorCode.CONTEXT_INVALID:
         assert classified.failure_class is FailureClass.RESUMABLE_HALT
         assert classified.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
     else:
@@ -443,8 +458,8 @@ def test_native_codex_rejections_distinguish_context_from_model_response(
 
 def test_local_codex_schema_failure_is_not_retried_as_model_output() -> None:
     classified = classify_exception(
-        NativeCodexContractError(
-            NativeCodexErrorCode.SCHEMA_INVALID,
+        NativeImplementerContractError(
+            NativeImplementerErrorCode.SCHEMA_INVALID,
             "bundled schema is invalid",
             source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         )
@@ -461,7 +476,7 @@ def test_retry_rejection_code_wire_inventories_match_the_contract_enum() -> None
     assert artifact_models._NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
 
     implementer_expected = {
-        code.value for code in NATIVE_CODEX_RESPONSE_RETRY_CODES
+        code.value for code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES
     }
     assert (
         workflow_state.NATIVE_IMPLEMENTER_RESPONSE_REJECTION_CODES

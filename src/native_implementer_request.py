@@ -13,14 +13,17 @@ from typing import Any, Mapping
 import plan_handoff
 from contracts import ReadinessMarker, ValidationAttestation
 from finding_reducer import project_open_set
-from native_codex_contract import (
-    BoundNativeCodexContext,
-    NATIVE_CODEX_RESPONSE_RETRY_CODES as NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,  # allowlist:provider -- typed implementer boundary
-    NativeCodexContext,
-    NativeCodexErrorCode as NativeImplementerErrorCode,  # allowlist:provider -- typed implementer boundary
-    NativeCodexRequestKind,
-    native_codex_provider_response_schema,
+from native_implementer_contract import (
+    BoundNativeImplementerContext,
+    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,
+    NativeImplementerContext,
+    NativeImplementerErrorCode,
+    NativeImplementerRequestKind,
+    native_implementer_provider_response_schema,
 )
+from native_provider_schema import OPENAI_PROVIDER
+from path_policy import is_canonical_repository_relative_path
+from schema_patterns import has_visible_text
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -29,35 +32,35 @@ from schema_validation import (
 )
 
 
-REQUEST_SCHEMA_VERSION = "native-agent-codex-request-v2"
-RESPONSE_SCHEMA_VERSION = "native-agent-codex-result-v2"
-NATIVE_CODEX_TRANSPORT = "native-codex-v2"
+REQUEST_SCHEMA_VERSION = "native-agent-implementer-request-v3"
+RESPONSE_SCHEMA_VERSION = "native-agent-implementer-result-v3"
+NATIVE_IMPLEMENTER_TRANSPORT = "native-codex-v3"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-codex-request-v2.schema.json"
+    / "native-agent-implementer-request-v3.schema.json"
 )
 SAFE_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,199}")
 INVOCATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 
 
-class NativeCodexRequestErrorCode(StrEnum):
+class NativeImplementerRequestErrorCode(StrEnum):
     SCHEMA_INVALID = "schema-invalid"
     CONTEXT_INVALID = "context-invalid"
     EVIDENCE_INVALID = "evidence-invalid"
     REQUEST_INVALID = "request-invalid"
 
 
-class NativeCodexRequestError(ValueError):
-    def __init__(self, code: NativeCodexRequestErrorCode, detail: str) -> None:
+class NativeImplementerRequestError(ValueError):
+    def __init__(self, code: NativeImplementerRequestErrorCode, detail: str) -> None:
         self.code = code
         self.detail = detail
         super().__init__(f"{code.value}: {detail}")
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexEvidenceInput:
+class NativeImplementerEvidenceInput:
     evidence_id: str
     kind: str
     content: str
@@ -65,32 +68,32 @@ class NativeCodexEvidenceInput:
 
     def __post_init__(self) -> None:
         if SAFE_ID_PATTERN.fullmatch(self.evidence_id) is None:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "evidence_id is not a safe identifier",
             )
         _require_text(
             self.kind,
             "evidence kind",
             100,
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
         )
         _require_text(
             self.content,
             "evidence content",
             4_000_000,
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
         )
         if self.source_path is not None:
             _require_repository_path(
                 self.source_path,
                 "evidence source_path",
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
             )
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexEvidenceAsset:
+class NativeImplementerEvidenceAsset:
     path: str
     sha256: str
     byte_count: int
@@ -101,16 +104,16 @@ class NativeCodexEvidenceAsset:
         _require_sha256(
             self.sha256,
             "evidence asset sha256",
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
         )
         if self.byte_count != len(self.content.encode("utf-8")) or self.byte_count < 1:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "evidence asset byte_count differs from content",
             )
         if self.sha256 != _sha256_text(self.content):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "evidence asset digest differs from content",
             )
 
@@ -126,164 +129,165 @@ class NativeImplementerRetryFeedback:
             not isinstance(self.prior_invocation_id, str)
             or INVOCATION_ID_PATTERN.fullmatch(self.prior_invocation_id) is None
         ):
-            raise NativeCodexRequestError(  # allowlist:provider -- established request error
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "retry feedback prior_invocation_id is not a safe identifier",
             )
         if self.rejection_code not in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES:
-            raise NativeCodexRequestError(  # allowlist:provider -- established request error
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "retry feedback requires a response-dependent rejection code",
             )
         _require_text(
             self.correction_instruction,
             "retry feedback correction_instruction",
             3000,
-            NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
         )
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexRequestSpec:
-    context: NativeCodexContext
+class NativeImplementerRequestSpec:
+    context: NativeImplementerContext
     target_branch: str
     base_commit: str
     authorized_paths: tuple[str, ...]
     assignment: str
     work_context: str
-    evidence: tuple[NativeCodexEvidenceInput, ...]
+    evidence: tuple[NativeImplementerEvidenceInput, ...]
     retry_feedback: NativeImplementerRetryFeedback | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, NativeCodexContext):
-            raise NativeCodexRequestError(  # allowlist:provider -- established request error
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
-                "request spec requires NativeCodexContext",
+        if not isinstance(self.context, NativeImplementerContext):
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
+                "request spec requires NativeImplementerContext",
             )
         _require_text(
             self.target_branch,
             "target_branch",
             300,
-            NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
         )
         if not re.fullmatch(r"[0-9a-f]{40}", self.base_commit):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "base_commit must be lowercase 40-character Git SHA",
             )
         _require_sorted_paths(
             self.authorized_paths,
             "authorized_paths",
-            NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
             allow_empty=False,
         )
         _require_text(
             self.assignment,
             "assignment",
             120_000,
-            NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
         )
         _require_text(
             self.work_context,
             "work_context",
             1_000_000,
-            NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
         )
         evidence_ids = tuple(item.evidence_id for item in self.evidence)
         if evidence_ids != tuple(sorted(set(evidence_ids))) or not evidence_ids:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "evidence must be non-empty, sorted, and unique",
             )
         _require_distinct_evidence(
             self.evidence,
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
         )
         if self.retry_feedback is not None and not isinstance(
             self.retry_feedback, NativeImplementerRetryFeedback
         ):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.CONTEXT_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "retry_feedback must be a NativeImplementerRetryFeedback",
             )
 
 
 @dataclass(frozen=True, slots=True)
-class NativeCodexRequestBundle:
+class NativeImplementerRequestBundle:
     canonical_json: str
-    bound_context: BoundNativeCodexContext
+    bound_context: BoundNativeImplementerContext
     provider_response_schema_json: str
-    evidence_assets: tuple[NativeCodexEvidenceAsset, ...] = ()
+    evidence_assets: tuple[NativeImplementerEvidenceAsset, ...] = ()
+    capability_profile: str = OPENAI_PROVIDER
 
     def __post_init__(self) -> None:
         try:
             document = json.loads(self.canonical_json)
         except json.JSONDecodeError as exc:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle canonical_json is invalid",
             ) from exc
-        validate_native_codex_request_document(document)
+        validate_native_implementer_request_document(document)
         if self.canonical_json != _canonical_json(document):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle canonical_json is not canonical",
             )
         if document["request_id"] != self.bound_context.request_id:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle request id differs from bound context",
             )
         binding = {key: value for key, value in document.items() if key != "request_id"}
         calculated_digest = _sha256_text(_canonical_json(binding))
         if (
             calculated_digest != self.bound_context.request_digest
-            or document["request_id"] != "native-codex-request-" + calculated_digest
+            or document["request_id"] != "native-implementer-request-" + calculated_digest
         ):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "request content differs from its bound digest",
             )
-        expected_context = _codex_context_request_projection(
+        expected_context = _implementer_context_request_projection(
             self.bound_context.context
         )
         actual_context = {key: document[key] for key in expected_context}
         if actual_context != expected_context:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "request document differs from its bound Codex context projection",
             )
         try:
             provider_schema = json.loads(self.provider_response_schema_json)
         except json.JSONDecodeError as exc:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle provider response schema is invalid JSON",
             ) from exc
         if not isinstance(provider_schema, dict) or self.provider_response_schema_json != _canonical_json(provider_schema):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle provider response schema is not a canonical object",
             )
-        expected_schema = native_codex_provider_response_schema(
-            self.bound_context.context
+        expected_schema = native_implementer_provider_response_schema(
+            self.bound_context.context, self.capability_profile
         )
         if provider_schema != expected_schema:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle provider response schema differs from bound context",
             )
         schema_digest = _sha256_text(self.provider_response_schema_json)
         if document["response_contract"]["schema_sha256"] != schema_digest:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.REQUEST_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.REQUEST_INVALID,
                 "bundle response contract differs from provider schema",
             )
         manifest = tuple(document["evidence_manifest"])
         evidence_ids = tuple(item["evidence_id"] for item in manifest)
         if evidence_ids != tuple(sorted(set(evidence_ids))):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "request evidence manifest must be sorted and unique",
             )
         expected_assets: dict[str, tuple[str, int]] = {}
@@ -294,15 +298,15 @@ class NativeCodexRequestBundle:
                     _sha256_text(content) != item["sha256"]
                     or len(content.encode("utf-8")) != item["byte_count"]
                 ):
-                    raise NativeCodexRequestError(
-                        NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                    raise NativeImplementerRequestError(
+                        NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                         f"inline evidence {item['evidence_id']} metadata differs from content",
                     )
             else:
                 reference = item["content_ref"]
                 if reference in expected_assets:
-                    raise NativeCodexRequestError(
-                        NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                    raise NativeImplementerRequestError(
+                        NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                         "request content references must be unique",
                     )
                 expected_assets[reference] = (item["sha256"], item["byte_count"])
@@ -310,13 +314,13 @@ class NativeCodexRequestBundle:
             item.path: (item.sha256, item.byte_count) for item in self.evidence_assets
         }
         if len(actual_assets) != len(self.evidence_assets):
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "request evidence asset paths must be unique",
             )
         if actual_assets != expected_assets:
-            raise NativeCodexRequestError(
-                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
                 "request evidence assets differ from content references",
             )
 
@@ -333,35 +337,35 @@ class NativeCodexRequestBundle:
         return document
 
 
-def load_native_codex_request_schema() -> dict[str, Any]:
+def load_native_implementer_request_schema() -> dict[str, Any]:
     schema = json.loads(REQUEST_SCHEMA_PATH.read_text(encoding="utf-8"))
     if not isinstance(schema, dict):
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.SCHEMA_INVALID,
             "bundled native Codex request schema must be an object",
         )
     try:
-        check_schema(schema, location="<native-codex-request-schema>")
+        check_schema(schema, location="<native-implementer-request-schema>")
     except SchemaDefinitionError as exc:
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.SCHEMA_INVALID, str(exc)
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.SCHEMA_INVALID, str(exc)
         ) from exc
     return schema
 
 
-def validate_native_codex_request_document(document: Mapping[str, Any]) -> None:
+def validate_native_implementer_request_document(document: Mapping[str, Any]) -> None:
     try:
-        validate_schema_document(document, load_native_codex_request_schema())
+        validate_schema_document(document, load_native_implementer_request_schema())
     except SchemaMismatch as exc:
         location = ".".join(str(part) for part in exc.path) or "<request>"
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.SCHEMA_INVALID,
             f"schema validation failed at {location}: {exc.message}",
         ) from None
 
 
-def validate_native_codex_provider_response(
-    document: Mapping[str, Any], bundle: NativeCodexRequestBundle
+def validate_native_implementer_provider_response(
+    document: Mapping[str, Any], bundle: NativeImplementerRequestBundle
 ) -> None:
     """Validate one result against the exact writer schema bound to its request."""
     try:
@@ -370,24 +374,25 @@ def validate_native_codex_provider_response(
         )
     except SchemaMismatch as exc:
         location = ".".join(str(part) for part in exc.path) or "<response>"
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.SCHEMA_INVALID,
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.SCHEMA_INVALID,
             f"provider response schema failed at {location}: {exc.message}",
         ) from None
 
 
-def build_native_codex_request(
-    spec: NativeCodexRequestSpec,
+def build_native_implementer_request(
+    spec: NativeImplementerRequestSpec,
     *,
+    profile: str = OPENAI_PROVIDER,
     inline_evidence_chars: int = DEFAULT_INLINE_EVIDENCE_CHARS,
-) -> NativeCodexRequestBundle:
+) -> NativeImplementerRequestBundle:
     if inline_evidence_chars < 1:
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
             "inline evidence limit must be positive",
         )
     manifest: list[dict[str, Any]] = []
-    assets: list[NativeCodexEvidenceAsset] = []
+    assets: list[NativeImplementerEvidenceAsset] = []
     for item in spec.evidence:
         digest = _sha256_text(item.content)
         byte_count = len(item.content.encode("utf-8"))
@@ -406,16 +411,16 @@ def build_native_codex_request(
                 f"{item.evidence_id}-{digest}.txt"
             )
             manifest.append({**common, "delivery": "content_ref", "content_ref": path})
-            assets.append(NativeCodexEvidenceAsset(path, digest, byte_count, item.content))
+            assets.append(NativeImplementerEvidenceAsset(path, digest, byte_count, item.content))
 
     context = spec.context
-    context_projection = _codex_context_request_projection(context)
-    response_schema = native_codex_provider_response_schema(context)
+    context_projection = _implementer_context_request_projection(context)
+    response_schema = native_implementer_provider_response_schema(context, profile)
     response_schema_json = _canonical_json(response_schema)
     response_schema_digest = _sha256_text(response_schema_json)
     binding: dict[str, Any] = {
         "schema_version": REQUEST_SCHEMA_VERSION,
-        "transport": NATIVE_CODEX_TRANSPORT,
+        "transport": NATIVE_IMPLEMENTER_TRANSPORT,
         **context_projection,
         "target_branch": spec.target_branch,
         "base_commit": spec.base_commit,
@@ -435,19 +440,20 @@ def build_native_codex_request(
             "correction_instruction": spec.retry_feedback.correction_instruction,
         }
     request_digest = _sha256_text(_canonical_json(binding))
-    request_id = "native-codex-request-" + request_digest
+    request_id = "native-implementer-request-" + request_digest
     document = {**binding, "request_id": request_id}
-    canonical = canonical_native_codex_request_json(document)
-    return NativeCodexRequestBundle(
+    canonical = canonical_native_implementer_request_json(document)
+    return NativeImplementerRequestBundle(
         canonical_json=canonical,
-        bound_context=BoundNativeCodexContext(context, request_id, request_digest),
+        bound_context=BoundNativeImplementerContext(context, request_id, request_digest),
         provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
+        capability_profile=profile,
     )
 
 
-def _codex_context_request_projection(
-    context: NativeCodexContext,
+def _implementer_context_request_projection(
+    context: NativeImplementerContext,
 ) -> dict[str, Any]:
     """Return the complete context projection actually transported to Codex.
 
@@ -460,7 +466,7 @@ def _codex_context_request_projection(
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,
         "current_fingerprint": context.current_fingerprint,
-        "codex_contract": _contract_document(context),
+        "implementer_contract": _contract_document(context),
         "open_findings": [
             {
                 "finding_id": item.finding_id,
@@ -474,12 +480,12 @@ def _codex_context_request_projection(
     }
 
 
-def canonical_native_codex_request_json(document: Mapping[str, Any]) -> str:
-    validate_native_codex_request_document(document)
+def canonical_native_implementer_request_json(document: Mapping[str, Any]) -> str:
+    validate_native_implementer_request_document(document)
     return _canonical_json(document)
 
 
-def _contract_document(context: NativeCodexContext) -> dict[str, Any]:
+def _contract_document(context: NativeImplementerContext) -> dict[str, Any]:
     contract = context.contract
     readiness_kind = {
         ReadinessMarker.PLAN: "plan",
@@ -548,43 +554,37 @@ def _require_text(
     value: object,
     label: str,
     maximum: int,
-    code: NativeCodexRequestErrorCode,
+    code: NativeImplementerRequestErrorCode,
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value, first_line=True)
         or len(value) > maximum
     ):
-        raise NativeCodexRequestError(
+        raise NativeImplementerRequestError(
             code, f"{label} must be non-blank, NUL-free, and at most {maximum} characters"
         )
 
 
 def _require_sha256(
-    value: object, label: str, code: NativeCodexRequestErrorCode
+    value: object, label: str, code: NativeImplementerRequestErrorCode
 ) -> None:
     if (
         not isinstance(value, str)
         or len(value) != 64
         or any(character not in "0123456789abcdef" for character in value)
     ):
-        raise NativeCodexRequestError(code, f"{label} must be lowercase SHA-256")
+        raise NativeImplementerRequestError(code, f"{label} must be lowercase SHA-256")
 
 
 def _require_repository_path(
-    value: str, label: str, code: NativeCodexRequestErrorCode
+    value: str, label: str, code: NativeImplementerRequestErrorCode
 ) -> None:
-    path = PurePosixPath(value)
     if (
-        path.is_absolute()
-        or not path.parts
-        or ".." in path.parts
-        or "\\" in value
-        or path.as_posix() != value
-        or path.parts[0] == ".orchestrator"
+        not is_canonical_repository_relative_path(value)
+        or PurePosixPath(value).parts[0] == ".orchestrator"
     ):
-        raise NativeCodexRequestError(
+        raise NativeImplementerRequestError(
             code, f"{label} must be a canonical repository-relative path"
         )
 
@@ -592,12 +592,12 @@ def _require_repository_path(
 def _require_sorted_paths(
     values: tuple[str, ...],
     label: str,
-    code: NativeCodexRequestErrorCode,
+    code: NativeImplementerRequestErrorCode,
     *,
     allow_empty: bool,
 ) -> None:
     if values != tuple(sorted(set(values))) or (not allow_empty and not values):
-        raise NativeCodexRequestError(
+        raise NativeImplementerRequestError(
             code, f"{label} must be sorted and unique" + ("" if allow_empty else " and non-empty")
         )
     for value in values:
@@ -605,15 +605,15 @@ def _require_sorted_paths(
 
 
 def _require_distinct_evidence(
-    evidence: tuple[NativeCodexEvidenceInput, ...],
-    code: NativeCodexRequestErrorCode,
+    evidence: tuple[NativeImplementerEvidenceInput, ...],
+    code: NativeImplementerRequestErrorCode,
 ) -> None:
     source_paths = tuple(item.source_path for item in evidence if item.source_path is not None)
     if len(source_paths) != len(set(source_paths)):
-        raise NativeCodexRequestError(code, "evidence source_path values must be unique")
+        raise NativeImplementerRequestError(code, "evidence source_path values must be unique")
     content_digests = tuple(_sha256_text(item.content) for item in evidence)
     if len(content_digests) != len(set(content_digests)):
-        raise NativeCodexRequestError(
+        raise NativeImplementerRequestError(
             code,
             "evidence content and digests must be unique within one request",
         )
@@ -630,7 +630,7 @@ def _require_internal_asset_path(value: str) -> None:
         or "\\" in value
         or path.as_posix() != value
     ):
-        raise NativeCodexRequestError(
-            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+        raise NativeImplementerRequestError(
+            NativeImplementerRequestErrorCode.EVIDENCE_INVALID,
             "evidence asset path must use the native Codex artifact namespace",
         )

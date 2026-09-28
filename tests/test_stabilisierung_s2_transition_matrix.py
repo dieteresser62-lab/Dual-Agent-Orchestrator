@@ -191,8 +191,9 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "schema_version",
         "claude_review_transport",
         "codex_result_transport",
-        "codex_profile",
-        "claude_profile",
+        "implementer_profile",
+        "reviewer_profile",
+        "final_reviewer_profile",
     },
     "InvocationFailureRecord": {
         "invocation_id",
@@ -248,8 +249,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "current_step",
         "round_number",
         "request_sequence",
-        "codex_return_count",
-        "max_codex_returns",
+        "implementer_return_count",
+        "max_implementer_returns",
         "gate",
         "reviewer",
         "open_findings",
@@ -378,7 +379,7 @@ COMPARISON_TARGETS = (
         "_persist_native_agent_request_bundle",
     ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_immutable_file"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_codex_raw_response"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_implementer_raw_response"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_materialize_review_packet"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_canonical_native_agent_result"),
     ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_implementer"),
@@ -559,7 +560,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/artifact_store.py:ArtifactStore._ensure_append_index': 3,
  'src/artifact_store.py:ArtifactStore._head_cache_matches': 3,
  'src/artifact_store.py:ArtifactStore._refresh_append_head_cache': 2,
- 'src/artifact_bridge.py:ArtifactBridge.start_provider_attempt': 17,
+ 'src/artifact_bridge.py:ArtifactBridge.start_provider_attempt': 24,
  'src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt': 10,
  'src/artifact_bridge.py:ArtifactBridge.side_effect_result': 7,
  'src/final_review_preflight.py:run_final_review_preflight': 12,
@@ -567,18 +568,18 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_audit_projection.py:_attach_record_events': 13,
  'src/orchestrator.py:_load_bound_queue_terminal': 4,
  'src/orchestrator.py:run_pipeline': 16,
- 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 3,
+ 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 14,
  'src/workflow_production.py:_read_production_task': 2,
  'src/workflow_production.py:_prepare_new_watch_task': 1,
  'src/workflow_production.py:_validate_resumed_state': 8,
- 'src/workflow_production.py:_create_production_state': 0,
+ 'src/workflow_production.py:_create_production_state': 2,
  'src/workflow_production.py:_recover_final_review_history': 2,
  'src/workflow_production.py:run_production_workflow': 4,
  'src/workflow_production.py:_run_production_transition_loop': 22,
  'src/workflow_baseline.py:matches_baseline_initialization_prefix': 18,
  'src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline': 22,
  'src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context': 5,
- 'src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt': 19,
+ 'src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt': 21,
  'src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect': 17,
  'src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file': 3,
  'src/workflow_recovery.py:WorkflowRecovery._reconcile_pending_side_effects': 37,
@@ -586,7 +587,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings': 4,
  'src/workflow_persistence.py:WorkflowPersistence._persist_native_agent_request_bundle': 4,
  'src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file': 3,
- 'src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response': 0,
+ 'src/orchestrator.py:ProductionWorkflowDriver._write_native_implementer_raw_response': 0,
  'src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet': 3,
  'src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result': 4,
  'src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer': 39,
@@ -609,7 +610,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/inbox_watcher.py:move_poison_to_outbox_recoverably': 3,
  'src/inbox_watcher.py:_rename_stuck_task': 0,
  'src/inbox_watcher.py:_prepare_watch_invocation': 0,
- 'src/inbox_watcher.py:_process_watch_task': 12,
+ 'src/inbox_watcher.py:_process_watch_task': 13,
  'src/inbox_watcher.py:_strengthen_rejected_result': 1,
  'src/inbox_watcher.py:_begin_rejected_archive': 0,
  'src/inbox_watcher.py:_finish_rejected_archive': 1,
@@ -649,12 +650,12 @@ EXPECTED_STRICT_BODY_DIGESTS = {'src/artifact_resume.py:require_workflow_status_
  'src/artifact_bridge.py:review_payload_matches_result': '4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506',
  'src/final_review_preflight.py:run_final_review_preflight': '7e1a2614db9219f279147e7aed442b0f4965de90bc27eb5cb39ed2df77be7f1e',
  'src/workflow_audit_projection.py:_persisted_histories': '46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86',
- 'src/workflow_audit_projection.py:_attach_record_events': 'cf8f419efeb90e9231c017a7df0779fd0bad7ccf501f7c2df503f5d1598d74d0',
+ 'src/workflow_audit_projection.py:_attach_record_events': '621ad1dcffcc12953fe1d2b69e2c683106ec32a521b492de123dbbba289922ae',
  'src/workflow_audit.py:WorkflowAudit.finalize_audit': '60ecf8b15bc913fec75e34aa8006d0e65110218afea19ac34956d01e93c8b593',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context': '4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation': 'b8623a4c7006d06638f9f703c489494c770ba9ec4f75ad76fc56672538b81bb5',
  'src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding': '7c7ab0e20733005877e51a1a4f86e847456fc6fe5e230c0b57f601bbb036f833',
- 'src/workflow_git_commit.py:WorkflowGitCommit.commit_slice': '530fcd5f1229e0e46d35d8e0ca8a665898468ffb2c555e42bdfcf9a2f4a28b59',
+ 'src/workflow_git_commit.py:WorkflowGitCommit.commit_slice': 'd0f8eff6c4b92b9ac3082fad5f8c23184388d3175e69a63d92d18ab6a488dfaa',
  'src/git_service.py:commit_managed_audit_report': 'ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717'}
 
 
@@ -917,7 +918,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 17
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 21
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1304,7 +1305,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "
         "inventarisierte\nVergleichsausdrücke"
     ) in document
-    assert "`persist_native_codex_contract()` 11" not in document
+    assert "`persist_native_implementer_contract()` 11" not in document
 
 
 def test_recovery_and_preflight_predicate_bodies_are_frozen() -> None:

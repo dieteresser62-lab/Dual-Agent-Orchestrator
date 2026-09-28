@@ -7,6 +7,10 @@ import pytest
 import contracts
 from contracts import (
     AgentRole,
+    ApprovalMarker,
+    ImplementerStepContract,
+    ReadinessMarker,
+    StepContract,
     AnchorRecord,
     FindingClass,
     FindingOrigin,
@@ -17,6 +21,21 @@ from contracts import (
     apply_reviewer_finding_update,
     compare_anchors,
 )
+
+
+def test_step_contracts_reject_traversing_expected_test_paths() -> None:
+    with pytest.raises(ValueError, match="unsafe repository path"):
+        StepContract(
+            name="review", reviewer=AgentRole.REVIEWER, slice_id="01",
+            round_number=1, approval_marker=ApprovalMarker.SLICE,
+            expected_test_files=("../outside.py",),
+        )
+    with pytest.raises(ValueError, match="unsafe repository path"):
+        ImplementerStepContract(
+            name="implement", readiness_marker=ReadinessMarker.IMPLEMENTATION,
+            slice_id="01", round_number=1,
+            expected_test_files=("../outside.py",), require_test_files_record=True,
+        )
 
 
 MISSING_ANCHOR_DETAIL = (
@@ -35,12 +54,12 @@ MISSING_PREDECESSOR_DETAIL = (
 
 def _finding(*, status: FindingStatus = FindingStatus.OPEN) -> FindingRecord:
     return FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=status,
         summary="Native contract gap",
         acceptance_test="The native result is request-bound.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
 
 
@@ -50,12 +69,12 @@ def _generation_finding(
     evidence_anchor_sha256: str | None = None,
 ) -> FindingRecord:
     return FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Rediscovered defect",
         acceptance_test="The generation identity is complete.",
-        origin=FindingOrigin("07", 1, AgentRole.CLAUDE),
+        origin=FindingOrigin("07", 1, AgentRole.REVIEWER),
         predecessor_finding_ref=predecessor_finding_ref,
         evidence_anchor_sha256=evidence_anchor_sha256,
     )
@@ -63,7 +82,7 @@ def _generation_finding(
 
 def _assert_u14_pair_diagnostics_are_complete() -> None:
     cases = (
-        ({"predecessor_finding_ref": "C-01"}, MISSING_ANCHOR_DETAIL),
+        ({"predecessor_finding_ref": "R-01"}, MISSING_ANCHOR_DETAIL),
         ({"evidence_anchor_sha256": "a" * 64}, MISSING_PREDECESSOR_DETAIL),
     )
     for arguments, expected in cases:
@@ -94,10 +113,10 @@ def test_finding_generation_identity_requires_both_fields_or_neither() -> None:
 
     assert _generation_finding().predecessor_finding_ref is None
     complete = _generation_finding(
-        predecessor_finding_ref="C-01",
+        predecessor_finding_ref="R-01",
         evidence_anchor_sha256="a" * 64,
     )
-    assert complete.predecessor_finding_ref == "C-01"
+    assert complete.predecessor_finding_ref == "R-01"
     assert complete.evidence_anchor_sha256 == "a" * 64
 
 
@@ -179,7 +198,7 @@ def test_codex_can_answer_only_an_open_finding() -> None:
 def test_only_reporting_reviewer_can_update_a_finding() -> None:
     closed = apply_reviewer_finding_update(
         _finding(),
-        reviewer=AgentRole.CLAUDE,
+        reviewer=AgentRole.REVIEWER,
         status=FindingStatus.CLOSED,
         rationale="Verified against the bound JSON result.",
     )
@@ -187,7 +206,7 @@ def test_only_reporting_reviewer_can_update_a_finding() -> None:
     with pytest.raises(ValueError, match="reporting reviewer"):
         apply_reviewer_finding_update(
             _finding(),
-            reviewer=AgentRole.CODEX,
+            reviewer=AgentRole.IMPLEMENTER,
             status=FindingStatus.CLOSED,
             rationale="Foreign closure.",
         )

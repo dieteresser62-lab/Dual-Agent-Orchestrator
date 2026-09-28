@@ -41,6 +41,7 @@ from artifact_models import (
     STATE_PROJECTION_REDUCER_VERSION,
     RunIdentityPayload,
     RunProfilePayload,
+    foreign_reducer_diagnostic,
     QuotaPausePayload,
     SideEffectPayload,
     SliceSpec,
@@ -378,12 +379,23 @@ def replay_artifacts(
                 "record type does not match its typed payload",
                 record,
             )
+        if isinstance(record.payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)) and RecordType.RUN_PROFILE not in singleton_types:
+            _fail(ReplayDiagnosticCode.RECORD_MISSING, "provider record precedes the bound run profile", record)
+        if (
+            isinstance(record.payload, RunProfilePayload)
+            and record.payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION
+        ):
+            _fail(
+                ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+                foreign_reducer_diagnostic(record.payload.reducer_version),
+                record,
+            )
         if isinstance(record.payload, CorrectionWorkUnitPayload):
             _fail(
                 ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
-                "legacy correction_work_unit records cannot be written under the "
-                f"installed reducer; inspect historical chains with "
-                "scripts/verify_legacy_chain.py",
+                "legacy correction_work_unit records cannot be replayed under the "
+                f"installed reducer {STATE_PROJECTION_REDUCER_VERSION!r}; resume "
+                "or inspect this run with the matching older orchestrator release",
                 record,
             )
         if record.record_type in {
@@ -456,6 +468,11 @@ def replay_artifacts(
             + " and ".join(missing),
         )
 
+    bound_profile = next(record.payload for record in chain if isinstance(record.payload, RunProfilePayload))
+    for record in chain:
+        if isinstance(record.payload, (ProviderInputMeasurementPayload, ProviderAttemptPayload, FinalReviewPreflightPayload)):
+            validate_provider_record_binding(record.payload, bound_profile, record)
+
     strict_content = (
         require_content_authority
         if require_content_authority is not None
@@ -492,6 +509,35 @@ def replay_artifacts(
         chain,
         pending_review_record_id=pending_review_record_id,
     )
+
+
+def validate_provider_record_binding(
+    payload: ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload,
+    profile: RunProfilePayload,
+    record: ArtifactRecord | None = None,
+) -> None:
+    """Check provider facts against this chain's immutable slot occupancy."""
+    if payload.operation == "reviewer_final_review":
+        slot = "final_reviewer"
+        expected_role = Role.REVIEWER
+    elif payload.role is Role.IMPLEMENTER:
+        slot = "implementer"
+        expected_role = Role.IMPLEMENTER
+    else:
+        slot = "reviewer"
+        expected_role = Role.REVIEWER
+    selected = getattr(profile, slot)
+    if (payload.role is not expected_role or payload.provider != selected.provider
+        or isinstance(payload, ProviderAttemptPayload) and (
+            payload.slot != slot or payload.profile_name != selected.profile_name
+            or payload.model != selected.model or payload.effort != selected.effort
+            or payload.binary_identity != selected.binary_identity
+        )):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            f"slot={slot} provider={payload.provider}: provider record differs from run profile provider={selected.provider}",
+            record,
+        )
 
 
 def replay_findings(
@@ -767,26 +813,14 @@ def _project_work_unit_round_and_kind(
         for candidate in transitions.transition_history
         if candidate.payload.work_unit_id == unit.work_unit_id
     )
-    if first_step == "codex_final_correction" and not isinstance(  # allowlist:provider -- canonical state-v3 step
-        definition, CorrectionWorkUnitPayload
-    ):
-        _fail(
-            ReplayDiagnosticCode.RECORD_MISSING,
-            "a correction cursor requires its correction work-unit record",
-            next(
-                record
-                for record in transitions.transition_history
-                if record.payload.work_unit_id == unit.work_unit_id
-            ),
-        )
     kind = (
         "correction"
         if isinstance(definition, CorrectionWorkUnitPayload)
         else "final_review"
-        if first_step == "claude_final_review"  # allowlist:provider -- canonical state-v3 step
+        if first_step == "reviewer_final_review"
         else "plan"
         if unit.work_unit_id == "1"
-        or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
+        or first_step in {"implementer_plan", "reviewer_plan_review", "implementer_plan_revision"}
         else "slice"
     )
     return round_number, kind
@@ -957,10 +991,10 @@ def _project_work_unit_document(
                 ),
             )
         ),
-        "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
+        "implementer_return_count": (
             0 if policy is None else policy.implementer_return_count
         ),
-        "max_codex_returns": (  # allowlist:provider -- canonical state-v3 field
+        "max_implementer_returns": (
             6 if policy is None else policy.max_implementer_returns
         ),
         "gate": gate_document,
@@ -1055,17 +1089,12 @@ def _assemble_workflow_state_document(
         "target_branch": task.target_branch,
         "protocol_binding": {
             "mode": "structured-v2",
-            "schema_version": "2",
-            "claude_review_transport": "native-claude-review-v2",  # allowlist:provider -- canonical protocol binding
-            "codex_result_transport": "native-codex-v2",  # allowlist:provider -- canonical protocol binding
-            "codex_profile": {  # allowlist:provider -- canonical state-v3 field
-                "model": profile.implementer.model,
-                "effort": profile.implementer.effort,
-            },
-            "claude_profile": {  # allowlist:provider -- canonical state-v3 field
-                "model": profile.reviewer.model,
-                "effort": profile.reviewer.effort,
-            },
+            "schema_version": "3",
+            "claude_review_transport": "native-claude-review-v3",  # allowlist:provider -- transport: canonical protocol binding
+            "codex_result_transport": "native-codex-v3",  # allowlist:provider -- transport: canonical protocol binding
+            "implementer_profile": {**asdict(profile.implementer), "binary_identity": profile.implementer.binary_identity.to_dict()},
+            "reviewer_profile": {**asdict(profile.reviewer), "binary_identity": profile.reviewer.binary_identity.to_dict()},
+            "final_reviewer_profile": {**asdict(profile.final_reviewer), "binary_identity": profile.final_reviewer.binary_identity.to_dict()},
         },
         "bootstrap_checks": tuple(
             _project_bootstrap_fact(record.payload)
@@ -1229,7 +1258,7 @@ def _project_bootstrap_fact(
     return {
         "check_kind": payload.record_type.value,
         "transition_fingerprint": payload.transition_fingerprint,
-        "provider": payload.provider.value,
+        "provider": payload.provider,
         "role": payload.role.value,
         "operation": payload.operation,
         "work_unit_id": int(payload.work_unit_id),
@@ -2565,7 +2594,8 @@ def _validate_provider_attempt_sequences(
             binding = (
                 payload.provider, payload.role, payload.operation, payload.work_unit_id,
                 payload.logical_operation_id, payload.binding_fingerprint,
-                payload.input_digest,
+                payload.input_digest, payload.slot, payload.profile_name,
+                payload.model, payload.effort, payload.binary_identity,
             )
             if immutable is None:
                 immutable = binding
@@ -2582,10 +2612,15 @@ def _validate_provider_attempt_sequences(
                     terminal_payload.work_unit_id, terminal_payload.logical_operation_id,
                     terminal_payload.binding_fingerprint, terminal_payload.input_digest,
                     terminal_payload.attempt_number, terminal_payload.started_at,
+                    terminal_payload.slot, terminal_payload.profile_name,
+                    terminal_payload.model, terminal_payload.effort,
+                    terminal_payload.binary_identity,
                 ) != (
                     payload.provider, payload.role, payload.operation, payload.work_unit_id,
                     payload.logical_operation_id, payload.binding_fingerprint, payload.input_digest,
                     payload.attempt_number, payload.started_at,
+                    payload.slot, payload.profile_name,
+                    payload.model, payload.effort, payload.binary_identity,
                 ):
                     _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt terminal changed immutable fields", terminal)
 

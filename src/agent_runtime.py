@@ -7,6 +7,7 @@ import math
 import os
 import queue
 import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -21,8 +22,9 @@ from typing import Callable, Mapping, TextIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agent_adapters import (
-    AGENT_REGISTRY,
     AgentAdapter,
+    NativeImplementerAdapter,
+    NativeReviewAdapter,
     AgentBudgetError,
     AgentPermissionError,
     AgentOutputError,
@@ -32,25 +34,25 @@ from agent_adapters import (
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
 from contracts import (
-    CodexContractResult,
+    ImplementerContractResult,
     ContractResult,
     FindingRecord,
     ValidationAttestation,
 )
-from native_codex_contract import (
-    NativeCodexContext,
-    NativeCodexContractError,
-    NativeCodexErrorCode,
+from native_implementer_contract import (
+    NativeImplementerContext,
+    NativeImplementerContractError,
+    NativeImplementerErrorCode,
     find_native_implementer_contract_error,
-    is_retryable_native_codex_response_error as is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
-    parse_bound_native_codex_contract_result,
-    validate_native_codex_document,
+    is_retryable_native_implementer_response_error,
+    parse_bound_native_implementer_contract_result,
+    validate_native_implementer_document,
 )
-from native_codex_request import (
-    NativeCodexRequestBundle,
-    NativeCodexRequestError,
-    NativeCodexRequestErrorCode as NativeImplementerRequestErrorCode,  # allowlist:provider -- typed implementer boundary
-    validate_native_codex_provider_response,
+from native_implementer_request import (
+    NativeImplementerRequestBundle,
+    NativeImplementerRequestError,
+    NativeImplementerRequestErrorCode,
+    validate_native_implementer_provider_response,
 )
 from native_review_contract import (
     NativeReviewContext,
@@ -75,8 +77,18 @@ from native_provider_schema import (
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
 from artifact_models import ProviderUsagePayload
+from provider_process import (
+    ProcessIdentity, ProcessStatus, capture_process_identity,
+    count_process_group_members, observe_identity, signal_process_group,
+)
+from provider_identity import (
+    ProviderIdentity, capture_provider_identity, check_provider_candidate,
+    executable_candidates, inspect_provider_installations,
+)
+from role_occupancy import role_for_provider
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
+    PROVIDER_ROLES,
     PreparedProviderInput,
     ProviderInputComponent,
     ProviderInputBudgetError,
@@ -98,9 +110,6 @@ from rejected_response_shape import (
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
 logger = logging.getLogger(__name__)
-NativeImplementerErrorCode = NativeCodexErrorCode  # allowlist:provider -- local role alias
-NativeImplementerContractError = NativeCodexContractError  # allowlist:provider -- local role alias
-NativeImplementerRequestError = NativeCodexRequestError  # allowlist:provider -- local role alias
 REVIEW_SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {
         ".git",
@@ -901,38 +910,106 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
         return 1, "", str(exc)
 
 
-def _resolve_agent_binary(binary: str) -> str | None:
-    candidate = Path(binary).expanduser()
-    if candidate.is_absolute() or "/" in binary or "\\" in binary:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            return None
-        if resolved.is_file() and os.access(resolved, os.X_OK):
-            return str(resolved)
-        return None
-    return shutil.which(binary)
+def _resolve_agent_binary(binary: str, *, path: str | None = None) -> str | None:
+    candidates = executable_candidates(binary, os.environ.get("PATH", os.defpath) if path is None else path)
+    return candidates[0] if candidates else None
 
 
-def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False) -> None:
+def _binary_remedy(adapter: AgentAdapter) -> str:
+    slot = getattr(adapter, "bound_slot", None)
+    if slot is None:
+        role = role_for_provider(adapter.name)
+        slot = None if role is None else role.value
+    if slot is None:
+        return (
+            f"Remedy: no role is assigned to provider {adapter.name!r}; "
+            "configure a supported provider binary or adjust PATH"
+        )
+    return (
+        f"Remedy: set --{slot.replace('_', '-')}-binary or RUN_TASK_{slot.upper()}_BINARY "
+        "to an absolute Linux path, or adjust PATH"
+    )
+
+
+def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = None) -> ProviderIdentity:
+    bound = getattr(adapter, "provider_identity", None)
+    slot = getattr(adapter, "bound_slot", adapter.name)
+    if bound is None:
+        raise AgentCompatibilityError(f"slot={slot} has no verified binary identity")
+    if bound.kind != "verified":
+        raise AgentCompatibilityError(f"slot={slot}: dry-run binary identity cannot authorize a provider start")
+    search_path = os.environ.get("PATH", os.defpath) if path is None else path
+    entry = _resolve_agent_binary(adapter.cli_binary, path=search_path)
+    if entry is None:
+        raise AgentCompatibilityError(f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}")
+    try:
+        current = capture_provider_identity(
+            entry, adapter.capability.version_args, run_local_command,
+            path=search_path, expected=bound,
+        )
+    except ValueError as exc:
+        raise AgentCompatibilityError(
+            f"slot={slot} binary identity drift at {entry}: {exc}; {_binary_remedy(adapter)}"
+        ) from exc
+    if current != bound:
+        raise AgentCompatibilityError(
+            f"slot={slot} binary identity drift at {entry}: expected {bound!r}; "
+            f"observed {current!r}; {_binary_remedy(adapter)}"
+        )
+    return bound
+
+
+def _bound_launch_command(adapter: AgentAdapter, command: tuple[str, ...]) -> list[str]:
+    if not command or command[0] != adapter.cli_binary:
+        raise AgentCompatibilityError(
+            f"{adapter.name} prepared command does not use its configured binary"
+        )
+    identity = getattr(adapter, "provider_identity", None)
+    if identity is None:
+        raise AgentCompatibilityError(f"{adapter.name} has no verified binary identity")
+    return [*identity.launch_prefix, *command[1:]]
+
+
+def verify_agent_capabilities(
+    adapter: AgentAdapter, *, strict_dns: bool = False, path: str | None = None,
+) -> None:
     """Verify the configured role once, immediately before its first real invocation."""
     if adapter.capability_verified:
+        _check_bound_provider_identity(adapter, path=path)
         return
-    resolved_binary = _resolve_agent_binary(adapter.cli_binary)
+    search_path = os.environ.get("PATH", os.defpath) if path is None else path
+    resolved_binary = _resolve_agent_binary(adapter.cli_binary, path=search_path)
     if resolved_binary is None:
         raise AgentCompatibilityError(
             f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}"
         )
+    try:
+        check_provider_candidate(resolved_binary, path=search_path)
+    except ValueError as exc:
+        raise AgentCompatibilityError(
+            f"{adapter.name} CLI {resolved_binary}: {exc}; {_binary_remedy(adapter)}"
+        ) from exc
 
-    version_rc, version_out, version_err = run_local_command(
-        [resolved_binary, *adapter.capability.version_args]
+    identities, failures = inspect_provider_installations(
+        adapter.cli_binary, adapter.capability.version_args, run_local_command,
+        path=search_path,
     )
-    version_text = (version_out or version_err).strip()
-    if version_rc != 0 or not version_text:
+    if len(identities) + len(failures) > 1:
+        logger.warning(
+            "Multiple %s CLI installations: %s",
+            adapter.name,
+            "; ".join(
+                [f"{item.entry_path} -> {item.real_path} ({item.version})" for item in identities]
+                + list(failures)
+            ),
+        )
+    identity = next((item for item in identities if item.entry_path == resolved_binary), None)
+    if identity is None:
         raise AgentCompatibilityError(
             f"Cannot determine {adapter.name} version using {resolved_binary}: "
-            f"{(version_err or version_out).strip() or 'empty output'}"
+            + (next((item for item in failures if item.startswith(resolved_binary + ":")), "unknown error"))
         )
+    version_text = identity.version
     version_matches_static_pattern = any(
         re.fullmatch(pattern, version_text)
         for pattern in adapter.capability.supported_version_patterns
@@ -950,7 +1027,7 @@ def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False
             ) from exc
 
     help_rc, help_out, help_err = run_local_command(
-        [resolved_binary, *adapter.capability.help_args]
+        [*identity.launch_prefix, *adapter.capability.help_args]
     )
     help_text = "\n".join(part for part in (help_out, help_err) if part)
     if help_rc != 0:
@@ -975,10 +1052,11 @@ def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False
             )
 
     adapter.capability_verified = True
+    adapter.provider_identity = identity
     logger.info(
         "Agent ready: role=%s binary=%s version=%s model=%s effort=%s timeout=%ss profile=%s",
         adapter.name,
-        resolved_binary,
+        identity.real_path,
         version_text,
         adapter.model,
         adapter.effort,
@@ -1145,6 +1223,103 @@ def print_agent_output(
     logger.info("%s", shorten(output, config.agent_output_max_chars))
 
 
+def _detach_provider_pipe(stream: TextIO, flags: int) -> None:
+    """Unblock eventual pipe users without freeing a descriptor they still own."""
+    try:
+        target = stream.fileno()
+        replacement = os.open(os.devnull, flags)
+        if replacement != target:
+            try:
+                os.dup2(replacement, target)
+            finally:
+                os.close(replacement)
+    except (OSError, ValueError):
+        pass
+
+
+def _signal_unidentified_child(
+    process: subprocess.Popen[str], sig: signal.Signals,
+) -> None:
+    """Use the owned, live Popen handle when /proc identity is unavailable."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.getsid(process.pid) == process.pid and os.getpgid(process.pid) == process.pid:
+            os.killpg(process.pid, sig)
+            return
+    except OSError:
+        pass
+    try:
+        if sig is signal.SIGKILL:
+            process.kill()
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+
+
+def _write_provider_input(
+    stream: TextIO, prompt: str, errors: queue.Queue[BaseException],
+) -> None:
+    try:
+        stream.write(prompt)
+        stream.close()
+    except BaseException as exc:
+        errors.put(exc)
+
+
+def _stop_provider_group(
+    process: subprocess.Popen[str], identity: ProcessIdentity | None,
+    *, drain_seconds: float = 2.0, drained: bool = False,
+) -> None:
+    """Bound TERM, KILL, pipe drain and leader reap after every exit path."""
+    if identity is not None:
+        signal_process_group(identity, signal.SIGTERM)
+    else:
+        _signal_unidentified_child(process, signal.SIGTERM)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if (identity is None and process.poll() is not None) or (
+            identity is not None and observe_identity(identity).status is not ProcessStatus.RUNNING
+        ):
+            break
+        time.sleep(0.05)
+    if identity is not None:
+        signal_process_group(identity, signal.SIGKILL)
+    else:
+        _signal_unidentified_child(process, signal.SIGKILL)
+    if drained:
+        return
+    if process.stdin is not None:
+        # Bypass TextIOWrapper's lock: a daemon writer can be blocked in write().
+        _detach_provider_pipe(process.stdin, os.O_WRONLY)
+        process.stdin = None
+    try:
+        process.communicate(timeout=drain_seconds)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                _detach_provider_pipe(stream, os.O_RDONLY)
+        process.stdout = None
+        process.stderr = None
+
+
+def _finish_exited_leader_group(
+    process: subprocess.Popen[str], identity: ProcessIdentity | None, agent_key: str,
+) -> None:
+    """Release inherited pipes while preserving the leader's completed result."""
+    remaining = count_process_group_members(identity) if identity is not None else None
+    _stop_provider_group(process, identity, drained=True)
+    logger.warning(
+        "[AGENT] %s terminated %s remaining provider group process(es) after leader exit",
+        agent_key, remaining if remaining is not None else "an unknown number of",
+    )
+
+
 def _run_agent_process(
     adapter: AgentAdapter,
     command_parts: list[str],
@@ -1157,148 +1332,191 @@ def _run_agent_process(
     agent_key: str,
     process_started: Callable[[int], None] | None = None,
 ) -> StreamResult | subprocess.CompletedProcess[str]:
-    """Start one provider process and retain ownership through its cleanup boundary."""
-    if config.agent_live_stream:
-        # Stream mode captures stdout/stderr incrementally while still preserving full output.
-        process = subprocess.Popen(
-            command_parts,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            cwd=execution_root,
-            bufsize=1,
-        )
+    """Own a provider session until its pipes and process group are settled."""
+    process = subprocess.Popen(
+        command_parts,
+        stdin=subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env, cwd=execution_root, bufsize=1, start_new_session=True,
+    )
+    identity: ProcessIdentity | None = None
+    start = time.monotonic()
+    finished = False
+    group_cleanup_done = False
+    try:
+        try:
+            identity = capture_process_identity(process.pid)
+        except (OSError, ValueError, IndexError, UnicodeError):
+            pass
         if process_started is not None:
-            try:
-                process_started(process.pid)
-            except Exception:
-                process.kill()
-                process.wait(timeout=5)
-                raise
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
-
-        if stdin_text is not None:
-            process.stdin.write(stdin_text)
-        process.stdin.close()
-
-        stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-        start = time.monotonic()
-        stream_state: dict[str, str | bool] = {
-            "skip_prompt_echo": False,
-            "last_emitted_line": "",
-        }
-
-        def read_stream(stream: TextIO, channel: str) -> None:
-            # Use sentinel None to signal channel completion to the main loop.
-            try:
-                while True:
-                    line = stream.readline()
-                    if line == "":
-                        break
-                    stream_queue.put((channel, line))
-            finally:
-                stream_queue.put((channel, None))
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-
-        threads = [
-            threading.Thread(
-                target=read_stream,
-                args=(process.stdout, "stdout"),
-                daemon=True,
-            ),
-            threading.Thread(
-                target=read_stream,
-                args=(process.stderr, "stderr"),
-                daemon=True,
-            ),
-        ]
-        for thread in threads:
-            thread.start()
-
-        completed_channels: set[str] = set()
-        heartbeat_interval_seconds = 30.0
-        last_heartbeat = start
-        while len(completed_channels) < 2:
-            if timeout_seconds is not None and time.monotonic() - start > timeout_seconds:
-                process.kill()
-                raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-            now = time.monotonic()
-            if now - last_heartbeat >= heartbeat_interval_seconds:
-                elapsed = int(now - start)
-                logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
-                last_heartbeat = now
-            try:
-                channel, line = stream_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-
-            if line is None:
-                completed_channels.add(channel)
-                continue
-            if channel == "stdout":
-                stdout_chunks.append(line)
-            else:
-                stderr_chunks.append(line)
-
-            if config.agent_live_stream_channels == "stdout" and channel != "stdout":
-                continue
-            if config.agent_live_stream_channels == "stderr" and channel != "stderr":
-                continue
-            if config.agent_live_stream_mode == "full":
-                logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
-            else:
-                rendered = _compact_stream_text(adapter, channel, line, stream_state)
-                if rendered is not None:
-                    logger.info("[%s:%s] %s", agent_key, channel, rendered)
-
-        for thread in threads:
-            thread.join(timeout=1)
-        process.wait(timeout=5)
-        result = StreamResult(
-            process.returncode if process.returncode is not None else 1,
-            "".join(stdout_chunks),
-            "".join(stderr_chunks),
-        )
-    elif process_started is not None:
-        process = subprocess.Popen(
-            command_parts, stdin=subprocess.PIPE if stdin_text is not None else None,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=env, cwd=execution_root,
-        )
-        try:
             process_started(process.pid)
-        except Exception:
-            process.kill()
-            process.wait(timeout=5)
-            raise
-        try:
-            stdout, stderr = process.communicate(input=stdin_text, timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
-            raise
-        result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
-    else:
-        result = subprocess.run(
-            command_parts,
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=execution_root,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    return result
+        if config.agent_live_stream:
+            assert process.stdout is not None and process.stderr is not None
+            if stdin_text is None and process.stdin is not None:
+                process.stdin.close()
+                process.stdin = None
+            stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+            stream_state: dict[str, str | bool] = {
+                "skip_prompt_echo": False, "last_emitted_line": "",
+            }
+            writer_errors: queue.Queue[BaseException] = queue.Queue()
+
+            def write_input() -> None:
+                if process.stdin is None:
+                    return
+                try:
+                    process.stdin.write(stdin_text or "")
+                    process.stdin.close()
+                except BaseException as exc:
+                    writer_errors.put(exc)
+
+            def read_stream(stream: TextIO, channel: str) -> None:
+                try:
+                    while line := stream.readline():
+                        stream_queue.put((channel, line))
+                except (OSError, ValueError):
+                    # Forced bounded cleanup may replace an outstanding pipe read.
+                    pass
+                finally:
+                    stream_queue.put((channel, None))
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            threads = [threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True),
+                       threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True)]
+            for thread in threads:
+                thread.start()
+            writer: threading.Thread | None = None
+            if stdin_text is not None:
+                writer = threading.Thread(target=write_input, daemon=True)
+                writer.start()
+            completed_channels: set[str] = set()
+            last_heartbeat = start
+            leader_exit_at: float | None = None
+            drain_deadline: float | None = None
+            while len(completed_channels) < 2:
+                now = time.monotonic()
+                if timeout_seconds is not None and now - start > timeout_seconds:
+                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+                if process.poll() is not None:
+                    leader_exit_at = leader_exit_at or now
+                    if (now - leader_exit_at > 1.0 and not group_cleanup_done
+                            and any(thread.is_alive() for thread in threads)):
+                        _finish_exited_leader_group(process, identity, agent_key)
+                        group_cleanup_done = True
+                        drain_deadline = time.monotonic() + 2.0
+                if (drain_deadline is not None and now > drain_deadline
+                        and any(thread.is_alive() for thread in threads)):
+                    raise AgentProcessError(
+                        f"{agent_key} output pipes remained open after group cleanup.",
+                        kind_hint=AgentFailureKind.PROCESS,
+                    )
+                if now - last_heartbeat >= 30.0:
+                    logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, int(now - start))
+                    last_heartbeat = now
+                try:
+                    channel, line = stream_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    completed_channels.add(channel)
+                    continue
+                if channel == "stdout":
+                    stdout_chunks.append(line)
+                else:
+                    stderr_chunks.append(line)
+                if config.agent_live_stream_channels not in {"both", channel}:
+                    continue
+                if config.agent_live_stream_mode == "full":
+                    logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
+                else:
+                    rendered = _compact_stream_text(adapter, channel, line, stream_state)
+                    if rendered is not None:
+                        logger.info("[%s:%s] %s", agent_key, channel, rendered)
+            for thread in threads:
+                thread.join(timeout=0.2)
+            if writer is not None:
+                writer.join(timeout=1)
+                if writer.is_alive():
+                    raise RuntimeError("provider stdin writer did not finish")
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired as exc:
+                if timeout_seconds is not None and time.monotonic() - start >= timeout_seconds:
+                    raise
+                raise AgentProcessError(
+                    f"{agent_key} closed output pipes without exiting.",
+                    kind_hint=AgentFailureKind.PROCESS,
+                ) from exc
+            result: StreamResult | subprocess.CompletedProcess[str] = StreamResult(
+                process.returncode if process.returncode is not None else 1,
+                "".join(stdout_chunks), "".join(stderr_chunks),
+            )
+        else:
+            writer_errors: queue.Queue[BaseException] = queue.Queue()
+            writer: threading.Thread | None = None
+            if stdin_text is not None:
+                assert process.stdin is not None
+                input_stream = process.stdin
+                process.stdin = None
+                writer = threading.Thread(
+                    target=_write_provider_input,
+                    args=(input_stream, stdin_text, writer_errors), daemon=True,
+                )
+                writer.start()
+            leader_exit_at = None
+            drain_deadline = None
+            while True:
+                now = time.monotonic()
+                remaining = None if timeout_seconds is None else timeout_seconds - (now - start)
+                if remaining is not None and remaining <= 0:
+                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                if drain_deadline is not None and now > drain_deadline:
+                    raise AgentProcessError(
+                        f"{agent_key} output pipes remained open after group cleanup.",
+                        kind_hint=AgentFailureKind.PROCESS,
+                    )
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining) if remaining is not None else 0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    if process.poll() is not None:
+                        leader_exit_at = leader_exit_at or time.monotonic()
+                        if time.monotonic() - leader_exit_at > 1.0 and not group_cleanup_done:
+                            _finish_exited_leader_group(process, identity, agent_key)
+                            group_cleanup_done = True
+                            drain_deadline = time.monotonic() + 2.0
+            if writer is not None:
+                writer.join(timeout=1)
+                if writer.is_alive():
+                    raise AgentProcessError(f"{agent_key} stdin writer did not finish.", kind_hint=AgentFailureKind.PROCESS)
+                if not writer_errors.empty():
+                    raise writer_errors.get_nowait()
+            result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
+        finished = True
+        return result
+    except BaseException:
+        if identity is None:
+            try:
+                identity = capture_process_identity(process.pid)
+            except (OSError, ValueError, IndexError, UnicodeError):
+                pass
+        _stop_provider_group(process, identity, drain_seconds=0.2 if group_cleanup_done else 2.0)
+        raise
+    finally:
+        if finished:
+            # The leader can exit before children. Reap any remaining group members.
+            _stop_provider_group(process, identity, drained=True)
 
 
 def run_agent(
@@ -1340,6 +1558,8 @@ def run_agent(
 
     invocation_started = time.monotonic()
     try:
+        if not operation:
+            raise ValueError(f"provider input operation is required for {agent_key}")
         if adapter.reviewer:
             if not reviewer_repository_required:
                 workspace = create_empty_reviewer_workspace()
@@ -1351,28 +1571,15 @@ def run_agent(
             execution_root = workspace.root
             adapter.bind_reviewer_workspace(source_root, execution_root)
 
-        prepare_input = getattr(adapter, "prepare_provider_input", None)
         if prepared_provider_input is not None:
             prepared = prepared_provider_input
-        elif callable(prepare_input):
-            prepared = prepare_input(prompt)
         else:
-            legacy_command, legacy_stdin = adapter.build_command(prompt)
-            prepared = PreparedProviderInput(
-                tuple(legacy_command),
-                prompt if legacy_stdin else None,
-                (ProviderInputComponent("stdin_prompt", prompt),),
-            )
-        effective_operation = operation or {
-            "codex": "codex_implementation",
-            "claude": "claude_slice_review",
-        }.get(agent_key)
-        if effective_operation is None:
-            raise ValueError(f"provider input operation is required for {agent_key}")
+            prepared = adapter.prepare_provider_input(prompt)
+        effective_operation = operation
         measurement = measure_provider_input(
             prepared,
             provider=agent_key,
-            role=agent_key,
+            role=PROVIDER_ROLES[agent_key],
             operation=effective_operation,
             binding_fingerprint=binding_fingerprint,
             policy=config.provider_input_budget,
@@ -1402,11 +1609,14 @@ def run_agent(
         if not measurement.allowed:
             raise ProviderInputBudgetExceeded(measurement)
 
-        verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
-        command_parts = list(prepared.command)
-        stdin_text = prepared.stdin_text
         env = os.environ.copy()
         env.update(adapter.env)
+        verify_agent_capabilities(
+            adapter, strict_dns=config.strict_preflight,
+            path=env.get("PATH", os.defpath),
+        )
+        command_parts = _bound_launch_command(adapter, prepared.command)
+        stdin_text = prepared.stdin_text
         if adapter.reviewer:
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             for variable in (
@@ -1523,7 +1733,7 @@ class NativeAgentReviewOutput:
 
 
 def run_native_review_agent(
-    adapter: AgentAdapter,
+    adapter: NativeReviewAdapter,
     bundle: NativeReviewRequestBundle,
     *,
     config: OrchestratorConfig,
@@ -1536,10 +1746,7 @@ def run_native_review_agent(
     response_callback: Callable[[str], None] | None = None,
 ) -> NativeAgentReviewOutput:
     """Run one native Claude review without legacy marker or repair parsing."""
-    prepare = getattr(adapter, "prepare_native_provider_input", None)
-    if not callable(prepare):
-        raise TypeError("native review adapter lacks prepare_native_provider_input")
-    prepared = prepare(bundle)
+    prepared = adapter.prepare_native_provider_input(bundle)
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -1621,7 +1828,7 @@ def run_native_review_agent(
 
 def run_native_review_agent_checked(
     *,
-    adapter: AgentAdapter,
+    adapter: NativeReviewAdapter,
     bundle: NativeReviewRequestBundle,
     log_prefix: str,
     config: OrchestratorConfig,
@@ -1730,23 +1937,23 @@ def run_native_review_agent_checked(
 
 
 @dataclass(frozen=True, slots=True)
-class NativeAgentCodexOutput:
+class NativeAgentImplementerOutput:
     """One schema-, request-, and domain-bound native Codex result."""
 
-    result: CodexContractResult
+    result: ImplementerContractResult
     canonical_json: str
     request_id: str
     response_sha256: str
-    context: NativeCodexContext | None = field(default=None, compare=False)
+    context: NativeImplementerContext | None = field(default=None, compare=False)
     recovered_finding_comparison: RecoveredFindingComparison | None = field(
         default=None,
         compare=False,
     )
 
 
-def run_native_codex_agent(
-    adapter: AgentAdapter,
-    bundle: NativeCodexRequestBundle,
+def run_native_implementer_agent(
+    adapter: NativeImplementerAdapter,
+    bundle: NativeImplementerRequestBundle,
     *,
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
@@ -1756,15 +1963,12 @@ def run_native_codex_agent(
     attempt_invocation: _ProviderAttemptInvocation | None = None,
     validated_response_callback: Callable[[str], None] | None = None,
     execution_boundary: NativeCodexExecutionBoundary | None = None,
-) -> NativeAgentCodexOutput:
+) -> NativeAgentImplementerOutput:
     """Run native Codex without marker parsing, flag extraction, or repair."""
-    prepare = getattr(adapter, "prepare_native_provider_input", None)
-    if not callable(prepare):
-        raise TypeError("native Codex adapter lacks prepare_native_provider_input")
     boundary = execution_boundary or NativeCodexExecutionBoundary.production(
         config.repo_root
     )
-    prepared = prepare(bundle, boundary)
+    prepared = adapter.prepare_native_provider_input(bundle, boundary)
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -1782,16 +1986,16 @@ def run_native_codex_agent(
         document = json.loads(canonical)
         if not isinstance(document, dict):
             raise AgentOutputError("native Codex result must be a JSON object")
-        validate_native_codex_document(document)
-        validate_native_codex_provider_response(document, bundle)
+        validate_native_implementer_document(document)
+        validate_native_implementer_provider_response(document, bundle)
         if document.get("request_id") != bundle.bound_context.request_id:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.REQUEST_MISMATCH,
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.REQUEST_MISMATCH,
                 "response request_id does not match bound request",
             )
         if validated_response_callback is not None:
             validated_response_callback(canonical)
-        result = parse_bound_native_codex_contract_result(
+        result = parse_bound_native_implementer_contract_result(
             document, bundle.bound_context
         )
     except json.JSONDecodeError as exc:
@@ -1822,7 +2026,7 @@ def run_native_codex_agent(
             provider_data=document,
             technical_text=f"{exc.code.value}: {exc.detail}",
         ) from exc
-    return NativeAgentCodexOutput(
+    return NativeAgentImplementerOutput(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
@@ -1831,10 +2035,10 @@ def run_native_codex_agent(
     )
 
 
-def run_native_codex_agent_checked(
+def run_native_implementer_agent_checked(
     *,
-    adapter: AgentAdapter,
-    bundle: NativeCodexRequestBundle,
+    adapter: NativeImplementerAdapter,
+    bundle: NativeImplementerRequestBundle,
     raw_response_path: Path,
     config: OrchestratorConfig,
     write_file: Callable[[Path, str], None],
@@ -1843,9 +2047,9 @@ def run_native_codex_agent_checked(
     binding_fingerprint: str,
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None,
     provider_attempt_lifecycle: ProviderAttemptLifecycle | None,
-    accepted_output_callback: Callable[[NativeAgentCodexOutput], None] | None = None,
+    accepted_output_callback: Callable[[NativeAgentImplementerOutput], None] | None = None,
     execution_boundary: NativeCodexExecutionBoundary | None = None,
-) -> NativeAgentCodexOutput:
+) -> NativeAgentImplementerOutput:
     """Persist canonical response bytes before any accepted-result callback."""
     invocation_id = uuid.uuid4().hex
     attempt_invocation = (
@@ -1854,7 +2058,7 @@ def run_native_codex_agent_checked(
         else None
     )
     try:
-        output = run_native_codex_agent(
+        output = run_native_implementer_agent(
             adapter,
             bundle,
             config=config,

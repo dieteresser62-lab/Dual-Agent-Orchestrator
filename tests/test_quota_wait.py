@@ -345,7 +345,7 @@ def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
         clock[0] += timedelta(seconds=seconds)
 
     wait_until_quota_resume(
-        role="claude",
+        role="reviewer",
         task_label="task-14",
         work_unit_id=9,
         reset_at_utc=RECEIVED + timedelta(seconds=12),
@@ -358,7 +358,7 @@ def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
 
     assert sleeps == [5.0, 5.0, 2.0]
     assert len(heartbeats) == 5
-    assert all("role=claude" in item and "work_unit=9" in item for item in heartbeats)
+    assert all("role=reviewer" in item and "work_unit=9" in item for item in heartbeats)
     assert heartbeats[0].startswith("quota wait entered:")
     assert sum(
         item.startswith("quota wait heartbeat:") for item in heartbeats
@@ -371,7 +371,7 @@ def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
 def test_wait_is_interruptible_without_internal_retry() -> None:
     with pytest.raises(KeyboardInterrupt):
         wait_until_quota_resume(
-            role="codex",
+            role="implementer",
             task_label="task-14",
             work_unit_id=2,
             reset_at_utc=RECEIVED + timedelta(minutes=1),
@@ -386,7 +386,7 @@ def test_wait_is_interruptible_without_internal_retry() -> None:
 def test_wait_rejects_resume_before_reset_directly() -> None:
     with pytest.raises(ValueError, match="cannot precede"):
         wait_until_quota_resume(
-            role="claude", task_label="task-invalid", work_unit_id=1,
+            role="reviewer", task_label="task-invalid", work_unit_id=1,
             reset_at_utc=RECEIVED + timedelta(minutes=2),
             resume_at_utc=RECEIVED + timedelta(minutes=1),
             heartbeat_interval_seconds=10,
@@ -405,7 +405,7 @@ def test_large_margin_logs_reset_before_single_fake_clock_sleep() -> None:
         clock[0] += timedelta(seconds=seconds)
 
     wait_until_quota_resume(
-        role="claude", task_label="large-margin", work_unit_id=2,
+        role="reviewer", task_label="large-margin", work_unit_id=2,
         reset_at_utc=RECEIVED, resume_at_utc=resume,
         heartbeat_interval_seconds=3_600,
         now_fn=lambda: clock[0], sleep_fn=sleep, heartbeat_fn=events.append,
@@ -419,7 +419,7 @@ def test_large_margin_logs_reset_before_single_fake_clock_sleep() -> None:
 def test_wait_rejects_naive_injected_clock() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         wait_until_quota_resume(
-            role="claude",
+            role="reviewer",
             task_label="task-14",
             work_unit_id=5,
             reset_at_utc=RECEIVED + timedelta(seconds=1),

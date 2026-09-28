@@ -17,7 +17,7 @@ from workflow_state import WorkflowStep
 
 def _native_plan_result() -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": "$BOUND_REQUEST_ID",
         "result_type": "plan_result",
         "ready": True,
@@ -38,10 +38,10 @@ def _scenario_document() -> dict[str, object]:
         "name": "native-plan",
         "agent_events": [
             {
-                "role": "codex",
+                "role": "implementer",
                 "work_unit_id": 1,
                 "request_sequence": 1,
-                "step": "codex_plan",
+                "step": "implementer_plan",
                 "output": _native_plan_result(),
             }
         ],
@@ -53,8 +53,8 @@ def test_scenario_accepts_only_native_json_agent_documents() -> None:
     scenario = DryRunScenario.from_dict(_scenario_document())
     event = scenario.agent_events[0]
     assert event.output == _native_plan_result()
-    assert event.role is AgentRole.CODEX
-    assert event.step is WorkflowStep.CODEX_PLAN
+    assert event.role is AgentRole.IMPLEMENTER
+    assert event.step is WorkflowStep.IMPLEMENTER_PLAN
 
 
 def test_scenario_accepts_legacy_round_spelling_as_request_sequence() -> None:
@@ -92,7 +92,7 @@ def test_scenario_rejects_retired_productive_path_count_option() -> None:
 
 def test_scripted_event_requires_exactly_one_native_output_or_failure() -> None:
     with pytest.raises(ValueError, match="exactly one"):
-        ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN)
+        ScriptedAgentEvent(AgentRole.IMPLEMENTER, 1, 1, WorkflowStep.IMPLEMENTER_PLAN)
 
 
 def test_load_scenario_preserves_native_document_bytes_semantically(
