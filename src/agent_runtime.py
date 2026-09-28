@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import hashlib
 import logging
 import math
@@ -1053,14 +1054,16 @@ def verify_agent_capabilities(
 
     adapter.capability_verified = True
     adapter.provider_identity = identity
+    slot = getattr(adapter, "bound_slot", "reviewer" if adapter.reviewer else "implementer")
+    role = "reviewer" if adapter.reviewer else "implementer"
     logger.info(
-        "Agent ready: role=%s binary=%s version=%s model=%s effort=%s timeout=%ss profile=%s",
-        adapter.name,
+        "Agent ready: slot=%s role=%s provider=%s binary=%s version=%s model=%s effort=%s timeout=%s profile=%s",
+        slot, role, adapter.name,
         identity.real_path,
         version_text,
         adapter.model,
         adapter.effort,
-        adapter.timeout,
+        f"{adapter.timeout}s" if adapter.timeout else "unlimited",
         "read-only-reviewer" if adapter.reviewer else "workspace-write-implementer",
     )
 
@@ -1268,6 +1271,17 @@ def _write_provider_input(
         errors.put(exc)
 
 
+def _raise_writer_error(errors: queue.Queue[BaseException], process: subprocess.Popen[str]) -> None:
+    if errors.empty():
+        return
+    error = errors.get_nowait()
+    if isinstance(error, OSError) and error.errno == errno.EPIPE:
+        if process.poll() is None:
+            errors.put(error)
+        return
+    raise error
+
+
 def _stop_provider_group(
     process: subprocess.Popen[str], identity: ProcessIdentity | None,
     *, drain_seconds: float = 2.0, drained: bool = False,
@@ -1402,8 +1416,7 @@ def _run_agent_process(
                 now = time.monotonic()
                 if timeout_seconds is not None and now - start > timeout_seconds:
                     raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-                if not writer_errors.empty():
-                    raise writer_errors.get_nowait()
+                _raise_writer_error(writer_errors, process)
                 if process.poll() is not None:
                     leader_exit_at = leader_exit_at or now
                     if (now - leader_exit_at > 1.0 and not group_cleanup_done
@@ -1445,8 +1458,7 @@ def _run_agent_process(
                 writer.join(timeout=1)
                 if writer.is_alive():
                     raise RuntimeError("provider stdin writer did not finish")
-                if not writer_errors.empty():
-                    raise writer_errors.get_nowait()
+                _raise_writer_error(writer_errors, process)
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired as exc:
@@ -1484,8 +1496,7 @@ def _run_agent_process(
                         f"{agent_key} output pipes remained open after group cleanup.",
                         kind_hint=AgentFailureKind.PROCESS,
                     )
-                if not writer_errors.empty():
-                    raise writer_errors.get_nowait()
+                _raise_writer_error(writer_errors, process)
                 try:
                     stdout, stderr = process.communicate(timeout=min(0.2, remaining) if remaining is not None else 0.2)
                     break
@@ -1500,8 +1511,7 @@ def _run_agent_process(
                 writer.join(timeout=1)
                 if writer.is_alive():
                     raise AgentProcessError(f"{agent_key} stdin writer did not finish.", kind_hint=AgentFailureKind.PROCESS)
-                if not writer_errors.empty():
-                    raise writer_errors.get_nowait()
+                _raise_writer_error(writer_errors, process)
             result = subprocess.CompletedProcess(command_parts, process.returncode, stdout, stderr)
         finished = True
         return result
@@ -1663,32 +1673,34 @@ def run_agent(
                 exit_code=result.returncode,
                 kind_hint=AgentFailureKind.OUTPUT,
             )
+        slot = getattr(adapter, "bound_slot", "reviewer" if adapter.reviewer else "implementer")
+        role = "reviewer" if adapter.reviewer else "implementer"
         if config.agent_live_stream and config.agent_live_stream_mode == "compact":
             summary_lines = _compact_result_lines(output)
             if summary_lines:
                 for summary_line in summary_lines:
-                    logger.info("[AGENT_RESULT] role=%s %s", agent_key, summary_line)
+                    logger.info("[AGENT_RESULT] slot=%s role=%s provider=%s %s", slot, role, agent_key, summary_line)
             else:
-                logger.info("[AGENT_RESULT] role=%s completed", agent_key)
+                logger.info("[AGENT_RESULT] slot=%s role=%s provider=%s completed", slot, role, agent_key)
         normalized_usage = normalize_provider_usage(adapter.metadata)
         if normalized_usage is not None:
             if config.agent_live_stream_mode == "full" or config.agent_output_mode == "full":
                 logger.info(
-                    "[AGENT_USAGE] role=%s operation=%s usage=%s",
-                    agent_key,
+                    "[AGENT_USAGE] slot=%s role=%s provider=%s operation=%s usage=%s",
+                    slot, role, agent_key,
                     effective_operation,
                     json.dumps(asdict(normalized_usage), ensure_ascii=False, sort_keys=True),
                 )
             else:
                 logger.info(
-                    "[AGENT_USAGE] role=%s operation=%s %s",
-                    agent_key,
+                    "[AGENT_USAGE] slot=%s role=%s provider=%s operation=%s %s",
+                    slot, role, agent_key,
                     effective_operation,
                     _compact_usage_metadata(adapter.metadata),
                 )
         logger.info(
-            "[PROVIDER_COMPLETION] role=%s operation=%s success=true elapsed=%.2fs usage=%s",
-            agent_key,
+            "[PROVIDER_COMPLETION] slot=%s role=%s provider=%s operation=%s success=true elapsed=%.2fs usage=%s",
+            slot, role, agent_key,
             effective_operation,
             time.monotonic() - invocation_started,
             _compact_usage_metadata(adapter.metadata),

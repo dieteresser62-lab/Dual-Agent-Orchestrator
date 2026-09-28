@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from artifact_replay import replay_artifacts
 from artifact_models import CorrectionWorkUnitPayload, WorkUnitPayload
 from artifact_store import ArtifactStore
-from audit_document_contract import PLAN_APPENDIX_HEADING
+from audit_document_contract import PLAN_APPENDIX_HEADING, marker
 from readable_audit import (
     AuditFacts, authored_slice_sections, read_approved_plan,
     render_overall, render_plan_appendix, render_slice,
@@ -74,11 +74,7 @@ def main() -> int:
         identity = facts.replay.run_identity
         if identity is None:
             raise ValueError("chain lacks run identity")
-        if identity.audit_report_path:
-            emit(
-                identity.audit_report_path,
-                render_overall(facts, task=Path(identity.task_file).stem, branch=identity.branch),
-            )
+        missing_reports: list[str] = []
         if facts.plan is not None:
             slice_scopes = ((spec.slice_id, spec.paths) for spec in facts.plan.slices)
         else:
@@ -93,14 +89,26 @@ def main() -> int:
                 continue
             seen_slices.add(slice_id)
             paths = [path for path in scope if path.startswith("docs/internal/slice-") and path.endswith(".md")]
-            if len(paths) != 1:
+            if len(paths) > 1:
                 raise ValueError(f"Slice {slice_id} lacks one audit path")
+            if not paths:
+                missing_reports.append(slice_id)
+                continue
             source = repository / paths[0]
             implementation, deviations = (
                 authored_slice_sections(source.read_text(encoding="utf-8"))
                 if source.is_file() else ("Noch nicht dokumentiert.", "Keine.")
             )
             emit(paths[0], render_slice(facts, int(slice_id), implementation=implementation, deviations=deviations))
+        if identity.audit_report_path:
+            overall = render_overall(facts, task=Path(identity.task_file).stem, branch=identity.branch)
+            if missing_reports:
+                note = "\n\n".join(
+                    f"### Slice {slice_id}\n\nkein Slice-Bericht im Scope."
+                    for slice_id in missing_reports
+                )
+                overall = overall.replace(marker("overview", "end"), "\n" + note + "\n" + marker("overview", "end"), 1)
+            emit(identity.audit_report_path, overall)
         if facts.plan is not None:
             plan_facts = facts
             if args.plan_run_id:

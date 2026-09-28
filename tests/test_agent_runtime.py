@@ -178,14 +178,14 @@ def test_capability_verification_accepts_forward_compatible_claude_minor(
 
 
 def test_capability_verification_accepts_forward_compatible_codex_minor(
-    monkeypatch, tmp_path: Path,
+    monkeypatch, tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     class FakeCodex:
         name = "codex"
         cli_binary = "codex"
         model = "gpt-6-sol"
         effort = "medium"
-        timeout = 30
+        timeout = None
         reviewer = False
         required_hosts: tuple[str, ...] = ()
         capability = CapabilitySpec(
@@ -215,9 +215,13 @@ def test_capability_verification_accepts_forward_compatible_codex_minor(
 
     monkeypatch.setattr(agent_runtime, "run_local_command", fake_run)
 
+    caplog.set_level("INFO")
     verify_agent_capabilities(adapter)
 
     assert adapter.capability_verified is True
+    assert "Agent ready: slot=implementer role=implementer provider=codex" in caplog.text  # allowlist:provider -- transport: log fields
+    assert "timeout=unlimited" in caplog.text
+    assert "role=codex" not in caplog.text  # allowlist:provider -- transport: reject provider in role field
 
 
 def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
@@ -1955,7 +1959,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     output = run_agent(
         adapter,
         "prompt",
-        config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
+        config=OrchestratorConfig(repo_root=source, agent_live_stream=True),
         shorten=lambda text, limit: (text or "")[:limit],
         operation="reviewer_slice_review",
     )
@@ -1974,6 +1978,10 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert output == "STATUS: DONE"
     assert "operation=reviewer_slice_review" in caplog.text
     assert "input_tokens=10 output_tokens=20 turns=2" in caplog.text
+    assert "[AGENT_RESULT] slot=reviewer role=reviewer provider=claude" in caplog.text  # allowlist:provider -- transport: result log fields
+    assert "[AGENT_USAGE] slot=reviewer role=reviewer provider=claude" in caplog.text  # allowlist:provider -- transport: usage log fields
+    assert "[PROVIDER_COMPLETION] slot=reviewer role=reviewer provider=claude" in caplog.text  # allowlist:provider -- transport: completion log fields
+    assert "role=claude" not in caplog.text  # allowlist:provider -- transport: reject provider in role field
 
 
 def test_provider_usage_normalization_is_closed_and_preserves_unknown() -> None:
@@ -2072,6 +2080,27 @@ def test_full_stdin_has_bounded_group_cleanup(
             execution_root=tmp_path, timeout_seconds=1, agent_key="implementer",
         )
     assert time.monotonic() - start < 5
+
+
+@pytest.mark.parametrize("live_stream", (False, True))
+def test_early_provider_exit_keeps_its_error_after_stdin_epipe(
+    tmp_path: Path, live_stream: bool,
+) -> None:
+    code = (
+        "import sys; sys.stdin.close(); "
+        "sys.stderr.write('provider rejected request\\n'); sys.stderr.flush(); sys.exit(27)"
+    )
+    result = agent_runtime._run_agent_process(
+        object(), [sys.executable, "-u", "-c", code], "x" * (16 * 1024 * 1024),
+        config=OrchestratorConfig(
+            repo_root=tmp_path, agent_live_stream=live_stream,
+            agent_live_stream_mode="full",
+        ),
+        env=os.environ.copy(), execution_root=tmp_path,
+        timeout_seconds=5, agent_key="implementer",
+    )
+    assert result.returncode == 27
+    assert result.stderr == "provider rejected request\n"
 
 
 @pytest.mark.parametrize("timeout_seconds", (None, 5))

@@ -174,8 +174,11 @@ def test_registry_uses_each_synthetically_admitted_slot_provider(monkeypatch: py
 def test_toml_usd_setting_is_emitted_in_claude_command() -> None:
     settings = AgentSettings("claude", "claude", "opus", None, "high", 5.0)
     adapter = NativeClaudeReviewAdapter(settings)
-    prepared = adapter.prepare_native_provider_input(_review_bundle())
-    assert prepared.command[prepared.command.index("--max-budget-usd") + 1] == "5.0"
+    try:
+        prepared = adapter.prepare_native_provider_input(_review_bundle())
+        assert prepared.command[prepared.command.index("--max-budget-usd") + 1] == "5.0"
+    finally:
+        adapter.cleanup()
 
 
 def test_import_does_not_resolve_settings_or_construct_registry() -> None:
@@ -252,20 +255,26 @@ def test_transport_command_environment_and_components_match_start_head(
         else NativeClaudeReviewAdapter(_settings(provider))
     )
     bundle = _codex_bundle() if provider == "codex" else _review_bundle()
-    prepared = adapter.prepare_native_provider_input(bundle)
-    runtime = str(adapter.invocation.runtime_dir)
-
     def digest(value: object) -> str:
         return hashlib.sha256(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-    assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
-    assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
-        "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
-    )
-    assert digest([(item.name, item.content) for item in prepared.components]) == expected_components
-    adapter.cleanup()
+    try:
+        prepared = adapter.prepare_native_provider_input(bundle)
+        runtime = str(adapter.invocation.runtime_dir)
+        assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
+        assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
+            "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
+        )
+        # The historical digest used /tmp as the parent of the random runtime name.
+        runtime_parent = str(adapter.invocation.runtime_dir.parent)
+        assert digest([
+            (item.name, item.content.replace(runtime_parent, "/tmp"))
+            for item in prepared.components
+        ]) == expected_components
+    finally:
+        adapter.cleanup()
 
 
 def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:

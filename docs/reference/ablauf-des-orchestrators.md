@@ -19,12 +19,14 @@ dafür, dass keiner von beiden seine eigene Arbeit abnimmt.
 
 Man kann es sich wie eine Werkstatt vorstellen:
 
-- **Codex** ist der Handwerker. Er plant die Arbeit und führt sie aus.
-- **Claude** ist der Prüfer. Er sieht sich jedes Zwischenergebnis an und darf
+- **Der Implementer** (standardmäßig Codex) ist der Handwerker. Er plant die Arbeit und führt sie aus.
+- **Reviewer und Final-Reviewer** (standardmäßig Claude) sind die Prüfer. Der Reviewer sieht sich jedes Zwischenergebnis an, der Final-Reviewer den gesamten Branch. Beide dürfen
   nichts selbst anfassen — nur beurteilen.
 - **Der Orchestrator** ist der Werkstattleiter. Er gibt die Aufträge aus,
   lässt die Tests laufen, führt Buch und ist der Einzige, der ein Ergebnis in
   die Versionsverwaltung übernimmt.
+
+`[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung.
 
 Diese Trennung ist der ganze Zweck der Übung. Ein einzelner Agent, der seine
 Arbeit selbst beurteilt, neigt dazu, sie für gelungen zu halten. Zwei
@@ -78,21 +80,21 @@ den offenen Versuch als beendet behandelt.
 
 | | darf | darf nicht |
 |---|---|---|
-| **Codex** | planen, Dateien ändern, Tests schreiben, Befunde beantworten | die eigene Arbeit freigeben, committen |
-| **Claude** | lesen, beurteilen, Befunde eröffnen und schließen | Dateien ändern, Tests ausführen, committen |
+| **Implementer** | planen, Dateien ändern, Tests schreiben, Befunde beantworten | die eigene Arbeit freigeben, committen |
+| **Reviewer und Final-Reviewer** | lesen, beurteilen, Befunde eröffnen und schließen | Dateien ändern, Tests ausführen, committen |
 | **Orchestrator** | Aufträge vergeben, Tests ausführen, lokal committen, Buch führen | inhaltlich urteilen |
 
 Keine Agentenrolle darf pushen, zusammenführen, die Historie umschreiben oder
 die eigene Arbeit abnehmen. Den lokalen Abschlussmerge führt allein der
 Orchestrator nach einem befundfreien Gesamtreview aus.
 
-Claude arbeitet dabei in einer **schreibgeschützten Kopie** des Repositorys.
+Reviewer und Final-Reviewer arbeiten dabei in einer **schreibgeschützten Kopie** des Repositorys.
 Das ist keine Vertrauensfrage, sondern eine Bauweise: Wer nichts ändern kann,
 kann auch nicht versehentlich das prüfen, was er selbst gerade angepasst hat.
 
 Dasselbe Prinzip gilt in der Gegenrichtung, und es ist die vielleicht
-eleganteste Stelle des Systems: Dass nur Claude einen Befund schließen darf,
-ist keine Regel, die Codex befolgen muss — **Codex' Antwortschema enthält kein
+eleganteste Stelle des Systems: Dass nur der Reviewer einen Befund schließen darf,
+ist keine Regel, die der Implementer befolgen muss — **das Implementer-Antwortschema enthält kein
 Feld dafür.** Er kann einen Befund beantworten, aber nicht für erledigt
 erklären. Was nicht ausdrückbar ist, muss nicht verboten werden.
 
@@ -161,8 +163,8 @@ und einem lesbaren Urteil; die Aufzeichnungen bleiben vollständig erhalten.
                │
                ▼
      ┌──────────────────┐
-     │  1. PLANUNG      │   Codex schreibt einen Arbeitsplan
-     │                  │   Claude prüft ihn
+     │  1. PLANUNG      │   Implementer schreibt einen Arbeitsplan
+     │                  │   Reviewer prüft ihn
      │                  │   bis keine Befunde offen sind
      └────────┬─────────┘
               │
@@ -170,7 +172,7 @@ und einem lesbaren Urteil; die Aufzeichnungen bleiben vollständig erhalten.
      ┌──────────────────┐
      │  2. UMSETZUNG    │   je Arbeitspaket ("Slice"):
      │                  │
-     │   Codex baut ──► Tests ──► Claude prüft
+     │   Implementer baut ──► Tests ──► Reviewer prüft
      │        ▲                        │
      │        │     Befund offen?      │
      │        └────────────────────────┘
@@ -180,7 +182,7 @@ und einem lesbaren Urteil; die Aufzeichnungen bleiben vollständig erhalten.
               │  alle Slices fertig
               ▼
      ┌──────────────────┐
-     │  3. ABNAHME      │   Claude liest den gesamten Branch
+     │  3. ABNAHME      │   Final-Reviewer liest den gesamten Branch
      │                  │
      │   Restarbeit? ──► neue Aufgabe, alles beginnt von vorn
      │   nichts mehr?  ──► fertig
@@ -199,8 +201,8 @@ Einkaufslisten-Beschreibung.
 
 ### Phase 1 — Planung, 5 Minuten
 
-Codex sieht sich das Repository an und schneidet die Arbeit in sieben Pakete.
-Claude prüft den Plan und gibt ihn frei. Der Plan wird committet.
+Der Implementer sieht sich das Repository an und schneidet die Arbeit in sieben Pakete.
+Der Reviewer prüft den Plan und gibt ihn frei. Der Plan wird committet.
 
 ### Phase 2 — Umsetzung, sieben Pakete
 
@@ -214,19 +216,19 @@ Claude prüft den Plan und gibt ihn frei. Der Plan wird committet.
 | 06 | Ausgabe als Text und Druck | 1 |
 | 07 | Zusammenbau zur Anwendung | 2 |
 
-Bei den Paketen 03, 04 und 07 hat Claude etwas beanstandet. Beispiel aus
+Bei den Paketen 03, 04 und 07 hat der Reviewer etwas beanstandet. Beispiel aus
 Paket 03:
 
 > Die Änderungspfade brauchen ein fail-closed lesendes Verfahren, damit ein
 > vorübergehender oder fehlerhafter Lesezugriff nicht in einen leeren Zustand
 > umgedeutet und dauerhaft gespeichert wird.
 
-Codex hat den Befund behoben, Claude hat ihn geschlossen, das Paket wurde
+Der Implementer hat den Befund behoben, der Reviewer hat ihn geschlossen, das Paket wurde
 committet. Jedes Mal genügte eine Korrekturrunde.
 
 ### Phase 3 — Abnahme, zweimal
 
-Claude liest den **gesamten Branch** — 740.000 Zeichen gegenüber 94.000 bei
+Der Final-Reviewer liest den **gesamten Branch** — 740.000 Zeichen gegenüber 94.000 bei
 einem einzelnen Paket — und findet etwas, das kein einzelnes Paket zeigen
 konnte:
 
@@ -294,13 +296,13 @@ Und drei Arten von Arbeitseinheiten: `plan`, `slice`, `final_review`.
 
 ### Befunde: zwei Klassen, zwei Antworten
 
-Claude eröffnet Befunde mit Kennungen der Form `R-01`, `R-02`, … Jeder Befund
+Der Reviewer eröffnet Befunde mit Kennungen der Form `R-01`, `R-02`, … Jeder Befund
 hat eine von zwei Klassen:
 
 - **`FINDING`** — ein gewöhnlicher Befund.
 - **`BLOCKER`** — ein Befund, der einen Commit verhindert.
 
-Codex muss **jeden offenen Befund genau einmal** mit einer Begründung
+Der Implementer muss **jeden offenen Befund genau einmal** mit einer Begründung
 beantworten. Es gibt genau zwei Antworten:
 
 > **Blocker müssen gelöst werden. Findings können gelöst oder abgelehnt
@@ -318,10 +320,10 @@ ein Fingerabdruck nicht; das bleibt Sache des Prüfers.
 
 ### Wie ein Befund eskaliert
 
-Claude hat **keinen** ausdrücklichen Zug „hochstufen". Die Eskalation
+Der Reviewer hat **keinen** ausdrücklichen Zug „hochstufen". Die Eskalation
 geschieht durch Unterlassen:
 
-> Ein gewöhnlicher Befund, den Claude in einem **abgelehnten** Review **nicht
+> Ein gewöhnlicher Befund, den der Reviewer in einem **abgelehnten** Review **nicht
 > schließt**, wird zum `BLOCKER`.
 
 Der Orchestrator verzeichnet diesen Übergang. Will der Prüfer einen Befund

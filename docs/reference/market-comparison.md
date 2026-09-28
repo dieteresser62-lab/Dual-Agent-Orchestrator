@@ -6,7 +6,7 @@ Wie sich der Dual-Agent Task Orchestrator zu fünfzehn Coding-Agenten, Agentenpl
 
 ## 1. Zusammenfassung
 
-Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: **Codex** plant und baut, **Claude** prüft schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket.
+Der Orchestrator ist kein weiterer Coding-Agent. Er ist eine lokale Steuerungsebene, die zwei vorhandene Agenten in feste Rollen setzt: Der **Implementer** (standardmäßig Codex) plant und baut, **Reviewer und Final-Reviewer** (standardmäßig Claude) prüfen schreibgeschützt, und der Orchestrator selbst führt die Tests aus, führt Buch und committet – ausschließlich lokal, Arbeitspaket für Arbeitspaket. `[roles]` und `[agent_profiles]` in `orchestrator.toml` bestimmen die Besetzung.
 
 > [!TIP]
 > **Das Ergebnis dieser Recherche in drei Sätzen.**
@@ -35,8 +35,8 @@ Verglichen wird, was die offiziellen Quellen eines Produkts ausdrücklich beschr
 
 | Gruppe | Produkt | Was es ist |
 |---|---|---|
-| **Die beiden Motoren** | OpenAI Codex | Coding-Agent von OpenAI, lokal und in der Cloud – im Orchestrator der Implementierer |
-| | Claude Code | Coding-Agent von Anthropic, lokal und in der Cloud – im Orchestrator der Prüfer |
+| **Die beiden Motoren** | OpenAI Codex | Coding-Agent von OpenAI, lokal und in der Cloud – standardmäßig im Implementer-Slot |
+| | Claude Code | Coding-Agent von Anthropic, lokal und in der Cloud – standardmäßig in Reviewer- und Final-Reviewer-Slots |
 | **Herstellerplattform** | Google Antigravity | Agentenzentrierte Entwicklungsplattform von Google; externes Vergleichsprodukt und kein Bestandteil dieses Orchestrators |
 | **Plattformen mit Prüfdienst** | GitHub Copilot | Cloud Agent, Code Review und Agent HQ für Claude und Codex auf GitHub |
 | | Cursor | KI-IDE mit Cloud Agents, Bugbot und Freigabeagenten |
@@ -126,7 +126,7 @@ Die Merkmale, auf die der Orchestrator bewusst verzichtet:
 
 ## 6. Der Orchestrator im Profil
 
-Eine Aufgabe ist eine Markdown-Datei in normaler Sprache, abgelegt im Eingangsordner. Codex (GPT-6 Sol) schreibt daraus einen Arbeitsplan mit überschaubaren Arbeitspaketen, Claude (Opus 5.5) prüft ihn, bis kein Befund mehr offen ist. Danach setzt Codex Paket für Paket um; jedes Paket darf nur die Pfade ändern, die der Plan ihm zuweist. Der Orchestrator führt die Testsuite des Zielrepositorys selbst aus, bindet das Ergebnis an einen SHA-256-Fingerabdruck des Diffs und legt beides Claude vor, das in einer schreibgeschützten Kopie prüft. Commit gibt es nur, wenn für genau diesen Stand kein Blocker offen ist. Am Ende liest Claude den gesamten Branch; was dabei auffällt, wird als neue Aufgabe in den Eingang gelegt.
+Eine Aufgabe ist eine Markdown-Datei in normaler Sprache, abgelegt im Eingangsordner. Der Implementer schreibt daraus einen Arbeitsplan mit überschaubaren Arbeitspaketen, der Reviewer prüft ihn, bis kein Befund mehr offen ist. Danach setzt der Implementer Paket für Paket um; jedes Paket darf nur die Pfade ändern, die der Plan ihm zuweist. Der Orchestrator führt die Testsuite des Zielrepositorys selbst aus, bindet das Ergebnis an einen SHA-256-Fingerabdruck des Diffs und legt beides dem Reviewer vor, der in einer schreibgeschützten Kopie prüft. Commit gibt es nur, wenn für genau diesen Stand kein Blocker offen ist. Am Ende liest der Final-Reviewer den gesamten Branch; was dabei auffällt, wird als neue Aufgabe in den Eingang gelegt.
 
 Jede Tatsache landet in einer Aufzeichnungskette, die nur angehängt wird. Jeder Commit und jeder Provideraufruf ist darin vorher angekündigt und nachher bestätigt, sodass ein Lauf nach Absturz, Neustart oder Kontingentende exakt an der Stelle fortsetzt, ohne einen abgeschlossenen Schritt zu wiederholen. Neunundzwanzig Absturzszenarien belegen das. Nichts verlässt den Rechner: kein Push, kein Pull Request. Zusammengeführt wird nur lokal, nach einem befundfreien Gesamtreview und abschaltbar.
 
@@ -135,7 +135,7 @@ Jede Tatsache landet in einer Aufzeichnungskette, die nur angehängt wird. Jeder
 ## 7. Produktprofile
 
 <details>
-<summary><b>OpenAI Codex</b> – der Implementierer im Orchestrator</summary>
+<summary><b>OpenAI Codex</b> – standardmäßig der Implementer im Orchestrator</summary>
 
 Codex läuft lokal als CLI, IDE-Erweiterung und seit 9. Juli 2026 in der ChatGPT-Desktop-App, dazu in isolierten Cloud-Umgebungen von OpenAI. Seit dem 22. September stehen GPT-6 Sol und GPT-6 Luna bereit. Subagents, Worktrees und Cloud-Tasks arbeiten parallel; ein Planmodus ist vorhanden. `/review` prüft ungesicherte Änderungen, den Diff gegen die Merge-Base oder einen bestimmten Commit, ohne den Arbeitsbaum zu verändern, und das Prüfmodell ist über `review_model` getrennt wählbar. Tests führt der Agent selbst aus. CLI und SDK stehen unter Apache-2.0.
 
@@ -146,11 +146,11 @@ Quellen: [Neuerungen](https://learn.chatgpt.com/docs/whats-new) · [Code Review]
 </details>
 
 <details>
-<summary><b>Claude Code</b> – der Prüfer im Orchestrator</summary>
+<summary><b>Claude Code</b> – standardmäßig Reviewer und Final-Reviewer im Orchestrator</summary>
 
 Claude Code arbeitet im Terminal, in IDEs, als Desktop-App, im Web als „Cloud sessions" und in GitHub Actions – lokal oder in von Anthropic verwalteten VMs. Standardmodell ist seit dem 22. September Opus 5.5. Subagents laufen parallel, Agent Teams mit gemeinsamer Aufgabenliste sind experimentell. Der Planmodus ist nur lesend. Code Review (Research Preview für Team und Enterprise) prüft Pull Requests mit mehreren spezialisierten Agenten und hängt einen Check an den Commit, der allerdings immer „neutral" endet und keinen Merge blockiert. Hooks wie `TaskCompleted` können deterministisch blockieren.
 
-**Im Vergleich:** Claude Code prüft Claude-Arbeit mit Claude; ein Prüfer eines anderen Herstellers ist nicht nachgewiesen. Der Orchestrator setzt Claude umgekehrt ein: ausschließlich lesend, als Prüfer fremder Arbeit, mit einer Freigabe, die nur für den exakt geprüften Stand gilt.
+**Im Vergleich:** Claude Code prüft Claude-Arbeit mit Claude; ein Prüfer eines anderen Herstellers ist nicht nachgewiesen. Der Orchestrator setzt den Reviewer ausschließlich lesend ein, als Prüfer fremder Arbeit, mit einer Freigabe, die nur für den exakt geprüften Stand gilt.
 
 Quellen: [Changelog](https://code.claude.com/docs/en/changelog) · [Code Review](https://code.claude.com/docs/en/code-review) · [Agent Teams](https://code.claude.com/docs/en/agent-teams) · [Berechtigungsmodi](https://code.claude.com/docs/en/permission-modes)
 
@@ -327,7 +327,7 @@ Quellen: [CLI](https://docs.coderabbit.ai/cli) · [Claude-Code-Integration](http
 
 Der Orchestrator ersetzt keines der Werkzeuge, die er aufruft, und sollte auch nicht so beschrieben werden. Die Beziehung ist oft ergänzend:
 
-- **Codex und Claude** bleiben die Motoren. Der Orchestrator steuert beide über ihre Kommandozeilen und fügt den Prozess hinzu.
+- **Codex und Claude** (Standardbesetzung, konfigurierbar über `[roles]`) bleiben die Motoren. Der Orchestrator steuert die konfigurierten Provider über ihre Kommandozeilen und fügt den Prozess hinzu.
 - **Hosting-Plattformen** können die geprüften lokalen Commits später übernehmen. Wer danach einen Pull Request öffnet, kann ihn zusätzlich von Copilot Code Review, Bugbot, Devin Review oder CodeRabbit prüfen lassen.
 - **CI und Repository-Hooks** bleiben als weitere Verteidigungslinie nach der lokalen Validierung sinnvoll.
 

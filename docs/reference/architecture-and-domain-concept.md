@@ -5,8 +5,10 @@
 ## 1. Zweck
 
 Der Dual-Agent Task Orchestrator führt klar begrenzte Entwicklungsaufgaben
-lokal, fortsetzbar und auditierbar aus. Codex plant und implementiert, Claude
-reviewt unabhängig, und der Orchestrator besitzt Validierung, Zustand,
+lokal, fortsetzbar und auditierbar aus. Der Implementer (standardmäßig Codex)
+plant und implementiert, Reviewer und Final-Reviewer (standardmäßig Claude)
+prüfen unabhängig. `[roles]` und `[agent_profiles]` in `orchestrator.toml`
+bestimmen die Besetzung. Der Orchestrator besitzt Validierung, Zustand,
 Attestierung und lokale Committransaktionen.
 
 ## 2. Fachliches Problem
@@ -23,7 +25,7 @@ Validierungsattestierungen.
 |---|---|---|
 | Benutzer | Aufgabe, optionaler Zielbranch und echte Policyentscheidungen | technische Records oder State manuell erfinden |
 | Implementer (TOML-Profil) | Planung, Implementierung und Korrektur | eigene Arbeit freigeben, committen, pushen oder mergen |
-| Reviewer (TOML-Profil) | Read-only Plan-, Slice-, Korrektur- und Finalreview | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
+| Reviewer und Final-Reviewer (TOML-Profile) | Read-only Plan-, Slice-, Korrektur- und Finalreview | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
 | Orchestrator | Scope, Zustand, Recordkette, Validierung, Attestierung und lokale Commits | Defekte Freigaben erfinden oder externe Gitaktionen ausführen |
 
 ## 4. Architekturprinzipien und Invarianten
@@ -38,7 +40,7 @@ Validierungsattestierungen.
 5. Der Orchestrator führt die vollständige Matrix einmal je relevantem
    Fingerprint aus und bindet ihre Attestierung an den Review.
 6. Ein lokaler Commit entsteht nur aus exakt geprüftem Scope, Fingerprint,
-   Attestierung und Claude-Freigabe.
+   Attestierung und Reviewer-Freigabe.
 7. Resume ist fail-closed und wiederholt weder vollständige Providerresultate
    noch abgeschlossene Side Effects.
 8. Historische Protokollmodi werden mit `UNSUPPORTED-PROTOCOL` abgewiesen und
@@ -50,12 +52,12 @@ Validierungsattestierungen.
 Inbox/Task
    |
    v
-Task contract -> State-v3 workflow -> Codex native JSON
+Task contract -> State-v3 workflow -> Implementer native JSON
                          |                 |
                          v                 v
                   canonical diff -> validation attestation
                          |                 |
-                         +------> Claude native JSON review
+                         +------> Reviewer native JSON review
                                            |
                                            v
                                exact local Git commit
@@ -67,7 +69,7 @@ Records -> checked State mirror + deterministic Markdown projection
 Wesentliche Module:
 
 - `task_contract` und `plan_handoff` binden Auftrag und Slicegrenzen;
-- `workflow` steuert Codex–Claude-Konvergenz und Gates;
+- `workflow` steuert Implementer-Reviewer-Konvergenz und Gates;
 - `native_implementer_request`/`native_implementer_contract` und
   `native_review_request`/`native_review_contract` bilden die nativen
   Verträge;
@@ -82,24 +84,24 @@ Wesentliche Module:
 ### 6.1 Planung
 
 Ein informeller Auftrag wird in einen eng begrenzten `PLAN_ONLY`-Vertrag
-überführt. Codex erstellt genau das Arbeitsplandokument. Nach interner
-Handoffprüfung und Claude-Review commitet der Orchestrator den Plan lokal und
+überführt. Der Implementer erstellt genau das Arbeitsplandokument. Nach interner
+Handoffprüfung und Reviewer-Review commitet der Orchestrator den Plan lokal und
 erzeugt den `APPROVED_PLAN_COMMIT`-gebundenen Implementierungs-Handoff.
 
 ### 6.2 Implementierung und Korrektur
 
-Codex bearbeitet ausschließlich den aktiven Sliceschutzraum. Der Orchestrator
-ermittelt den kanonischen Diff und führt die Validierungsmatrix aus. Claude
+Der Implementer bearbeitet ausschließlich den aktiven Sliceschutzraum. Der Orchestrator
+ermittelt den kanonischen Diff und führt die Validierungsmatrix aus. Der Reviewer
 prüft den vollständigen Slice-Diff, gemessen ab dem unveränderlichen
 Slice-Start.
 
-Claude eröffnet Findings in zwei Klassen. Codex beantwortet jedes offene
+Der Reviewer eröffnet Findings in zwei Klassen. Der Implementer beantwortet jedes offene
 Finding genau einmal begründet: Ein `BLOCKER` muss gelöst werden, ein
 gewöhnliches `FINDING` darf gelöst oder abgelehnt werden. Eine Annahme ohne
 fingerprintändernde Repositoryänderung ist ungültig und wird an der
 Vertragsgrenze zurückgewiesen.
 
-Die Eskalation ist kein eigener Zug: Ein gewöhnliches Finding, das Claude in
+Die Eskalation ist kein eigener Zug: Ein gewöhnliches Finding, das der Reviewer in
 einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion
 zum `BLOCKER`. Die einzige Commitbedingung lautet, dass die recordabgeleitete
 Findingmenge des Slices keinen offenen Blocker enthält.
@@ -112,7 +114,7 @@ beendet den Slice negativ ohne Commit.
 ### 6.3 Abschluss
 
 Der Abnahmereview ist die letzte Arbeitseinheit desselben `IMPLEMENT`-Laufs.
-Claude liest den vollständigen Diff ab `git merge-base <basisbranch> <zielbranch>`
+Der Final-Reviewer liest den vollständigen Diff ab `git merge-base <basisbranch> <zielbranch>`
 und meldet dort nur neue Findings oder das erneute Auftreten bekannter
 Signaturen; er fordert keine Sonderkorrektur an.
 

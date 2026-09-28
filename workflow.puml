@@ -54,7 +54,7 @@ else (plan required)
     :Run deterministic plan checks;
     :Reviewer reviews the bound plan fingerprint;
     while (PLAN_APPROVAL is NO?) is (yes)
-      :Codex returns a native JSON plan correction;
+      :Implementer returns a native JSON plan correction;
       :Refresh bound evidence and Reviewer reviews again;
     endwhile (no)
     if (Manual plan gate enabled?) then (yes)

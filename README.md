@@ -32,7 +32,7 @@ Der [Marktvergleich](docs/reference/market-comparison.md) stellt das neben fünf
 
 ### Hintergrund
 
-Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP-Praxis. Dort war die Steuerung verteilter Offshore-Entwicklungsteams Alltag, und dort habe ich gelernt, dass verteilte Arbeit gelingt, wenn sie nicht auf Vertrauen, sondern auf Struktur baut: klar abgegrenzte Aufträge, Vier-Augen-Prinzip, Tests außerhalb der Entwicklung und eine Abnahme vor jedem Transport. Coding-Agenten brauchen genau dasselbe. Ein Slice entspricht einem Transportauftrag, Claudes Review der Qualitätssicherung und der lokale Commit der Freigabe.
+Der Orchestrator stammt nicht aus der KI-Szene, sondern aus jahrzehntelanger SAP-Praxis. Dort war die Steuerung verteilter Offshore-Entwicklungsteams Alltag, und dort habe ich gelernt, dass verteilte Arbeit gelingt, wenn sie nicht auf Vertrauen, sondern auf Struktur baut: klar abgegrenzte Aufträge, Vier-Augen-Prinzip, Tests außerhalb der Entwicklung und eine Abnahme vor jedem Transport. Coding-Agenten brauchen genau dasselbe. Ein Slice entspricht einem Transportauftrag, dem Reviewer-Review der Qualitätssicherung und der lokale Commit der Freigabe.
 
 ### Stand und Grenzen
 
@@ -60,13 +60,13 @@ Für den echten Einstieg: [Quickstart.md](Quickstart.md) oder die ausführliche 
 
 Die Rollenbesetzung wird aus TOML aufgelöst: Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen im Zielrepository gelten die mitgelieferten Profile aus dem Orchestrator-TOML (Implementer: Codex; Reviewer und Final-Reviewer: Claude). Das Zielrepository kann Profile und den Finalslot ausdrücklich überschreiben.
 
-Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
+Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest der Final-Reviewer die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
 2. Den Implementer geordnete `SLICE_PLAN`-Datensätze erstellen und den Reviewer den Planfingerprint prüfen lassen.
-3. Den von Claude freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
+3. Den vom Reviewer freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
 4. Für jeden geplanten Slice:
    - Der Implementer bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix für diesen Fingerprint aus. Ein grüner erster Durchgang bleibt einmalig; nach einem roten ersten Durchgang folgt eine vorab laufzeitabhängig begrenzte Flackerprobe, deren Einzelergebnisse vollständig und fail-closed attestiert werden.
@@ -74,14 +74,14 @@ Der normale Ablauf ist:
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
 5. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
 
-Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
-abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
+Erkennt der Implementer während eines Slices einen konkreten Defekt in einem bereits
+abgeschlossenen Vorgängerslice, kann er mit `REMEDIATION_PATHS` die kleinste
 notwendige Pfadmenge melden. Der Orchestrator erweitert den laufenden Slice nur
 dann automatisch, wenn alle Pfade bereits zum freigegebenen Vorgängerslice
 gehörten und das produktive Dateilimit weiter gilt. Unbekannte oder zukünftige
 Pfade sowie echte Produktentscheidungen bleiben ein Gate.
 
-Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
+Keine Rolle ersetzt eine andere. Der Implementer gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
 
 ## Referenzdokumentation
 
@@ -146,7 +146,7 @@ Eine nicht abgeschlossene `.orchestrator/state.json` wird im Einzelaufgabenmodus
 
 ## Informeller Inbox- und formaler Aufgabenbetrieb
 
-Im normalen Inbox-Betrieb darf die menschliche Aufgabe bewusst informell bleiben; freier Markdown-Text genügt. `TARGET_BRANCH: feature/<name>`, `TARGET_BRANCH: codex/<name>` und `--target-branch` bleiben optionale ausdrückliche Vorgaben. Ohne sie wird genau ein im Fließtext vorkommender Branchname übernommen. Fehlt auch dieser, entsteht deterministisch `feature/<gegenstand>-<digest-kurzteil>` aus Aufgabeninhalt und SHA-256-Digest. Wenn keine formalen Ausführungsmarker und kein Scope-Abschnitt vorhanden sind, erzeugt der Orchestrator außerdem deterministisch einen `PLAN_ONLY`-Vertrag: Der Dateiname wird zu einem ASCII-Slug normalisiert, der Arbeitsplan liegt unter `docs/internal/<slug>-arbeitsplan.md`, und nur dieser Planpfad ist im ersten Lauf beschreibbar. Codex übersetzt die Idee anhand des Repositorys in Slices, Pfade, Akzeptanzkriterien, Risiken und Validierung. Direkter Implementierungsscope wird niemals aus freier Prosa abgeleitet.
+Im normalen Inbox-Betrieb darf die menschliche Aufgabe bewusst informell bleiben; freier Markdown-Text genügt. `TARGET_BRANCH: feature/<name>`, `TARGET_BRANCH: codex/<name>` und `--target-branch` bleiben optionale ausdrückliche Vorgaben. Ohne sie wird genau ein im Fließtext vorkommender Branchname übernommen. Fehlt auch dieser, entsteht deterministisch `feature/<gegenstand>-<digest-kurzteil>` aus Aufgabeninhalt und SHA-256-Digest. Wenn keine formalen Ausführungsmarker und kein Scope-Abschnitt vorhanden sind, erzeugt der Orchestrator außerdem deterministisch einen `PLAN_ONLY`-Vertrag: Der Dateiname wird zu einem ASCII-Slug normalisiert, der Arbeitsplan liegt unter `docs/internal/<slug>-arbeitsplan.md`, und nur dieser Planpfad ist im ersten Lauf beschreibbar. Der Implementer übersetzt die Idee anhand des Repositorys in Slices, Pfade, Akzeptanzkriterien, Risiken und Validierung. Direkter Implementierungsscope wird niemals aus freier Prosa abgeleitet.
 
 Sobald einer der formalen Marker `ORCHESTRATOR_MODE`, `WORK_PLAN_PATH`, `APPROVED_PLAN_COMMIT` oder `TASK_SCOPE` vorkommt, gilt die Datei als formaler Vertrag und muss vollständig sein. Eine formale produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptanzkriterien diese maschinenlesbare Grenze:
 
@@ -160,9 +160,9 @@ TASK_SCOPE: <comma-separated repository-relative paths or globs>
 
 `TARGET_BRANCH` ist auch im formalen Vertrag optional und dient nur der ausdrücklichen Festlegung; ohne Marker gilt dieselbe eindeutige Textableitung beziehungsweise deterministische Erzeugung. `WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der aufgelöste Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
 
-`PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor dem Planreview prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält Codex vor Claude automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Claude prüft den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
+`PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Der Implementer erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor dem Planreview prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält der Implementer vor dem Reviewer automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Der Reviewer prüft den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
 
-Im Modus `IMPLEMENT` überführt Codex den Auftrag in einen oder mehrere persistierte Slices. Jeder ausführbare `SLICE_PLAN`-Datensatz enthält:
+Im Modus `IMPLEMENT` überführt der Implementer den Auftrag in einen oder mehrere persistierte Slices. Jeder ausführbare `SLICE_PLAN`-Datensatz enthält:
 
 ```text
 SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>
@@ -187,7 +187,7 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v2` sowie an die nativen, geschlossenen JSON-Verträge von Codex und Claude gebunden. Es gibt keine Transportflags mehr und ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
+Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v2` sowie an die nativen, geschlossenen JSON-Verträge von Implementer und Reviewer gebunden. Es gibt keine Transportflags mehr und ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
 
 Historische `legacy-state-v3`- und `structured-v1`-Läufe werden mit `UNSUPPORTED-PROTOCOL` fail-closed abgewiesen. Es gibt weder stille Migration noch modusübergreifenden Fallback.
 
@@ -197,17 +197,17 @@ Innerhalb eines laufenden Prozesses hält der Artifact-Store einen rein abgeleit
 
 Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice committet. Ein Slice-Dokument zeigt Ziel, Kriterien und Umfang aus dem freigegebenen Plan, die Umsetzung, den Verlauf, die eigenen Befunde, Validierungen und die Abschlussprüfung. Das Gesamtaudit bietet nur eine Übersicht mit Commits, Befunden, Halten und Abnahmereview. Technische Nachweise stehen ausschließlich in der Recordkette. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Slices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
 
-JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Codex-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Codex-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet Codex nicht erneut.
+JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Implementer-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Implementer-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet den Implementer nicht erneut.
 
 Die Auditansicht zeigt technische Record-, Request-, Fingerprint- und Digestbindungen im Ereignistext als stabile zwölfstellige Hexreferenzen. Jeder unterschiedliche Vollwert steht genau einmal im Unterabschnitt `Nachweis vollständiger Bindungswerte` des bestehenden `decision-table`-Blocks; identische Werte aus mehreren Feldern teilen dort eine Zeile und nennen alle erkannten Feldarten. Rollen, Runden, Ergebnisse, argv-Grenzen und Findingstatus bleiben direkt in den jeweiligen Ereignistabellen sichtbar. Prosa wird ausschließlich an vorhandenen Zeilenenden, an Listenmarkern (`-`, `*`, `+`, `•`, Dezimalzahl mit `.` oder `)`) nach horizontalem Leerraum sowie an `.`, `!` oder `?` mit folgendem horizontalem Leerraum gegliedert. Nur dieser Leerraum wird durch den sichtbaren Zeilenwechsel ersetzt; Zeichenfolge, Marker, Sprache und Reihenfolge werden nicht interpretiert oder umformuliert. Diese Projektion ändert weder Recordfakten noch den semantischen Artifact-Digest.
 
-Jeder neue Codex–Claude-Lauf verwendet ohne zusätzliche CLI-Optionen den nativen JSON-Transport. Resume übernimmt exakt diese vollständige Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
+Jeder neue Implementer-Reviewer-Lauf verwendet ohne zusätzliche CLI-Optionen den nativen JSON-Transport. Resume übernimmt exakt diese vollständige Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Reviewer-Reviewphase einen Textfallback. Offene Findings und Implementer-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Reviewer-Entscheidungen, Implementer-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
 
 Implementierungsaufrufe transportieren nicht mehr den vollständigen Mehrslice-Plan. Der Orchestrator projiziert daraus ein kanonisches, digestgebundenes Slice-Ausführungspaket mit Ziel, Akzeptanzkriterien, exakten Pfaden und ausdrücklich benannten Querverweisen. Korrekturaufrufe erhalten entsprechend nur die betroffenen offenen Findings, deren Abnahmekriterien, das aktuelle Diff und die fingerprintgebundene Pfadgrenze. Doppelte Evidenz-IDs, Quellpfade, Inhaltsdigests oder inhaltsgleiche Providerkomponenten werden vor dem Providerstart abgewiesen.
 
 Die Markdownprojektion verdichtet Providerattempts pro Operation mit Inputzeichen, UTF-8-Bytes, Laufzeit, Attemptanzahl, Retrystatus und – sofern tatsächlich persistiert – Input-/Outputtokens. Fehlende Usage bleibt ausdrücklich `unknown`; Zeichen- und Bytezahlen werden nicht als Tokenwerte ausgegeben. Die eingefrorene Vor-Cutover-Baseline dient ausschließlich als read-only Vergleich und wird im normalen Lauf weder importiert noch regeneriert.
 
-Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Claude-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
+Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Final-Reviewer-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
 Ohne Folgeauftrag verschiebt der Orchestrator danach neu angelegte Dateien aus der Wurzel von `docs/internal/` in den für den Lauf gebundenen Unterordner von `docs/internal/archive/` und committet ihre Umbenennungen separat. Das relative Muster `archive_run_directory` hat als Vorgabe `{run_id}` und verlangt diesen Platzhalter als vollständiges Pfadsegment; zusätzlich sind `{year}` aus der Laufkennung und `{branch_slug}` aus dem Zielbranch zulässig. Es wird beim Laufstart im Run-Profil gebunden. Ein vorhandener Zielordner, ein Symlink oder ein ungültiges Muster stoppt frühzeitig. Bei alten Läufen ohne gebundenes Archivmuster bleibt das bisherige flache Archivziel erhalten.
 
@@ -227,11 +227,11 @@ Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. 
 
 ## Validierung und Reviewisolation
 
-Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Kein Finding kann sie erweitern oder anhalten — weder ein gewöhnliches `FINDING` noch ein `BLOCKER`. Jedes Finding verwendet eine Prosa-Akzeptanz; die Validierungsmatrix bleibt davon unabhängig. Besteht der erste Matrixdurchgang, bleibt es bei diesem einen Durchgang. Scheitert er, legt der Orchestrator anhand seiner gemessenen Gesamtlaufzeit einmalig die Größe einer Flackerprobe fest: innerhalb eines 30-Sekunden-Budgets höchstens fünf Gesamtdurchgänge, mindestens aber die vorgeschriebene eine Wiederholung. Spätere Ergebnisse ändern diese Zahl nicht. Die Attestierung bleibt rot, sobald mindestens ein Durchgang scheitert, nennt das Verhältnis der roten zu allen Durchgängen und bewahrt die nummerierten Roh- und Kompaktausgaben jedes Durchgangs im vorhandenen Validierungsinhalt. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und Claude erhält die gebundene Evidenz.
+Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Kein Finding kann sie erweitern oder anhalten — weder ein gewöhnliches `FINDING` noch ein `BLOCKER`. Jedes Finding verwendet eine Prosa-Akzeptanz; die Validierungsmatrix bleibt davon unabhängig. Besteht der erste Matrixdurchgang, bleibt es bei diesem einen Durchgang. Scheitert er, legt der Orchestrator anhand seiner gemessenen Gesamtlaufzeit einmalig die Größe einer Flackerprobe fest: innerhalb eines 30-Sekunden-Budgets höchstens fünf Gesamtdurchgänge, mindestens aber die vorgeschriebene eine Wiederholung. Spätere Ergebnisse ändern diese Zahl nicht. Die Attestierung bleibt rot, sobald mindestens ein Durchgang scheitert, nennt das Verhältnis der roten zu allen Durchgängen und bewahrt die nummerierten Roh- und Kompaktausgaben jedes Durchgangs im vorhandenen Validierungsinhalt. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und der Reviewer erhält die gebundene Evidenz.
 
-Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
+Der Implementer arbeitet mit Schreibzugriff auf den Workspace. Reviewer und Final-Reviewer erhalten eine temporäre schreibgeschützte Repositorykopie, während ihre privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Das mitgelieferte TOML-Profil verwendet für den Reviewer Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
+Das mitgelieferte TOML-Profil verwendet für den Reviewer Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält der Reviewer verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
 geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
@@ -271,17 +271,17 @@ Die wichtigsten Gates sind:
 
 Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen und keinen reviewer-eigenen offenen Blocker.
 
-Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `R-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
+Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Der Reviewer eröffnet Findings mit `R-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Der Implementer muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
 
-Eine Eskalation wird nicht ausgesprochen, sondern geschieht: Ein gewöhnliches Finding, das Claude in einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion zum `BLOCKER`. Es gibt keinen Reklassifizierungszug und keine Observation-Klasse. Umgekehrt ist eine Freigabe mit einem eigenen offenen Finding widersprüchlich und wird zurückgewiesen — entweder im selben Zug schließen oder ablehnen.
+Eine Eskalation wird nicht ausgesprochen, sondern geschieht: Ein gewöhnliches Finding, das der Reviewer in einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion zum `BLOCKER`. Es gibt keinen Reklassifizierungszug und keine Observation-Klasse. Umgekehrt ist eine Freigabe mit einem eigenen offenen Finding widersprüchlich und wird zurückgewiesen — entweder im selben Zug schließen oder ablehnen.
 
 Jedes Finding gehört unveränderlich zu dem Slice, in dem es eröffnet wurde. Die einzige Commitbedingung lautet, dass die aus den Records abgeleitete Findingmenge dieses Slices keinen offenen Blocker enthält. Die erste Prüfung eines Slices entdeckt; jede weitere abgelehnte Prüfung ist eine Konvergenzrunde und muss einen bekannten Befund schließen oder eine attestierte, fingerprintändernde Behebung nachweisen. Eine Runde ohne beides beendet den Slice negativ, ebenso das Rundenlimit `max_rounds_per_loop`.
 
-Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `R-`-Kennung schließen.
+Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und vom Reviewer geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur der Reviewer darf Findings mit `R-`-Kennung schließen.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
-Codex und Claude liefern ausschließlich requestgebundene native JSON-Resultate.
+Implementer und Reviewer liefern ausschließlich requestgebundene native JSON-Resultate.
 Der jeweilige Provider erhält ein kontextspezifisches Writerschema; anschließend
 prüft der Orchestrator zusätzlich Requestbindung und Domänenregeln. Textmarker,
 Markdown-Codezäune, lokale Textnormalisierung und ein LLM-Reparaturturn gehören
@@ -292,7 +292,7 @@ Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quot
 
 ## Lokale Commits und externe Git-Aktionen
 
-Nachdem Claude den Slice-Fingerprint freigegeben hat, führt der Orchestrator folgende Schritte aus:
+Nachdem der Reviewer den Slice-Fingerprint freigegeben hat, führt der Orchestrator folgende Schritte aus:
 
 1. Repositorystatus und kanonischen Diff erneut ermitteln;
 2. Branch, Slice-Grenze, erlaubte Pfade, Reviews, Findings und Validierungsattestierung prüfen;
@@ -322,7 +322,7 @@ Der Watch-Modus:
 - weist jeder Aufgabe eine persistierte Lauf-ID und einen Digest des Aufgabeninhalts zu;
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
 - verwendet den vollständig automatischen Workflowstandard: Plan-, Teständerungs- und Slice-Commit-Gates sind aus, während echte Stopregeln, Scopeverletzungen, unauflösbare Vertragsfragen und fehlgeschlagene Pflichtvalidierungen weiterhin anhalten;
-- behandelt einen von Codex gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
+- behandelt einen vom Implementer gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
 - verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum branchweiten Reviewer-Abschlussreview ab;
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an; das digestgebundene Gesamtaudit fasst deren Stand und Commit zusammen, ohne Slice-Inhalte zu wiederholen. Die vollständigen technischen Nachweise bleiben in der Recordkette;
 - streamt standardmäßig `stdout`;
@@ -383,8 +383,8 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
-| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
-| `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und der Claude-Review verpflichtend. |
+| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Reviewer-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
+| `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und der Reviewer-Review verpflichtend. |
 | `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
 | `--target-branch <branch>` | Aufgabenmarker, eindeutige Textableitung oder deterministische Erzeugung | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
@@ -432,7 +432,7 @@ Datenproblem resumierbar und wird nicht als Quotenerschöpfung umgedeutet.
 | `--agent-output <none\|summary\|full>` | `none` | Umfang der auszugebenden abgeschlossenen Agentenantworten. |
 | `--agent-output-max-chars <count>` | `1800` | Maximale Zeichenanzahl abgeschlossener Antworten im Zusammenfassungsmodus. |
 | `--agent-live-stream` / `--no-agent-live-stream` | an | Live-Prozessausgabe aktivieren oder deaktivieren. |
-| `--agent-live-stream-mode <compact\|full>` | `compact` | `compact` zeigt lesbaren Codex-Fortschritt sowie Findings, Entscheidungen, Laufzeit und eine kurze Nutzungssumme ohne Provider-JSON; `full` zeigt die unveränderte Provider-Ausgabe. |
+| `--agent-live-stream-mode <compact\|full>` | `compact` | `compact` zeigt lesbaren Implementer-Fortschritt sowie Findings, Entscheidungen, Laufzeit und eine kurze Nutzungssumme ohne Provider-JSON; `full` zeigt die unveränderte Provider-Ausgabe. |
 | `--agent-live-stream-channels <both\|stdout\|stderr>` | Umgebung oder `stdout` | Auszugebende Live-Kanäle. |
 
 Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und anschließend diese persistenten Standards:
@@ -590,13 +590,13 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | `CODEX.md` | Dünner Einstieg der Codex CLI; verweist auf `AGENTS.md`. |
 | `CLAUDE.md` | Dünner Einstieg der Claude CLI; verweist auf `AGENTS.md`. |
 
-Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
+Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Der Implementer
 erhält `native-agent-implementer-request-v3` und antwortet gemäß
 `native-agent-implementer-result-v3` mit einer der strikt
 getrennten Varianten `plan_result`, `implementation_result`,
-`correction_result` oder `stop_result`. Claude erhält
+`correction_result` oder `stop_result`. Der Reviewer erhält
 `native-agent-review-request-v3` und antwortet gemäß
-`native-agent-review-result-v3`; sein request-spezifisches Writerschema bindet
+`native-agent-review-result-v3`; dessen request-spezifisches Writerschema bindet
 Freigabe, Findings, Statusänderungen, Reviewevidenz,
 Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
 persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder
