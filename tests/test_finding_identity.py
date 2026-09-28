@@ -82,7 +82,7 @@ def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -
             marker, slice_id, 1,
         )
         documents.append(native_review_provider_response_schema(context))
-    expected_counts = (1, 1, 1, 4, 2, 4, 5, 7, 5)
+    expected_counts = (1, 1, 1, 4, 2, 4, 5, 9, 5)
     samples = ("R-01", "R-10", "R-100", "R-00", "R-1", "R-01x", "C-01")
     expected = tuple(FINDING_ID_PATTERN.fullmatch(sample) is not None for sample in samples)
     for document, count in zip(documents, expected_counts, strict=True):

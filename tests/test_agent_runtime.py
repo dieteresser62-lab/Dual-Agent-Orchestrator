@@ -739,6 +739,8 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
                 "finding_id": "R-01",
                 "finding_class": "BLOCKER",
                 "affected_paths": [],
+                "predecessor_finding_ref": None,
+                "evidence_anchor_sha256": None,
                 "summary": "Approval still contains an open blocker.",
                 "acceptance_test": {
                     "kind": "prose",

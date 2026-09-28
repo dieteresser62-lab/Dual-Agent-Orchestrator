@@ -4258,6 +4258,8 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
                 "finding_id": "R-01",
                 "finding_class": "FINDING",
                 "affected_paths": ["src/runtime.py"],
+                "predecessor_finding_ref": None,
+                "evidence_anchor_sha256": None,
                 "summary": "Keep recovery transaction completeness visible.",
                 "acceptance_test": {
                     "kind": "prose",

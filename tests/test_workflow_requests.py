@@ -57,7 +57,7 @@ LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256 = (
     "3df05d6673e8134817cef501b58ff0a98baf926c4978e0b96d2d039fa415e682"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "271c9f634fc0473cba8572a3f49e2daac0e5801a140da55e1fa726b27267f8b5"
+    "bde300a33620f077cc274f4c48605dc43887ad23943c2f51db1ae5c4e2c924fd"
 )
 
 
@@ -320,7 +320,7 @@ def test_canonical_requests_match_the_current_bound_bytes() -> None:
     prior_schema = (review.provider_response_schema_json
         .replace('"const":"reviewer"', '"const":"claude"')
         .replace('"enum":["reviewer"]', '"enum":["claude"]'))
-    assert _canonical_digest(prior_schema) == "8892fb0113d102afa886f2be6421c393440a683fd6065e31198823205c2c9746"
+    assert _canonical_digest(prior_schema) == "96234209de18341a86a38ec920a1d1fd4c19984fa97c0610c1b621598a5f3317"
     prior_review = prior_role_wire_document(
         review.document, prior_schema_sha256=_canonical_digest(prior_schema)
     )
@@ -328,7 +328,7 @@ def test_canonical_requests_match_the_current_bound_bytes() -> None:
         PRE_CUT_REVIEW_REQUEST_SHA256
     )
     assert _canonical_digest(review.canonical_json) == (
-        "82e2a02f3bc289275c35392b37abae96fcdc4e2a1b4b17bc45b522e023187946"
+        "dd69e5dfa21efdc05aa1b69eefa2d5b2315f7c9894efcebc93b3391b91331826"
     )
 
 

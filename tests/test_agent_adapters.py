@@ -240,8 +240,8 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     ),
     (
         "claude",
-        "6b83ef239379787de1d5c6bacb082c124558fa5efd369b4f213d3458274a77f4",
-        "9251537e4303a1c600ac7711e34608ce289c831face267ba890a2b34225001f2",
+        "6c2345e803ecd221792282548f0382d75cff16e91c70ac3ee2090a5d3aabcaf4",
+        "cfd2c6e962fbf7f6f18c3fcb5848db2dd0aeddc97015e23682080bfab73587aa",
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
