@@ -61,7 +61,6 @@ EXPECTED_RECOVERY_EDGES = {
     },
     "_start_provider_attempt": {
         "active_state",
-        "agent_profile",
         "artifact_bridge",
         "attempt_response_path",
         "mark_side_effect_completed",
@@ -181,7 +180,6 @@ def _dependencies(
         persist_implementer_contract=_unexpected_dependency,
         persist_review_contract=_unexpected_dependency,
         store_implementer_output=_unexpected_dependency,
-        agent_profile=_unexpected_dependency,
     )
 
 

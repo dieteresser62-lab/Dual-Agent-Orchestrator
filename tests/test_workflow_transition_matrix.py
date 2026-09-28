@@ -2488,8 +2488,6 @@ def _append_completed_provider_attempt(
         measurement_record=measurement,
         binding_fingerprint="9" * 64,
         work_unit_id=work_unit_id,
-        model="sonnet",
-        effort="high",
     )
     bridge.finish_provider_attempt(
         started,

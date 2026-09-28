@@ -323,7 +323,6 @@ class WorkflowRecoveryDependencies:
     persist_implementer_contract: PersistImplementerContract
     persist_review_contract: PersistReviewContract
     store_implementer_output: Callable[[str], None]
-    agent_profile: Callable[[str], tuple[str, str]]
 
 
 class WorkflowRecovery:
@@ -1053,14 +1052,17 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "provider operation already occurred; recover its durable response instead of starting again"
             )
-        model, effort = self._dependencies.agent_profile(measurement.provider)
+        if replay.run_profile is None:
+            raise WorkflowExecutionError("provider attempt has no bound run profile")
+        slot = "final_reviewer" if measurement.operation == "reviewer_final_review" else bootstrap.payload.role.value
+        profile = getattr(replay.run_profile, slot)
         started = bridge.start_provider_attempt(
             measurement_record=bootstrap,
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
             operation_instance=operation_instance,
-            model=model,
-            effort=effort,
+            model=profile.model,
+            effort=profile.effort,
         )
         return started, spec, response_path
 

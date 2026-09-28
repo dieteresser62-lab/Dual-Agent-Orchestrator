@@ -46,8 +46,10 @@ from artifact_replay import (
     project_work_unit_reviewers,
     replay_artifacts as replay_artifacts_checked,
     replay_findings,
+    validate_provider_record_binding,
 )
 from contracts import FindingResponseDecision, FindingStatus
+from provider_identity import ProviderIdentity
 from workflow_state import Reviewer, WorkflowStep, init_workflow_state
 
 
@@ -791,6 +793,9 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
     started_payload = ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
         "provider-operation-01", "a" * 64, measurement.record_id, "c" * 64, 1,
         "started", "2026-08-21T10:00:01+00:00", None, None, None, None,
+        model="reviewer-model", effort="high",
+        profile_name=records[1].payload.reviewer.profile_name,
+        binary_identity=records[1].payload.reviewer.binary_identity,
     )
     _append(records, "attempt-1", started_payload)
     _append(
@@ -803,6 +808,14 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
         revision=2,
     )
     assert replay_artifacts(records, "run-replay").records == tuple(records)
+
+    for changed in (
+        replace(started_payload, profile_name="alias"),
+        replace(started_payload, model="foreign-model"),
+        replace(started_payload, binary_identity=ProviderIdentity.dry_run("other")),
+    ):
+        with pytest.raises(ArtifactReplayError, match="provider record differs from run profile"):
+            validate_provider_record_binding(changed, records[1].payload)
 
     terminal_only = [records[0], records[1], records[2], records[3], records[5]]
     terminal_only[4] = replace(

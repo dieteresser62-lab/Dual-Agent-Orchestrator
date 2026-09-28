@@ -977,8 +977,6 @@ def _run_crash_case(
                     binding_fingerprint=spec.operation[3],
                     work_unit_id=spec.work_unit_id,
                     operation_instance=spec.operation[4],
-                    model="provider-free",
-                    effort="medium",
                 )
                 response.parent.mkdir(parents=True, exist_ok=True)
                 response.write_bytes(b"s5-provider-response")

@@ -373,8 +373,9 @@ def _apply_resumed_agent_profiles(
     if set(slots) != {slot.value for slot in AgentSlot}:
         raise StateSchemaError("slot_settings missing a required role slot")
     certifications = load_role_certifications()
+    recorded = {slot: getattr(binding, f"{slot.value}_profile") for slot in AgentSlot}
     try:
-        certifications.require_occupancy({slot: slots[slot.value].name for slot in AgentSlot})
+        certifications.require_occupancy({slot: recorded[slot].provider for slot in AgentSlot})
     except CertificationError as exc:
         raise StateSchemaError(f"AGENT-PROFILE-DIFF | {exc}") from exc
     for role, profile in (
@@ -383,17 +384,9 @@ def _apply_resumed_agent_profiles(
         ("final_reviewer", binding.final_reviewer_profile),
     ):
         current = slots[role]
-        if (
-            current.name != profile.provider or current.binary != profile.binary
-            or (current.timeout_seconds or 0) != profile.timeout_seconds
-            or current.max_budget_usd != profile.max_budget_usd
-        ):
-            raise StateSchemaError(
-                f"AGENT-PROFILE-DIFF | slot={role} provider={current.name}: configured profile differs from immutable record"
-            )
         slot = AgentSlot(role)
         try:
-            certificate = certifications.require(current.name, role_for_slot(slot), slot)
+            certificate = certifications.require(profile.provider, role_for_slot(slot), slot)
         except CertificationError as exc:
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification changed") from exc
         if (profile.manufacturer != certificate.manufacturer
@@ -403,16 +396,25 @@ def _apply_resumed_agent_profiles(
             or profile.policy_sha256 != certificate.policy_sha256
             or profile.certification_sha256 != certificate.digest):
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
-        for field in ("model", "effort"):
-            if (role, field) in explicit and getattr(current, field) != getattr(profile, field):
+        for field, profile_field in (("binary", "binary"), ("model", "model"), ("timeout", "timeout_seconds"), ("effort", "effort")):
+            selected = getattr(current, "timeout_seconds" if field == "timeout" else field)
+            recorded_value = getattr(profile, profile_field)
+            if field == "timeout":
+                selected = selected or 0
+            if (role, field) in explicit and selected != recorded_value:
                 raise StateSchemaError(
                     "AGENT-PROFILE-DIFF | explicit "
                     f"{role} {field} differs from the immutable persisted profile"
                 )
         slots[role] = replace(
             current,
+            name=profile.provider,
+            profile_name=profile.profile_name,
+            binary=profile.binary,
             model=profile.model,
             effort=profile.effort,
+            timeout_seconds=profile.timeout_seconds or None,
+            max_budget_usd=profile.max_budget_usd,
         )
     identities = _capture_slot_identities(
         slots, scripted=bool(getattr(args, "scripted_provider_identity", False)),

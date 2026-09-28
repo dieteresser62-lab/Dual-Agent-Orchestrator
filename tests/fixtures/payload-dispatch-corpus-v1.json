@@ -42,7 +42,8 @@
             "kind": "dry_run"
           },
           "binary_identity_sha256": "5550788e2f76a3ba8343801118426205cb7980c327f6577ec9865180e2ed248f",
-          "max_budget_usd": null
+          "max_budget_usd": null,
+          "profile_name": "implementation"
         },
         "reviewer": {
           "model": "opus",
@@ -69,7 +70,8 @@
             "kind": "dry_run"
           },
           "binary_identity_sha256": "4af124463d1b266fe4a8ab7f27591e5d155e3427042990b162ad1332c687e588",
-          "max_budget_usd": null
+          "max_budget_usd": null,
+          "profile_name": "review"
         },
         "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
@@ -87,21 +89,22 @@
           "transport_sha256": "2ea6376d95c6e012529277f7907a91d52907a43ee5835155a9e1f15da1a61cc4",
           "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
           "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
-          "certification_sha256": "07c602ac6595c18ed1b58d58b3bb56c5ed6173140a685b51276eb15f263e01db",
+          "certification_sha256": "51ca820cfe26d54e013fad58d4cbbac025052ce7514294980720a4f0046880ce",
           "binary_identity": {
-            "entry_path": "dry-run:reviewer",
-            "real_path": "dry-run:reviewer",
+            "kind": "dry_run",
+            "entry_path": "dry-run:final_reviewer",
+            "real_path": "dry-run:final_reviewer",
             "version": "dry-run",
-            "sha256": "b8979280b38a4d3d2e289ad8f1512317ac4c568c6025c2d1c4d81f4adff9b75f",
+            "sha256": "f184cdb89ac8e2ff53277ff05c4be5b288b9ff2fe115a07b3e8c177f2e074bff",
             "interpreter_entry_path": null,
             "interpreter_real_path": null,
             "interpreter_version": null,
             "interpreter_args": [],
-            "interpreter_sha256": null,
-            "kind": "dry_run"
+            "interpreter_sha256": null
           },
-          "binary_identity_sha256": "4af124463d1b266fe4a8ab7f27591e5d155e3427042990b162ad1332c687e588",
-          "max_budget_usd": null
+          "binary_identity_sha256": "50aa3f1ca7abf969597879e719ba9888cefb7dc53cd36fd83651596b396a9ffb",
+          "max_budget_usd": null,
+          "profile_name": "review"
         }
       }
     },
@@ -662,7 +665,21 @@
           "cost_usd": 0.01
         },
         "model": "gpt-5.6-sol",
-        "effort": "max"
+        "effort": "max",
+        "slot": "implementer",
+        "profile_name": "implementation",
+        "binary_identity": {
+          "entry_path": "dry-run:implementer",
+          "real_path": "dry-run:implementer",
+          "version": "dry-run",
+          "sha256": "4ef64246a016d6af5b1af1fd0b12901040897fd848a87cc6f73904d33bd3b364",
+          "interpreter_entry_path": null,
+          "interpreter_real_path": null,
+          "interpreter_version": null,
+          "interpreter_args": [],
+          "interpreter_sha256": null,
+          "kind": "dry_run"
+        }
       }
     },
     {

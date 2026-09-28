@@ -2,38 +2,20 @@
   "schema_version": "cli-argument-evaluation-corpus-v1",
   "namespace_base": {
     "acknowledge_post_merge": null,
+    "agent_environment": {},
     "agent_live_stream": true,
     "agent_live_stream_channels": "stdout",
     "agent_live_stream_mode": "compact",
     "agent_output": "none",
     "agent_output_max_chars": 1800,
     "agent_profile_overrides": [],
-    "agent_settings": {
-      "claude": {
-        "__type__": "AgentSettings",
-        "name": "claude",
-        "binary": "claude",
-        "model": "opus",
-        "timeout_seconds": null,
-        "effort": "high",
-        "max_budget_usd": null
-      },
-      "codex": {
-        "__type__": "AgentSettings",
-        "name": "codex",
-        "binary": "codex",
-        "model": "gpt-6-sol",
-        "timeout_seconds": null,
-        "effort": "high",
-        "max_budget_usd": null
-      }
-    },
     "agents_file": "<ROOT>/AGENTS.md",
     "approve_gate": false,
     "auto_resume": false,
     "completed_state_replaced": false,
     "config": null,
     "config_file": null,
+    "config_path": "<SCENARIO_ROOT>/orchestrator.toml",
     "configuration_warnings": [],
     "dry_run": false,
     "dry_run_report": null,
@@ -243,7 +225,8 @@
         "model": "opus",
         "timeout_seconds": null,
         "effort": "high",
-        "max_budget_usd": null
+        "max_budget_usd": null,
+        "profile_name": "review"
       },
       "implementer": {
         "__type__": "AgentSettings",
@@ -252,7 +235,8 @@
         "model": "gpt-6-sol",
         "timeout_seconds": null,
         "effort": "high",
-        "max_budget_usd": null
+        "max_budget_usd": null,
+        "profile_name": "implementation"
       },
       "reviewer": {
         "__type__": "AgentSettings",
@@ -261,7 +245,8 @@
         "model": "opus",
         "timeout_seconds": null,
         "effort": "high",
-        "max_budget_usd": null
+        "max_budget_usd": null,
+        "profile_name": "review"
       }
     },
     "state_was_frozen": false,
@@ -712,8 +697,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 73,
-        "namespace_sha256": "94fc8b3f7d866dee58529b5a87889067f58051b68b034fa749c234df5f9554b2",
+        "namespace_field_count": 74,
+        "namespace_sha256": "6fde130106705d7b2117bea6a20a1aca500f14d7235366c529448eaea0ae4534",
         "return_trace": [
           {
             "function": "quota_int",
@@ -795,8 +780,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 73,
-        "namespace_sha256": "0ce1d13bc19b9e6a1741c1cb5fb11e4497345ad66c9309283d130e42caed992e",
+        "namespace_field_count": 74,
+        "namespace_sha256": "dbd463c4604e952e05b0aa6dc793c737732b9f5b453ce38a28c16ae871f5a124",
         "return_trace": [
           {
             "function": "quota_int",
@@ -869,8 +854,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 73,
-        "namespace_sha256": "d49ae7792dd3c33b8a9f1e1abc0215d839336711091e80bad9e943312b4ab103",
+        "namespace_field_count": 74,
+        "namespace_sha256": "d40bef960cb04b99245fcba7fcb427056b397d51a1947d3e5af5c8cedb97df5c",
         "return_trace": [
           {
             "function": "quota_int",
@@ -950,8 +935,8 @@
       "process_starts": 0,
       "outcome": {
         "kind": "success",
-        "namespace_field_count": 73,
-        "namespace_sha256": "0bd53250c510d7cbb22d5a090315941b900ee81c2252cd164424c2e3a1e0a781",
+        "namespace_field_count": 74,
+        "namespace_sha256": "4982c53bc81ee07ac4bdc9d02826f111bec7ad86e7f9881d4bf348d81e6ddf30",
         "return_trace": [
           {
             "function": "quota_int",

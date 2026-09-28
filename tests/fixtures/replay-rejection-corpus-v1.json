@@ -619,7 +619,7 @@
       "code": "RECORD-FINGERPRINT-MISMATCH",
       "message": "provider attempt terminal changed immutable fields",
       "function": "_validate_provider_attempt_sequences",
-      "guard": "terminal_payload.measurement_record_id != payload.measurement_record_id or (terminal_payload.provider, terminal_payload.role, terminal_payload.operation, terminal_payload.work_unit_id, terminal_payload.logical_operation_id, terminal_payload.binding_fingerprint, terminal_payload.input_digest, terminal_payload.attempt_number, terminal_payload.started_at) != (payload.provider, payload.role, payload.operation, payload.work_unit_id, payload.logical_operation_id, payload.binding_fingerprint, payload.input_digest, payload.attempt_number, payload.started_at)",
+      "guard": "terminal_payload.measurement_record_id != payload.measurement_record_id or (terminal_payload.provider, terminal_payload.role, terminal_payload.operation, terminal_payload.work_unit_id, terminal_payload.logical_operation_id, terminal_payload.binding_fingerprint, terminal_payload.input_digest, terminal_payload.attempt_number, terminal_payload.started_at, terminal_payload.slot, terminal_payload.profile_name, terminal_payload.model, terminal_payload.effort, terminal_payload.binary_identity) != (payload.provider, payload.role, payload.operation, payload.work_unit_id, payload.logical_operation_id, payload.binding_fingerprint, payload.input_digest, payload.attempt_number, payload.started_at, payload.slot, payload.profile_name, payload.model, payload.effort, payload.binary_identity)",
       "message_expression": "'provider attempt terminal changed immutable fields'"
     },
     {

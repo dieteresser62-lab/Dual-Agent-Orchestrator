@@ -1309,6 +1309,19 @@ def _process_watch_task(
         [Path, argparse.Namespace, bool], int | WatchTaskResult
     ],
 ) -> _WatchProcessingResult:
+    if force_new:
+        # New tasks read current TOML; retries reconstruct their recorded slots.
+        from cli import load_repo_config
+        from agent_config import resolve_agent_settings
+
+        config_path = getattr(task_args, "config_path", None)
+        if config_path is not None:
+            task_args.repo_config = load_repo_config(config_path)
+            task_args.slot_settings = resolve_agent_settings(
+                task_args, getattr(task_args, "agent_environment", {}),
+                roles=task_args.repo_config.roles,
+                profiles=task_args.repo_config.agent_profiles,
+            )
     raw_result = process_task(task_file, task_args, force_new)
     if isinstance(raw_result, WatchTaskResult):
         task_result = raw_result

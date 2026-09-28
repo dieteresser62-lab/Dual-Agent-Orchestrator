@@ -917,18 +917,18 @@ def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() 
     )
 
     registry = build_agent_registry()
-    assert _compact_stream_text(registry["codex"], "stdout", codex_line, state) == (
+    assert _compact_stream_text(registry["implementer"], "stdout", codex_line, state) == (
         "Slice geprüft und bereit."
     )
     assert _compact_stream_text(
-        registry["claude"],
+        registry["reviewer"],
         "stdout",
         '{"usage":{"output_tokens":9000},"result":"very large"}',
         {},
     ) is None
     warning = "same important warning"
-    assert _compact_stream_text(registry["codex"], "stderr", warning, state) == warning
-    assert _compact_stream_text(registry["codex"], "stdout", warning, state) == warning
+    assert _compact_stream_text(registry["implementer"], "stderr", warning, state) == warning
+    assert _compact_stream_text(registry["implementer"], "stdout", warning, state) == warning
 
 
 def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
@@ -1316,7 +1316,7 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
 def test_provider_clock_past_old_limit_requires_explicit_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str,
 ) -> None:
-    settings = default_agent_settings()[role]
+    settings = default_agent_settings()[{"codex": "implementer", "claude": "reviewer"}[role]]
     command = [sys.executable, "-c", "print('completed')"]
     config = OrchestratorConfig(
         repo_root=tmp_path, agent_live_stream=True, agent_live_stream_mode="full"
@@ -1438,7 +1438,7 @@ def test_preflight_skip_git_check_bypasses_dirty_repo(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": build_agent_registry()["codex"]},
+        agents={"codex": build_agent_registry()["implementer"]},
         skip_git_check=True,
     )
 
@@ -1458,7 +1458,7 @@ def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
     ok = preflight(
         required_agents=["codex"],
         strict=False,
-        agents={"codex": build_agent_registry()["codex"]},
+        agents={"codex": build_agent_registry()["implementer"]},
     )
 
     assert ok is False

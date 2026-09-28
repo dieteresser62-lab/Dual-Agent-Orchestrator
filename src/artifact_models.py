@@ -252,6 +252,7 @@ class RoleProfilePayload:
     binary_identity: ProviderIdentity
     binary_identity_sha256: str
     max_budget_usd: float | None = None
+    profile_name: str = dataclass_field(kw_only=True)
 
     def __post_init__(self) -> None:
         _require_text(self.model, "model")
@@ -259,7 +260,7 @@ class RoleProfilePayload:
             raise ArtifactValidationError("model must be canonical")
         if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ArtifactValidationError("effort is unsupported")
-        for label in ("provider", "binary", "manufacturer"):
+        for label in ("provider", "binary", "manufacturer", "profile_name"):
             value = getattr(self, label)
             if not isinstance(value, str) or not value.strip():
                 raise ArtifactValidationError(f"{label} is invalid")
@@ -1489,6 +1490,9 @@ class ProviderAttemptPayload:
     usage: ProviderUsagePayload | None
     model: str = "unknown"
     effort: str = "unknown"
+    slot: str = ""
+    profile_name: str = "scripted"
+    binary_identity: ProviderIdentity | None = None
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_ATTEMPT
 
     @property
@@ -1496,6 +1500,17 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
+        slot = self.slot or ("final_reviewer" if self.operation == "reviewer_final_review" else self.role.value)
+        object.__setattr__(self, "slot", slot)
+        if self.binary_identity is None:
+            object.__setattr__(self, "binary_identity", ProviderIdentity.dry_run(slot))
+        if slot not in {"implementer", "reviewer", "final_reviewer"} or (
+            slot == "implementer" and self.role is not Role.IMPLEMENTER
+        ) or (slot != "implementer" and self.role is not Role.REVIEWER):
+            raise ArtifactValidationError("provider attempt slot and role differ")
+        _require_text(self.profile_name, "provider attempt profile_name")
+        if not isinstance(self.binary_identity, ProviderIdentity):
+            raise ArtifactValidationError("provider attempt binary identity is invalid")
         if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("attempt provider and role must identify one agent")
         _require_identifier(self.operation, "attempt operation")
@@ -2985,7 +3000,8 @@ _PAYLOAD_READERS: dict[
             data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
             ProviderUsagePayload(**data["usage"]) if data["usage"] is not None else None,
-            data["model"], data["effort"],
+            data["model"], data["effort"], data["slot"], data["profile_name"],
+            ProviderIdentity.from_dict(data["binary_identity"]),
         ),
     RecordType.SIDE_EFFECT: lambda data: SideEffectPayload(
             data["effect_key"], data["effect_class"], data["work_unit_id"],

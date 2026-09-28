@@ -13,6 +13,7 @@ from artifact_models import (
     CorrectionWorkUnitPayload, FindingTransitionPayload, Fingerprint, FingerprintKind,
     GateTransitionPayload, PlanPayload, ProviderContentPayload, ScopeExtensionPathPayload,
     ScopeExtensionPayload,
+    ProviderAttemptPayload,
     ReviewEvidencePayload, ReviewPayload, Role, RunIdentityPayload,
     SliceSpec, ValidationAttestationPayload, ValidationContentPayload,
     ValidationOutputContent, ValidationResult, WorkUnitPayload,
@@ -23,6 +24,8 @@ from readable_audit import (
     AuditFacts, _prose, authored_slice_sections, render_overall,
     render_plan_appendix, render_slice,
 )
+from provider_identity import ProviderIdentity
+from workflow_state import scripted_profile_binding
 from semantic_markdown import canonical_semantic_markdown, parse_semantic_markdown
 
 
@@ -118,6 +121,22 @@ def _assert_readable(markdown: str) -> None:
     without_commits = re.sub(r"\b[0-9a-f]{8}\b", "", markdown)
     assert not re.search(r"(?<![A-Za-z0-9])[0-9a-f]{12,}(?![A-Za-z0-9])", without_commits)
     parse_semantic_markdown(markdown, require_managed=True)
+
+
+def test_overall_audit_names_the_bound_final_attempt_profile_and_identity() -> None:
+    facts = _facts()
+    identity = ProviderIdentity.dry_run("final_reviewer")
+    provider = scripted_profile_binding("final_reviewer").provider
+    attempt = ProviderAttemptPayload(
+        provider, Role.REVIEWER, "reviewer_final_review", "1", "final-attempt",
+        "a" * 64, "measurement-1", "b" * 64, 1, "started",
+        "2026-09-24T12:00:00+00:00", None, None, None, None,
+        model="sonnet", effort="xhigh", slot="final_reviewer",
+        profile_name="final", binary_identity=identity,
+    )
+    facts.records = (*facts.records, SimpleNamespace(payload=attempt))
+    overall = render_overall(facts, task="Task", branch="feature/test")
+    assert f"| final_reviewer | reviewer | {provider} | final | sonnet | xhigh | dry_run: dry-run:final_reviewer (`{identity.digest}`) |" in overall
 
 
 def test_readable_documents_preserve_plan_and_slice_ownership() -> None:

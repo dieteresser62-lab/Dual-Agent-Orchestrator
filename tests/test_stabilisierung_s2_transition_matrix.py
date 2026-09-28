@@ -560,7 +560,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/artifact_store.py:ArtifactStore._ensure_append_index': 3,
  'src/artifact_store.py:ArtifactStore._head_cache_matches': 3,
  'src/artifact_store.py:ArtifactStore._refresh_append_head_cache': 2,
- 'src/artifact_bridge.py:ArtifactBridge.start_provider_attempt': 17,
+ 'src/artifact_bridge.py:ArtifactBridge.start_provider_attempt': 24,
  'src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt': 10,
  'src/artifact_bridge.py:ArtifactBridge.side_effect_result': 7,
  'src/final_review_preflight.py:run_final_review_preflight': 12,
@@ -568,7 +568,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_audit_projection.py:_attach_record_events': 13,
  'src/orchestrator.py:_load_bound_queue_terminal': 4,
  'src/orchestrator.py:run_pipeline': 16,
- 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 16,
+ 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 14,
  'src/workflow_production.py:_read_production_task': 2,
  'src/workflow_production.py:_prepare_new_watch_task': 1,
  'src/workflow_production.py:_validate_resumed_state': 8,
@@ -579,7 +579,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_baseline.py:matches_baseline_initialization_prefix': 18,
  'src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline': 22,
  'src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context': 5,
- 'src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt': 19,
+ 'src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt': 21,
  'src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect': 17,
  'src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file': 3,
  'src/workflow_recovery.py:WorkflowRecovery._reconcile_pending_side_effects': 37,
@@ -610,7 +610,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/inbox_watcher.py:move_poison_to_outbox_recoverably': 3,
  'src/inbox_watcher.py:_rename_stuck_task': 0,
  'src/inbox_watcher.py:_prepare_watch_invocation': 0,
- 'src/inbox_watcher.py:_process_watch_task': 12,
+ 'src/inbox_watcher.py:_process_watch_task': 13,
  'src/inbox_watcher.py:_strengthen_rejected_result': 1,
  'src/inbox_watcher.py:_begin_rejected_archive': 0,
  'src/inbox_watcher.py:_finish_rejected_archive': 1,
@@ -918,7 +918,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 18
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 21
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document

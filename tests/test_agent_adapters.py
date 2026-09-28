@@ -16,6 +16,7 @@ from agent_adapters import (
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
     build_agent_registry,
+    build_slot_agent_registry,
 )
 from reviewer_input import _write_review_manifest
 from agent_config import AgentSettings
@@ -114,9 +115,45 @@ def _review_bundle():
 
 
 def test_registry_constructs_only_native_adapters() -> None:
-    registry = build_agent_registry({"codex": _settings("codex"), "claude": _settings("claude")})
-    assert type(registry["codex"]) is NativeCodexAdapter
-    assert type(registry["claude"]) is NativeClaudeReviewAdapter
+    registry = build_agent_registry({"implementer": _settings("codex"), "reviewer": _settings("claude"), "final_reviewer": _settings("claude")})
+    assert type(registry["implementer"]) is NativeCodexAdapter
+    assert type(registry["reviewer"]) is NativeClaudeReviewAdapter
+    assert type(registry["final_reviewer"]) is NativeClaudeReviewAdapter
+    assert registry["reviewer"] is not registry["final_reviewer"]
+    assert registry["reviewer"].invocation is not registry["final_reviewer"].invocation
+    registry["final_reviewer"].env["FINAL_ONLY"] = "1"
+    assert "FINAL_ONLY" not in registry["reviewer"].env
+
+
+def test_registry_uses_each_synthetically_admitted_slot_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    import agent_adapters
+    from agent_roles import AgentSlot
+
+    slots = {
+        "implementer": AgentSettings("vendor_a", "a", "model-a", 10, "high", profile_name="one"),
+        "reviewer": AgentSettings("vendor_b", "b", "model-b", 20, "medium", profile_name="two"),
+        "final_reviewer": AgentSettings("vendor_c", "c", "model-c", 30, "low", profile_name="three"),
+    }
+    observed = []
+
+    class Admitted:
+        def require_occupancy(self, occupancy):
+            assert occupancy == {slot: slots[slot.value].name for slot in AgentSlot}
+
+    def pair(provider, role, *, slot, settings, certifications):
+        observed.append((slot.value, role.value, provider, settings.profile_name))
+        assert isinstance(certifications, Admitted)
+        return SimpleNamespace(settings=settings)
+
+    monkeypatch.setattr(agent_adapters, "create_agent_pair", pair)
+    registry = build_slot_agent_registry(slots, certifications=Admitted())
+    assert set(registry) == set(slots)
+    assert observed == [
+        ("implementer", "implementer", "vendor_a", "one"),
+        ("reviewer", "reviewer", "vendor_b", "two"),
+        ("final_reviewer", "reviewer", "vendor_c", "three"),
+    ]
 
 
 def test_toml_usd_setting_is_emitted_in_claude_command() -> None:

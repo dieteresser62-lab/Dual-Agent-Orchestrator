@@ -1159,6 +1159,7 @@
       "additionalProperties": false,
       "required": [
         "model",
+        "profile_name",
         "effort",
         "provider",
         "binary",
@@ -1173,6 +1174,7 @@
         "binary_identity_sha256"
       ],
       "properties": {
+        "profile_name": {"$ref": "#/$defs/non_empty"},
         "model": {
           "$ref": "#/$defs/non_empty"
         },
@@ -3630,9 +3632,15 @@
         "failure_kind",
         "usage",
         "model",
-        "effort"
+        "effort",
+        "slot",
+        "profile_name",
+        "binary_identity"
       ],
       "properties": {
+        "slot": {"enum": ["implementer", "reviewer", "final_reviewer"]},
+        "profile_name": {"$ref": "#/$defs/non_empty"},
+        "binary_identity": {"$ref": "#/$defs/provider_identity"},
         "provider": {
           "enum": [
             "codex",

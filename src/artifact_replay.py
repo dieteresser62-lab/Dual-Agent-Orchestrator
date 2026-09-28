@@ -525,7 +525,12 @@ def validate_provider_record_binding(
         slot = "reviewer"
         expected_role = Role.REVIEWER
     selected = getattr(profile, slot)
-    if payload.role is not expected_role or payload.provider != selected.provider:
+    if (payload.role is not expected_role or payload.provider != selected.provider
+        or isinstance(payload, ProviderAttemptPayload) and (
+            payload.slot != slot or payload.profile_name != selected.profile_name
+            or payload.model != selected.model or payload.effort != selected.effort
+            or payload.binary_identity != selected.binary_identity
+        )):
         _fail(
             ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
             f"slot={slot} provider={payload.provider}: provider record differs from run profile provider={selected.provider}",
@@ -2587,7 +2592,8 @@ def _validate_provider_attempt_sequences(
             binding = (
                 payload.provider, payload.role, payload.operation, payload.work_unit_id,
                 payload.logical_operation_id, payload.binding_fingerprint,
-                payload.input_digest,
+                payload.input_digest, payload.slot, payload.profile_name,
+                payload.model, payload.effort, payload.binary_identity,
             )
             if immutable is None:
                 immutable = binding
@@ -2604,10 +2610,15 @@ def _validate_provider_attempt_sequences(
                     terminal_payload.work_unit_id, terminal_payload.logical_operation_id,
                     terminal_payload.binding_fingerprint, terminal_payload.input_digest,
                     terminal_payload.attempt_number, terminal_payload.started_at,
+                    terminal_payload.slot, terminal_payload.profile_name,
+                    terminal_payload.model, terminal_payload.effort,
+                    terminal_payload.binary_identity,
                 ) != (
                     payload.provider, payload.role, payload.operation, payload.work_unit_id,
                     payload.logical_operation_id, payload.binding_fingerprint, payload.input_digest,
                     payload.attempt_number, payload.started_at,
+                    payload.slot, payload.profile_name,
+                    payload.model, payload.effort, payload.binary_identity,
                 ):
                     _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt terminal changed immutable fields", terminal)
 

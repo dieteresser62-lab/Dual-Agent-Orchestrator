@@ -6,6 +6,7 @@ import subprocess
 import sys
 import hashlib
 import json
+import copy
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from artifact_resume import ArtifactResumeError
 from artifact_store import ArtifactStore
 from cli import parse_args
 from inbox_watcher import (
+    _process_watch_task,
     WatchTaskDisposition,
     WatchTaskIdentity,
     WatchTaskResult,
@@ -35,11 +37,33 @@ from inbox_watcher import (
     watch_inbox,
     watch_identity_path,
 )
+
+
 from orchestrator import run_pipeline
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from task_contract import TaskContractError
 from workflow import WorkflowExecutionError, WorkflowHistory, WorkflowRunResult
 from workflow_state import GateReason, ProtocolBinding, ProtocolMode, init_workflow_state
+
+
+def test_watch_new_run_reloads_toml_while_retry_keeps_prior_slot_settings(tmp_path: Path) -> None:
+    args = parse_args(["--watch"], cwd=tmp_path, environ={})
+    old_model = args.slot_settings["implementer"].model
+    (tmp_path / "orchestrator.toml").write_text(
+        '[agent_profiles.implementation]\nmodel = "gpt-6-luna"\n', encoding="utf-8"
+    )
+    task = tmp_path / "queued.md"
+    task.write_text("queued", encoding="utf-8")
+    identity = WatchTaskIdentity("watch-profile-refresh", "a" * 64)
+    seen: list[str] = []
+
+    def process(_task, task_args, _force_new):
+        seen.append(task_args.slot_settings["implementer"].model)
+        return 0
+
+    _process_watch_task(task, copy.copy(args), True, identity, process)
+    _process_watch_task(task, copy.copy(args), False, identity, process)
+    assert seen == ["gpt-6-luna", old_model]
 
 
 def _append_test_record(

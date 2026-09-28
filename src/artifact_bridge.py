@@ -909,13 +909,23 @@ class ArtifactBridge:
     ) -> ArtifactRecord:
         """Persist one physical provider start after all local preflights pass."""
         chain = self.store.current_chain()
-        replay_artifacts(chain, self.store.run_id)
+        replay = replay_artifacts(chain, self.store.run_id)
         if (
             measurement_record not in chain
             or not isinstance(measurement_record.payload, ProviderInputMeasurementPayload)
         ):
             raise ArtifactBridgeError("provider attempt measurement is not in the accepted chain")
         measurement = measurement_record.payload
+        slot = "final_reviewer" if measurement.operation == "reviewer_final_review" else measurement.role.value
+        if replay.run_profile is None:
+            raise ArtifactBridgeError("provider attempt requires a bound run profile")
+        profile = getattr(replay.run_profile, slot)
+        if measurement.provider != profile.provider:
+            raise ArtifactBridgeError(f"slot={slot}: attempt provider differs from run profile")
+        if ((model != "unknown" and model != profile.model)
+            or (effort != "unknown" and effort != profile.effort)):
+            raise ArtifactBridgeError(f"slot={slot}: attempt model or effort differs from run profile")
+        model, effort = profile.model, profile.effort
         if str(work_unit_id) != measurement.work_unit_id:
             raise ArtifactBridgeError("provider attempt work unit differs from its measurement")
         if operation_instance is not None and not operation_instance.strip():
@@ -1035,6 +1045,9 @@ class ArtifactBridge:
             usage=None,
             model=model,
             effort=effort,
+            slot=slot,
+            profile_name=profile.profile_name,
+            binary_identity=profile.binary_identity,
         )
         record = self.append(
             payload,
@@ -1111,6 +1124,9 @@ class ArtifactBridge:
             usage=usage,
             model=started.model,
             effort=started.effort,
+            slot=started.slot,
+            profile_name=started.profile_name,
+            binary_identity=started.binary_identity,
         )
         record = self.append(
             payload,

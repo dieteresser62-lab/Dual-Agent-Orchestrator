@@ -764,7 +764,6 @@ def _dependencies(
         store_implementer_output=lambda canonical: capture.setdefault(
             "stored_implementer", canonical
         ),
-        agent_profile=forbidden_provider,
     )
 
 

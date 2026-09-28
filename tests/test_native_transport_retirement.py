@@ -109,13 +109,14 @@ def test_payload_construction_inventory_requires_complete_native_binding() -> No
 def test_runtime_registry_contains_only_native_transports() -> None:
     registry = build_agent_registry(
         {
-            "codex": AgentSettings("codex", "codex", "gpt-5.6-sol", 60, "medium"),
-            "claude": AgentSettings("claude", "claude", "sonnet", 60, "high"),
+            "implementer": AgentSettings("codex", "codex", "gpt-5.6-sol", 60, "medium"),
+            "reviewer": AgentSettings("claude", "claude", "sonnet", 60, "high"),
+            "final_reviewer": AgentSettings("claude", "claude", "sonnet", 60, "high"),
         }
     )
 
-    assert type(registry["codex"]) is NativeCodexAdapter
-    assert type(registry["claude"]) is NativeClaudeReviewAdapter
+    assert type(registry["implementer"]) is NativeCodexAdapter
+    assert type(registry["reviewer"]) is NativeClaudeReviewAdapter
 
 
 def test_retired_result_grammar_and_repair_symbols_cannot_reenter_runtime() -> None:

@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from agent_config import AgentSettings, default_agent_settings, current_pre_toml_occupancy
+from agent_config import AgentSettings, default_agent_settings
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from reviewer_input import (
@@ -386,7 +386,7 @@ class NativeCodexAdapter(_BaseAdapter):
         self, settings: AgentSettings | None = None,
         *, role_binding: RoleBinding | None = None,
     ) -> None:
-        super().__init__(settings or default_agent_settings()["codex"])
+        super().__init__(settings or default_agent_settings()["implementer"])
         self.role_binding = role_binding or binding_for_role(AgentRoleName.IMPLEMENTER)
         if self.role_binding.role is not AgentRoleName.IMPLEMENTER:
             raise TypeError("native Codex adapter requires implementer role binding")
@@ -852,31 +852,10 @@ def create_agent_pair(
 
 def build_agent_registry(
     settings: dict[str, AgentSettings] | None = None,
-    *, final_settings: AgentSettings | None = None,
 ) -> dict[str, AgentAdapter]:
-    """Create adapters from the shipped slot defaults for callers without a run."""
+    """Create one adapter per slot from its selected provider and profile."""
     resolved = settings if settings is not None else default_agent_settings()
-    if set(resolved) != {"codex", "claude"}:
-        raise ValueError("agent settings must contain exactly codex and claude")
-    occupancy = current_pre_toml_occupancy()
-    table = load_role_certifications()
-    table.require(occupancy[AgentSlot.FINAL_REVIEWER], AgentRoleName.REVIEWER, AgentSlot.FINAL_REVIEWER)
-    registry = {
-        "codex": create_agent_pair(
-            occupancy[AgentSlot.IMPLEMENTER], AgentRoleName.IMPLEMENTER,
-            slot=AgentSlot.IMPLEMENTER, settings=resolved["codex"], certifications=table,
-        ),
-        "claude": create_agent_pair(
-            occupancy[AgentSlot.REVIEWER], AgentRoleName.REVIEWER,
-            slot=AgentSlot.REVIEWER, settings=resolved["claude"], certifications=table,
-        ),
-    }
-    if final_settings is not None:
-        registry["final_reviewer"] = create_agent_pair(
-            occupancy[AgentSlot.FINAL_REVIEWER], AgentRoleName.REVIEWER,
-            slot=AgentSlot.FINAL_REVIEWER, settings=final_settings, certifications=table,
-        )
-    return registry
+    return build_slot_agent_registry(resolved)
 
 
 def build_slot_agent_registry(
@@ -896,5 +875,4 @@ def build_slot_agent_registry(
     }
     for slot in AgentSlot:
         registry[slot.value].bound_slot = slot.value
-        registry.setdefault(slots[slot.value].name, registry[slot.value])
     return registry

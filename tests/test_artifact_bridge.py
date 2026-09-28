@@ -661,7 +661,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
 
     first = bridge.start_provider_attempt(
         measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
-        model="sonnet", effort="high",
+        model="reviewer-model", effort="high",
     )
     terminal = bridge.finish_provider_attempt(
         first, duration_seconds=1.5, failure_kind=None,
@@ -673,7 +673,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     )
     second = bridge.start_provider_attempt(
         measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
-        model="sonnet", effort="high",
+        model="reviewer-model", effort="high",
     )
 
     assert isinstance(first.payload, ProviderAttemptPayload)
@@ -683,7 +683,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     assert terminal.idempotency_key.endswith(":1:terminal")
     assert second.payload.attempt_number == 2
     assert second.payload.phase == "started"
-    assert first.payload.model == terminal.payload.model == "sonnet"
+    assert first.payload.model == terminal.payload.model == "reviewer-model"
     assert first.payload.effort == terminal.payload.effort == "high"
     assert bridge.store.load_chain()[-1] == second
 

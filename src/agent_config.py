@@ -27,6 +27,7 @@ class AgentSettings:
     timeout_seconds: int | None
     effort: str
     max_budget_usd: float | None = None
+    profile_name: str = "scripted"
 
 
 @dataclass(frozen=True)
@@ -276,6 +277,7 @@ def resolve_agent_settings(
             timeout_seconds=timeout_seconds,
             effort=effort,
             max_budget_usd=profile.max_budget_usd,
+            profile_name=roles[slot],
         )
     if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
         inherited = settings["reviewer"]
@@ -287,12 +289,13 @@ def resolve_agent_settings(
             timeout_seconds=_process_timeout(_resolve(args, environ, "final_reviewer", "timeout", inherited.timeout_seconds), "final_reviewer timeout"),
             effort=_non_empty(_resolve(args, environ, "final_reviewer", "effort", inherited.effort), "final_reviewer effort").lower(),
             max_budget_usd=inherited.max_budget_usd,
+            profile_name=current.profile_name,
         )
     return settings
 
 
 def default_agent_settings() -> dict[str, AgentSettings]:
-    """Return deterministic defaults for compatibility imports and unit tests."""
+    """Return deterministic settings for all three independent slots."""
     namespace = argparse.Namespace(
         **{
             f"{role}_{field}": None
@@ -300,5 +303,4 @@ def default_agent_settings() -> dict[str, AgentSettings]:
             for field in ("binary", "model", "timeout", "effort")
         },
     )
-    resolved = resolve_agent_settings(namespace, {})
-    return {"codex": resolved["implementer"], "claude": resolved["reviewer"]}  # allowlist:provider -- profile configuration: compatibility map
+    return resolve_agent_settings(namespace, {})

@@ -882,6 +882,14 @@ def parse_args(
     repo_config = load_repo_config(config_path)
     args.repo_config = repo_config
     args.config_file = repo_config.source
+    args.config_path = config_path.resolve()
+    agent_environment_names = {
+        f"RUN_TASK_{role.upper()}_{field.upper()}"
+        for role in ("implementer", "reviewer", "final_reviewer")
+        for field in ("binary", "model", "timeout", "effort")
+    }
+    args.agent_environment = {name: value for name, value in env.items()
+                              if name in agent_environment_names}
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
     if args.test_change_gate is None:
@@ -1002,7 +1010,7 @@ def parse_args(
     args.agent_profile_overrides = frozenset(
         (role, field)
         for role in ("implementer", "reviewer", "final_reviewer")
-        for field in ("model", "effort")
+        for field in ("binary", "model", "timeout", "effort")
         if getattr(args, f"{role}_{field}") is not None
         or bool(env.get(f"RUN_TASK_{role.upper()}_{field.upper()}", "").strip())
     )
@@ -1010,20 +1018,16 @@ def parse_args(
         args.slot_settings = resolve_agent_settings(args, env, roles=repo_config.roles, profiles=repo_config.agent_profiles)
     except AgentConfigError as exc:
         raise ConfigError(str(exc)) from exc
-    try:
-        load_role_certifications().require_occupancy({
-            slot: args.slot_settings[slot.value].name for slot in AgentSlot
-        })
-    except CertificationError as exc:
-        raise ConfigError(str(exc)) from exc
-    args.agent_settings = {
-        "codex": args.slot_settings["implementer"],  # allowlist:provider -- profile configuration: runtime transport map
-        "claude": args.slot_settings["reviewer"],  # allowlist:provider -- profile configuration: runtime transport map
-    }
-
     _resolve_skip_git_check(args, env)
     _resolve_live_stream_channels(args, env)
     _resolve_resume_state(args, repo_root)
+    if not args.resume and not args.watch:
+        try:
+            load_role_certifications().require_occupancy({
+                slot: args.slot_settings[slot.value].name for slot in AgentSlot
+            })
+        except CertificationError as exc:
+            raise ConfigError(str(exc)) from exc
     args.agents_file_explicit = any(
         token == "--agents-file" or token.startswith("--agents-file=")
         for token in raw_argv

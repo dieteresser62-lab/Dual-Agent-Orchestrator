@@ -1852,6 +1852,7 @@
             "certification_sha256": "04abf2e647605ca38db83be0e1d930c1bac13533bf4e24dcb19015dfc555beb6",
             "binary_identity_sha256": "5550788e2f76a3ba8343801118426205cb7980c327f6577ec9865180e2ed248f",
             "max_budget_usd": null,
+            "profile_name": "implementation",
             "binary_identity": {
               "kind": "dry_run",
               "entry_path": "dry-run:implementer",
@@ -1879,6 +1880,7 @@
             "certification_sha256": "07c602ac6595c18ed1b58d58b3bb56c5ed6173140a685b51276eb15f263e01db",
             "binary_identity_sha256": "4af124463d1b266fe4a8ab7f27591e5d155e3427042990b162ad1332c687e588",
             "max_budget_usd": null,
+            "profile_name": "review",
             "binary_identity": {
               "kind": "dry_run",
               "entry_path": "dry-run:reviewer",
@@ -1906,6 +1908,7 @@
             "certification_sha256": "51ca820cfe26d54e013fad58d4cbbac025052ce7514294980720a4f0046880ce",
             "binary_identity_sha256": "50aa3f1ca7abf969597879e719ba9888cefb7dc53cd36fd83651596b396a9ffb",
             "max_budget_usd": null,
+            "profile_name": "review",
             "binary_identity": {
               "kind": "dry_run",
               "entry_path": "dry-run:final_reviewer",

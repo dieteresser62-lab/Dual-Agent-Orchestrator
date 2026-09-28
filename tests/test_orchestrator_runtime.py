@@ -22,10 +22,13 @@ import workflow_production
 import workflow_requests
 from conftest import can_symlink
 from agent_adapters import (
+    build_agent_registry,
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
 )
+
+
 from agent_config import AgentSettings
 from agent_runtime import (
     AgentInvocationError,
@@ -121,6 +124,8 @@ from inbox_watcher import (
     watch_identity_path,
 )
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
+
+
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from review_packets import ReviewPacket, ReviewPacketManifest
 from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
@@ -157,6 +162,7 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
     init_workflow_state,
+    scripted_profile_binding,
 )
 from workflow_state import AgentFailureKind
 from provider_input_budget import (
@@ -198,6 +204,14 @@ from content_authority_support import (
 from side_effects import SideEffectBoundaryPhase, SideEffectReconciliationError
 from provider_process import record_process_start
 from workflow_recovery import _require_provider_input_round
+
+
+def test_driver_selects_a_distinct_final_reviewer_adapter() -> None:
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver.agents = build_agent_registry()
+    assert driver._adapter_for_slot("final_reviewer") is driver.agents["final_reviewer"]
+    assert driver._adapter_for_slot("reviewer") is driver.agents["reviewer"]
+    assert driver._adapter_for_slot("final_reviewer") is not driver._adapter_for_slot("reviewer")
 
 
 def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
@@ -352,7 +366,7 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
-        agents={"claude": adapter},
+        agents={"reviewer": adapter},
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
@@ -1779,15 +1793,13 @@ def test_new_watch_task_switches_to_existing_target_and_uses_merge_base_as_ancho
     task = tmp_path / "inbox-task.md"
     _write_task(task, "feature/inbox-target", "src/new.py")
     args = _args(repository, task)
-    args.agent_settings["codex"] = replace(
-        args.agent_settings["codex"], model="gpt-profile", effort="high"
+    args.slot_settings["implementer"] = replace(
+        args.slot_settings["implementer"], model="gpt-profile", effort="high"
     )
-    args.agent_settings["claude"] = replace(
-        args.agent_settings["claude"], model="opus", effort="medium"
+    args.slot_settings["reviewer"] = replace(
+        args.slot_settings["reviewer"], model="opus", effort="medium"
     )
-    args.slot_settings["implementer"] = args.agent_settings["codex"]
-    args.slot_settings["reviewer"] = args.agent_settings["claude"]
-    args.slot_settings["final_reviewer"] = args.agent_settings["claude"]
+    args.slot_settings["final_reviewer"] = replace(args.slot_settings["reviewer"], profile_name=args.slot_settings["final_reviewer"].profile_name)
     args.watch_run_id = "watch-existing-target"
     captured: dict[str, object] = {}
     real_fresh_state = orchestrator._fresh_state
@@ -1943,7 +1955,7 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
         orchestrator._apply_resumed_agent_profiles(mismatched, state)
 
 
-def test_resume_rejects_changed_toml_binary_before_provider(tmp_path: Path) -> None:
+def test_resume_keeps_recorded_binary_after_toml_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repository = _repository(tmp_path, "feature/profile-binary-resume")
     task = tmp_path / "profile-binary-resume.md"
     _write_task(task, "feature/profile-binary-resume", "src/new.py")
@@ -1952,12 +1964,19 @@ def test_resume_rejects_changed_toml_binary_before_provider(tmp_path: Path) -> N
         task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
         implementer_profile=bound_state_profile("gpt-6-sol", "high", provider="codex", binary="codex"),
         reviewer_profile=bound_state_profile("opus", "high", provider="claude", binary="claude"),
-        final_reviewer_profile=bound_state_profile("opus", "high", provider="claude", binary="claude"),
+        final_reviewer_profile=scripted_profile_binding("final_reviewer"),
     )
     (repository / "orchestrator.toml").write_text('[agent_profiles.implementation]\nbinary = "/changed/codex"\n', encoding="utf-8")
     changed = _args(repository, task)
-    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*slot=implementer"):
-        orchestrator._apply_resumed_agent_profiles(changed, state)
+    binding = state.protocol_binding
+    assert binding is not None
+    import workflow_run_setup
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: {
+        slot: getattr(binding, f"{slot}_profile").binary_identity
+        for slot in ("implementer", "reviewer", "final_reviewer")
+    })
+    orchestrator._apply_resumed_agent_profiles(changed, state)
+    assert changed.slot_settings["implementer"].binary == "codex"
 
 
 def test_run_records_exist_before_first_workflow_dispatch(
@@ -1967,15 +1986,13 @@ def test_run_records_exist_before_first_workflow_dispatch(
     task = tmp_path / "run-binding-order.md"
     _write_task(task, "feature/run-binding-order", "src/new.py")
     args = _args(repository, task)
-    args.agent_settings["codex"] = replace(
-        args.agent_settings["codex"], model="gpt-order", effort="max"
+    args.slot_settings["implementer"] = replace(
+        args.slot_settings["implementer"], model="gpt-order", effort="max"
     )
-    args.agent_settings["claude"] = replace(
-        args.agent_settings["claude"], model="opus-order", effort="max"
+    args.slot_settings["reviewer"] = replace(
+        args.slot_settings["reviewer"], model="opus-order", effort="max"
     )
-    args.slot_settings["implementer"] = args.agent_settings["codex"]
-    args.slot_settings["reviewer"] = args.agent_settings["claude"]
-    args.slot_settings["final_reviewer"] = args.agent_settings["claude"]
+    args.slot_settings["final_reviewer"] = replace(args.slot_settings["reviewer"], profile_name=args.slot_settings["final_reviewer"].profile_name)
     observed: dict[str, object] = {}
 
     class DispatchObserved(RuntimeError):
@@ -2529,7 +2546,7 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
     assets = tmp_path / "assets"
     execution.mkdir()
     assets.mkdir()
-    adapter = NativeCodexAdapter(args.agent_settings["codex"])
+    adapter = NativeCodexAdapter(args.slot_settings["implementer"])
     prepared = adapter.prepare_native_provider_input(
         bundle,
         NativeCodexExecutionBoundary.canary(
@@ -5613,6 +5630,10 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
             duration_seconds=None,
             failure_kind=None,
             usage=None,
+            model=state.protocol_binding.implementer_profile.model,
+            effort=state.protocol_binding.implementer_profile.effort,
+            profile_name=state.protocol_binding.implementer_profile.profile_name,
+            binary_identity=state.protocol_binding.implementer_profile.binary_identity,
         ),
         logical_id="provider-operation-finding-recovery-1",
         idempotency_key="provider-attempt:finding-recovery:started",

@@ -327,16 +327,10 @@ class ProductionWorkflowDriver:
         self._reported_code_version_changes: set[tuple[str, str]] = set()
 
     def _adapter_for_slot(self, slot: str):
-        if slot in self.agents:
-            return self.agents[slot]
-        binding = self.active_state.protocol_binding if self.active_state is not None else None
-        if binding is None:
-            raise WorkflowExecutionError(f"slot={slot}: no bound agent profile")
-        profile = getattr(binding, f"{slot}_profile")
         try:
-            return self.agents[profile.provider]
+            return self.agents[slot]
         except KeyError as exc:
-            raise WorkflowExecutionError(f"slot={slot} provider={profile.provider}: adapter is missing") from exc
+            raise WorkflowExecutionError(f"slot={slot}: adapter is missing") from exc
 
     def _recovery_boundary(self) -> WorkflowRecovery:
         """Bind driver-owned state to one recovery operation explicitly."""
@@ -358,10 +352,6 @@ class ProductionWorkflowDriver:
                 persist_review_contract=self.persist_native_review_contract,
                 store_implementer_output=lambda content: setattr(
                     self, "last_codex_output", content
-                ),
-                agent_profile=lambda name: (
-                    self.agents[name].model,
-                    self.agents[name].effort,
                 ),
             )
         )

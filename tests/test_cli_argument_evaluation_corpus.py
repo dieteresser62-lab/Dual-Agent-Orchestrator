@@ -531,11 +531,12 @@ def _normalize_value(value: object) -> object:
     return value
 
 
-def _normalize_namespace(namespace: argparse.Namespace) -> dict[str, object]:
+def _normalize_namespace(namespace: argparse.Namespace, scenario_root: Path) -> dict[str, object]:
     normalized = {
         key: _normalize_value(value) for key, value in sorted(vars(namespace).items())
     }
     assert isinstance(normalized.pop("agents_file_explicit"), bool)
+    normalized["config_path"] = _normalize_message(str(normalized["config_path"]), scenario_root)
     agents_file = Path(str(normalized["agents_file"])).resolve()
     if agents_file == (ROOT / "AGENTS.md").resolve():
         normalized["agents_file"] = "<ROOT>/AGENTS.md"
@@ -782,7 +783,7 @@ def _run_scenario(
                 "stderr": stderr.getvalue(),
             }
         else:
-            namespace = _normalize_namespace(parsed)
+            namespace = _normalize_namespace(parsed, scenario_root)
             outcome = {
                 "kind": "success",
                 "namespace_field_count": len(namespace),

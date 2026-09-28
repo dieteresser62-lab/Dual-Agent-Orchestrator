@@ -70,9 +70,12 @@ max_budget_usd = 10.0
     final = args.slot_settings["final_reviewer"]
     assert (final.model, final.effort, final.timeout_seconds, final.max_budget_usd) == ("sonnet", "xhigh", None, 10.0)
     from agent_adapters import build_agent_registry
-    adapters = build_agent_registry(args.agent_settings, final_settings=final)
+    adapters = build_agent_registry(args.slot_settings)
     assert adapters["final_reviewer"].max_budget_usd == 10.0
-    assert adapters["claude"].max_budget_usd is None
+    assert adapters["reviewer"].max_budget_usd is None
+    assert adapters["final_reviewer"] is not adapters["reviewer"]
+    assert (adapters["final_reviewer"].model, adapters["final_reviewer"].effort,
+            adapters["final_reviewer"].timeout) == ("sonnet", "xhigh", None)
 
 
 @pytest.mark.parametrize("providers", itertools.product(("codex", "claude"), repeat=3))
@@ -565,27 +568,27 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
         },
     )
 
-    claude = args.agent_settings["claude"]
+    claude = args.slot_settings["reviewer"]
     assert claude.binary == "/cli/claude"
     assert claude.model == "opus"
     assert claude.timeout_seconds == 321
     assert claude.effort == "high"
     assert claude.max_budget_usd == 2.5
-    assert set(args.agent_settings) == {"codex", "claude"}
-    assert args.agent_settings["codex"].model == "gpt-6-luna"
-    assert args.agent_settings["codex"].effort == "high"
+    assert set(args.slot_settings) == {"implementer", "reviewer", "final_reviewer"}
+    assert args.slot_settings["implementer"].model == "gpt-6-luna"
+    assert args.slot_settings["implementer"].effort == "high"
 
 
 def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     args = parse_args([], cwd=tmp_path, environ={})
 
-    assert args.agent_settings["claude"].model == "opus"
-    assert args.agent_settings["claude"].effort == "high"
-    assert args.agent_settings["claude"].timeout_seconds is None
-    assert args.agent_settings["codex"].timeout_seconds is None
-    assert args.agent_settings["claude"].max_budget_usd is None
-    assert args.agent_settings["codex"].model == "gpt-6-sol"
-    assert args.agent_settings["codex"].effort == "high"
+    assert args.slot_settings["reviewer"].model == "opus"
+    assert args.slot_settings["reviewer"].effort == "high"
+    assert args.slot_settings["reviewer"].timeout_seconds is None
+    assert args.slot_settings["implementer"].timeout_seconds is None
+    assert args.slot_settings["reviewer"].max_budget_usd is None
+    assert args.slot_settings["implementer"].model == "gpt-6-sol"
+    assert args.slot_settings["implementer"].effort == "high"
 
 
 def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
@@ -593,12 +596,12 @@ def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
         ["--implementer-timeout", "0", "--reviewer-timeout", "47"],
         cwd=tmp_path,
         environ={"RUN_TASK_IMPLEMENTER_TIMEOUT": "17", "RUN_TASK_REVIEWER_TIMEOUT": "0"},
-    ).agent_settings
-    assert settings["codex"].timeout_seconds is None
-    assert settings["claude"].timeout_seconds == 47
+    ).slot_settings
+    assert settings["implementer"].timeout_seconds is None
+    assert settings["reviewer"].timeout_seconds == 47
     assert parse_args(
         [], cwd=tmp_path, environ={"RUN_TASK_REVIEWER_TIMEOUT": "0"}
-    ).agent_settings["claude"].timeout_seconds is None
+    ).slot_settings["reviewer"].timeout_seconds is None
 
 
 def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
@@ -608,8 +611,8 @@ def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
         (["--implementer-model", "gpt-6-luna", "--reviewer-model", "SONNET"], "gpt-6-luna", "sonnet"),
         (["--implementer-model", "astra", "--reviewer-model", "fable"], "gpt-6-astra", "fable"),
     ):
-        settings = parse_args(argv, cwd=tmp_path, environ={}).agent_settings
-        assert (settings["codex"].model, settings["claude"].model) == (codex, claude)
+        settings = parse_args(argv, cwd=tmp_path, environ={}).slot_settings
+        assert (settings["implementer"].model, settings["reviewer"].model) == (codex, claude)
 
     for argv, message in (
         (["--implementer-model", "gpt-5.6-luna"], "codex model must be one of sol"),
@@ -623,8 +626,8 @@ def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
 def test_effort_is_freely_selectable_within_the_known_levels(tmp_path: Path) -> None:
     settings = parse_args(
         ["--implementer-effort", "xhigh", "--reviewer-effort", "max"], cwd=tmp_path, environ={}
-    ).agent_settings
-    assert (settings["codex"].effort, settings["claude"].effort) == ("xhigh", "max")
+    ).slot_settings
+    assert (settings["implementer"].effort, settings["reviewer"].effort) == ("xhigh", "max")
 
 
 def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> None:

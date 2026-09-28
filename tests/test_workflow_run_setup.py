@@ -119,7 +119,7 @@ def test_resume_requires_resolved_slot_settings() -> None:
         workflow_run_setup._apply_resumed_agent_profiles(SimpleNamespace(), state)
 
 
-def test_resume_rejects_changed_configuration_occupancy_before_binary_probe(
+def test_resume_uses_recorded_occupancy_after_configuration_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
@@ -139,8 +139,17 @@ def test_resume_rejects_changed_configuration_occupancy_before_binary_probe(
     }
     slots["implementer"] = replace(slots["implementer"], name="claude")
     args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
-    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
-    with pytest.raises(StateSchemaError, match="slot=implementer.*provider=claude"):
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: {
+        slot: profile.binary_identity for slot, profile in profiles.items()
+    })
+    workflow_run_setup._apply_resumed_agent_profiles(args, state)
+    assert args.slot_settings["implementer"].name == profiles["implementer"].provider
+    assert args.slot_settings["implementer"].profile_name == profiles["implementer"].profile_name
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: {
+        **{slot: profile.binary_identity for slot, profile in profiles.items()},
+        "implementer": profiles["reviewer"].binary_identity,
+    })
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*binary identity drift"):
         workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 

@@ -223,6 +223,7 @@ class AgentProfileBinding:
     binary_identity: ProviderIdentity
     binary_identity_sha256: str
     max_budget_usd: float | None = None
+    profile_name: str = field(kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str) or not self.model.strip():
@@ -235,6 +236,8 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile effort is unsupported")
         if not isinstance(self.provider, str) or not self.provider.strip():
             raise WorkflowStateValidationError("agent profile provider is invalid")
+        if not isinstance(self.profile_name, str) or not self.profile_name.strip():
+            raise WorkflowStateValidationError("agent profile name is invalid")
         if not isinstance(self.binary, str) or not self.binary.strip():
             raise WorkflowStateValidationError("agent profile binary is invalid")
         if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
@@ -292,6 +295,7 @@ def scripted_profile_binding(slot: str) -> AgentProfileBinding:
         cert.capability_sha256, cert.transport_sha256, cert.rights_sha256,
         cert.policy_sha256, cert.digest, identity, identity.digest,
         config.max_budget_usd,
+        profile_name=config.profile_name,
     )
 
 
