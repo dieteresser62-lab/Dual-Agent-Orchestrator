@@ -1623,6 +1623,7 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
             )
+        self._persist_native_agent_request_bundle(invocation)
         raw_response_path = self._native_reviewer_response_path(invocation)
         return run_native_review_agent_checked(
                 adapter=native_adapter,

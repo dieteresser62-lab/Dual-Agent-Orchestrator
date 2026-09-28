@@ -252,6 +252,15 @@ class OrchestratorDiagnostic(StrEnum):
     REVIEW_CONTEXT_PREVIOUS_FINDINGS_SORTED = (
         "context-invalid: previous findings must be sorted and unique"
     )
+    REVIEW_CONTEXT_KNOWN_STOP_RULES_INVALID = (
+        "context-invalid: known stop rules must be a non-empty tuple of rules sorted by unique valid id"
+    )
+    REVIEW_CONTEXT_FINAL_STOP_RULE_RESERVED = (
+        "context-invalid: known stop rules cannot include the final-review-only rule"
+    )
+    REVIEW_CONTEXT_STOP_RULE_DESCRIPTION_INVALID = (
+        "context-invalid: known stop rule descriptions must fit the review request schema"
+    )
     REVIEW_CONTEXT_AUTHORITATIVE_IDS_SORTED = (
         "context-invalid: authoritative finding ids must be sorted and unique"
     )
@@ -411,6 +420,9 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_STOP_RULE_ID_REQUIRED = (
         "stop-content-invalid: stop request requires a rule id"
+    )
+    REVIEW_STOP_RULE_ID_NOT_ALLOWED = (
+        "stop-content-invalid: stop rule id is not allowed in this review context"
     )
     REVIEW_STOP_RATIONALE_REQUIRED = (
         "stop-content-invalid: stop request requires a rationale"

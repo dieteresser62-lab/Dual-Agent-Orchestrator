@@ -46,6 +46,7 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
+from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN, StopRule
 from finding_identity import (
     FINDING_ID_EXAMPLE,
     FINDING_ID_PATTERN_TEXT,
@@ -495,6 +496,42 @@ def _validated_final_review_capacity(
     return normalized
 
 
+def _validate_known_stop_rules(rules: tuple[StopRule, ...]) -> None:
+    rule_ids = (
+        tuple(rule.id for rule in rules if isinstance(rule, StopRule))
+        if isinstance(rules, tuple)
+        else ()
+    )
+    if (
+        not isinstance(rules, tuple)
+        or not rules
+        or len(rule_ids) != len(rules)
+        or rule_ids != tuple(sorted(set(rule_ids)))
+        or any(
+            len(rule_id) > 200
+            or STOP_RULE_ID_PATTERN.fullmatch(rule_id) is None
+            for rule_id in rule_ids
+        )
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "known stop rules must be a non-empty tuple of rules sorted by unique valid id",
+        )
+    if DISCOVERY_OUTPUT_LIMIT_RULE_ID in rule_ids:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "known stop rules cannot include the final-review-only rule",
+        )
+    if any(
+        len(rule.description) > 3000 or "\x00" in rule.description
+        for rule in rules
+    ):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "known stop rule descriptions must fit the review request schema",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class NativeReviewContext:
     run_id: str
@@ -522,8 +559,14 @@ class NativeReviewContext:
     max_new_findings: int | None = None
     planned_slices: tuple[PlannedSlice, ...] = ()
     request_sequence: int | None = None
+    known_stop_rules: tuple[StopRule, ...] = field(
+        default_factory=lambda: tuple(
+            sorted(BUILTIN_STOP_RULES, key=lambda rule: rule.id)
+        )
+    )
 
     def __post_init__(self) -> None:
+        _validate_known_stop_rules(self.known_stop_rules)
         object.__setattr__(
             self,
             "max_new_findings",
@@ -693,6 +736,16 @@ class NativeReviewContext:
         if self.known_open_findings is not None:
             return self.known_open_findings
         return project_open_set(self.previous_findings).findings
+
+    @property
+    def known_stop_rule_ids(self) -> frozenset[str]:
+        return frozenset(rule.id for rule in self.known_stop_rules)
+
+    @property
+    def allowed_stop_rule_ids(self) -> frozenset[str]:
+        if self.approval_marker is ApprovalMarker.FINAL_REVIEW:
+            return self.known_stop_rule_ids | {DISCOVERY_OUTPUT_LIMIT_RULE_ID}
+        return self.known_stop_rule_ids
 
     @property
     def request_id(self) -> str:
@@ -947,17 +1000,13 @@ def _final_review_provider_response_schema(
     )
     definitions["bound_final_review_completed"] = completed
     stop = _bound_stop_result_definition(
-        definitions["stop_request"], reviewer=context.reviewer
+        definitions["stop_request"], context=context
     )
     stop["properties"]["rule_id"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=200
     )
     stop["properties"]["rationale"].update(
         pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
-    )
-    stop["properties"]["rule_id"]["description"] = (
-        f"Use {DISCOVERY_OUTPUT_LIMIT_RULE_ID} when the scan reaches the "
-        "request-bound max_new_findings capacity; no partial result is authoritative."
     )
     definitions["bound_final_review_stop"] = stop
     validation = context.validation_attestation
@@ -1228,7 +1277,7 @@ def native_review_provider_response_schema(
     }
 
     stop = _bound_stop_result_definition(
-        definitions["stop_request"], reviewer=context.reviewer
+        definitions["stop_request"], context=context
     )
     stop["properties"]["rule_id"]["pattern"] = NONBLANK_TEXT_PATTERN
     stop["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
@@ -1411,7 +1460,7 @@ def _bind_required_empty_array(schema: dict[str, Any]) -> None:
 
 
 def _bound_stop_result_definition(
-    definition: Mapping[str, Any], *, reviewer: AgentRole
+    definition: Mapping[str, Any], *, context: NativeReviewContext
 ) -> dict[str, Any]:
     projected = json.loads(json.dumps(definition["allOf"][1]))
     projected["properties"]["schema_version"] = {
@@ -1424,7 +1473,23 @@ def _bound_stop_result_definition(
     }
     projected["properties"]["reviewer"] = {
         "type": "string",
-        "const": reviewer.value,
+        "const": context.reviewer.value,
+    }
+    rules = list(context.known_stop_rules)
+    if context.approval_marker is ApprovalMarker.FINAL_REVIEW:
+        rules.append(
+            StopRule(
+                DISCOVERY_OUTPUT_LIMIT_RULE_ID,
+                "The scan reached max_new_findings; partial findings are not authoritative.",
+            )
+        )
+    projected["properties"]["rule_id"] = {
+        "type": "string",
+        "enum": sorted(rule.id for rule in rules),
+        "description": "Stop rules: " + " ".join(
+            f"{rule.id}: {rule.description}"
+            for rule in sorted(rules, key=lambda rule: rule.id)
+        ),
     }
     projected["properties"]["request_id"]["description"] = (
         "Copy the exact request_id from the current canonical request."
@@ -1645,6 +1710,11 @@ def _native_response_to_contract_result(
             max_length=200,
             code=NativeReviewErrorCode.STOP_CONTENT_INVALID,
         )
+        if response.rule_id not in context.allowed_stop_rule_ids:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.STOP_CONTENT_INVALID,
+                "stop rule id is not allowed in this review context",
+            )
         _require_native_text(
             response.rationale,
             "stop rationale",
@@ -2623,6 +2693,10 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "slice_id": context.slice_id,
         "round_number": context.round_number,
         "request_sequence": context.request_sequence,
+        "known_stop_rules": [
+            {"id": rule.id, "description": rule.description}
+            for rule in context.known_stop_rules
+        ],
         "previous_findings": [_finding_binding(item) for item in context.previous_findings],
         "known_open_finding_signatures": [
             {

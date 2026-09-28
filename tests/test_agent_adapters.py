@@ -240,14 +240,14 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     ),
     (
         "claude",
-        "6c2345e803ecd221792282548f0382d75cff16e91c70ac3ee2090a5d3aabcaf4",
-        "cfd2c6e962fbf7f6f18c3fcb5848db2dd0aeddc97015e23682080bfab73587aa",
+        "8213c36b7ac6e45e9c0bd7c764171140f9f7c9165ad64e0a452152332c68694b",
+        "bda350b4635f2757e71259fbd28e2c2254b6279d3d63e8fe6d3ff68ebbc77011",
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
     provider: str, expected_command: str, expected_components: str,
 ) -> None:
-    # The Codex baseline is unchanged; Claude's command digest includes --restricted.
+    # Fix 137 changes Claude's bound request and writer bytes; Codex stays unchanged.
     # Random runtime directory names are replaced before hashing.
     adapter = (
         NativeCodexAdapter(_settings(provider))

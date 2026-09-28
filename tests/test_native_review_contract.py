@@ -33,7 +33,7 @@ from contracts import (
     apply_finding_response,
 )
 from finding_reducer import project_open_set, project_reviewer_persistence_transitions
-from gates import detect_anchor_changes
+from gates import BUILTIN_STOP_RULES, StopRule, detect_anchor_changes
 from native_review_contract import (
     DISCOVERY_OUTPUT_LIMIT_RULE_ID,
     NativeFinding,
@@ -60,6 +60,65 @@ from workflow_state import WorkUnitKind
 
 
 FINGERPRINT = "a" * 64
+
+
+@pytest.mark.parametrize("profile", (ANTHROPIC_PROVIDER, OPENAI_PROVIDER))
+@pytest.mark.parametrize("kind", ("plan", "slice_initial", "slice_convergence", "final"))
+def test_stop_writer_binds_known_rules_for_every_review_kind(profile: str, kind: str) -> None:
+    context = _context()
+    if kind == "plan":
+        context = replace(context, operation="reviewer_plan_review", approval_marker=ApprovalMarker.PLAN)
+    elif kind == "slice_initial":
+        context = replace(context, round_number=1, allow_new_findings=True)
+    elif kind == "final":
+        context = replace(context, operation="reviewer_final_review", approval_marker=ApprovalMarker.FINAL_REVIEW, slice_id="FINAL", anchor_origin=None)
+    rules = tuple(sorted((*BUILTIN_STOP_RULES, StopRule("PROJECT-RULE", "Project stop condition.")), key=lambda rule: rule.id))
+    context = replace(context, known_stop_rules=rules)
+    writer = native_review_provider_response_schema(context, profile=profile)
+    stop_defs = [value for key, value in writer["$defs"].items() if key.startswith("bound_") and key.endswith("_stop")]
+    assert stop_defs
+    expected = sorted(context.allowed_stop_rule_ids)
+    for stop_def in stop_defs:
+        rule_schema = stop_def["properties"]["rule_id"]
+        assert rule_schema["enum"] == expected
+        assert "PROJECT-RULE: Project stop condition." in rule_schema["description"]
+        for invalid in ("boundary-rule", "none"):
+            stop = {
+                "schema_version": "native-agent-review-result-v3", "result_type": "stop_request",
+                "request_id": context.request_id, "reviewer": "reviewer", "rule_id": invalid,
+                "rationale": "Cannot proceed.", "remediation_paths": [],
+            }
+            with pytest.raises(SchemaMismatch):
+                validate_schema_document(stop, stop_def)
+        assert (DISCOVERY_OUTPUT_LIMIT_RULE_ID in rule_schema["enum"]) is (kind == "final")
+
+
+def test_stop_domain_rejects_unknown_rule_and_limits_discovery_to_final() -> None:
+    for context, rule_id in (
+        (_context(), "boundary-rule"),
+        (_context(), "none"),
+        (_context(), DISCOVERY_OUTPUT_LIMIT_RULE_ID),
+    ):
+        document = {
+            "schema_version": "native-agent-review-result-v3", "result_type": "stop_request",
+            "request_id": context.request_id, "reviewer": "reviewer", "rule_id": rule_id,
+            "rationale": "Cannot proceed.", "remediation_paths": [],
+        }
+        with pytest.raises(NativeReviewContractError) as raised:
+            parse_native_contract_result(document, context)
+        assert raised.value.code is NativeReviewErrorCode.STOP_CONTENT_INVALID
+
+
+def test_stop_rule_context_requires_sorted_unique_ids_and_reserves_discovery() -> None:
+    for rules in (
+        (),
+        (StopRule("Z-RULE", "Z."), StopRule("A-RULE", "A.")),
+        (StopRule("A-RULE", "A."), StopRule("A-RULE", "Again.")),
+        (StopRule(DISCOVERY_OUTPUT_LIMIT_RULE_ID, "Reserved."),),
+    ):
+        with pytest.raises(NativeReviewContractError) as raised:
+            replace(_context(), known_stop_rules=rules)
+        assert raised.value.code is NativeReviewErrorCode.CONTEXT_INVALID
 MISSING_ANCHOR_DETAIL = (
     "predecessor_finding_ref and evidence_anchor_sha256 must be provided together "
     "or both omitted; a valid evidence_anchor_sha256 is missing, so either provide "

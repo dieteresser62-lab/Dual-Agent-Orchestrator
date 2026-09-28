@@ -279,6 +279,20 @@
           "type": "integer",
           "minimum": 1
         },
+        "known_stop_rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]*$"},
+              "description": {"$ref": "#/$defs/safe_text"}
+            },
+            "required": ["id", "description"],
+            "additionalProperties": false
+          }
+        },
         "next_finding_id": {
           "type": "string",
           "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
@@ -368,6 +382,7 @@
         "slice_id",
         "round_number",
         "request_sequence",
+        "known_stop_rules",
         "next_finding_id",
         "previous_findings",
         "known_open_finding_signatures",

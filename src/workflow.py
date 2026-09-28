@@ -414,8 +414,13 @@ class WorkflowContext:
         builtin_ids = {rule.id for rule in BUILTIN_STOP_RULES}
         if len(set(rule_ids)) != len(rule_ids):
             raise ValueError("declared stop rule ids must be unique")
-        if builtin_ids.intersection(rule_ids):
-            raise ValueError("declared stop rules cannot shadow built-in rule ids")
+        if (
+            builtin_ids.intersection(rule_ids)
+            or DISCOVERY_OUTPUT_LIMIT_RULE_ID in rule_ids
+        ):
+            raise ValueError(
+                "declared stop rules cannot shadow built-in or final-review rule ids"
+            )
         if self.current_branch is not None and not self.current_branch.strip():
             raise ValueError("current_branch must be non-empty when provided")
         if (
@@ -505,10 +510,14 @@ class WorkflowContext:
         )
 
     @property
-    def known_stop_rule_ids(self) -> frozenset[str]:
-        return frozenset(
-            rule.id for rule in (*BUILTIN_STOP_RULES, *self.stop_rules)
+    def known_stop_rules(self) -> tuple[StopRule, ...]:
+        return tuple(
+            sorted((*BUILTIN_STOP_RULES, *self.stop_rules), key=lambda rule: rule.id)
         )
+
+    @property
+    def known_stop_rule_ids(self) -> frozenset[str]:
+        return frozenset(rule.id for rule in self.known_stop_rules)
 
     @staticmethod
     def _render_anchors(anchors: tuple[AnchorRecord, ...]) -> str:

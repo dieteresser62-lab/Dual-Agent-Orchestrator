@@ -23,12 +23,12 @@ def _adapter() -> NativeClaudeReviewAdapter:
 
 
 def test_reviewer_components_match_start_head_bytes() -> None:
-    # Slice 8b wire cut; the historical component digests are checked below.
+    # Fix 137 binds stop rules into the request and writer component bytes.
     expected = {
-        "request_chunk_001": ("fa2a6a9354dfdf4601423c2d4690e68c7f5e55512d14c30672ad8039ad0dfb8e", 1813),
-        "packet_manifest": ("cbfe0df44c026e0f2c66fb20cb77f520c151b2ea73eb5883fe6d6b7bd7dd22ed", 502),
+        "request_chunk_001": ("11ee17b0284164375ad10d4c2f27fb3a43c3c59d87e66d9a545e8ea1c2f4708a", 3087),
+        "packet_manifest": ("a67dc7176a8716cb3d8370840e3963249aa8a7e6d4c4940750429c853de335a5", 502),
         "system_policy": ("a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d", 2440),
-        "response_schema": ("ec2b2abccea7faab60c31c1ae8eb15138a8f7e5973dcd67fc2c020034cef2cca", 38898),
+        "response_schema": ("3f812a2686cf2ffc9df212eba3f6d8f5a4f1edd449b342632502fbb5cc26ac2f", 40170),
         "start_directive": ("344363a35fdc403d7803b5c1edfaf731becbade36c37b941d7b8e204c65db6a0", 280),
     }
     adapter = _adapter()
@@ -40,21 +40,20 @@ def test_reviewer_components_match_start_head_bytes() -> None:
             return content.replace(runtime_parent, "/tmp")
 
         assert list(expected) == [item.name for item in prepared.components]
-        # Slice 8b wire cut: inverse request/schema values recreate the old
-        # request-chunk pin and its digest-bound manifest line exactly.
+        # The inverse role-name projection still pins exact Fix-137 bytes.
         bundle = _review_bundle()
         prior_schema = (bundle.provider_response_schema_json
             .replace('"const":"reviewer"', '"const":"claude"')
             .replace('"enum":["reviewer"]', '"enum":["claude"]'))
         prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
-        assert prior_schema_digest == "96234209de18341a86a38ec920a1d1fd4c19984fa97c0610c1b621598a5f3317"
+        assert prior_schema_digest == "456a4a0ba1d247d34923fbe716f70a3362c9815685bc27ad86cf021786cf8360"
         prior_request = prior_role_wire_document(
             bundle.document, prior_schema_sha256=prior_schema_digest
         )
         prior_chunk = json.dumps(prior_request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         prior_chunk_digest = hashlib.sha256(prior_chunk.encode()).hexdigest()
         assert (prior_chunk_digest, len(prior_chunk.encode())) == (
-            "9fc6e7944cb4781e426695c6e1b7cd1e0243cf946caeb5ed69364ba3c747e8f8", 1809
+            "5b12b137f2962c88c8ca011119319ead6640202d017afdb2a8a900685a4292ab", 3083
         )
         current_chunk = next(item for item in prepared.components if item.name == "request_chunk_001")
         current_manifest = next(item for item in prepared.components if item.name == "packet_manifest")
@@ -62,7 +61,7 @@ def test_reviewer_components_match_start_head_bytes() -> None:
             .replace(str(len(current_chunk.content.encode())), str(len(prior_chunk.encode())))
             .replace(hashlib.sha256(current_chunk.content.encode()).hexdigest(), prior_chunk_digest))
         assert hashlib.sha256(prior_manifest.encode()).hexdigest() == (
-            "aa89f7d38bb3e87a15907a32a26fa542318535528b517b75184feb29ccbaa072"
+            "b36a3c088e96d04c8c5f229b841839bea856177613b36e6f37d477097bf53f96"
         )
         assert {
             item.name: (hashlib.sha256(historical_content(item.content).encode()).hexdigest(),

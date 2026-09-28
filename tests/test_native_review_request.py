@@ -170,23 +170,23 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
 def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
-    # Slice 8b wire cut: reviewer constants and request fields are the only changes.
+    # Fix 137 binds the complete stop-rule catalog into writer and request bytes.
     prior_schema = (
         bundle.provider_response_schema_json
         .replace('"const":"reviewer"', '"const":"claude"')
         .replace('"enum":["reviewer"]', '"enum":["claude"]')
     )
     prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
-    assert prior_schema_digest == "ed48ed6759e3f67f1aa47caf6c80e1f00ab41d793a587a791ea96881751cf544"
+    assert prior_schema_digest == "1bc7f8234f9544bc5d46641fd294cfde38cc9869f739a64c0e8c67432b32932e"
     prior = prior_role_wire_document(bundle.document, prior_schema_sha256=prior_schema_digest)
     assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
-        "ced9fcac8445f062e31041d6afaa0dcb6b2c97f2e892d54b63d0144ad3bec751"
+        "8e33297719396dda538623bbe4fe84ebf0163574c731bd722faf55979465e9df"
     )
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "5f41b390fc3c64a4d316503d172c684fa337b195e40d985f5921d1d30a70b8ab"
+        "15cb6a530b96433f69d4f60e1a39cdeab6af3a0d90a00b8e056c2475f5f92097"
     )
     assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
-        "45880c8397ad9395ca1f052fea80cb40f572279033d9d69462d424b86ae5896d"
+        "1a8d1c50e39ee7f7c49c623cc56fd79d0927d8dcfafe15e27c4308f6886f0b61"
     )
 
 

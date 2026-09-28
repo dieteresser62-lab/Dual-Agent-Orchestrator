@@ -342,6 +342,14 @@ def test_every_bounded_claude_field_has_synthetic_boundary_evidence(
         for fragment in fragments:
             assert fragment["maxLength"] == limit
             check_schema(fragment, location=f"<{context_name}:{pointer}>")
+            if "enum" in fragment:
+                # Fix 137 narrows stop rule ids to the request-bound catalog.
+                assert all(len(item) <= limit for item in fragment["enum"])
+                for item in fragment["enum"]:
+                    validate_schema_document(item, fragment)
+                with pytest.raises(SchemaMismatch, match="must be one of"):
+                    validate_schema_document("boundary-rule", fragment)
+                continue
             length = (limit * percentage + 99) // 100
             value = "x" * length
             if percentage <= 100:

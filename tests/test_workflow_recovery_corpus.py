@@ -74,6 +74,7 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
+from gates import StopRule
 from workflow import (
     ImplementerInvocation,
     EvidenceKind,
@@ -102,18 +103,18 @@ RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
-# Slice 8b wire cut: IDs and response digests bind the neutral wire values.
+# Fix 137: review IDs and response digests bind the stop-rule catalog in the request.
 IMPLEMENTER_REQUEST_ID = (
     "native-implementer-request-d5ee9c3972a558c6b5d00e8dc326104ba4d969909de3dfe8fc9751bb39fafe9c"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-0f23593b2a38781c76ad20b9250482037d4a80cd834586d01a0a119ad183fdd4"
+    "native-review-request-d7b6d1254181ab5e1d76b17a2d6eea46364fe5b7006de3f38243499e01571ebc"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
     "1b78a9ea73300fa8dced16b0c660b74a6b751ab37dc16a611de668006a10c4e3"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "ef2921d144c20f5cd95594d73562cc79ac39f93ce296548397da46738a055ac9"
+    "2deb20ecf7e644c337ac5d5164fb7764c162a80e7a5591d6ef78b7ab3aad61cb"
 )
 
 RECOVERY_HELPERS = {
@@ -1396,6 +1397,7 @@ def _reviewer_base() -> dict[str, object]:
     return {
         "attestation": attestation,
         "context": context,
+        "bundle": bundle,
         "document": document,
         "canonical": canonical,
         "record": record,
@@ -1403,6 +1405,211 @@ def _reviewer_base() -> dict[str, object]:
         "validation_record": validation_record,
         "state": state,
     }
+
+
+def test_pending_reviewer_rebuilds_stop_rules_from_run_context() -> None:
+    base = _reviewer_base()
+    workflow_context = replace(
+        base["context"],
+        stop_rules=(StopRule("PROJECT-RULE", "Project stop condition."),),
+    )
+    recovery = recovery_module.WorkflowRecovery(
+        _dependencies(
+            recovery_module,
+            state=SimpleNamespace(),
+            chain=(),
+            persisted_content=None,
+            capture={},
+            provider_counter={"count": 0},
+        )
+    )
+    native_context = recovery._build_pending_native_reviewer_context(
+        base["state"],
+        workflow_context,
+        WorkflowHistory(1),
+        base["state"].current_work_unit,
+        base["record"],
+        1,
+        base["attestation"],
+    )
+    assert native_context.known_stop_rules == workflow_context.known_stop_rules
+    assert native_context.known_stop_rule_ids == workflow_context.known_stop_rule_ids
+    changed_config_replay = recovery_module.ArtifactReplayResult(
+        expected_run_id=RUN_ID,
+        records=(),
+        head_record_id=None,
+        semantic_facts=(),
+        semantic_digest="0" * 64,
+        audit_events=(),
+        run_profile=SimpleNamespace(orchestrator_code_version="a" * 64),
+    )
+    changed_context = recovery._build_pending_native_reviewer_context(
+        base["state"],
+        workflow_context,
+        WorkflowHistory(1),
+        base["state"].current_work_unit,
+        base["record"],
+        1,
+        base["attestation"],
+        changed_config_replay,
+    )
+    assert changed_context.known_stop_rules == workflow_context.known_stop_rules
+
+
+def test_reviewer_recovery_without_request_ledger_uses_bundle_rules() -> None:
+    base = _reviewer_base()
+    recovery = recovery_module.WorkflowRecovery(_dependencies(
+        recovery_module, state=base["state"], chain=(),
+        persisted_content=None, capture={}, provider_counter={"count": 0},
+    ))
+    invocation = ReviewerInvocation(
+        work_unit_id=1,
+        step=WorkflowStep.REVIEWER_SLICE_REVIEW,
+        reviewer=AgentRole.REVIEWER,
+        round_number=1,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        fingerprint=FINGERPRINT,
+        paths=(),
+        prompt="review",
+        native_request=base["bundle"],
+    )
+    output = recovery._recover_request_bound_reviewer_output(
+        (base["record"],), base["record"], base["content"].payload,
+        base["state"], invocation, base["bundle"],
+        base["record"].payload, base["canonical"],
+    )
+    assert output.context.known_stop_rules == (
+        base["bundle"].bound_context.context.known_stop_rules
+    )
+
+
+def test_reviewer_recovery_uses_recorded_stop_rules_after_config_change(
+    tmp_path: Path,
+) -> None:
+    base = _reviewer_base()
+    recorded_rules = tuple(sorted(
+        (*base["bundle"].bound_context.context.known_stop_rules,
+         StopRule("PROJECT-RULE", "Project stop condition.")),
+        key=lambda rule: rule.id,
+    ))
+    recorded_context = replace(
+        base["bundle"].bound_context.context, known_stop_rules=recorded_rules
+    )
+    recorded_bundle = build_native_review_request(NativeReviewRequestSpec(
+        context=recorded_context,
+        review_kind=NativeReviewKind.SLICE,
+        target_branch="feature/backlog-followups",
+        base_commit="a" * 40,
+        authorized_paths=("tests/test_workflow_recovery_corpus.py",),
+        acceptance_criteria=("Recover exactly one durable review.",),
+        evidence=(NativeReviewEvidenceInput(
+            "b53-diff", "full_slice", "B53 test-only diff"
+        ),),
+    ))
+    directory = (tmp_path / ".orchestrator" / "artifacts" / RUN_ID
+                 / "native-agent-requests")
+    directory.mkdir(parents=True)
+    artifact = directory / "work-unit-0001-reviewer_slice_review-request-0001.json"
+    envelope = {
+        "schema_version": "native-agent-request-bundle-v1",
+        "canonical_request": recorded_bundle.canonical_json,
+        "provider_response_schema": recorded_bundle.provider_response_schema_json,
+        "evidence_assets": [
+            {"path": item.path, "sha256": item.sha256,
+             "byte_count": item.byte_count, "content": item.content}
+            for item in recorded_bundle.evidence_assets
+        ],
+    }
+    artifact.write_text(json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ), encoding="utf-8")
+    recovery = recovery_module.WorkflowRecovery(replace(
+        _dependencies(
+            recovery_module, state=SimpleNamespace(), chain=(),
+            persisted_content=None, capture={}, provider_counter={"count": 0},
+        ), root=tmp_path,
+    ))
+    rules = recovery._recorded_reviewer_stop_rules(
+        RUN_ID, 1, WorkflowStep.REVIEWER_SLICE_REVIEW.value,
+        recorded_bundle.bound_context.request_id,
+    )
+    assert rules == recorded_rules
+    replay = recovery_module.ArtifactReplayResult(
+        expected_run_id=RUN_ID, records=(), head_record_id=None,
+        semantic_facts=(), semantic_digest="0" * 64, audit_events=(),
+        run_profile=SimpleNamespace(orchestrator_code_version="a" * 64),
+    )
+    recorded_record = replace(
+        base["record"], payload=replace(
+            base["record"].payload,
+            request_id=recorded_bundle.bound_context.request_id,
+        ),
+    )
+    pending_context = recovery._build_pending_native_reviewer_context(
+        base["state"], base["context"], WorkflowHistory(1),
+        base["state"].current_work_unit, recorded_record, 1,
+        base["attestation"], replay,
+    )
+    assert pending_context.known_stop_rules == recorded_rules
+    snapshot = recovery_module._RequestLedgerSnapshot(
+        replay=replay, findings_by_id={}, open_finding_ids=(),
+        measurement_record_id="ar1-" + "6" * 64,
+        relevant_record_head="9" * 64,
+        prefix_head_record_id="ar1-" + "7" * 64,
+    )
+    rebound = recovery._rebind_reviewer_context_to_request_ledger(
+        base["bundle"].bound_context.context, snapshot,
+        known_stop_rules=rules,
+    )
+    assert rebound.known_stop_rules == recorded_rules
+    stop = {
+        "schema_version": "native-agent-review-result-v3",
+        "result_type": "stop_request",
+        "request_id": recorded_bundle.bound_context.request_id,
+        "reviewer": "reviewer",
+        "rule_id": "PROJECT-RULE",
+        "rationale": "Project stop condition applies.",
+        "remediation_paths": [],
+    }
+    result = recovery._parse_request_bound_reviewer_result(
+        stop, rebound,
+        SimpleNamespace(request_id=recorded_bundle.bound_context.request_id),
+        recorded_bundle.bound_context.request_digest, snapshot,
+    )
+    assert result.stop_request.rule_id == "PROJECT-RULE"
+    stop["rule_id"] = "NEVER-RECORDED"
+    with pytest.raises(ValueError, match="result.rule_id: must be one of"):
+        recovery._parse_request_bound_reviewer_result(
+            stop, rebound,
+            SimpleNamespace(request_id=recorded_bundle.bound_context.request_id),
+            recorded_bundle.bound_context.request_digest, snapshot,
+        )
+
+    old_document = json.loads(recorded_bundle.canonical_json)
+    del old_document["review_contract"]["known_stop_rules"]
+    binding = {key: value for key, value in old_document.items()
+               if key != "request_id"}
+    old_document["request_id"] = "native-review-request-" + hashlib.sha256(
+        json.dumps(binding, ensure_ascii=False, sort_keys=True,
+                   separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    envelope["canonical_request"] = json.dumps(
+        old_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    artifact.write_text(json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ), encoding="utf-8")
+    legacy_rules = recovery._recorded_reviewer_stop_rules(
+        RUN_ID, 1, WorkflowStep.REVIEWER_SLICE_REVIEW.value,
+        old_document["request_id"],
+    )
+    assert legacy_rules is None
+    legacy_context = recovery._rebind_reviewer_context_to_request_ledger(
+        base["bundle"].bound_context.context, snapshot,
+        known_stop_rules=legacy_rules,
+    )
+    assert legacy_context.known_stop_rules == base["context"].known_stop_rules
+    assert "PROJECT-RULE" not in legacy_context.known_stop_rule_ids
 
 
 def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None:

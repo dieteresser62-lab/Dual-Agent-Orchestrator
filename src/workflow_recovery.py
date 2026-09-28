@@ -83,6 +83,7 @@ from native_review_request import (
     validate_native_review_provider_response_for_context,
 )
 from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
+from gates import StopRule
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
     Reconciliation,
@@ -637,6 +638,7 @@ class WorkflowRecovery:
         context: NativeReviewContext,
         request_ledger: _RequestLedgerSnapshot,
         offered_finding_ids: tuple[str, ...] | None = None,
+        known_stop_rules: tuple[StopRule, ...] | None = None,
     ) -> NativeReviewContext:
         offered_ids = (
             tuple(item.finding_id for item in context.previous_findings)
@@ -657,6 +659,10 @@ class WorkflowRecovery:
         finding_ledger = tuple(request_ledger.findings_by_id.values())
         return replace(
             context,
+            known_stop_rules=(
+                context.known_stop_rules
+                if known_stop_rules is None else known_stop_rules
+            ),
             previous_findings=previous_findings,
             known_open_findings=project_open_set(finding_ledger).findings or None,
             authoritative_finding_ids=sorted_finding_ids(
@@ -664,6 +670,81 @@ class WorkflowRecovery:
             ),
             final_review_pending_count=None,
         )
+
+    def _recorded_reviewer_stop_rules(
+        self,
+        run_id: str,
+        work_unit_id: int,
+        operation: str,
+        request_id: str,
+    ) -> tuple[StopRule, ...] | None:
+        """Read the request-id-bound catalog; None denotes a legacy request."""
+        directory = (
+            self._dependencies.root / ".orchestrator" / "artifacts" / run_id
+            / "native-agent-requests"
+        )
+        prefix = f"work-unit-{work_unit_id:04d}-{operation}-request-"
+        matches: list[dict[str, Any]] = []
+        try:
+            for path in sorted(directory.glob(f"{prefix}*.json")):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("reviewer request artifact is not a regular file")
+                raw = path.read_text(encoding="utf-8")
+                envelope = json.loads(raw)
+                if (
+                    not isinstance(envelope, dict)
+                    or envelope.get("schema_version") != "native-agent-request-bundle-v1"
+                    or not isinstance(envelope.get("canonical_request"), str)
+                    or json.dumps(envelope, ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":")) != raw
+                ):
+                    raise ValueError("reviewer request artifact is not canonical")
+                canonical = envelope["canonical_request"]
+                document = json.loads(canonical)
+                if not isinstance(document, dict):
+                    raise ValueError("reviewer request is not an object")
+                if document.get("request_id") != request_id:
+                    continue
+                binding = {key: value for key, value in document.items()
+                           if key != "request_id"}
+                digest = hashlib.sha256(
+                    json.dumps(binding, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
+                if (
+                    request_id != f"native-review-request-{digest}"
+                    or json.dumps(document, ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":")) != canonical
+                    or document.get("run_id") != run_id
+                    or document.get("work_unit_id") != str(work_unit_id)
+                    or document.get("operation") != operation
+                ):
+                    raise ValueError("reviewer request digest or context is invalid")
+                matches.append(document)
+            if len(matches) > 1:
+                raise ValueError("duplicate reviewer request-id authority")
+            if not matches:
+                return None
+            review_contract = matches[0].get("review_contract")
+            if not isinstance(review_contract, dict):
+                raise ValueError("recorded reviewer contract is invalid")
+            if "known_stop_rules" not in review_contract:
+                return None
+            rules = review_contract["known_stop_rules"]
+            if not isinstance(rules, list) or not rules or not all(
+                isinstance(item, dict)
+                and set(item) == {"id", "description"}
+                and isinstance(item["id"], str)
+                and isinstance(item["description"], str)
+                for item in rules
+            ):
+                raise ValueError("recorded reviewer stop rules are invalid")
+            return tuple(StopRule(item["id"], item["description"])
+                         for item in rules)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise WorkflowExecutionError(
+                f"native reviewer request recovery artifact no longer validates: {exc}"
+            ) from exc
 
     @staticmethod
     def _durable_reviewer_request_id(
@@ -702,6 +783,7 @@ class WorkflowRecovery:
             if request_attempt is None
             else self._request_ledger_snapshot(chain, request_attempt, state)
         )
+        request_id = self._durable_reviewer_request_id(payload, content_payload)
         native_context = (
             bundle.bound_context.context
             if request_ledger is None
@@ -713,10 +795,11 @@ class WorkflowRecovery:
                     if isinstance(payload, ReviewPayload)
                     else None
                 ),
+                self._recorded_reviewer_stop_rules(
+                    state.run_id, state.current_work_unit_id,
+                    state.current_step.value, request_id,
+                ),
             )
-        )
-        request_id = self._durable_reviewer_request_id(
-            payload, content_payload
         )
         request_digest = request_id.removeprefix("native-review-request-")
         try:
@@ -1727,6 +1810,13 @@ class WorkflowRecovery:
         )
         payload = record.payload
         assert isinstance(payload, (ReviewPayload, FinalReviewCompletedPayload))
+        recorded_stop_rules = (
+            self._recorded_reviewer_stop_rules(
+                state.run_id, unit.work_unit_id, state.current_step.value,
+                payload.request_id,
+            )
+            if request_replay is not None else None
+        )
         finding_ledger = (
             history.findings
             if request_replay is None
@@ -1758,6 +1848,10 @@ class WorkflowRecovery:
             ),
             round_number=round_number,
             request_sequence=unit.request_sequence,
+            known_stop_rules=(
+                context.known_stop_rules
+                if recorded_stop_rules is None else recorded_stop_rules
+            ),
             previous_findings=previous_findings,
             known_open_findings=(
                 project_open_set(finding_ledger).findings or None

@@ -56,9 +56,6 @@ SRC = ROOT / "src"
 LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256 = (
     "3df05d6673e8134817cef501b58ff0a98baf926c4978e0b96d2d039fa415e682"
 )
-PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "bde300a33620f077cc274f4c48605dc43887ad23943c2f51db1ae5c4e2c924fd"
-)
 
 
 def _canonical_digest(text: str) -> str:
@@ -307,7 +304,7 @@ def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
 
 
 def test_canonical_requests_match_the_current_bound_bytes() -> None:
-    # Slice 8b wire cut: inverse names recover both pre-cut request documents.
+    # Fix 137 changes reviewer writer and request digests through the bound stop rules.
     implementer = _codex_bundle()
     prior_implementer = prior_role_wire_document(implementer.document)
     assert _canonical_digest(json.dumps(prior_implementer, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
@@ -320,16 +317,36 @@ def test_canonical_requests_match_the_current_bound_bytes() -> None:
     prior_schema = (review.provider_response_schema_json
         .replace('"const":"reviewer"', '"const":"claude"')
         .replace('"enum":["reviewer"]', '"enum":["claude"]'))
-    assert _canonical_digest(prior_schema) == "96234209de18341a86a38ec920a1d1fd4c19984fa97c0610c1b621598a5f3317"
+    assert _canonical_digest(prior_schema) == "456a4a0ba1d247d34923fbe716f70a3362c9815685bc27ad86cf021786cf8360"
     prior_review = prior_role_wire_document(
         review.document, prior_schema_sha256=_canonical_digest(prior_schema)
     )
     assert _canonical_digest(json.dumps(prior_review, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
-        PRE_CUT_REVIEW_REQUEST_SHA256
+        "1c1e780f39a39e3a8c285600a50780d1743967926e167413c96d60fe67d132dd"
     )
     assert _canonical_digest(review.canonical_json) == (
-        "dd69e5dfa21efdc05aa1b69eefa2d5b2315f7c9894efcebc93b3391b91331826"
+        "f8ffe4d27aff50d8e56bf97983d8deddd292e990e6b055aecd6046b37f776ab1"
     )
+
+
+def test_review_request_binds_project_stop_rule_and_changes_request_id() -> None:
+    original = _review_bundle()
+    context = replace(_context(), stop_rules=(StopRule("PROJECT-RULE", "Project stop condition."),))
+    custom = _review_bundle(context=context)
+    rules = custom.document["review_contract"]["known_stop_rules"]
+    assert {rule["id"] for rule in rules} == context.known_stop_rule_ids
+    assert custom.bound_context.context.known_stop_rule_ids == context.known_stop_rule_ids
+    assert custom.bound_context.request_id != original.bound_context.request_id
+    stop = custom.provider_response_schema["$defs"]["bound_slice_initial_stop"]
+    assert "PROJECT-RULE" in stop["properties"]["rule_id"]["enum"]
+
+
+def test_workflow_context_reserves_final_review_stop_rule() -> None:
+    with pytest.raises(ValueError, match="final-review rule ids"):
+        replace(
+            _context(),
+            stop_rules=(StopRule("DISCOVERY_OUTPUT_LIMIT", "Reserved."),),
+        )
 
 
 def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:

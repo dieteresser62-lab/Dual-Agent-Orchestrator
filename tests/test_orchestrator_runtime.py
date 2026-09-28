@@ -373,6 +373,11 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
     driver.active_state = state
     driver._artifact_bridge = SimpleNamespace()
     monkeypatch.setattr(driver, "assert_structured_decision_context", lambda: None)
+    persisted_requests: list[ReviewerInvocation] = []
+    monkeypatch.setattr(
+        driver, "_persist_native_agent_request_bundle",
+        persisted_requests.append,
+    )
     captured: dict[str, object] = {}
     expected = object()
 
@@ -394,6 +399,7 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
     )
 
     assert driver.invoke_reviewer(invocation) is expected
+    assert persisted_requests == [invocation]
     assert captured["adapter"] is adapter
     assert captured["reviewer_manifest_paths"] is None
     assert captured["raw_response_path"] == driver._native_reviewer_response_path(
@@ -452,6 +458,9 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
 
     assert driver.invoke_reviewer(slice_invocation) is expected
     assert captured["reviewer_manifest_paths"] == ("src/runtime.py",)
+    assert persisted_requests == [
+        invocation, direct_implement_slice, slice_invocation,
+    ]
 
 
 def test_rejected_reviewer_response_uses_side_effect_ledger_and_exact_bytes(

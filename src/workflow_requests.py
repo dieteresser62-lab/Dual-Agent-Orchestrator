@@ -501,6 +501,7 @@ def native_review_request(
         slice_id=contract.slice_id,
         round_number=contract.round_number,
         request_sequence=contract.request_sequence,
+        known_stop_rules=context.known_stop_rules,
         previous_findings=request_findings,
         known_open_findings=effective_known_open_findings or None,
         authoritative_finding_ids=authoritative_finding_ids,
