@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tokenize
 import tomllib
 from pathlib import Path
 
@@ -905,6 +907,11 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
 _RETIREMENT_EVIDENCE_PREFIX = "antigravity-endgueltige-entfernung-"
 _RETIREMENT_ARCHIVE = Path("docs/internal/archive")
 _PROVIDER_NAMES = ("codex", "claude")
+_PROVIDER_REFERENCE_CATEGORIES = (
+    "transport", "schema-bound diagnostic", "wire until slice 8/9",
+    "certification data", "role policy file", "legacy branch syntax",
+    "stable audit marker",
+)
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"
 )
@@ -924,17 +931,24 @@ def _matches_config_path(root: Path, path: Path, pattern: str) -> bool:
     )
 
 
-def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
+def _provider_productive_files(
+    root: Path = ROOT, *, include_tests: bool = False
+) -> tuple[Path, ...]:
     with (root / "orchestrator.toml").open("rb") as handle:
         path_config = tomllib.load(handle)["paths"]
     generated_patterns = tuple(path_config.get("generated", ()))
     files: set[Path] = set()
     resolved_root = root.resolve()
-    for pattern in path_config["productive"]:
+    patterns = [*path_config["productive"]]
+    if include_tests:
+        patterns.extend(path_config.get("tests", ()))
+    for pattern in patterns:
         glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
         for path in root.glob(glob_pattern):
             resolved = path.resolve()
             if not resolved.is_file():
+                continue
+            if include_tests and path.is_relative_to(root / "tests") and path.suffix != ".py":
                 continue
             resolved.relative_to(resolved_root)
             files.add(resolved)
@@ -954,8 +968,25 @@ def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
 
 
 def _provider_name_counts(text: str) -> dict[str, int]:
+    lines = text.splitlines()
+    allowed_lines: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        for token in tokens:
+            if token.type != tokenize.COMMENT or "# allowlist:provider" not in token.string:
+                continue
+            before = lines[token.start[0] - 1].split("# allowlist:provider", 1)[0]
+            reason = token.string.split("# allowlist:provider -- ", 1)
+            if (
+                re.search(r"codex|claude", before, re.I)
+                and len(reason) == 2
+                and any(reason[1].startswith(category) for category in _PROVIDER_REFERENCE_CATEGORIES)
+            ):
+                allowed_lines.add(token.start[0])
+    except tokenize.TokenError:
+        pass
     text = "\n".join(
-        line for line in text.splitlines() if "# allowlist:provider" not in line
+        line for number, line in enumerate(lines, 1) if number not in allowed_lines
     )
     return {
         name: sum(1 for _match in re.finditer(re.escape(name), text, re.I))
@@ -977,7 +1008,7 @@ def _provider_coupling_hits(
         for counts in baseline.values()
     )
     resolved_root = root.resolve()
-    files = _provider_productive_files(root)
+    files = _provider_productive_files(root, include_tests=True)
     current_paths = {
         path.relative_to(resolved_root).as_posix() for path in files
     }
@@ -1159,9 +1190,53 @@ def test_provider_name_counting_is_literal_embedded_case_insensitive_and_nonover
 
 def test_provider_name_counting_ignores_only_explicitly_allowlisted_lines() -> None:
     assert _provider_name_counts(
-        '"claude-review"  # allowlist:provider -- canonical marker\n'
+        '"claude-review"  # allowlist:provider -- wire until slice 8/9: canonical marker\n'
         '"codex-responses"\n'
     ) == {"codex": 1, "claude": 0}
+    assert _provider_name_counts('"codex"  # allowlist:provider\n')["codex"] == 1
+    assert _provider_name_counts('"codex # allowlist:provider -- transport"\n')["codex"] == 1
+
+
+def test_provider_name_ratchet_covers_tests_and_classified_transport(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestrator.toml").write_text(
+        '[paths]\nproductive = []\ntests = ["tests/**"]\ngenerated = []\n',
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "tests/test_new_role.py"
+    test_file.parent.mkdir()
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"schema_version": "provider-name-coupling-baseline-v1", "counts": {}}),
+        encoding="utf-8",
+    )
+    test_file.write_text('role = "Codex"\n', encoding="utf-8")
+    assert _provider_coupling_hits(tmp_path, baseline) == [
+        "tests/test_new_role.py: codex baseline=0 actual=1"
+    ]
+    test_file.write_text(
+        'binary = "codex"  # allowlist:provider -- transport\n',
+        encoding="utf-8",
+    )
+    assert _provider_coupling_hits(tmp_path, baseline) == []
+
+
+def test_provider_allowlist_comments_name_a_category_and_a_provider() -> None:
+    problems = []
+    for path in (*((ROOT / "src").rglob("*.py")), *((ROOT / "tests").rglob("*.py"))):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for token in tokenize.generate_tokens(io.StringIO("\n".join(lines)).readline):
+            if token.type != tokenize.COMMENT or "# allowlist:provider" not in token.string:
+                continue
+            before = lines[token.start[0] - 1].split("# allowlist:provider", 1)[0]
+            reasons = token.string.split("# allowlist:provider -- ", 1)
+            if not re.search(r"codex|claude", before, re.I) or not (
+                len(reasons) == 2
+                and any(reasons[1].startswith(category) for category in _PROVIDER_REFERENCE_CATEGORIES)
+            ):
+                problems.append(f"{path.relative_to(ROOT)}:{token.start[0]}")
+    assert not problems, problems
 
 
 def test_provider_name_ratchet_rejects_only_a_temporary_copy_increase(

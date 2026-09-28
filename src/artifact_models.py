@@ -288,14 +288,14 @@ class RunProfilePayload:
 
 
 _WORKFLOW_STEPS = {
-    "codex_plan",  # allowlist:provider -- persisted protocol vocabulary
-    "claude_plan_review",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_plan_revision",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_implementation",  # allowlist:provider -- persisted protocol vocabulary
-    "claude_slice_review",  # allowlist:provider -- persisted protocol vocabulary
-    "codex_correction",  # allowlist:provider -- persisted protocol vocabulary
+    "codex_plan",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "claude_plan_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "codex_plan_revision",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "codex_implementation",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "claude_slice_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "codex_correction",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
     "slice_commit",
-    "claude_final_review",  # allowlist:provider -- persisted protocol vocabulary
+    "claude_final_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
     "completed",
 }
 _SLICE_STATUSES = {
@@ -858,9 +858,9 @@ class FinalReviewCompletedPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_COMPLETED
 
     def __post_init__(self) -> None:
-        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- wire until slice 8/9: reviewer authority
             raise ArtifactValidationError(
-                "final review completion reviewer must be claude"  # allowlist:provider -- diagnostic role
+                "final review completion reviewer must be claude"  # allowlist:provider -- schema-bound diagnostic: diagnostic role
             )
         if self.scan_complete is not True:
             raise ArtifactValidationError(
@@ -895,7 +895,7 @@ class FinalReviewCompletedPayload:
             "validation_attestation_record_id",
         )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
-        if self.transport_schema != "native-claude-review-v2":  # allowlist:provider -- persisted protocol vocabulary
+        if self.transport_schema != "native-claude-review-v2":  # allowlist:provider -- transport: persisted protocol vocabulary
             raise ArtifactValidationError(
                 "final review completion transport_schema is unsupported"
             )
@@ -2102,7 +2102,7 @@ class InvocationFailurePayload:
             )
         automatic_review_form = (
             self.failure_kind == "output"
-            and self.role is Role.CLAUDE  # allowlist:provider -- bound reviewer role
+            and self.role is Role.CLAUDE  # allowlist:provider -- wire until slice 8/9: bound reviewer role
             and self.diagnostic_code in {
                 "NATIVE-REVIEW-FORM",
                 STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -2112,7 +2112,7 @@ class InvocationFailurePayload:
         )
         automatic_implementer_form = (
             self.failure_kind == "output"
-            and self.role is Role.CODEX  # allowlist:provider -- implementer role
+            and self.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: implementer role
             and self.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and self.step.startswith(f"{self.role.value}_")
         )
@@ -2195,7 +2195,7 @@ def _validate_native_response_failure_feedback(
                 "invocation failure native implementer rejection is invalid"
             )
         if not (
-            payload.role is Role.CODEX  # allowlist:provider -- implementer role
+            payload.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: implementer role
             and payload.failure_kind == "output"
             and payload.diagnostic_code == "NATIVE-IMPLEMENTER-FORM"
             and payload.step.startswith(f"{payload.role.value}_")

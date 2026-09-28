@@ -129,7 +129,7 @@ def _state(tmp_path: Path) -> WorkflowState:
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
             updated_at="2026-09-02T00:00:00+00:00",
         )
         .bind_current_slice_git_boundary(

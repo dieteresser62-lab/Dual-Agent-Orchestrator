@@ -35,7 +35,7 @@ from workflow import (
     WorkflowHistory,
 )
 import workflow_requests
-from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_CODEX_SYSTEM_POLICY
+from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_IMPLEMENTER_SYSTEM_POLICY
 from task_contract import TaskMode, parse_task_contract
 from validation_matrix import ValidationCommand, ValidationMatrix
 from workflow_state import (
@@ -112,7 +112,7 @@ def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> Non
         if item["evidence_id"] == "native-policy"
     )
     assert policy["kind"] == "system_policy"
-    assert policy["content"] == NATIVE_CODEX_SYSTEM_POLICY
+    assert policy["content"] == NATIVE_IMPLEMENTER_SYSTEM_POLICY
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in policy["content"]
     assert policy["sha256"] == hashlib.sha256(policy["content"].encode()).hexdigest()
 

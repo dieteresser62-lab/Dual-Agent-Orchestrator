@@ -205,7 +205,7 @@ class NativeReviewRequestSpec:
         expected_operation = {
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
-            NativeReviewKind.FINAL_REVIEW: "claude_final_review",  # allowlist:provider -- canonical operation
+            NativeReviewKind.FINAL_REVIEW: "claude_final_review",  # allowlist:provider -- wire until slice 8/9: canonical operation
         }[self.review_kind]
         if self.context.operation != expected_operation:
             raise NativeReviewRequestError(

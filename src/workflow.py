@@ -645,12 +645,12 @@ class WorkflowDriver(Protocol):
         self, invocation: CodexInvocation
     ) -> str | NativeAgentImplementerOutput: ...
 
-    def recover_pending_native_implementer(  # allowlist:provider -- canonical capability
+    def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        contract: ImplementerStepContract,  # allowlist:provider -- typed boundary
+        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentImplementerOutput | None: ...  # allowlist:provider -- typed boundary
+    ) -> NativeAgentImplementerOutput | None: ...
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
@@ -736,9 +736,9 @@ class WorkflowDriver(Protocol):
         fingerprint: str,
     ) -> str: ...
 
-    def persist_native_implementer_contract(  # allowlist:provider -- canonical capability
+    def persist_native_implementer_contract(
         self,
-        output: NativeAgentImplementerOutput,  # allowlist:provider -- typed boundary
+        output: NativeAgentImplementerOutput,
         request_sequence: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None: ...
@@ -771,7 +771,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "commit_slice",
         "detect_test_changes",
         "evaluate_slice_finding_convergence",
-        "invoke_codex",  # allowlist:provider -- canonical capability
+        "invoke_codex",  # allowlist:provider -- transport: canonical capability
         "invoke_reviewer",
         "persist_gate_decision",
         "close_unknown_provider_attempt",
@@ -780,12 +780,12 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "write_invocation_failure_diagnostic",
         "persist_scope_extension",
         "scope_extension_source_request_id",
-        "persist_native_implementer_contract",  # allowlist:provider -- canonical capability
+        "persist_native_implementer_contract",
         "persist_native_review_contract",
         "persist_review_packet",
         "persist_validation_attestation",
         "persist_validation_request",
-        "recover_pending_native_implementer",  # allowlist:provider -- canonical capability
+        "recover_pending_native_implementer",
         "recover_pending_native_reviewer",
         "recover_pending_native_reviewer_before_policy",
         "recover_pending_validation_attestation",
@@ -849,15 +849,15 @@ class WorkflowHistory:
     findings: tuple[FindingRecord, ...] = ()
     events: tuple[AuditEvent, ...] = ()
     attestations: tuple[ValidationAttestation, ...] = ()
-    last_claude_fingerprint: str | None = None
-    latest_claude_review: ContractResult | None = None
+    last_reviewer_fingerprint: str | None = None
+    latest_reviewer_review: ContractResult | None = None
     active_review_packet: ReviewPacket | None = None
 
     def __post_init__(self) -> None:
         if self.work_unit_id < 1:
             raise ValueError("workflow history work_unit_id must be 1-based")
-        if self.last_claude_fingerprint is not None and not SHA256_PATTERN.fullmatch(
-            self.last_claude_fingerprint
+        if self.last_reviewer_fingerprint is not None and not SHA256_PATTERN.fullmatch(
+            self.last_reviewer_fingerprint
         ):
             raise ValueError("last Claude fingerprint must be a SHA-256 digest")
         finding_ids = tuple(item.finding_id for item in self.findings)
@@ -872,8 +872,8 @@ class WorkflowHistory:
             "work_unit_id": self.work_unit_id,
             "findings": [_finding_to_dict(item) for item in self.findings],
             "attestations": [_attestation_to_dict(item) for item in self.attestations],
-            "last_claude_fingerprint": self.last_claude_fingerprint,
-            "latest_claude_review": _review_to_dict(self.latest_claude_review),
+            "last_claude_fingerprint": self.last_reviewer_fingerprint,
+            "latest_claude_review": _review_to_dict(self.latest_reviewer_review),
         }
         if self.active_review_packet is not None:
             packet = self.active_review_packet
@@ -922,11 +922,11 @@ class WorkflowHistory:
             attestations=tuple(
                 _attestation_from_dict(item) for item in _json_list(raw["attestations"])
             ),
-            last_claude_fingerprint=(
+            last_reviewer_fingerprint=(
                 None if raw["last_claude_fingerprint"] is None
                 else str(raw["last_claude_fingerprint"])
             ),
-            latest_claude_review=_review_from_dict(raw["latest_claude_review"]),
+            latest_reviewer_review=_review_from_dict(raw["latest_claude_review"]),
             active_review_packet=active_review_packet,
         )
 
@@ -1397,7 +1397,7 @@ def workflow_rejection_finding_ids(
 ) -> tuple[str, ...]:
     """Return the open IDs carried by a terminal reviewer denial, if any."""
 
-    review = history.latest_claude_review  # allowlist:provider -- canonical history field
+    review = history.latest_reviewer_review
     if (
         state.current_work_unit.status is not WorkUnitStatus.COMPLETED
         or state.current_step is not WorkflowStep.COMPLETED
@@ -1497,7 +1497,7 @@ def _validate_plan_measurement_support(
 
 
 class WorkflowEngine:
-    """Additive state-v3 engine for the Codex/Claude chain."""
+    """Additive state-v3 engine for the implementer/reviewer chain."""
 
     def __init__(
         self,
@@ -1685,8 +1685,8 @@ class WorkflowEngine:
             if state.current_step is not resume_step:
                 active_history = replace(
                     active_history,
-                    last_claude_fingerprint=None,
-                    latest_claude_review=None,
+                    last_reviewer_fingerprint=None,
+                    latest_reviewer_review=None,
                 )
                 self.driver.checkpoint(state, active_history)
 
@@ -1933,7 +1933,7 @@ class WorkflowEngine:
     def reframe_unexpected_path_stop_gate(
         self, state: WorkflowState
     ) -> WorkflowState:
-        """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
+        """Upgrade a legacy implementer UNEXPECTED-PATH stop to an exact user gate."""
         require_driver_capabilities(
             self.driver,
             methods=frozenset({"collect_changes"}),
@@ -2002,9 +2002,9 @@ class WorkflowEngine:
         history: WorkflowHistory,
     ) -> tuple[
         bool,
-        ImplementerStepContract,  # allowlist:provider -- typed boundary
-        CodexInvocation,  # allowlist:provider -- typed boundary
-        NativeAgentImplementerOutput | None,  # allowlist:provider -- typed boundary
+        ImplementerStepContract,
+        CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        NativeAgentImplementerOutput | None,
         WorkflowHistory,
     ]:
         unit, context = (
@@ -2024,7 +2024,7 @@ class WorkflowEngine:
             request_sequence=unit.request_sequence,
             require_test_files_record=not is_plan,
             expected_test_files=context.expected_test_files if not is_plan else (),
-            # R-10 gates after implementation readiness and before review. Codex must be
+            # R-10 gates after implementation readiness and before review. The implementer must be
             # able to report test paths before a user approval exists.
             test_changes_approved=True,
             require_slice_plan=is_plan and context.require_slice_plan,
@@ -2086,7 +2086,7 @@ class WorkflowEngine:
             previous_findings=history.findings,
         )
         recovered = (
-            self.driver.recover_pending_native_implementer(  # allowlist:provider
+            self.driver.recover_pending_native_implementer(
                 invocation, contract, history
             )
             if native_request is not None
@@ -2208,8 +2208,8 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory,
         is_plan: bool,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentImplementerOutput | None,  # allowlist:provider -- typed boundary
+        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        output: NativeAgentImplementerOutput | None,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         if output is None:
             return state, history
@@ -2218,7 +2218,7 @@ class WorkflowEngine:
         result = output.result
         output_text = output.canonical_json
         self._persist_structured(
-            self.driver.persist_native_implementer_contract,  # allowlist:provider
+            self.driver.persist_native_implementer_contract,
             output,
             invocation.request_sequence,
             history.findings,
@@ -2461,8 +2461,8 @@ class WorkflowEngine:
         self,
         state: WorkflowState,
         history: WorkflowHistory,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        output: NativeAgentImplementerOutput,  # allowlist:provider -- typed boundary
+        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        output: NativeAgentImplementerOutput,
     ) -> WorkflowHistory:
         """Merge fresh or recovered output without mixing its ledger cuts."""
 
@@ -3643,8 +3643,8 @@ class WorkflowEngine:
         if result.reviewer is not AgentRole.CLAUDE:
             raise WorkflowExecutionError("review history accepts only Claude results")
         if track_slice_approval:
-            updates["last_claude_fingerprint"] = fingerprint
-            updates["latest_claude_review"] = result
+            updates["last_reviewer_fingerprint"] = fingerprint
+            updates["latest_reviewer_review"] = result
         return replace(history, **updates)
 
     def _commit(
@@ -3705,7 +3705,7 @@ class WorkflowEngine:
             ),
             None,
         )
-        claude = history.latest_claude_review
+        review = history.latest_reviewer_review
         validation_authorized = attestation is not None and (
             attestation.passed
             or (
@@ -3715,9 +3715,9 @@ class WorkflowEngine:
         )
         reviews_current = (
             validation_authorized
-            and claude is not None
-            and claude.approval is True
-            and claude.validation == attestation
+            and review is not None
+            and review.approval is True
+            and review.validation == attestation
         )
         if not reviews_current:
             review_step = (
@@ -3728,8 +3728,8 @@ class WorkflowEngine:
             state = state.with_current_step(review_step)
             history = replace(
                 history,
-                last_claude_fingerprint=None,
-                latest_claude_review=None,
+                last_reviewer_fingerprint=None,
+                latest_reviewer_review=None,
             )
             self.driver.checkpoint(state, history)
             return WorkflowRunResult(state, history)
@@ -3760,7 +3760,7 @@ class WorkflowEngine:
                     slice_id=state.current_slice_id,
                     fingerprint=changes.fingerprint,
                     attestation=attestation,
-                    claude_review=claude,
+                    claude_review=review,
                     findings=history.findings,
                     red_state_followup_slice=context.red_state_followup_slice,
                 )
@@ -3809,8 +3809,8 @@ class WorkflowEngine:
             state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
             history = replace(
                 history,
-                last_claude_fingerprint=None,
-                latest_claude_review=None,
+                last_reviewer_fingerprint=None,
+                latest_reviewer_review=None,
             )
             self.driver.checkpoint(state, history)
             return state, history, False
@@ -4268,7 +4268,7 @@ class WorkflowEngine:
     def _fingerprint_bound_implementer_scope_paths(
         self, state: WorkflowState
     ) -> tuple[str, ...]:
-        """Expose only the latest exact resume-gate path approval to Codex."""
+        """Expose only the latest exact resume-gate path approval to the implementer."""
         decision = next(
             (
                 item

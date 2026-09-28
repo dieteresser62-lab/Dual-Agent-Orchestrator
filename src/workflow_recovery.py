@@ -562,7 +562,7 @@ class WorkflowRecovery:
         attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- canonical reviewer role
+            role=Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,
@@ -674,7 +674,7 @@ class WorkflowRecovery:
         request_attempt = self._request_attempt(
             chain,
             response_anchor,
-            role=Role.CLAUDE,  # allowlist:provider -- canonical reviewer role
+            role=Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
             run_id=state.run_id,
             work_unit_id=state.current_work_unit_id,
             operation=state.current_step.value,

@@ -26,7 +26,7 @@ from provider_input_efficiency import (
     build_slice_execution_package,
     compare_provider_input_components,
 )
-from prompts import NATIVE_CODEX_SYSTEM_POLICY
+from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -286,7 +286,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
                         NativeImplementerEvidenceInput(
                             "native-policy",
                             "system_policy",
-                            NATIVE_CODEX_SYSTEM_POLICY,
+                            NATIVE_IMPLEMENTER_SYSTEM_POLICY,
                         ),
                         evidence,
                     ),

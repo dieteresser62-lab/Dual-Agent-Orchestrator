@@ -33,8 +33,8 @@ from workflow_state import (
     AgentProfileBinding,
     GateDecisionRecord,
     GateReason,
-    NATIVE_CLAUDE_REVIEW_TRANSPORT,  # allowlist:provider -- transport constant
-    NATIVE_CODEX_RESULT_TRANSPORT,  # allowlist:provider -- transport constant
+    NATIVE_CLAUDE_REVIEW_TRANSPORT,  # allowlist:provider -- transport: transport constant
+    NATIVE_CODEX_RESULT_TRANSPORT,  # allowlist:provider -- transport: transport constant
     ProtocolBinding,
     ProtocolMode,
     WorkflowState,
@@ -449,8 +449,8 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
         for key in (
             "findings",
             "attestations",
-            "last_claude_fingerprint",  # allowlist:provider -- canonical history field
-            "latest_claude_review",  # allowlist:provider -- canonical history field
+            "last_claude_fingerprint",  # allowlist:provider -- wire until slice 8/9: canonical history field
+            "latest_claude_review",  # allowlist:provider -- wire until slice 8/9: canonical history field
             "active_review_packet",
         )
     ):

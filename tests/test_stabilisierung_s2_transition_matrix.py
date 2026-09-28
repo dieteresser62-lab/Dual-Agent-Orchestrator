@@ -649,7 +649,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {'src/artifact_resume.py:require_workflow_status_
  'src/artifact_bridge.py:review_payload_matches_result': '4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506',
  'src/final_review_preflight.py:run_final_review_preflight': '7e1a2614db9219f279147e7aed442b0f4965de90bc27eb5cb39ed2df77be7f1e',
  'src/workflow_audit_projection.py:_persisted_histories': '46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86',
- 'src/workflow_audit_projection.py:_attach_record_events': 'cf8f419efeb90e9231c017a7df0779fd0bad7ccf501f7c2df503f5d1598d74d0',
+ 'src/workflow_audit_projection.py:_attach_record_events': '3df0831131bfc555e44b578597d17247a45f468b2ec102898d99a498a3ac1c96',
  'src/workflow_audit.py:WorkflowAudit.finalize_audit': '60ecf8b15bc913fec75e34aa8006d0e65110218afea19ac34956d01e93c8b593',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context': '4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c',
  'src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation': 'b8623a4c7006d06638f9f703c489494c770ba9ec4f75ad76fc56672538b81bb5',

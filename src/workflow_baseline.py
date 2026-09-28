@@ -118,10 +118,10 @@ def _append_baseline_identity_expectations(
     )
     expected_profile = RunProfilePayload(
         implementer=RoleProfilePayload(
-            binding.codex_profile.model, binding.codex_profile.effort  # allowlist:provider
+            binding.codex_profile.model, binding.codex_profile.effort  # allowlist:provider -- wire until slice 8/9
         ),
         reviewer=RoleProfilePayload(
-            binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
+            binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider -- wire until slice 8/9
         ),
         orchestrator_code_version=code_version or orchestrator_code_version(),
         merge_completed_branch=(

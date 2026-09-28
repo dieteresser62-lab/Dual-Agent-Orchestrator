@@ -457,7 +457,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_plan", "in_progress"  # allowlist:provider -- persisted step vocabulary
+            "1", "in_progress", "1", "codex_plan", "in_progress"  # allowlist:provider -- wire until slice 8/9: persisted step vocabulary
         ),
     )
 
@@ -473,7 +473,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
     assert project_work_unit_reviewers(tuple(records)) == state_reviewers()
 
     state = state.record_review_denial(
-        reviewer=Reviewer.CLAUDE,  # allowlist:provider -- reviewer projection fixture
+        reviewer=Reviewer.CLAUDE,  # allowlist:provider -- wire until slice 8/9: reviewer projection fixture
         open_findings=("C-01",),
         return_step=WorkflowStep.CODEX_PLAN_REVISION,
         progress_made=True,
@@ -482,12 +482,12 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         records,
         "review-1",
         ReviewPayload(
-            Role.CLAUDE,  # allowlist:provider -- reviewer projection fixture
+            Role.CLAUDE,  # allowlist:provider -- wire until slice 8/9: reviewer projection fixture
             "1",
             "denied",
             ("C-01",),
             None,
-            "native-claude-review-v2",  # allowlist:provider -- closed transport fixture
+            "native-claude-review-v2",  # allowlist:provider -- transport: closed transport fixture
             "native-review-request-" + "f" * 64,
             "d" * 64,
         ),

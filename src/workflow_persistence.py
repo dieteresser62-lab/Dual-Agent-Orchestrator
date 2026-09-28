@@ -181,7 +181,7 @@ def scope_extension_source_request_id(
         record
         for record in chain
         if isinstance(record.payload, AgentResultPayload)
-        and record.payload.role is Role.CODEX  # allowlist:provider -- canonical role
+        and record.payload.role is Role.CODEX  # allowlist:provider -- wire until slice 8/9: canonical role
         and record.payload.work_unit_id == str(work_unit_id)
         and record.payload.outcome == "stopped"
         and record.fingerprint.sha256 == fingerprint
@@ -902,7 +902,7 @@ class WorkflowPersistence:
     def _recompose_failed_correction_request(
         self, invocation: object, previous: str, current: str
     ) -> None:
-        if invocation.step is not WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- fixed implementer step
+        if invocation.step is not WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- wire until slice 8/9: fixed implementer step
             return
         previous_binding = self._request_binding(previous)
         current_binding = self._request_binding(current)
@@ -919,7 +919,7 @@ class WorkflowPersistence:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == Role.CODEX.value  # allowlist:provider -- fixed implementer role
+            and item.operation[0] == Role.CODEX.value  # allowlist:provider -- wire until slice 8/9: fixed implementer role
             and item.operation[1] == invocation.step.value
             and item.operation[4] in {
                 f"request:{invocation.request_sequence}",
@@ -937,7 +937,7 @@ class WorkflowPersistence:
             if not any(
                 isinstance(record.payload, ProviderAttemptPayload)
                 and record.payload.phase == "failed"
-                and record.payload.provider is Role.CODEX  # allowlist:provider -- fixed implementer role
+                and record.payload.provider is Role.CODEX  # allowlist:provider -- wire until slice 8/9: fixed implementer role
                 and record.payload.work_unit_id == str(invocation.work_unit_id)
                 and record.payload.operation == invocation.step.value
                 and record.payload.input_digest == item.operation[2]

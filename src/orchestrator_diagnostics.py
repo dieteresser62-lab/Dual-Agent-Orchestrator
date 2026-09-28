@@ -69,13 +69,13 @@ class OrchestratorDiagnostic(StrEnum):
         "workflow-execution: native review persistence has no unique earlier validation record"
     )
     WORKFLOW_REVIEW_BINDING_MISSING = (
-        "workflow-execution: native review persistence lacks its immutable Claude binding"  # allowlist:provider -- closed static diagnostic
+        "workflow-execution: native review persistence lacks its immutable Claude binding"  # allowlist:provider -- schema-bound diagnostic: closed static diagnostic
     )
     WORKFLOW_REVIEW_CONTENT_DIGEST_MISMATCH = (
         "workflow-execution: native reviewer content digest differs from its review binding"
     )
     WORKFLOW_IMPLEMENTER_BINDING_MISSING = (
-        "workflow-execution: native Codex persistence lacks its immutable transport binding"  # allowlist:provider -- closed static diagnostic
+        "workflow-execution: native Codex persistence lacks its immutable transport binding"  # allowlist:provider -- schema-bound diagnostic: closed static diagnostic
     )
     WORKFLOW_IMPLEMENTER_LOGICAL_BINDING_MISMATCH = (
         "workflow-execution: native agent result logical binding differs"

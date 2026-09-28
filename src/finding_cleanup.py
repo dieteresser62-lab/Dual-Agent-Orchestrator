@@ -79,10 +79,10 @@ def _slice_work_units(records: Sequence[ArtifactRecord]) -> dict[str, int]:
         ):
             steps_by_unit.setdefault(payload.work_unit_id, set()).add(payload.step)
     excluded_steps = {
-        "codex_plan",  # allowlist:provider -- persisted workflow step
-        "claude_plan_review",  # allowlist:provider -- persisted workflow step
-        "codex_plan_revision",  # allowlist:provider -- persisted workflow step
-        "claude_final_review",  # allowlist:provider -- persisted workflow step
+        "codex_plan",  # allowlist:provider -- wire until slice 8/9: persisted workflow step
+        "claude_plan_review",  # allowlist:provider -- wire until slice 8/9: persisted workflow step
+        "codex_plan_revision",  # allowlist:provider -- wire until slice 8/9: persisted workflow step
+        "claude_final_review",  # allowlist:provider -- wire until slice 8/9: persisted workflow step
     }
     result: dict[str, int] = {}
     for record in records:

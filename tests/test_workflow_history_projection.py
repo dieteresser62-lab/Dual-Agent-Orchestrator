@@ -71,6 +71,8 @@ from finding_reducer import reduce_findings
 from final_review_preflight import relevant_record_head, run_final_review_preflight
 from state_io import write_workflow_state_projection
 from workflow import WorkflowHistory
+
+
 from workflow_state import (
     AgentProfileBinding,
     GateReason,
@@ -813,6 +815,21 @@ def _state_projection_anchor_entries(tmp_path: Path) -> list[dict[str, object]]:
     return entries
 
 
+def test_history_wire_roundtrip_matches_starting_head_bytes() -> None:
+    history = WorkflowHistory(1, last_reviewer_fingerprint="f" * 64)
+    document = history.to_dict()
+    assert set(document) == {
+        "work_unit_id", "findings", "attestations",
+        "last_claude_fingerprint", "latest_claude_review",
+    }
+    encoded = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "5f45d8ba33fe205010ee9681de8dca98983c84914ae44cf07a6421eb2cdb1a15"
+    )
+    assert WorkflowHistory.from_dict(json.loads(encoded)) == history
+
 def test_first_slice_projection_uses_structural_start_even_when_equal_to_base(
     tmp_path: Path,
 ) -> None:
@@ -983,8 +1000,8 @@ def _unit_four_history(
         4,
         events=events,
         attestations=attestations,
-        last_claude_fingerprint=latest_fingerprint,
-        latest_claude_review=latest_review,
+        last_reviewer_fingerprint=latest_fingerprint,
+        latest_reviewer_review=latest_review,
     )
 
 
@@ -1710,8 +1727,8 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
             ),
         ),
         attestations=(validations[validation_event.record_refs[0]],),
-        last_claude_fingerprint=review_record.fingerprint.sha256,
-        latest_claude_review=review_contract.result,
+        last_reviewer_fingerprint=review_record.fingerprint.sha256,
+        latest_reviewer_review=review_contract.result,
     )
 
     reconstructed = _attach_record_events(
@@ -1735,8 +1752,8 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
     ).findings
     assert hydrated.events == expected.events
     assert hydrated.attestations == expected.attestations
-    assert hydrated.last_claude_fingerprint == expected.last_claude_fingerprint
-    assert hydrated.latest_claude_review == expected.latest_claude_review
+    assert hydrated.last_reviewer_fingerprint == expected.last_reviewer_fingerprint
+    assert hydrated.latest_reviewer_review == expected.latest_reviewer_review
     assert hydrated.active_review_packet is None
 
     missing_attestation = replace(expected, attestations=())
@@ -1810,8 +1827,8 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
     mirror_history = WorkflowHistory(
         5,
         attestations=(attestation,),
-        last_claude_fingerprint=slice_review.fingerprint.sha256,
-        latest_claude_review=review_contract.result,
+        last_reviewer_fingerprint=slice_review.fingerprint.sha256,
+        latest_reviewer_review=review_contract.result,
     )
     projected_state = project_workflow_state(replay).state
     assert isinstance(projected_state, WorkflowState)

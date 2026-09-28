@@ -21,7 +21,7 @@ from artifact_models import InvocationFailurePayload
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import (
     AgentRole,
-    ImplementerStepContract,  # allowlist:provider -- typed boundary
+    ImplementerStepContract,
     FindingRecord,
     PlannedSlice,
     StepContract,
@@ -1017,7 +1017,7 @@ class ScriptedWorkflowDriver:
             ledger[key] for key in sorted(ledger, key=finding_id_sort_key)
         )
         self.structured_events.append(
-            ("native-codex", (output, request_sequence, previous_findings))  # allowlist:provider
+            ("native-codex", (output, request_sequence, previous_findings))  # allowlist:provider -- transport
         )
 
     def persist_native_review_contract(
@@ -1116,14 +1116,14 @@ class ScriptedWorkflowDriver:
             context=invocation.native_request.bound_context.context,
         )
 
-    def recover_pending_native_implementer(  # allowlist:provider -- canonical capability
+    def recover_pending_native_implementer(
         self,
-        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
-        contract: ImplementerStepContract,  # allowlist:provider -- typed boundary
+        invocation: CodexInvocation,  # allowlist:provider -- wire until slice 8/9: typed boundary
+        contract: ImplementerStepContract,
         history: WorkflowHistory,
-    ) -> NativeAgentImplementerOutput | None:  # allowlist:provider -- typed boundary
+    ) -> NativeAgentImplementerOutput | None:
         self.structured_events.append(
-            ("recover-native-codex", (invocation, contract, history))  # allowlist:provider
+            ("recover-native-codex", (invocation, contract, history))  # allowlist:provider -- transport
         )
         return None
 
@@ -1390,7 +1390,7 @@ class ScriptedWorkflowDriver:
         return next(
             output.request_id
             for kind, value in reversed(self.structured_events)
-            if kind == "native-codex"  # allowlist:provider -- canonical event
+            if kind == "native-codex"  # allowlist:provider -- transport: canonical event
             for output in (value[0],)
             if output.result.stopped
         )
@@ -1911,7 +1911,7 @@ def _run_scripted_workflow(
         state = state.start_work_unit(
             slice_id=planned.slice_id,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
             slice_start_commit=None if planned.slice_id == 1 else change.start_commit,
         ).bind_current_slice_git_boundary(
             start_commit=change.start_commit,
@@ -1993,12 +1993,12 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
         ),
         agent_events=(
             ScriptedAgentEvent(
-                AgentRole.CODEX,  # allowlist:provider
+                AgentRole.CODEX,  # allowlist:provider -- wire until slice 8/9
                 1,
                 1,
-                WorkflowStep.CODEX_PLAN,  # allowlist:provider
+                WorkflowStep.CODEX_PLAN,  # allowlist:provider -- wire until slice 8/9
                 {
-                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
                     "request_id": "$BOUND_REQUEST_ID",
                     "result_type": "plan_result",
                     "ready": True,
@@ -2022,15 +2022,15 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                 },
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE,  # allowlist:provider
+                AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9
                 1,
                 1,
-                WorkflowStep.CLAUDE_PLAN_REVIEW,  # allowlist:provider
+                WorkflowStep.CLAUDE_PLAN_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "review_result",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider
+                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
                     "decision": "approved",
                     "new_findings": [],
                     "status_changes": [],
@@ -2057,11 +2057,11 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
     )
 
 
-def _s5_implementer_result(  # allowlist:provider -- scripted native result factory
+def _s5_implementer_result(
     result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
 ) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
         "request_id": "$BOUND_REQUEST_ID",
         "result_type": result_type,
         "ready": True,
@@ -2105,7 +2105,7 @@ def _s5_review_result(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "$BOUND_REQUEST_ID",
-        "reviewer": "claude",  # allowlist:provider -- persisted reviewer role
+        "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9: persisted reviewer role
         "decision": "approved" if approved else "denied",
         "new_findings": findings,
         "status_changes": [
@@ -2140,7 +2140,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         "usage cap reached; reset 2026-09-01T00:00:05+00:00",
         datetime(2026, 9, 1, tzinfo=timezone.utc),
         provider_data={
-            "provider": "codex",  # allowlist:provider -- structured quota evidence
+            "provider": "codex",  # allowlist:provider -- transport: structured quota evidence
             "error_type": "usage_limit",
             "resets_at": "2026-09-01T00:00:05+00:00",
         },
@@ -2160,45 +2160,45 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         ),
         agent_events=(
             ScriptedAgentEvent(
-                AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                _s5_implementer_result("implementation_result", test_files=[]),  # allowlist:provider
+                AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+                _s5_implementer_result("implementation_result", test_files=[]),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 _s5_review_result(approved=True),
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
                 failure=quota_failure,
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
-                output=_s5_implementer_result(  # allowlist:provider
+                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- wire until slice 8/9
+                output=_s5_implementer_result(
                     "implementation_result", test_files=[]
                 ),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 _s5_review_result(approved=False, blockers=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
-                _s5_implementer_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),  # allowlist:provider
+                AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider -- wire until slice 8/9
+                _s5_implementer_result("correction_result", dispositions=(format_finding_id(1),), test_files=[]),
             ),
             ScriptedAgentEvent(
-                AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                AgentRole.CLAUDE, 3, 3, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 _s5_review_result(approved=True, closed=(format_finding_id(1),)),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE,
                 4,
                 1,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
+                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider
+                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
                     "scan_complete": True,
                     "new_findings": [
                         {
@@ -2300,17 +2300,17 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
 
     base, slice_commit = "a" * 40, "b" * 40
     scope = ("src/runtime.py",)
-    implementer_role = AgentRole.CODEX  # allowlist:provider -- scripted role boundary
-    reviewer_role = AgentRole.CLAUDE  # allowlist:provider -- scripted role boundary
-    implementation_step = WorkflowStep.CODEX_IMPLEMENTATION  # allowlist:provider -- scripted step boundary
-    slice_review_step = WorkflowStep.CLAUDE_SLICE_REVIEW  # allowlist:provider -- scripted step boundary
-    correction_step = WorkflowStep.CODEX_CORRECTION  # allowlist:provider -- scripted step boundary
+    implementer_role = AgentRole.CODEX  # allowlist:provider -- wire until slice 8/9: scripted role boundary
+    reviewer_role = AgentRole.CLAUDE  # allowlist:provider -- wire until slice 8/9: scripted role boundary
+    implementation_step = WorkflowStep.CODEX_IMPLEMENTATION  # allowlist:provider -- wire until slice 8/9: scripted step boundary
+    slice_review_step = WorkflowStep.CLAUDE_SLICE_REVIEW  # allowlist:provider -- wire until slice 8/9: scripted step boundary
+    correction_step = WorkflowStep.CODEX_CORRECTION  # allowlist:provider -- wire until slice 8/9: scripted step boundary
 
     def implementer_result(
         result_type: str, findings: tuple[str, ...] = ()
     ) -> dict[str, object]:
         return {
-            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
             "request_id": "$BOUND_REQUEST_ID",
             "result_type": result_type,
             "ready": True,
@@ -2335,7 +2335,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
             "schema_version": "native-agent-review-result-v2",
             "result_type": "review_result",
             "request_id": "$BOUND_REQUEST_ID",
-            "reviewer": "claude",  # allowlist:provider
+            "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
             "decision": "approved" if approved else "denied",
             "new_findings": [
                 {
@@ -2423,12 +2423,12 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                 reviewer_role,
                 3,
                 1,
-                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
+                WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- wire until slice 8/9
                 {
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider
+                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
                     "scan_complete": True,
                     "new_findings": [],
                     "occurrences": [],

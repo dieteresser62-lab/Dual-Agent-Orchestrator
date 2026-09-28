@@ -108,7 +108,7 @@ class NativeImplementerRejectionSource(StrEnum):
     MODEL_RESPONSE = "model-response"
 
 
-NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = frozenset(  # allowlist:provider -- public contract vocabulary
+NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] = frozenset(
     code
     for code in NativeImplementerErrorCode
     if code is not NativeImplementerErrorCode.CONTEXT_INVALID
@@ -119,38 +119,38 @@ NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES: frozenset[NativeImplementerErrorCode] =
 # rejection.  This one-per-code map is the fail-closed fallback and, more
 # importantly, makes a newly retryable code without repository-owned guidance
 # fail at import time.
-_NATIVE_IMPLEMENTER_RETRY_GUIDANCE: dict[  # allowlist:provider -- public contract vocabulary
+_NATIVE_IMPLEMENTER_RETRY_GUIDANCE: dict[
     NativeImplementerErrorCode, OrchestratorDiagnostic
 ] = {
     code: _IMPLEMENTER_DIAGNOSTIC_BY_CODE[code]
-    for code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+    for code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES
 }
 
-assert set(_NATIVE_IMPLEMENTER_RETRY_GUIDANCE) == set(NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES)  # allowlist:provider -- completeness invariant
+assert set(_NATIVE_IMPLEMENTER_RETRY_GUIDANCE) == set(NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES)
 assert all(
     diagnostic.value.startswith(f"{code.value}: ")
-    for code, diagnostic in _NATIVE_IMPLEMENTER_RETRY_GUIDANCE.items()  # allowlist:provider -- completeness invariant
+    for code, diagnostic in _NATIVE_IMPLEMENTER_RETRY_GUIDANCE.items()
 )
 
 
-def is_retryable_native_implementer_response_error(error: BaseException) -> bool:  # allowlist:provider -- public contract API
+def is_retryable_native_implementer_response_error(error: BaseException) -> bool:
     """Return whether another model response can satisfy the same implementer task."""
 
     return (
-        isinstance(error, NativeImplementerContractError)  # allowlist:provider -- public contract type
-        and error.code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES  # allowlist:provider -- public contract vocabulary
+        isinstance(error, NativeImplementerContractError)
+        and error.code in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES
         and error.source is NativeImplementerRejectionSource.MODEL_RESPONSE
     )
 
 
-def native_implementer_retry_guidance(  # allowlist:provider -- public contract API
+def native_implementer_retry_guidance(
     code: NativeImplementerErrorCode,
     diagnostic: OrchestratorDiagnostic | None = None,
 ) -> str:
     """Return closed, provider-free corrective guidance for one rejection."""
 
     try:
-        fallback = _NATIVE_IMPLEMENTER_RETRY_GUIDANCE[code]  # allowlist:provider -- complete map
+        fallback = _NATIVE_IMPLEMENTER_RETRY_GUIDANCE[code]
     except KeyError as exc:
         raise ValueError(
             f"native implementer rejection {code.value} is not retryable"
@@ -201,13 +201,13 @@ class NativeImplementerContractError(ValueError):
 
 def find_native_implementer_contract_error(
     error: BaseException,
-) -> NativeImplementerContractError | None:  # allowlist:provider -- public contract type
+) -> NativeImplementerContractError | None:
     """Find a native implementer rejection through explicit cause edges."""
 
     seen: set[int] = set()
     current: BaseException | None = error
     while current is not None and id(current) not in seen:
-        if isinstance(current, NativeImplementerContractError):  # allowlist:provider -- public contract type
+        if isinstance(current, NativeImplementerContractError):
             return current
         seen.add(id(current))
         current = current.__cause__
@@ -270,8 +270,8 @@ class NativeImplementerContext:
         if not isinstance(self.build_output_declared, bool) or not isinstance(
             self.running_product_declared, bool
         ):
-            raise NativeImplementerContractError(  # allowlist:provider -- context boundary
-                NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+            raise NativeImplementerContractError(
+                NativeImplementerErrorCode.CONTEXT_INVALID,
                 "native implementer measurement-stage declarations must be booleans",
             )
         finding_ids = tuple(item.finding_id for item in self.previous_findings)
@@ -596,8 +596,8 @@ def parse_native_implementer_response(
         for item in document["slice_plan"]:
             diagnostic = planned_slice_path_diagnostic(tuple(item["scope_paths"]))
             if diagnostic is not None:
-                raise NativeImplementerContractError(  # allowlist:provider -- contract boundary
-                    NativeImplementerErrorCode.SLICE_PLAN_INVALID,  # allowlist:provider -- error vocabulary
+                raise NativeImplementerContractError(
+                    NativeImplementerErrorCode.SLICE_PLAN_INVALID,
                     diagnostic.detail,
                     orchestrator_diagnostic=diagnostic,
                 )
@@ -746,9 +746,9 @@ def parse_bound_native_implementer_contract_result(
     )
 
 
-def validate_native_correction_fingerprint(  # allowlist:provider -- native correction boundary
-    result: ImplementerContractResult,  # allowlist:provider -- parsed result type
-    context: NativeImplementerContext,  # allowlist:provider -- bound request type
+def validate_native_correction_fingerprint(
+    result: ImplementerContractResult,
+    context: NativeImplementerContext,
     resulting_fingerprint: str,
 ) -> None:
     """Reject an accepted correction that changed no repository fingerprint.
@@ -757,27 +757,27 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
     Attribution of individual Findings to diff hunks remains reviewer-owned.
     """
 
-    if not isinstance(result, ImplementerContractResult) or not isinstance(  # allowlist:provider -- parsed result type
-        context, NativeImplementerContext  # allowlist:provider -- bound request type
+    if not isinstance(result, ImplementerContractResult) or not isinstance(
+        context, NativeImplementerContext
     ):
-        raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
-            NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.CONTEXT_INVALID,
             "correction fingerprint validation requires typed result and context",
         )
     _require_sha256(
         resulting_fingerprint,
         "resulting_fingerprint",
-        NativeImplementerErrorCode.CONTEXT_INVALID,  # allowlist:provider -- error vocabulary
+        NativeImplementerErrorCode.CONTEXT_INVALID,
     )
-    if context.request_kind is not NativeImplementerRequestKind.CORRECTION:  # allowlist:provider -- request kind
+    if context.request_kind is not NativeImplementerRequestKind.CORRECTION:
         return
     try:
         response_delta = project_finding_response_delta(
             context.previous_findings, result.findings
         )
     except ValueError as exc:
-        raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
-            NativeImplementerErrorCode.FINDING_REFERENCE_INVALID,  # allowlist:provider -- error vocabulary
+        raise NativeImplementerContractError(
+            NativeImplementerErrorCode.FINDING_REFERENCE_INVALID,
             str(exc),
         ) from exc
     accepted_without_change = tuple(
@@ -794,8 +794,8 @@ def validate_native_correction_fingerprint(  # allowlist:provider -- native corr
     accepted_ids = sorted_finding_ids(
         item.finding.finding_id for item in accepted_without_change
     )
-    raise NativeImplementerContractError(  # allowlist:provider -- typed rejection
-        NativeImplementerErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
+    raise NativeImplementerContractError(
+        NativeImplementerErrorCode.RESULT_CONTENT_INVALID,
         "correction result accepted finding IDs "
         f"{', '.join(accepted_ids)} but made no fingerprint-changing repository "
         "change; accepting a finding requires a change; resolve the accepted "

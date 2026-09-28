@@ -15,7 +15,7 @@ import native_finding_decisions
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9._-]+$")
 BRANCH_REFERENCE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9._/-])"
-    r"(?P<branch>(?:feature|codex)/[A-Za-z0-9]"  # allowlist:provider
+    r"(?P<branch>(?:feature|codex)/[A-Za-z0-9]"  # allowlist:provider -- legacy branch syntax
     r"(?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)"
     r"(?![A-Za-z0-9_/-])"
 )

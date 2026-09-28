@@ -36,13 +36,13 @@ from cli import ConfigError
 from dry_run_scenarios import DryRunScenarioError, ScriptedInterruption
 from final_review_preflight import FinalReviewPreflightDenied
 from git_service import GitTransactionError
-from native_implementer_contract import (  # allowlist:provider -- typed module boundary
-    NativeImplementerContractError,  # allowlist:provider
+from native_implementer_contract import (
+    NativeImplementerContractError,
     find_native_implementer_contract_error,
-    is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
+    is_retryable_native_implementer_response_error,
 )
-from native_implementer_request import (  # allowlist:provider -- typed module boundary
-    NativeImplementerRequestError,  # allowlist:provider
+from native_implementer_request import (
+    NativeImplementerRequestError,
 )
 from native_provider_schema import NativeProviderSchemaError
 from native_review_contract import (

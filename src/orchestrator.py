@@ -62,7 +62,7 @@ from finding_convergence import (
     SliceConvergenceEvaluation,
     evaluate_slice_convergence,
 )
-from native_implementer_contract import validate_native_correction_fingerprint  # allowlist:provider -- native result boundary
+from native_implementer_contract import validate_native_correction_fingerprint
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -1530,12 +1530,12 @@ class ProductionWorkflowDriver:
                 current_fingerprint=fingerprint,
                 contract=replace(
                     context.contract,
-                    round_number=request_document["codex_contract"][  # allowlist:provider -- canonical field
+                    round_number=request_document["codex_contract"][  # allowlist:provider -- wire until slice 8/9: canonical field
                         "round_number"
                     ],
-                    request_sequence=request_document["codex_contract"].get(  # allowlist:provider -- canonical field
+                    request_sequence=request_document["codex_contract"].get(  # allowlist:provider -- wire until slice 8/9: canonical field
                         "request_sequence",
-                        request_document["codex_contract"]["round_number"],  # allowlist:provider -- canonical field
+                        request_document["codex_contract"]["round_number"],  # allowlist:provider -- wire until slice 8/9: canonical field
                     ),
                 ),
             )
@@ -1873,10 +1873,10 @@ class ProductionWorkflowDriver:
         recovery_fingerprint: str | None = None,
     ) -> None:
         state = self.active_state
-        if state is not None and state.current_step is WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- canonical step
+        if state is not None and state.current_step is WorkflowStep.CODEX_CORRECTION:  # allowlist:provider -- wire until slice 8/9: canonical step
             if output.context is None:
                 raise WorkflowExecutionError(
-                    "native Codex correction persistence lacks its request context"  # allowlist:provider -- canonical role
+                    "native Codex correction persistence lacks its request context"  # allowlist:provider -- schema-bound diagnostic
                 )
             validate_native_correction_fingerprint(
                 output.result,

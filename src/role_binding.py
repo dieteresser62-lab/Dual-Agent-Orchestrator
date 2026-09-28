@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from agent_roles import AgentRoleName
-from prompts import NATIVE_CLAUDE_SYSTEM_POLICY, NATIVE_CODEX_SYSTEM_POLICY
+from prompts import NATIVE_REVIEWER_SYSTEM_POLICY, NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,13 +35,13 @@ _ROLE_BINDINGS = {
     AgentRoleName.IMPLEMENTER: RoleBinding(
         AgentRoleName.IMPLEMENTER,
         "native-agent-codex-result-v2",
-        NATIVE_CODEX_SYSTEM_POLICY,
+        NATIVE_IMPLEMENTER_SYSTEM_POLICY,
         MappingProxyType({"sandbox": "workspace-write"}),
     ),
     AgentRoleName.REVIEWER: RoleBinding(
         AgentRoleName.REVIEWER,
         "native-agent-review-result-v2",
-        NATIVE_CLAUDE_SYSTEM_POLICY,
+        NATIVE_REVIEWER_SYSTEM_POLICY,
         MappingProxyType({
             "tools": "Read",
             "allowed_tools": "Read",

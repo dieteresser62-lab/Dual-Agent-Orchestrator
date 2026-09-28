@@ -67,7 +67,7 @@ from finding_reducer import (
     project_reviewer_persistence_transitions,
     reduce_finding_records,
 )
-from native_implementer_contract import NativeFindingDisposition, _apply_dispositions  # allowlist:provider -- exercised production contract
+from native_implementer_contract import NativeFindingDisposition, _apply_dispositions
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
@@ -627,7 +627,7 @@ def _finding(
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
         acceptance_test="The reported behavior is corrected.",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- wire until slice 8/9: current typed ownership
         affected_paths=("src/native_review_contract.py",),
     )
     if decision is None:
@@ -646,7 +646,7 @@ def _context(
     previous: tuple[FindingRecord, ...] = (),
     *,
     approval: ApprovalMarker = ApprovalMarker.SLICE,
-    operation: str = "claude_slice_review",  # allowlist:provider -- persisted operation vocabulary
+    operation: str = "claude_slice_review",  # allowlist:provider -- wire until slice 8/9: persisted operation vocabulary
     round_number: int = 2,
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
@@ -657,7 +657,7 @@ def _context(
         work_unit_id=WORK_UNIT_ID,
         operation=operation,
         diff_fingerprint=fingerprint,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
         approval_marker=approval,
         slice_id="PLAN" if approval is ApprovalMarker.PLAN else "01",
         round_number=round_number,
@@ -674,7 +674,7 @@ def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str,
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": context.request_id,
-        "reviewer": "claude",  # allowlist:provider -- native wire vocabulary
+        "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9: native wire vocabulary
         "decision": "approved" if approved else "denied",
         "new_findings": [],
         "status_changes": [],
@@ -697,7 +697,7 @@ def _typed_response(
 ) -> NativeReviewResult:
     return NativeReviewResult(
         request_id=context.request_id,
-        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
         approved=approved,
         new_findings=new_findings,
         status_changes=status_changes,
@@ -730,7 +730,7 @@ class _ReviewProbeCollector:
         target_viable: bool | None = None,
         expected_status: FindingStatus | None = None,
         expected_class: CurrentFindingClass | None = None,
-        locations: tuple[str, ...] = (  # allowlist:provider -- measured code locations
+        locations: tuple[str, ...] = (
             "src/native_review_contract.py",
             "src/finding_reducer.py",
             "src/audit_trail.py",
@@ -1018,7 +1018,7 @@ def _finding_record_prefix(
                 f"finding-{prior.finding_id}",
                 finding_payload(
                     prior,
-                    actor=AgentRole.CODEX,  # allowlist:provider -- current typed ownership
+                    actor=AgentRole.CODEX,  # allowlist:provider -- wire until slice 8/9: current typed ownership
                     action="responded",
                     rationale=response.rationale,
                     work_unit_id=WORK_UNIT_ID,
@@ -1035,7 +1035,7 @@ def _native_opening_record(finding: NativeFinding) -> FindingRecord:
         status=FindingStatus.OPEN,
         summary=finding.summary,
         acceptance_test=finding.acceptance_test.text,
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- current typed ownership
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),  # allowlist:provider -- wire until slice 8/9: current typed ownership
         affected_paths=finding.affected_paths,
     )
 
@@ -1066,7 +1066,7 @@ def _record_probe(probe: ReviewProbe) -> tuple[bool, str]:
     try:
         current = apply_reviewer_events(
             probe.context.previous_findings,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
             opened=opened,
             status_changes=statuses,
             escalate_unclosed_findings=not probe.typed_response.approved,
@@ -1317,7 +1317,7 @@ def _workflow_probe(
             state=state,
             context=SimpleNamespace(),  # only stop/plan branches inspect context
             history=history,
-            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+            reviewer=AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
             result=result,
             fingerprint=FINGERPRINT,
             round_number=probe.context.round_number,
@@ -1469,7 +1469,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     plan_context = _context(
         (plan_finding,),
         approval=ApprovalMarker.PLAN,
-        operation="claude_plan_review",  # allowlist:provider -- persisted operation vocabulary
+        operation="claude_plan_review",  # allowlist:provider -- wire until slice 8/9: persisted operation vocabulary
         planned_slices=(
             PlannedSlice(
                 1,
@@ -1542,7 +1542,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             complete_dispositions_enforced,
             contract_detail,
             record_detail,
-            ("src/native_implementer_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),
         )
     )
 
@@ -1578,7 +1578,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             "Finding response records reject the blocker rejection"
             if not blocker_rejection_accepted
             else "Finding response records accept the blocker rejection",
-            ("src/native_implementer_contract.py", "src/finding_reducer.py"),  # allowlist:provider -- measured code location
+            ("src/native_implementer_contract.py", "src/finding_reducer.py"),
         )
     )
 
@@ -1594,9 +1594,9 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     )
     for index in range(DEFAULT_LOOP_ROUND_LIMIT):
         state = state.record_review_denial(
-            reviewer=Reviewer.CLAUDE,  # allowlist:provider -- current typed ownership
+            reviewer=Reviewer.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
             open_findings=("C-01",),
-            return_step=WorkflowStep.CODEX_PLAN_REVISION,  # allowlist:provider -- persisted step vocabulary
+            return_step=WorkflowStep.CODEX_PLAN_REVISION,  # allowlist:provider -- wire until slice 8/9: persisted step vocabulary
             progress_made=True,
             updated_at=f"oracle-round-{index + 1}",
         )
@@ -1639,8 +1639,8 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
         engine,
         SimpleNamespace(current_slice=SimpleNamespace(start_fingerprint=slice_start)),
         SimpleNamespace(approved_plan_text=None),
-        WorkflowHistory(1, last_claude_fingerprint=previous),  # allowlist:provider -- current persisted field
-        AgentRole.CLAUDE,  # allowlist:provider -- current typed ownership
+        WorkflowHistory(1, last_reviewer_fingerprint=previous),
+        AgentRole.CLAUDE,  # allowlist:provider -- wire until slice 8/9: current typed ownership
         SimpleNamespace(),
         SimpleNamespace(fingerprint=POST_FINGERPRINT, full_diff="full diff"),
         False,

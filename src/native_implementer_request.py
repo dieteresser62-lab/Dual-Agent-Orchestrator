@@ -15,9 +15,9 @@ from contracts import ReadinessMarker, ValidationAttestation
 from finding_reducer import project_open_set
 from native_implementer_contract import (
     BoundNativeImplementerContext,
-    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,  # allowlist:provider -- typed implementer boundary
+    NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES,
     NativeImplementerContext,
-    NativeImplementerErrorCode,  # allowlist:provider -- typed implementer boundary
+    NativeImplementerErrorCode,
     NativeImplementerRequestKind,
     native_implementer_provider_response_schema,
 )
@@ -126,20 +126,20 @@ class NativeImplementerRetryFeedback:
             not isinstance(self.prior_invocation_id, str)
             or INVOCATION_ID_PATTERN.fullmatch(self.prior_invocation_id) is None
         ):
-            raise NativeImplementerRequestError(  # allowlist:provider -- established request error
-                NativeImplementerRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "retry feedback prior_invocation_id is not a safe identifier",
             )
         if self.rejection_code not in NATIVE_IMPLEMENTER_RESPONSE_RETRY_CODES:
-            raise NativeImplementerRequestError(  # allowlist:provider -- established request error
-                NativeImplementerRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "retry feedback requires a response-dependent rejection code",
             )
         _require_text(
             self.correction_instruction,
             "retry feedback correction_instruction",
             3000,
-            NativeImplementerRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            NativeImplementerRequestErrorCode.CONTEXT_INVALID,
         )
 
 
@@ -156,8 +156,8 @@ class NativeImplementerRequestSpec:
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, NativeImplementerContext):
-            raise NativeImplementerRequestError(  # allowlist:provider -- established request error
-                NativeImplementerRequestErrorCode.CONTEXT_INVALID,  # allowlist:provider -- established request code
+            raise NativeImplementerRequestError(
+                NativeImplementerRequestErrorCode.CONTEXT_INVALID,
                 "request spec requires NativeImplementerContext",
             )
         _require_text(

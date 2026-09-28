@@ -35,8 +35,8 @@ from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, N
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 from prompts import (
     GERMAN_DOCUMENT_LANGUAGE_RULE,
-    NATIVE_CLAUDE_SYSTEM_POLICY,
-    NATIVE_CODEX_SYSTEM_POLICY,
+    NATIVE_REVIEWER_SYSTEM_POLICY,
+    NATIVE_IMPLEMENTER_SYSTEM_POLICY,
 )
 
 
@@ -75,7 +75,7 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
             authorized_paths=("docs/internal/plan.md",),
             assignment=assignment,
             work_context="Use the typed request.",
-            evidence=(NativeImplementerEvidenceInput("policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY),),
+            evidence=(NativeImplementerEvidenceInput("policy", "system_policy", NATIVE_IMPLEMENTER_SYSTEM_POLICY),),
         )
     )
 
@@ -239,7 +239,7 @@ def test_native_implementer_prepares_schema_request_and_assets(tmp_path: Path) -
     assert "--output-schema" in prepared.command
     assert prepared.command[prepared.command.index("--sandbox") + 1] == "read-only"
     assert {item.name for item in prepared.components} >= {"stdin_prompt", "response_schema"}
-    assert NATIVE_CODEX_SYSTEM_POLICY in prepared.stdin_text
+    assert NATIVE_IMPLEMENTER_SYSTEM_POLICY in prepared.stdin_text
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in prepared.stdin_text
     assert NativeCodexAdapter.required_hosts == ("chatgpt.com", "api.openai.com")
     adapter.cleanup()
@@ -346,7 +346,7 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
     names = {item.name for item in prepared.components}
     assert {"packet_manifest", "system_policy", "response_schema", "start_directive"} <= names
     policy = next(item.content for item in prepared.components if item.name == "system_policy")
-    assert policy == NATIVE_CLAUDE_SYSTEM_POLICY
+    assert policy == NATIVE_REVIEWER_SYSTEM_POLICY
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in policy
     assert prepared.command[prepared.command.index("--system-prompt") + 1] == policy
     assert "--json-schema" in prepared.command

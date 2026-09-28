@@ -1860,8 +1860,8 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             ReviewAuditEvent(2, 1, 1, stopped),
         ),
         attestations=(attestation,),
-        last_claude_fingerprint=attestation.diff_fingerprint,
-        latest_claude_review=stopped,
+        last_reviewer_fingerprint=attestation.diff_fingerprint,
+        latest_reviewer_review=stopped,
     )
     assert driver.active_state is not None
     driver.checkpoint(driver.active_state, history)
@@ -1875,7 +1875,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     )
     driver.checkpoint(
         driver.active_state,
-        replace(history, latest_claude_review=wrong_latest),
+        replace(history, latest_reviewer_review=wrong_latest),
     )
 
     resumed = _driver(repository)

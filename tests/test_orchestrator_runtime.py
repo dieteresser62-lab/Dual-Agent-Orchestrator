@@ -2597,7 +2597,7 @@ def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
     old_history = WorkflowHistory(1).to_dict()
     latest_history = WorkflowHistory(
         1,
-        last_claude_fingerprint="f" * 64,
+        last_reviewer_fingerprint="f" * 64,
     ).to_dict()
     persisted = replace(
         base,

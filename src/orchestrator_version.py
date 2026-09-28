@@ -51,8 +51,8 @@ def _compute_orchestrator_code_version(root: Path) -> str:
                         root / "orchestrator.toml",
                         root / "run_task",
                         root / "AGENTS.md",
-                        root / "CLAUDE.md",  # allowlist:provider -- role policy
-                        root / "CODEX.md",  # allowlist:provider -- role policy
+                        root / "CLAUDE.md",  # allowlist:provider -- role policy file
+                        root / "CODEX.md",  # allowlist:provider -- role policy file
                     )
                     if path.is_file()
                 ),

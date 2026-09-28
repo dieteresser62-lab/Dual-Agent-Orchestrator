@@ -810,7 +810,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
                         "type": "string",
                         "pattern": "^native-review-request-[0-9a-f]{64}$",
                     },
-                    "reviewer": {"const": "claude"},  # allowlist:provider -- canonical reviewer role
+                    "reviewer": {"const": "claude"},  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
                     "scan_complete": {"type": "boolean"},
                     "new_findings": {
                         "type": "array",

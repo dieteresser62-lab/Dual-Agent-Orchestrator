@@ -209,13 +209,13 @@ def _attach_record_events(
             history,
             events=tuple(event_lists.get(work_unit_id, ())),
             attestations=tuple(attestation_lists.get(work_unit_id, ())),
-            last_claude_fingerprint=(  # allowlist:provider -- canonical history field
-                history.last_claude_fingerprint  # allowlist:provider -- canonical history field
+            last_reviewer_fingerprint=(
+                history.last_reviewer_fingerprint
                 if latest is None
                 else latest[0]
             ),
-            latest_claude_review=(  # allowlist:provider -- canonical history field
-                history.latest_claude_review  # allowlist:provider -- canonical history field
+            latest_reviewer_review=(
+                history.latest_reviewer_review
                 if latest is None
                 else latest[1]
             ),

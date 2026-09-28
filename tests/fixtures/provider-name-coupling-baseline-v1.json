@@ -2,7 +2,7 @@
   "schema_version": "provider-name-coupling-baseline-v1",
   "counts": {
     "orchestrator.toml": {
-      "codex": 18,
+      "codex": 12,
       "claude": 9
     },
     "schemas/native-agent-codex-request-v2.schema.json": {
@@ -10,7 +10,7 @@
       "claude": 1
     },
     "schemas/native-agent-codex-result-v2.schema.json": {
-      "codex": 8
+      "codex": 7
     },
     "schemas/native-agent-review-request-v2.schema.json": {
       "claude": 6
@@ -23,8 +23,8 @@
       "claude": 6
     },
     "schemas/native-provider-schema-exceptions-v1.json": {
-      "codex": 27,
-      "claude": 20
+      "codex": 20,
+      "claude": 12
     },
     "schemas/orchestrator-artifact-v2.schema.json": {
       "codex": 12,
@@ -34,8 +34,16 @@
       "codex": 5,
       "claude": 9
     },
+    "scripts/baseline_findingfluss.py": {
+      "codex": 1,
+      "claude": 2
+    },
+    "scripts/crash_harness.py": {
+      "codex": 13,
+      "claude": 3
+    },
     "src/agent_adapters.py": {
-      "codex": 53,
+      "codex": 48,
       "claude": 29
     },
     "src/agent_config.py": {
@@ -43,85 +51,71 @@
       "claude": 24
     },
     "src/agent_runtime.py": {
-      "codex": 49,
-      "claude": 17
-    },
-    "src/artifact_bridge.py": {
-      "codex": 2
+      "codex": 20,
+      "claude": 10
     },
     "src/artifact_models.py": {
       "codex": 14,
       "claude": 10
     },
-    "src/artifact_resume.py": {
-      "codex": 6,
-      "claude": 10
-    },
     "src/audit_trail.py": {
-      "codex": 11,
-      "claude": 27
+      "claude": 2
     },
     "src/cli.py": {
       "codex": 2,
       "claude": 2
     },
     "src/contracts.py": {
-      "codex": 13,
+      "codex": 10,
       "claude": 7
     },
     "src/dry_run_scenarios.py": {
-      "codex": 36,
+      "codex": 23,
       "claude": 4
     },
     "src/final_review_preflight.py": {
-      "codex": 8,
-      "claude": 2
+      "claude": 1
     },
     "src/git_service.py": {
       "codex": 4,
       "claude": 3
     },
     "src/native_implementer_contract.py": {
-      "codex": 140
+      "codex": 11
     },
     "src/native_implementer_request.py": {
-      "codex": 132
+      "codex": 16
     },
     "src/native_provider_schema.py": {
-      "codex": 10,
+      "codex": 9,
       "claude": 9
     },
     "src/native_review_contract.py": {
-      "claude": 8
+      "claude": 7
     },
     "src/native_review_request.py": {
-      "claude": 14
+      "claude": 13
     },
     "src/orchestrator.py": {
-      "codex": 51,
+      "codex": 33,
       "claude": 11
     },
     "src/plan_handoff.py": {
       "claude": 1
     },
-    "src/prompts.py": {
-      "codex": 1,
-      "claude": 1
-    },
     "src/provider_input_budget.py": {
-      "codex": 7,
-      "claude": 5
+      "codex": 5,
+      "claude": 4
     },
     "src/reviewer_input.py": {
       "claude": 1
     },
     "src/role_binding.py": {
-      "codex": 3,
-      "claude": 2
+      "codex": 1
     },
     "src/role_certification.py": {
-      "codex": 2,
-      "claude": 3
+      "codex": 1,
+      "claude": 2
     },
     "src/state_io.py": {
       "codex": 1,
@@ -131,26 +125,25 @@
       "codex": 2
     },
     "src/workflow.py": {
-      "codex": 95,
-      "claude": 68
+      "codex": 42,
+      "claude": 39
     },
     "src/workflow_audit_projection.py": {
-      "codex": 4,
-      "claude": 2
+      "claude": 1
     },
     "src/workflow_baseline.py": {
       "codex": 2,
       "claude": 2
     },
     "src/workflow_dry_run.py": {
-      "codex": 16,
+      "codex": 13,
       "claude": 10
     },
     "src/workflow_git_commit.py": {
       "claude": 2
     },
     "src/workflow_persistence.py": {
-      "codex": 8,
+      "codex": 6,
       "claude": 6
     },
     "src/workflow_production.py": {
@@ -158,21 +151,325 @@
       "claude": 3
     },
     "src/workflow_recovery.py": {
-      "codex": 21,
+      "codex": 12,
       "claude": 18
     },
     "src/workflow_requests.py": {
-      "codex": 4
+      "codex": 3
     },
     "src/workflow_run_setup.py": {
       "codex": 9,
       "claude": 7
     },
     "src/workflow_state.py": {
-      "codex": 91,
+      "codex": 76,
       "claude": 40
     },
     "src/workflow_validation.py": {
+      "codex": 1
+    },
+    "tests/content_authority_support.py": {
+      "claude": 1
+    },
+    "tests/target_model_oracle.py": {
+      "codex": 6,
+      "claude": 3
+    },
+    "tests/test_agent_adapters.py": {
+      "codex": 39,
+      "claude": 47
+    },
+    "tests/test_agent_roles.py": {
+      "codex": 1,
+      "claude": 2
+    },
+    "tests/test_agent_runtime.py": {
+      "codex": 66,
+      "claude": 47
+    },
+    "tests/test_artifact_bridge.py": {
+      "claude": 22
+    },
+    "tests/test_artifact_models.py": {
+      "codex": 50,
+      "claude": 69
+    },
+    "tests/test_artifact_replay.py": {
+      "codex": 17,
+      "claude": 29
+    },
+    "tests/test_artifact_resume.py": {
+      "codex": 2,
+      "claude": 1
+    },
+    "tests/test_binary_review_packets.py": {
+      "claude": 1
+    },
+    "tests/test_cli.py": {
+      "codex": 39,
+      "claude": 62
+    },
+    "tests/test_cli_argument_evaluation_corpus.py": {
+      "claude": 1
+    },
+    "tests/test_collect_changes_cohesion.py": {
+      "codex": 1
+    },
+    "tests/test_commit_boundary_rejection_corpus.py": {
+      "claude": 1
+    },
+    "tests/test_content_authority.py": {
+      "codex": 17,
+      "claude": 6
+    },
+    "tests/test_contracts.py": {
+      "codex": 2,
+      "claude": 3
+    },
+    "tests/test_crash_harness.py": {
+      "codex": 4,
+      "claude": 1
+    },
+    "tests/test_dry_run_scenarios.py": {
+      "codex": 7
+    },
+    "tests/test_engine_dispatch_corpus.py": {
+      "codex": 82,
+      "claude": 8
+    },
+    "tests/test_error_classification.py": {
+      "codex": 13,
+      "claude": 1
+    },
+    "tests/test_final_review_preflight.py": {
+      "claude": 4
+    },
+    "tests/test_finding_convergence.py": {
+      "claude": 9
+    },
+    "tests/test_finding_identity.py": {
+      "codex": 2,
+      "claude": 3
+    },
+    "tests/test_finding_reducer.py": {
+      "codex": 2,
+      "claude": 11
+    },
+    "tests/test_finding_signature.py": {
+      "claude": 1
+    },
+    "tests/test_git_service.py": {
+      "codex": 1,
+      "claude": 13
+    },
+    "tests/test_inbox_watcher.py": {
+      "codex": 5,
+      "claude": 2
+    },
+    "tests/test_language_consistency.py": {
+      "codex": 46,
+      "claude": 35
+    },
+    "tests/test_legacy_verifier.py": {
+      "codex": 1
+    },
+    "tests/test_native_contract_differential.py": {
+      "codex": 31,
+      "claude": 21
+    },
+    "tests/test_native_implementer_contract.py": {
+      "codex": 16,
+      "claude": 1
+    },
+    "tests/test_native_implementer_request.py": {
+      "codex": 18,
+      "claude": 1
+    },
+    "tests/test_native_provider_schema.py": {
+      "codex": 50,
+      "claude": 36
+    },
+    "tests/test_native_review_contract.py": {
+      "claude": 52
+    },
+    "tests/test_native_review_request.py": {
+      "codex": 2,
+      "claude": 22
+    },
+    "tests/test_native_review_schema.py": {
+      "codex": 1,
+      "claude": 3
+    },
+    "tests/test_native_transport_retirement.py": {
+      "codex": 16,
+      "claude": 16
+    },
+    "tests/test_orchestrator_resilience_evidence.py": {
+      "codex": 25,
+      "claude": 16
+    },
+    "tests/test_orchestrator_runtime.py": {
+      "codex": 332,
+      "claude": 118
+    },
+    "tests/test_orchestrator_version.py": {
+      "codex": 4,
+      "claude": 4
+    },
+    "tests/test_parsing.py": {
+      "claude": 1
+    },
+    "tests/test_process_boundary.py": {
+      "codex": 7
+    },
+    "tests/test_production_entry_corpus.py": {
+      "codex": 2,
+      "claude": 2
+    },
+    "tests/test_production_transition_corpus.py": {
+      "codex": 7,
+      "claude": 2
+    },
+    "tests/test_prompts.py": {
+      "claude": 3
+    },
+    "tests/test_provider_identity.py": {
+      "codex": 29,
+      "claude": 11
+    },
+    "tests/test_provider_input_budget.py": {
+      "codex": 19,
+      "claude": 4
+    },
+    "tests/test_provider_input_efficiency.py": {
+      "codex": 10,
+      "claude": 6
+    },
+    "tests/test_quota_wait.py": {
+      "codex": 10,
+      "claude": 40
+    },
+    "tests/test_readable_audit.py": {
+      "codex": 3,
+      "claude": 9
+    },
+    "tests/test_refactoring_invariance.py": {
+      "codex": 8,
+      "claude": 1
+    },
+    "tests/test_rejected_response_shape.py": {
+      "codex": 2,
+      "claude": 1
+    },
+    "tests/test_replay_rejection_corpus.py": {
+      "codex": 32,
+      "claude": 16
+    },
+    "tests/test_repo_changes.py": {
+      "claude": 2
+    },
+    "tests/test_review_contract_authority.py": {
+      "claude": 20
+    },
+    "tests/test_review_packets.py": {
+      "claude": 2
+    },
+    "tests/test_review_runtime_hardening.py": {
+      "claude": 2
+    },
+    "tests/test_reviewer_input.py": {
+      "claude": 8
+    },
+    "tests/test_role_certification.py": {
+      "codex": 17,
+      "claude": 14
+    },
+    "tests/test_semantic_markdown.py": {
+      "codex": 2,
+      "claude": 4
+    },
+    "tests/test_side_effect_ledger.py": {
+      "codex": 1,
+      "claude": 6
+    },
+    "tests/test_slice_exit.py": {
+      "claude": 6
+    },
+    "tests/test_stabilisierung_s2_transition_matrix.py": {
+      "codex": 15,
+      "claude": 7
+    },
+    "tests/test_state_io.py": {
+      "codex": 1,
+      "claude": 2
+    },
+    "tests/test_structured_artifact_regressions.py": {
+      "codex": 29,
+      "claude": 52
+    },
+    "tests/test_structured_output_pressure.py": {
+      "codex": 1,
+      "claude": 15
+    },
+    "tests/test_target_model_oracle.py": {
+      "claude": 1
+    },
+    "tests/test_task_contract.py": {
+      "codex": 7
+    },
+    "tests/test_workflow.py": {
+      "codex": 471,
+      "claude": 206
+    },
+    "tests/test_workflow_baseline.py": {
+      "codex": 2,
+      "claude": 2
+    },
+    "tests/test_workflow_baseline_corpus.py": {
+      "codex": 4,
+      "claude": 4
+    },
+    "tests/test_workflow_completion.py": {
+      "codex": 4,
+      "claude": 1
+    },
+    "tests/test_workflow_driver_contract.py": {
+      "codex": 1
+    },
+    "tests/test_workflow_failure_recording.py": {
+      "codex": 3
+    },
+    "tests/test_workflow_git_commit.py": {
+      "claude": 6
+    },
+    "tests/test_workflow_history_projection.py": {
+      "codex": 25,
+      "claude": 41
+    },
+    "tests/test_workflow_persistence.py": {
+      "codex": 7,
+      "claude": 2
+    },
+    "tests/test_workflow_recovery_corpus.py": {
+      "codex": 46,
+      "claude": 38
+    },
+    "tests/test_workflow_requests.py": {
+      "codex": 12,
+      "claude": 5
+    },
+    "tests/test_workflow_run_setup.py": {
+      "codex": 1
+    },
+    "tests/test_workflow_state.py": {
+      "codex": 83,
+      "claude": 17
+    },
+    "tests/test_workflow_transition_matrix.py": {
+      "codex": 23,
+      "claude": 23
+    },
+    "tests/test_workflow_validation_evidence.py": {
       "codex": 1
     }
   }

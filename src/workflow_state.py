@@ -1278,7 +1278,7 @@ class WorkUnitRecord:
 
 def project_implementer_return_policy(unit: WorkUnitRecord) -> tuple[int, int]:
     """Map the provider-named state-v3 mirror fields to stable workflow roles."""
-    return unit.codex_return_count, unit.max_codex_returns  # allowlist:provider -- named R2 mirror projection
+    return unit.codex_return_count, unit.max_codex_returns  # allowlist:provider -- wire until slice 8/9: named R2 mirror projection
 
 
 @dataclass(frozen=True)
@@ -2213,7 +2213,7 @@ class WorkflowState:
         if not isinstance(progress_made, bool):
             raise WorkflowStateValidationError("review progress must be boolean")
         current = self.current_work_unit
-        next_count = current.codex_return_count + 1  # allowlist:provider -- persisted counter
+        next_count = current.codex_return_count + 1  # allowlist:provider -- wire until slice 8/9: persisted counter
         continue_rounds = (
             progress_made and current.round_number < current.max_codex_returns
         )

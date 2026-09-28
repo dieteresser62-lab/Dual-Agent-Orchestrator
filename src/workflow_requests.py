@@ -21,9 +21,9 @@ from finding_order import sorted_finding_ids
 from finding_reducer import project_open_set
 from native_implementer_contract import (
     NativeImplementerContext,
-    NativeImplementerErrorCode,  # allowlist:provider -- typed implementer rejection
+    NativeImplementerErrorCode,
     NativeImplementerRequestKind,
-    native_implementer_retry_guidance,  # allowlist:provider -- typed implementer guidance
+    native_implementer_retry_guidance,
 )
 from native_implementer_request import (
     NativeImplementerEvidenceInput,
@@ -101,7 +101,7 @@ def native_implementer_request(
     correction_fingerprint: str | None = None,
     correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeImplementerRequestBundle:
-    """Build one Codex request exclusively from orchestrator-owned values."""
+    """Build one implementer request exclusively from orchestrator-owned values."""
     if state.current_work_unit.kind is WorkUnitKind.PLAN:
         current_fingerprint = state.task_digest
         base_commit = state.branch_base

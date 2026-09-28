@@ -1096,8 +1096,8 @@ def _denied_slice_round(
     return state, WorkflowHistory(
         state.current_work_unit_id,
         findings=(finding,),
-        last_claude_fingerprint="d" * 64,
-        latest_claude_review=denial,
+        last_reviewer_fingerprint="d" * 64,
+        latest_reviewer_review=denial,
     )
 
 
@@ -1362,7 +1362,7 @@ def test_retired_iteration_gate_terminates_without_extending_the_round_limit() -
             ReviewAuditEvent(1, state.current_slice_id, 3, previous),
             ReviewAuditEvent(2, state.current_slice_id, 4, current),
         ),
-        latest_claude_review=current,
+        latest_reviewer_review=current,
     )
 
     resolved = resolve_retired_iteration_limit(state, history)
@@ -2388,7 +2388,7 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
     )
 
     assert advanced.current_step is WorkflowStep.SLICE_COMMIT
-    assert history.latest_claude_review is not None
+    assert history.latest_reviewer_review is not None
     assert len(driver.persisted_native) == 1
     invocation = driver.reviewer_calls[0]
     assert invocation.native_request is not None
@@ -3994,7 +3994,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     assert len(driver.persisted_native) == 1
     assert driver.authoritative_finding_calls == []
     assert advanced.current_step is WorkflowStep.SLICE_COMMIT
-    assert recovered.latest_claude_review is not None
+    assert recovered.latest_reviewer_review is not None
     assert recovered.findings == (persisted,)
 
 

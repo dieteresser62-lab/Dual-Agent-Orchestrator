@@ -44,14 +44,14 @@ from native_implementer_contract import (
     NativeImplementerContractError,
     NativeImplementerErrorCode,
     find_native_implementer_contract_error,
-    is_retryable_native_implementer_response_error,  # allowlist:provider -- typed implementer boundary
+    is_retryable_native_implementer_response_error,
     parse_bound_native_implementer_contract_result,
     validate_native_implementer_document,
 )
 from native_implementer_request import (
     NativeImplementerRequestBundle,
     NativeImplementerRequestError,
-    NativeImplementerRequestErrorCode,  # allowlist:provider -- typed implementer boundary
+    NativeImplementerRequestErrorCode,
     validate_native_implementer_provider_response,
 )
 from native_review_contract import (
