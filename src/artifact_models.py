@@ -45,9 +45,13 @@ from rejected_response_shape import (
     rejected_native_response_shape_document,
     rejected_native_response_shape_from_document,
 )
+from role_occupancy import role_for_provider
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = (
+    "structured-v2-schema-2-state-v3-role-wire-v1"
+)
+PRE_ROLE_WIRE_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
 )
 PRE_TARGET_CLASS_ROUND_EXIT_REDUCER_VERSION = (
@@ -138,10 +142,15 @@ class FingerprintKind(StrEnum):
 
 
 class Role(StrEnum):
-    IMPLEMENTER = "codex"
-    REVIEWER = "claude"
+    IMPLEMENTER = "implementer"
+    REVIEWER = "reviewer"
     ORCHESTRATOR = "orchestrator"
     USER = "user"
+
+
+def _agent_provider_role_matches(provider: str, role: Role) -> bool:
+    expected = role_for_provider(provider)
+    return expected is not None and role == expected.value
 
 
 class FindingSeverity(StrEnum):
@@ -292,14 +301,14 @@ class RunProfilePayload:
 
 
 _WORKFLOW_STEPS = {
-    "codex_plan",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
-    "claude_plan_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
-    "codex_plan_revision",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
-    "codex_implementation",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
-    "claude_slice_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
-    "codex_correction",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "implementer_plan",
+    "reviewer_plan_review",
+    "implementer_plan_revision",
+    "implementer_implementation",
+    "reviewer_slice_review",
+    "implementer_correction",
     "slice_commit",
-    "claude_final_review",  # allowlist:provider -- wire until slice 8/9: persisted protocol vocabulary
+    "reviewer_final_review",
     "completed",
 }
 _SLICE_STATUSES = {
@@ -630,7 +639,7 @@ class AgentResultPayload:
             raise ArtifactValidationError("agent result transport_schema is unsupported")
         if self.role is not Role.IMPLEMENTER:
             raise ArtifactValidationError(
-                "native Codex result transport requires role=codex"
+                "native Codex result transport requires role=implementer"
             )
         if (
             not isinstance(self.request_id, str)
@@ -712,7 +721,7 @@ class ReviewPayload:
 
     def __post_init__(self) -> None:
         if self.reviewer is not Role.REVIEWER:
-            raise ArtifactValidationError("reviewer must be claude")
+            raise ArtifactValidationError("reviewer must be reviewer")
         _require_identifier(self.work_unit_id, "work_unit_id")
         if self.verdict not in {"approved", "denied", "stop"}:
             raise ArtifactValidationError("review verdict is invalid")
@@ -864,7 +873,7 @@ class FinalReviewCompletedPayload:
     def __post_init__(self) -> None:
         if self.reviewer is not Role.REVIEWER:
             raise ArtifactValidationError(
-                "final review completion reviewer must be claude"  # allowlist:provider -- schema-bound diagnostic: diagnostic role
+                "final review completion reviewer must be reviewer"
             )
         if self.scan_complete is not True:
             raise ArtifactValidationError(
@@ -996,7 +1005,7 @@ class FindingTransitionPayload:
     def __post_init__(self) -> None:
         _require_finding_id(self.finding_id, "finding_id")
         if self.reporter is not Role.REVIEWER:
-            raise ArtifactValidationError("finding reporter must be claude")
+            raise ArtifactValidationError("finding reporter must be reviewer")
         if self.action not in {
             "opened", "responded", "status_changed", "escalated",
         }:
@@ -1015,9 +1024,9 @@ class FindingTransitionPayload:
                 "finding escalation requires an open BLOCKER transition"
             )
         if self.action == "responded" and self.actor is not Role.IMPLEMENTER:
-            raise ArtifactValidationError("only codex may record a finding response")
+            raise ArtifactValidationError("only implementer may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
-            raise ArtifactValidationError("a codex response cannot close a finding")
+            raise ArtifactValidationError("an implementer response cannot close a finding")
         if (
             self.action == "responded"
             and self.severity is FindingSeverity.BLOCKER
@@ -1315,7 +1324,7 @@ class ProviderInputComponentPayload:
 
 @dataclass(frozen=True, slots=True)
 class ProviderInputMeasurementPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1342,7 +1351,7 @@ class ProviderInputMeasurementPayload:
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_INPUT_MEASUREMENT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("measurement provider and role must identify one agent")
         _require_identifier(self.operation, "measurement operation")
         _require_identifier(self.work_unit_id, "measurement work_unit_id")
@@ -1427,7 +1436,7 @@ class ProviderUsagePayload:
 
 @dataclass(frozen=True, slots=True)
 class ProviderAttemptPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1451,7 +1460,7 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("attempt provider and role must identify one agent")
         _require_identifier(self.operation, "attempt operation")
         _require_identifier(self.work_unit_id, "attempt work_unit_id")
@@ -1652,7 +1661,7 @@ class SideEffectPayload:
 
 @dataclass(frozen=True, slots=True)
 class FinalReviewPreflightPayload:
-    provider: Role
+    provider: str
     role: Role
     operation: str
     work_unit_id: str
@@ -1669,7 +1678,7 @@ class FinalReviewPreflightPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_PREFLIGHT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.IMPLEMENTER, Role.REVIEWER} or self.role is not self.provider:
+        if not _agent_provider_role_matches(self.provider, self.role):
             raise ArtifactValidationError("preflight provider and role must identify one agent")
         _require_identifier(self.operation, "preflight operation")
         _require_identifier(self.work_unit_id, "preflight work_unit_id")
@@ -2922,7 +2931,7 @@ _PAYLOAD_READERS: dict[
         data["outcome"], data["final_binding_id"],
     ),
     RecordType.PROVIDER_INPUT_MEASUREMENT: lambda data: ProviderInputMeasurementPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["input_digest"], data["policy_digest"],
             tuple(ProviderInputComponentPayload(item["name"], item["chars"], item["bytes"]) for item in data["components"]),
             data["total_chars"], data["total_bytes"], data["safety_limit_chars"], data["safety_limit_bytes"],
@@ -2931,7 +2940,7 @@ _PAYLOAD_READERS: dict[
             tuple(data["violated_dimensions"]), data["char_overage"], data["byte_overage"], data["largest_component"],
         ),
     RecordType.PROVIDER_ATTEMPT: lambda data: ProviderAttemptPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["logical_operation_id"], data["binding_fingerprint"], data["measurement_record_id"],
             data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
@@ -2943,7 +2952,7 @@ _PAYLOAD_READERS: dict[
             tuple(data["operation"]), data["phase"], data["result"],
         ),
     RecordType.FINAL_REVIEW_PREFLIGHT: lambda data: FinalReviewPreflightPayload(
-            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["provider"], Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["measurement_record_id"],
             data["outcome"], data["category"], data["error_code"], tuple(data["affected_record_ids"]),
             tuple(data["affected_paths"]), data["remediation"],

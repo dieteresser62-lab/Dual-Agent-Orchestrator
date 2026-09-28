@@ -104,7 +104,7 @@ def _runtime_native_implementer_bundle():  # type: ignore[no-untyped-def]
     context = NativeImplementerContext(
         run_id="run-native-codex-runtime",
         work_unit_id="work-unit-1",
-        operation="codex_plan",
+        operation="implementer_plan",
         current_fingerprint="a" * 64,
         request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
@@ -274,7 +274,7 @@ def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
         bundle,
         config=OrchestratorConfig(),
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
     )
     assert output.result.ready is True
@@ -336,7 +336,7 @@ def test_native_implementer_exposes_schema_valid_bytes_before_domain_rejection(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             validated_response_callback=persisted.append,
         )
@@ -394,7 +394,7 @@ def test_native_implementer_writer_invalid_bytes_never_reach_validated_callback(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             validated_response_callback=persisted.append,
         )
@@ -464,7 +464,7 @@ def test_native_implementer_runtime_forwards_canary_execution_root(
         bundle,
         config=OrchestratorConfig(repo_root=repository_root),
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
         execution_boundary=boundary,
     )
@@ -537,7 +537,7 @@ def test_native_implementer_checked_writes_raw_before_accepted_callback(
         config=OrchestratorConfig(),
         write_file=write_raw,
         shorten=lambda value, _maximum: value or "",
-        operation="codex_plan",
+        operation="implementer_plan",
         binding_fingerprint="a" * 64,
         pre_start_callback=None,
         provider_attempt_lifecycle=None,
@@ -577,7 +577,7 @@ def test_native_implementer_checked_write_failure_prevents_callback(
             config=OrchestratorConfig(),
             write_file=lambda _path, _content: (_ for _ in ()).throw(OSError("disk")),
             shorten=lambda value, _maximum: value or "",
-            operation="codex_plan",
+            operation="implementer_plan",
             binding_fingerprint="a" * 64,
             pre_start_callback=None,
             provider_attempt_lifecycle=None,
@@ -636,7 +636,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
     context = NativeReviewContext(
         run_id="run-native-runtime",
         work_unit_id="work-unit-1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint=fingerprint,
         reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
@@ -660,7 +660,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -699,7 +699,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         bundle,
         config=OrchestratorConfig(),
         shorten=lambda value, _maximum: value or "",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         binding_fingerprint=fingerprint,
     )
 
@@ -719,7 +719,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="claude_slice_review",
+            operation="reviewer_slice_review",
             binding_fingerprint=fingerprint,
         )
     assert "request-mismatch" in raised.value.technical_text
@@ -753,7 +753,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             bundle,
             config=OrchestratorConfig(),
             shorten=lambda value, _maximum: value or "",
-            operation="claude_slice_review",
+            operation="reviewer_slice_review",
             binding_fingerprint=fingerprint,
             response_callback=persisted.append,
         )
@@ -798,7 +798,7 @@ def test_native_review_checked_preserves_schema_valid_domain_rejection(
             write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
             shorten=lambda value, _maximum: value or "",
             reviewer_manifest_paths=None,
-            operation="claude_plan_review",
+            operation="reviewer_plan_review",
             binding_fingerprint="a" * 64,
             pre_start_callback=None,
             provider_attempt_lifecycle=None,
@@ -856,8 +856,8 @@ def test_budget_denial_happens_after_preparation_but_before_capability_or_proces
                 rule.provider,
                 rule.role,
                 rule.operation,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_bytes,
             )
             for rule in defaults.rules
         )
@@ -877,7 +877,7 @@ def test_budget_denial_happens_after_preparation_but_before_capability_or_proces
         run_agent(
             FakeCodex(),
             "four",
-            operation="codex_implementation",
+            operation="implementer_implementation",
             binding_fingerprint="binding",
             pre_start_callback=measurements.append,
             config=OrchestratorConfig(provider_input_budget=policy),
@@ -1946,7 +1946,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         "prompt",
         config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
         shorten=lambda text, limit: (text or "")[:limit],
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
 
     working_directory = captured["execution_root"]
@@ -1961,7 +1961,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert captured["bound_snapshot"] == working_directory
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
-    assert "operation=claude_slice_review" in caplog.text
+    assert "operation=reviewer_slice_review" in caplog.text
     assert "input_tokens=10 output_tokens=20 turns=2" in caplog.text
 
 

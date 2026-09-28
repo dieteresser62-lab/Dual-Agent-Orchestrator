@@ -29,6 +29,7 @@ FAILURE_PATH = SRC / "workflow_failure_recording.py"
 WORKFLOW_PATH = SRC / "workflow.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
+    "agent_config",
     "agent_runtime",
     "artifact_models",
     "contracts",
@@ -204,7 +205,7 @@ def test_diagnostic_exception_escape_mutation_is_killed() -> None:
         pass
 
     class StubState:
-        current_step = SimpleNamespace(value="codex_implementation")
+        current_step = SimpleNamespace(value="implementer_implementation")
 
         def record_invocation_failure(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             return self

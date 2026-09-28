@@ -553,7 +553,7 @@ class NativeReviewContext:
         if self.reviewer is not AgentRole.REVIEWER:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "reviewer must be claude",
+                "reviewer must be reviewer",
             )
         if len(self.diff_fingerprint) != 64 or any(
             character not in "0123456789abcdef"
@@ -810,7 +810,7 @@ def _enable_final_review_result_schema(schema: dict[str, Any]) -> None:
                         "type": "string",
                         "pattern": "^native-review-request-[0-9a-f]{64}$",
                     },
-                    "reviewer": {"const": "claude"},  # allowlist:provider -- wire until slice 8/9: canonical reviewer role
+                    "reviewer": {"const": "reviewer"},
                     "scan_complete": {"type": "boolean"},
                     "new_findings": {
                         "type": "array",
@@ -985,7 +985,7 @@ def native_review_provider_response_schema(
     if context.reviewer is not AgentRole.REVIEWER:
         raise NativeReviewContractError(
             NativeReviewErrorCode.CONTEXT_INVALID,
-            "native Claude writer schema requires reviewer=claude",
+            "native Claude writer schema requires reviewer=reviewer",
         )
     schema = defensive_provider_projection(
         base_schema if base_schema is not None else load_native_review_schema(),
@@ -1023,7 +1023,7 @@ def native_review_provider_response_schema(
             context, definitions
         )
         assert_projected_provider_schema(
-            projected_schema, provider=context.reviewer.value
+            projected_schema, provider="claude"
         )
         return projected_schema
     own_findings = tuple(
@@ -1203,7 +1203,7 @@ def native_review_provider_response_schema(
         "$defs": definitions,
     }
     assert_projected_provider_schema(
-        projected_schema, provider=context.reviewer.value
+        projected_schema, provider="claude"
     )
     return projected_schema
 

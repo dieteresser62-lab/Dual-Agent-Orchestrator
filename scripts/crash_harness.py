@@ -49,7 +49,7 @@ from dry_run_scenarios import (
     ScriptedWorkflowDriver,
 )
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
-from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
+from provider_input_budget import PROVIDER_ROLES, ProviderInputComponentSize, ProviderInputMeasurement
 import provider_process
 from side_effects import (
     Reconciliation,
@@ -671,7 +671,7 @@ def _provider_context(
 ) -> tuple[ProductionWorkflowDriver, object, Path]:
     measurement = ProviderInputMeasurement(
         provider=spec.operation[0],
-        role=spec.operation[0],
+        role=PROVIDER_ROLES[spec.operation[0]],
         operation=spec.operation[1],
         binding_fingerprint=spec.operation[3],
         input_digest=spec.operation[2],
@@ -1183,7 +1183,7 @@ def _run_post_merge_case(
             def codex(_driver, invocation):  # allowlist:provider -- scripted implementer
                 target = repository / "src/one.py"
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if invocation.step.value == "codex_plan":  # allowlist:provider -- persisted step
+                if invocation.step.value == "implementer_plan":  # allowlist:provider -- persisted step
                     target.write_text("value = 0\n", encoding="utf-8")
                     return _native_plan_output(
                         invocation, summary="add value",
@@ -1193,7 +1193,7 @@ def _run_post_merge_case(
                 return _native_implementation_output(invocation)
 
             def review(driver, invocation):
-                if invocation.step.value == "claude_final_review":  # allowlist:provider -- persisted step
+                if invocation.step.value == "reviewer_final_review":  # allowlist:provider -- persisted step
                     return _native_final_review_output(
                         driver, invocation, finding_id=None,
                     )
@@ -1886,8 +1886,8 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
                 f"{item.finding_id}:{item.status.value}" for item in second_findings
             ],
             "correction_round_count": sum(
-                call.startswith("agent:codex:")  # allowlist:provider -- scripted role trace
-                and call.endswith(":codex_correction")  # allowlist:provider -- typed step
+                call.startswith("agent:implementer:")
+                and call.endswith(":implementer_correction")
                 for call in second_long.calls
             ),
             "approved_plan_commit": second_long.result.state.approved_plan_commit,
@@ -1949,8 +1949,8 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
         automatic = kind in {AgentFailureKind.QUOTA, AgentFailureKind.NETWORK}
         failure = InvocationFailureRecord(
             invocation_id=f"s5-{kind.value}-1",
-            idempotency_key=f"s5:1:codex_plan:{kind.value}",  # allowlist:provider
-            role="codex",  # allowlist:provider -- typed role vocabulary
+            idempotency_key=f"s5:1:implementer_plan:{kind.value}",  # allowlist:provider
+            role="implementer",  # allowlist:provider -- typed role vocabulary
             failure_kind=kind,
             provider_text=f"redacted {kind.value} diagnostic",
             received_at=FIXED_TIME,

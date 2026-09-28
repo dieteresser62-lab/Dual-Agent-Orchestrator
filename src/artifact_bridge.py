@@ -15,6 +15,8 @@ import hashlib
 import logging
 from typing import Callable, Iterable
 
+from agent_config import current_provider_for_role
+
 from artifact_models import (
     AgentResultPayload,
     ArtifactPayload,
@@ -539,7 +541,7 @@ def provider_input_measurement_payload(
     relevant_record_head: str,
 ) -> ProviderInputMeasurementPayload:
     return ProviderInputMeasurementPayload(
-        provider=Role(measurement.provider),
+        provider=measurement.provider,
         role=Role(measurement.role),
         operation=measurement.operation,
         work_unit_id=str(work_unit_id),
@@ -957,7 +959,7 @@ class ArtifactBridge:
         for record in prior:
             payload = record.payload
             comparisons = (
-                ("provider", payload.provider.value, measurement.provider.value),
+                ("provider", payload.provider, measurement.provider),
                 ("role", payload.role.value, measurement.role.value),
                 ("operation", payload.operation, measurement.operation),
                 ("work_unit_id", payload.work_unit_id, measurement.work_unit_id),
@@ -1028,7 +1030,7 @@ class ArtifactBridge:
         )
         logger.info(
             "provider attempt started provider=%s operation=%s logical_operation_id=%s attempt=%d status=started",
-            measurement.provider.value,
+            measurement.provider,
             measurement.operation,
             logical_operation_id,
             attempt_number,
@@ -1104,7 +1106,7 @@ class ArtifactBridge:
         )
         logger.info(
             "provider attempt terminal provider=%s operation=%s logical_operation_id=%s attempt=%d status=%s",
-            started.provider.value,
+            started.provider,
             started.operation,
             started.logical_operation_id,
             started.attempt_number,
@@ -1114,21 +1116,25 @@ class ArtifactBridge:
 
 
 def logical_provider_operation_id(
-    *, run_id: str, work_unit_id: str, provider: Role, operation: str,
+    *, run_id: str, work_unit_id: str, provider: str | Role, operation: str,
     binding_fingerprint: str, operation_instance: str | None = None,
 ) -> str:
+    provider_name = (
+        current_provider_for_role(provider.value)
+        if isinstance(provider, Role) else provider
+    )
     digest = hashlib.sha256(
         canonical_json(
             [
                 run_id,
                 work_unit_id,
-                provider.value,
+                provider_name,
                 operation,
                 binding_fingerprint,
                 operation_instance,
             ]
             if operation_instance is not None
-            else [run_id, work_unit_id, provider.value, operation, binding_fingerprint]
+            else [run_id, work_unit_id, provider_name, operation, binding_fingerprint]
         )
     ).hexdigest()
     return f"provider-operation-{digest}"

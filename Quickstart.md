@@ -100,7 +100,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 
 Plan-, Teständerungs-, Slice-Commit- und Umfangs-Gates sind standardmäßig aus; eine angemeldete Umfangserweiterung genehmigt der Orchestrator selbst. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
-Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich beides beim Start wählen, etwa `run_task --watch --codex-effort xhigh --claude-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
+Codex läuft standardmäßig mit Sol (`gpt-6-sol`), Claude mit Opus, beide mit Effort `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich beides beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
 
 Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
 

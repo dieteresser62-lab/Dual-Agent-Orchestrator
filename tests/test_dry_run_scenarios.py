@@ -38,10 +38,10 @@ def _scenario_document() -> dict[str, object]:
         "name": "native-plan",
         "agent_events": [
             {
-                "role": "codex",
+                "role": "implementer",
                 "work_unit_id": 1,
                 "request_sequence": 1,
-                "step": "codex_plan",
+                "step": "implementer_plan",
                 "output": _native_plan_result(),
             }
         ],

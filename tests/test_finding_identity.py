@@ -68,8 +68,8 @@ def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -
     ]
     documents.extend((load_native_review_schema(), load_native_review_request_schema()))
     for marker, operation, slice_id in (
-        (ApprovalMarker.SLICE, "claude_slice_review", "01"),
-        (ApprovalMarker.FINAL_REVIEW, "claude_final_review", "FINAL"),
+        (ApprovalMarker.SLICE, "reviewer_slice_review", "01"),
+        (ApprovalMarker.FINAL_REVIEW, "reviewer_final_review", "FINAL"),
     ):
         context = NativeReviewContext(
             "test-run", "1", operation, "a" * 64, AgentRole.REVIEWER,

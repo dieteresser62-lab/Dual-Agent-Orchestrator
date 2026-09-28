@@ -442,21 +442,21 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 | Rolle | CLI-Optionen | Standards |
 |---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
+| Implementer (Codex) | `--implementer-binary`, `--implementer-model`, `--implementer-timeout`, `--implementer-effort` | `codex`, `gpt-6-sol`, ohne Zeitlimit, `high` |
+| Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`, `--reviewer-timeout`, `--reviewer-effort` | `claude`, `opus`, ohne Zeitlimit, `high` |
 
 `--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus.
 
-Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--codex-timeout` und `--claude-timeout` beziehungsweise `RUN_TASK_CODEX_TIMEOUT` und `RUN_TASK_CLAUDE_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
+Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--implementer-timeout` und `--reviewer-timeout` beziehungsweise `RUN_TASK_IMPLEMENTER_TIMEOUT` und `RUN_TASK_REVIEWER_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
 
 Das Modell wählt man über seine Familie: für Codex `sol` (`gpt-6-sol`, Standard), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) oder `astra` (`gpt-6-astra`), für Claude `opus` (Standard), `sonnet` oder `fable`; die Claude-Aliase zeigen immer auf das neueste Modell. Andere Werte weist der Orchestrator vor dem ersten Aufruf ab. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
 
 Beispiele:
 
 ```bash
-./run_task --codex-effort xhigh --claude-effort max
-./run_task --codex-model luna --claude-model sonnet --codex-effort medium
-./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
+./run_task --implementer-effort xhigh --reviewer-effort max
+./run_task --implementer-model luna --reviewer-model sonnet --implementer-effort medium
+./run_task --implementer-binary /opt/codex/bin/codex --implementer-timeout 2400
 ```
 
 ### Watch- und Loggingoptionen
@@ -515,8 +515,8 @@ product_timeout_seconds = 300
 
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_implementation"
+role = "implementer"
+operation = "implementer_implementation"
 max_chars = 4000000
 max_bytes = 16000000
 

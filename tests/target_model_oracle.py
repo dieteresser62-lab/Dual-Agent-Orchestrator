@@ -646,7 +646,7 @@ def _context(
     previous: tuple[FindingRecord, ...] = (),
     *,
     approval: ApprovalMarker = ApprovalMarker.SLICE,
-    operation: str = "claude_slice_review",  # allowlist:provider -- wire until slice 8/9: persisted operation vocabulary
+    operation: str = "reviewer_slice_review",
     round_number: int = 2,
     attestation: ValidationAttestation | None = None,
     planned_slices: tuple[PlannedSlice, ...] = (),
@@ -674,7 +674,7 @@ def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str,
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": context.request_id,
-        "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9: native wire vocabulary
+        "reviewer": "reviewer",
         "decision": "approved" if approved else "denied",
         "new_findings": [],
         "status_changes": [],
@@ -1469,7 +1469,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     plan_context = _context(
         (plan_finding,),
         approval=ApprovalMarker.PLAN,
-        operation="claude_plan_review",  # allowlist:provider -- wire until slice 8/9: persisted operation vocabulary
+        operation="reviewer_plan_review",
         planned_slices=(
             PlannedSlice(
                 1,

@@ -197,13 +197,13 @@ def test_provider_free_happy_path_completes_implementation_run(tmp_path: Path) -
     assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
     assert result.state.current_step is WorkflowStep.COMPLETED
     assert tuple(call for call in calls if call.startswith("agent:")) == (
-        "agent:codex:work-unit-1:request-1:codex_plan",
-        "agent:claude:work-unit-1:request-1:claude_plan_review",
-        "agent:codex:work-unit-2:request-1:codex_implementation",
-        "agent:claude:work-unit-2:request-1:claude_slice_review",
-        "agent:codex:work-unit-3:request-1:codex_implementation",
-        "agent:claude:work-unit-3:request-1:claude_slice_review",
-        "agent:claude:work-unit-4:request-1:claude_final_review",
+        "agent:implementer:work-unit-1:request-1:implementer_plan",
+        "agent:reviewer:work-unit-1:request-1:reviewer_plan_review",
+        "agent:implementer:work-unit-2:request-1:implementer_implementation",
+        "agent:reviewer:work-unit-2:request-1:reviewer_slice_review",
+        "agent:implementer:work-unit-3:request-1:implementer_implementation",
+        "agent:reviewer:work-unit-3:request-1:reviewer_slice_review",
+        "agent:reviewer:work-unit-4:request-1:reviewer_final_review",
     )
     assert sum(call.startswith("commit:") for call in calls) == 2
     assert sum(validations.values()) == 4
@@ -574,8 +574,8 @@ def test_gate_kind_uses_automatic_wait_status_as_resume(
     quota = failure_kind is AgentFailureKind.QUOTA
     failure = InvocationFailureRecord(
         invocation_id=f"inv-{failure_kind.value}",
-        idempotency_key=f"dry:2:codex_implementation:{failure_kind.value}",
-        role="codex",
+        idempotency_key=f"dry:2:implementer_implementation:{failure_kind.value}",
+        role="implementer",
         failure_kind=failure_kind,
         provider_text="scripted provider wait",
         received_at="2026-08-27T12:01:00+00:00",
@@ -637,8 +637,8 @@ def test_gate_kind_covers_reopened_legacy_quota_revalidation() -> None:
     )
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-diff",
-        idempotency_key="dry:1:codex_plan:quota",
-        role="codex",
+        idempotency_key="dry:1:implementer_plan:quota",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at="2026-08-27T12:01:00+00:00",

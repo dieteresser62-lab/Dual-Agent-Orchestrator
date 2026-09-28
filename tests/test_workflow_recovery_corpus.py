@@ -102,17 +102,18 @@ RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
+# Slice 8b wire cut: IDs and response digests bind the neutral wire values.
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf"
+    "native-codex-request-84d725652635c741a1af4c5d427fff69e8f4459f3ff6168a6a93d988dec30603"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30"
+    "native-review-request-3cceea485059dedacfc13a0b08ac3abc49faf1de9ae9136513aac65a1c26cb6b"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab"
+    "c70ddb10e6ef140c620f297427b55a01856ff84f0537359e10c0345bef414ae1"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "1b0cbd085b9a1245aab05c32043535257c932ff03375cedfa7d30b480e26aee4"
+    "21376ef474f704e841e41e7e488f774f21a936b1ac6022a21c80854ec18c009f"
 )
 
 RECOVERY_HELPERS = {
@@ -547,7 +548,7 @@ def _implementer_base() -> dict[str, object]:
     )
     candidate = _Record(
         IMPLEMENTER_RECORD_ID,
-        "agent-1-codex_implementation-1",
+        "agent-1-implementer_implementation-1",
         _FingerprintRef(FINGERPRINT),
         payload,
     )
@@ -585,7 +586,7 @@ def _attempt_record() -> _Record:
         "attempt-b53",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.IMPLEMENTER,
+            provider="codex",
             role=Role.IMPLEMENTER,
             operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             work_unit_id="1",
@@ -616,7 +617,7 @@ def _measurement_record(
         f"measurement-{role.value}-{work_unit_id}",
         _FingerprintRef(FINGERPRINT),
         ProviderInputMeasurementPayload(
-            provider=role,
+            provider={Role.IMPLEMENTER: "codex", Role.REVIEWER: "claude"}[role],
             role=role,
             operation=operation,
             work_unit_id=work_unit_id,
@@ -1072,7 +1073,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
     )
     candidate = _Record(
         "ar1-" + "9" * 64,
-        "agent-17-codex_implementation-2",
+        "agent-17-implementer_implementation-2",
         _FingerprintRef(FINGERPRINT),
         agent_result_payload(
             parsed,
@@ -1319,7 +1320,7 @@ def _reviewer_base() -> dict[str, object]:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -1535,14 +1536,14 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         "attempt-reviewer-b123",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.REVIEWER,
+            provider="claude",
             role=Role.REVIEWER,
             operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             work_unit_id="1",
             logical_operation_id=logical_provider_operation_id(
                 run_id=RUN_ID,
                 work_unit_id="1",
-                provider=Role.REVIEWER,
+                provider="claude",
                 operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
                 binding_fingerprint=FINGERPRINT,
                 operation_instance="round:1",
@@ -1695,14 +1696,14 @@ def _run_reviewer_scenario(
         "attempt-reviewer-b53",
         _FingerprintRef(FINGERPRINT),
         ProviderAttemptPayload(
-            provider=Role.REVIEWER,
+            provider="claude",
             role=Role.REVIEWER,
             operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             work_unit_id="1",
             logical_operation_id=logical_provider_operation_id(
                 run_id=RUN_ID,
                 work_unit_id="1",
-                provider=Role.REVIEWER,
+                provider="claude",
                 operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
                 binding_fingerprint=FINGERPRINT,
                 operation_instance="round:1",
@@ -2192,10 +2193,10 @@ def test_successes_bind_the_adopted_record_and_resulting_state(
     assert implementer["state"]["request_id"] == IMPLEMENTER_REQUEST_ID
     assert implementer["state"]["recovery_fingerprint"] == FINGERPRINT
     assert implementer["state"]["content_binding"] == {
-        "role": "codex",
+        "role": "implementer",
         "work_unit_id": 1,
         "request_sequence": 1,
-        "operation": "codex_implementation",
+        "operation": "implementer_implementation",
         "request_id": IMPLEMENTER_REQUEST_ID,
         "response_sha256": IMPLEMENTER_RESPONSE_SHA256,
         "fingerprint": FINGERPRINT,
@@ -2207,10 +2208,10 @@ def test_successes_bind_the_adopted_record_and_resulting_state(
         "request_id": REVIEW_REQUEST_ID,
         "round_number": 1,
         "content_binding": {
-            "role": "claude",
+            "role": "reviewer",
             "work_unit_id": 1,
             "request_sequence": 1,
-            "operation": "claude_slice_review",
+            "operation": "reviewer_slice_review",
             "request_id": REVIEW_REQUEST_ID,
             "response_sha256": REVIEW_RESPONSE_SHA256,
             "fingerprint": FINGERPRINT,

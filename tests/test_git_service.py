@@ -610,7 +610,7 @@ def test_commit_blocks_stale_or_negative_review_without_mutating_index(
     (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
     authorization = _authorization(repository, head, claude_approval=False)
 
-    with pytest.raises(GitTransactionError, match="approving claude"):
+    with pytest.raises(GitTransactionError, match="approving reviewer"):
         commit_slice(
             repository_root=repository,
             boundary=boundary,
@@ -1271,4 +1271,3 @@ def test_ambiguous_base_branch_stops_and_names_its_candidates(
         match=rf"candidates: {listed}; set \[repository\] base_branch",
     ):
         resolve_base_branch(repository)
-

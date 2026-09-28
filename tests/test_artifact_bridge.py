@@ -603,8 +603,7 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
 
 
 def _measurement() -> ProviderInputMeasurementPayload:
-    return ProviderInputMeasurementPayload(
-        Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1", DIGEST,
+    return ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1", DIGEST,
         "b" * 64, "c" * 64, "d" * 64,
         (ProviderInputComponentPayload("prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",

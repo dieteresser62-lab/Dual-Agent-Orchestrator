@@ -138,7 +138,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
         logical_id="review-claude-7-3",
         idempotency_key="review-claude-7-3",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         anchors=(
             ReviewAnchor(
                 "anchor-r7",
@@ -177,7 +177,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     assert contract.result.validation.passed
     assert project_latest_review(replay, bridge.store.read_blob, "7") == contract.result
     assert project_latest_review(replay, bridge.store.read_blob, "8") is None
-    assert all(record.record_type.value != "latest_claude_review" for record in chain)
+    assert all(record.record_type.value != "latest_reviewer_review" for record in chain)
 
 
 def test_review_contract_preserves_specific_finding_reducer_diagnostic(
@@ -213,7 +213,7 @@ def test_review_contract_preserves_specific_finding_reducer_diagnostic(
         logical_id="review-claude-7-1",
         idempotency_key="review-claude-7-1",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     chain = bridge.store.load_chain()
     replay = replay_artifacts(chain, bridge.store.run_id)
@@ -264,7 +264,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
         logical_id="review-claude-8-1",
         idempotency_key="review-claude-8-1",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     chain = bridge.store.load_chain()
     replay = replay_artifacts(

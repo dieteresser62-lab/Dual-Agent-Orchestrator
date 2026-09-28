@@ -3,20 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Mapping
+from typing import TypeVar
 
-from contracts import AgentRole
+from agent_roles import AgentRoleName
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from role_occupancy import provider_roles
 from workflow_state import WorkflowStep
 
 
-PROVIDER_ROLES: Mapping[str, str] = {
-    "codex": AgentRole.IMPLEMENTER.value,
-    "claude": AgentRole.REVIEWER.value,
-}
-PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
-    "codex": frozenset(
+_ROLE_OPERATIONS: Mapping[AgentRoleName, frozenset[str]] = {
+    AgentRoleName.IMPLEMENTER: frozenset(
         {
             WorkflowStep.IMPLEMENTER_PLAN.value,
             WorkflowStep.IMPLEMENTER_PLAN_REVISION.value,
@@ -24,7 +22,7 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
             WorkflowStep.IMPLEMENTER_CORRECTION.value,
         }
     ),
-    "claude": frozenset(
+    AgentRoleName.REVIEWER: frozenset(
         {
             WorkflowStep.REVIEWER_FINAL_REVIEW.value,
             WorkflowStep.REVIEWER_PLAN_REVIEW.value,
@@ -32,6 +30,40 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
         }
     ),
 }
+
+_Value = TypeVar("_Value")
+
+
+class _DerivedProviderMapping(Mapping[str, _Value]):
+    """Read occupancy on access so patched and future slot choices stay visible."""
+
+    def __init__(self, derive: Callable[[], dict[str, _Value]]) -> None:
+        self._derive = derive
+
+    def __getitem__(self, provider: str) -> _Value:
+        return self._derive()[provider]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._derive())
+
+    def __len__(self) -> int:
+        return len(self._derive())
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return dict(self.items()) == dict(other.items())
+
+
+PROVIDER_ROLES: Mapping[str, str] = _DerivedProviderMapping(
+    lambda: {provider: role.value for provider, role in provider_roles().items()}
+)
+PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = _DerivedProviderMapping(
+    lambda: {
+        provider: _ROLE_OPERATIONS[role]
+        for provider, role in provider_roles().items()
+    }
+)
 PROVIDER_INPUT_COMPONENT_NAMES = frozenset(
     {
         "stdin_prompt",

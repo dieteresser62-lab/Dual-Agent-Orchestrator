@@ -17,7 +17,7 @@
           "type": "string",
           "pattern": "^native-review-request-[0-9a-f]{64}$"
         },
-        "reviewer": { "enum": ["claude"] }
+        "reviewer": { "enum": ["reviewer"] }
       },
       "required": ["schema_version", "result_type", "request_id", "reviewer"]
     },
@@ -106,7 +106,7 @@
               "type": "string",
               "pattern": "^native-review-request-[0-9a-f]{64}$"
             },
-            "reviewer": { "enum": ["claude"] },
+            "reviewer": { "enum": ["reviewer"] },
             "decision": { "enum": ["approved", "denied"] },
             "new_findings": {
               "type": "array",
@@ -171,7 +171,7 @@
               "type": "string",
               "pattern": "^native-review-request-[0-9a-f]{64}$"
             },
-            "reviewer": { "enum": ["claude"] },
+            "reviewer": { "enum": ["reviewer"] },
             "rule_id": { "type": "string", "pattern": "^[^\\u0000]{1,200}$" },
             "rationale": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" },
             "remediation_paths": {

@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
 
+from agent_config import current_provider_for_role
 from agent_runtime import (
     NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
@@ -155,7 +156,7 @@ def _completed_implementer_responses(
         if not any(
             isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.phase == "failed"
-            and record.payload.provider is _IMPLEMENTER_ARTIFACT_ROLE
+            and record.payload.role is _IMPLEMENTER_ARTIFACT_ROLE
             and record.payload.work_unit_id == str(invocation.work_unit_id)
             and record.payload.operation == invocation.step.value
             and record.payload.input_digest == item.operation[2]
@@ -378,7 +379,6 @@ class WorkflowRecovery:
             item
             for item in chain[:response_index]
             if isinstance(item.payload, ProviderAttemptPayload)
-            and item.payload.provider is role
             and item.payload.role is role
             and item.payload.work_unit_id == str(work_unit_id)
             and item.payload.operation == operation
@@ -940,7 +940,7 @@ class WorkflowRecovery:
             raise WorkflowExecutionError("provider attempt has no bound fingerprint")
         if (
             bootstrap.payload.input_digest != measurement.input_digest
-            or bootstrap.payload.provider.value != measurement.provider
+            or bootstrap.payload.provider != measurement.provider
             or bootstrap.payload.operation != measurement.operation
         ):
             raise WorkflowExecutionError("provider attempt measurement context diverged")
@@ -1166,7 +1166,7 @@ class WorkflowRecovery:
             item
             for item in chain[:response_index]
             if isinstance(item.payload, ProviderAttemptPayload)
-            and item.payload.provider is response_role
+            and item.payload.role is response_role
             and item.payload.work_unit_id == str(invocation.work_unit_id)
             and item.payload.operation == invocation.step.value
             and item.payload.phase == "started"
@@ -1304,7 +1304,7 @@ class WorkflowRecovery:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == _IMPLEMENTER_ARTIFACT_ROLE.value
+            and item.operation[0] == current_provider_for_role(_IMPLEMENTER_ARTIFACT_ROLE.value)
             and item.operation[1] == invocation.step.value
             and item.operation[4] in instances
         )
@@ -1394,7 +1394,6 @@ class WorkflowRecovery:
             record
             for record in chain
             if isinstance(record.payload, ProviderAttemptPayload)
-            and record.payload.provider is _IMPLEMENTER_ARTIFACT_ROLE
             and record.payload.role is _IMPLEMENTER_ARTIFACT_ROLE
             and record.payload.work_unit_id == str(invocation.work_unit_id)
             and record.payload.operation == invocation.step.value

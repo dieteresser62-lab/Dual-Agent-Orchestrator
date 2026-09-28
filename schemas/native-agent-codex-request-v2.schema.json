@@ -132,7 +132,7 @@
     "assignment": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,120000}$" },
     "work_context": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,1000000}$" },
     "retry_feedback": { "$ref": "#/$defs/retry_feedback" },
-    "codex_contract": {
+    "implementer_contract": {
       "type": "object",
       "properties": {
         "name": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
@@ -199,7 +199,7 @@
           "finding_class": { "enum": ["BLOCKER", "FINDING"] },
           "summary": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
           "acceptance_test": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
-          "reporter": { "enum": ["claude"] }
+          "reporter": { "enum": ["reviewer"] }
         },
         "required": ["finding_id", "finding_class", "summary", "acceptance_test", "reporter"],
         "additionalProperties": false
@@ -256,7 +256,7 @@
     "schema_version", "request_type", "transport", "request_id", "run_id",
     "work_unit_id", "operation", "target_branch", "base_commit",
     "current_fingerprint", "authorized_paths", "assignment", "work_context",
-    "codex_contract", "open_findings", "evidence_manifest", "response_contract"
+    "implementer_contract", "open_findings", "evidence_manifest", "response_contract"
   ],
   "additionalProperties": false
 }

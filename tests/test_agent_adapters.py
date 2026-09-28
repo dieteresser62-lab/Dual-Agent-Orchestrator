@@ -62,7 +62,7 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
     context = NativeImplementerContext(
         run_id="run-native",
         work_unit_id="1",
-        operation="codex_plan",
+        operation="implementer_plan",
         current_fingerprint="a" * 64,
         request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
@@ -92,7 +92,7 @@ def _review_bundle():
     context = NativeReviewContext(
         run_id="run-native",
         work_unit_id="1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint="c" * 64,
         reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
@@ -173,17 +173,18 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     (
         "codex",
         "7b25254cce9d482ceae43a8c9459093b17219c4588cf9e4917eb6449a888cdfc",
-        "fd3cd3a68b32bc7b8bb5eb6c0258a2bddaa9a61552418db0999dbd7643e853b8",
+        "b636f343fcc23a4796cfb4af4b388341cab60d4dc71975516fed2c462ac77a7e",
     ),
     (
         "claude",
-        "ec9dd9fbf3987f4e90fdf09e7034d0077f319e16fe79dc1b978a8e9c78dfade2",
-        "6550fd2e68bc060fe13487d5a462437772f9ffc5cdb340e1154a9ca99338fd2b",
+        "d867adb63b0b9e041697fb815c1623a177ba3b006544ee08aec5042eaa47cb4a",
+        "d0b9059148043bb727d32ff09a279e1049bfec2511c3348921110993959c8977",
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
     provider: str, expected_command: str, expected_components: str,
 ) -> None:
+    # Slice 8b wire cut: component digests include the newly bound request bytes.
     # Captured from HEAD 7064367 using the same helpers; only random runtime
     # directory names are replaced with a fixed token before hashing.
     adapter = (
@@ -354,7 +355,7 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -638,8 +639,8 @@ def test_reviewer_packet_components_stable_across_runtime_dirs(
             measure_provider_input(
                 item,
                 provider="claude",
-                role="claude",
-                operation="claude_slice_review",
+                role="reviewer",
+                operation="reviewer_slice_review",
                 binding_fingerprint="c" * 64,
                 policy=default_provider_input_budget_policy(),
             ).input_digest

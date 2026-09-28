@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from agent_roles import AgentSlot
+import role_occupancy
 
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
@@ -27,14 +28,15 @@ class AgentSettings:
 
 def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
     """Temporary production occupancy until TOML selects slots in Slice 10."""
-    return {
-        AgentSlot.IMPLEMENTER: "codex",
-        AgentSlot.REVIEWER: "claude",
-        AgentSlot.FINAL_REVIEWER: "claude",
-    }
+    return role_occupancy.current_pre_toml_occupancy()
 
 
-# The selectable model families per role; the first family is the default.
+def current_provider_for_role(role: str) -> str:
+    """Resolve the current fixed role occupancy until the TOML cutover."""
+    return current_pre_toml_occupancy()[AgentSlot(role)]
+
+
+# The selectable model families per provider; the first family is the default.
 # Implementer families name their newest model explicitly, while the reviewer
 # CLI resolves its aliases to the newest model itself.
 MODEL_FAMILIES = {
@@ -58,6 +60,7 @@ _DEFAULT_EFFORTS = {
 
 def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     label = role.capitalize()
+    provider = current_pre_toml_occupancy()[AgentSlot(role)]
     parser.add_argument(
         f"--{role}-binary",
         help=f"{label} CLI binary or explicit path (default: RUN_TASK_{role.upper()}_BINARY or detection).",
@@ -65,8 +68,8 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     parser.add_argument(
         f"--{role}-model",
         help=(
-            f"{label} model family: {', '.join(MODEL_FAMILIES[role])} "
-            f"(default: RUN_TASK_{role.upper()}_MODEL or {_DEFAULT_MODELS[role]})."
+            f"{label} model family: {', '.join(MODEL_FAMILIES[provider])} "
+            f"(default: RUN_TASK_{role.upper()}_MODEL or {_DEFAULT_MODELS[provider]})."
         ),
     )
     parser.add_argument(
@@ -83,7 +86,7 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
 
 def add_agent_arguments(parser: argparse.ArgumentParser) -> None:
     """Add local, non-repository agent configuration to the public CLI."""
-    for role in ("codex", "claude"):
+    for role in ("implementer", "reviewer"):
         _add_role_arguments(parser, role)
     parser.add_argument(
         "--claude-max-budget-usd",
@@ -159,20 +162,18 @@ def resolve_agent_settings(
     environ: Mapping[str, str],
 ) -> dict[str, AgentSettings]:
     """Resolve CLI > environment > role defaults without reading repository TOML."""
-    default_binaries = {
-        "codex": "codex",
-        "claude": "claude",
-    }
+    occupancy = current_pre_toml_occupancy()
     settings: dict[str, AgentSettings] = {}
-    for role in ("codex", "claude"):
+    for role in ("implementer", "reviewer"):
+        provider = occupancy[AgentSlot(role)]
         binary = _non_empty(
-            _resolve(args, environ, role, "binary", default_binaries[role]),
+            _resolve(args, environ, role, "binary", provider),
             f"{role} binary",
         )
         model = _selectable_model(
-            role,
+            provider,
             _non_empty(
-                _resolve(args, environ, role, "model", _DEFAULT_MODELS[role]),
+                _resolve(args, environ, role, "model", _DEFAULT_MODELS[provider]),
                 f"{role} model",
             ),
         )
@@ -181,15 +182,15 @@ def resolve_agent_settings(
             f"{role} timeout",
         )
         effort = _non_empty(
-            _resolve(args, environ, role, "effort", _DEFAULT_EFFORTS[role]),
+            _resolve(args, environ, role, "effort", _DEFAULT_EFFORTS[provider]),
             f"{role} effort",
         ).lower()
         if effort not in VALID_EFFORTS:
             raise AgentConfigError(
                 f"{role} effort must be one of {', '.join(VALID_EFFORTS)}; got {effort!r}"
             )
-        settings[role] = AgentSettings(
-            name=role,
+        settings[provider] = AgentSettings(
+            name=provider,
             binary=binary,
             model=model,
             timeout_seconds=timeout_seconds,
@@ -219,7 +220,7 @@ def default_agent_settings() -> dict[str, AgentSettings]:
     namespace = argparse.Namespace(
         **{
             f"{role}_{field}": None
-            for role in ("codex", "claude")
+            for role in ("implementer", "reviewer")
             for field in ("binary", "model", "timeout", "effort")
         },
         claude_max_budget_usd=None,

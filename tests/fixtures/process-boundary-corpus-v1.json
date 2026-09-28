@@ -72,7 +72,7 @@
       "scenario_id": "budget-exceeded",
       "description": "Vier Eingabezeichen überschreiten die auf drei Zeichen und Bytes gesetzte lokale Grenze; kein Prozess startet.",
       "trigger": {"mode": "preflight-rejection", "prompt": "four", "budget_chars": 3, "budget_bytes": 3},
-      "expected": {"output": null, "error_chain": [{"type": "ProviderInputBudgetExceeded", "message": "provider input budget exceeded: provider=codex role=codex operation=codex_implementation dimensions=chars,bytes chars=4/3 bytes=4/3"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 0, "real_process_starts": 0}
+      "expected": {"output": null, "error_chain": [{"type": "ProviderInputBudgetExceeded", "message": "provider input budget exceeded: provider=codex role=implementer operation=implementer_implementation dimensions=chars,bytes chars=4/3 bytes=4/3"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 0, "real_process_starts": 0}
     },
     {
       "scenario_id": "nonzero-exit-run",

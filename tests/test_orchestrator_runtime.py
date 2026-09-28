@@ -575,7 +575,7 @@ def _native_review_approval(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -656,7 +656,7 @@ def _native_final_review_output(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "final_review_completed",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "scan_complete": True,
         "new_findings": finding,
         "occurrences": [],
@@ -805,7 +805,7 @@ def _failed_codex_attempt_harness(
             ),
         ),
         provider="codex",
-        role="codex",
+        role="implementer",
         operation=WorkflowStep.IMPLEMENTER_PLAN.value,
         binding_fingerprint=task_digest,
         policy=default_provider_input_budget_policy(),
@@ -894,7 +894,7 @@ def _open_crashed_provider_attempt(
             command=("provider-double",), stdin_text="request",
             components=(ProviderInputComponent("stdin_prompt", "request"),),
         ),
-        provider=role, role=role, operation=step.value,
+        provider=role, role={"codex": "implementer", "claude": "reviewer"}[role], operation=step.value,
         binding_fingerprint=digest, policy=default_provider_input_budget_policy(),
     )
     bootstrap = driver._persist_provider_bootstrap(measured)
@@ -1072,7 +1072,7 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
                 "stdin_prompt", invocation.native_request.canonical_json,
             ),),
         ),
-        provider="codex", role="codex", operation=step.value,
+        provider="codex", role="implementer", operation=step.value,
         binding_fingerprint=fingerprint,
         policy=default_provider_input_budget_policy(),
     )
@@ -1120,7 +1120,7 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
                     "stdin_prompt", next_invocation.native_request.canonical_json,
                 ),),
             ),
-            provider="codex", role="codex", operation=step.value,
+            provider="codex", role="implementer", operation=step.value,
             binding_fingerprint=current_fingerprint,
             policy=default_provider_input_budget_policy(),
         )
@@ -1482,7 +1482,7 @@ def test_recomposed_request_opens_new_sequence_and_operation_but_binding_drift_s
                 components=(ProviderInputComponent("stdin_prompt", text),),
             ),
             provider="codex",
-            role="codex",
+            role="implementer",
             operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
             binding_fingerprint=fingerprint,
             policy=default_provider_input_budget_policy(),
@@ -1680,7 +1680,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
                 components=(ProviderInputComponent("stdin_prompt", request_text),),
             ),
             provider="claude",
-            role="claude",
+            role="reviewer",
             operation=WorkflowStep.REVIEWER_SLICE_REVIEW.value,
             binding_fingerprint="c" * 64,
             policy=default_provider_input_budget_policy(),
@@ -1694,7 +1694,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
         / "artifacts"
         / state.run_id
         / "native-review-responses"
-        / "work-unit-0002-claude_slice_review-request-0001.json"
+        / "work-unit-0002-reviewer_slice_review-request-0001.json"
     )
     started = driver._start_provider_attempt(
         stale,
@@ -1931,7 +1931,7 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
     assert resumed.agent_settings["claude"].effort == "medium"
 
     mismatched = parse_args(
-        ["--task-file", str(task), "--codex-model", "terra"],
+        ["--task-file", str(task), "--implementer-model", "terra"],
         cwd=repository,
         environ={},
     )
@@ -2382,7 +2382,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         logical_id="review-claude-1-1",
         idempotency_key="review:red",
         fingerprint_sha256=changes.fingerprint,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     passing = replace(
         failing,
@@ -3372,7 +3372,7 @@ def test_r9_resume_reconciles_one_durable_transition_without_its_event(
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
     transition = bridge.append(
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "claude_plan_review", "in_progress"
+            "1", "in_progress", "1", "reviewer_plan_review", "in_progress"
         ),
         logical_id="workflow-transition",
         idempotency_key="workflow-transition:crash-tail",
@@ -4213,7 +4213,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {
@@ -4291,7 +4291,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     log_path = (
         driver.log_dir
         / (
-            f"work-unit-{state.current_work_unit_id:04d}-claude_slice_review-"
+            f"work-unit-{state.current_work_unit_id:04d}-reviewer_slice_review-"
             "round-0001.attempt-1.log"
         )
     )
@@ -4500,7 +4500,7 @@ def test_native_implementer_record_ahead_recovery_reuses_raw_json_without_provid
             ),
         ),
         provider="codex",
-        role="codex",
+        role="implementer",
         operation=WorkflowStep.IMPLEMENTER_IMPLEMENTATION.value,
         binding_fingerprint="c" * 64,
         policy=default_provider_input_budget_policy(),
@@ -5204,7 +5204,7 @@ def test_structured_finding_transition_reuses_semantically_identical_old_key(
         )
         rationale = current.status_rationale or current.summary
     fingerprint = "d" * 64
-    old_key = f"finding:C-01:{transition_identity}:1:claude"
+    old_key = f"finding:C-01:{transition_identity}:1:reviewer"
     bridge = driver._artifact_bridge
     assert bridge is not None
     old_record = bridge.append(
@@ -5241,7 +5241,7 @@ def test_structured_finding_transition_old_key_from_other_work_unit_is_rejected(
     driver, state, finding = _finding_transition_driver(tmp_path, "old-key-other-unit")
     bridge = driver._artifact_bridge
     assert bridge is not None
-    old_key = "finding:C-01:opened:1:claude"
+    old_key = "finding:C-01:opened:1:reviewer"
     bridge.append(
         finding_payload(
             finding,
@@ -5282,7 +5282,7 @@ def test_structured_finding_transition_old_key_conflict_in_same_work_unit_fails_
             work_unit_id=state.current_work_unit_id,
         ),
         logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened:1:claude",
+        idempotency_key="finding:C-01:opened:1:reviewer",
         fingerprint_sha256="d" * 64,
     )
 
@@ -5337,7 +5337,7 @@ def test_status_rationale_key_resume_boundary_keeps_existing_identity(
     )
     assert len(records) == 2
     assert records[1].idempotency_key == (
-        f"finding:C-01:status_rationale:{state.current_work_unit_id}:2:claude"
+        f"finding:C-01:status_rationale:{state.current_work_unit_id}:2:reviewer"
     )
     assert replay_findings(replay, state.current_work_unit_id) == (reaffirmed,)
 
@@ -5359,7 +5359,7 @@ def test_unstructured_finding_transition_key_is_unchanged(tmp_path: Path) -> Non
         if isinstance(item.payload, FindingTransitionPayload)
     )
     assert len(records) == 1
-    assert records[0].idempotency_key == "finding:C-01:opened:1:claude"
+    assert records[0].idempotency_key == "finding:C-01:opened:1:reviewer"
     assert records[0].payload.work_unit_id is None
 
 
@@ -5547,7 +5547,7 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
     )
     measurement_record = bridge.append(
         ProviderInputMeasurementPayload(
-            provider=Role.IMPLEMENTER,
+            provider="codex",
             role=Role.IMPLEMENTER,
             operation=WorkflowStep.IMPLEMENTER_CORRECTION.value,
             work_unit_id=str(state.current_work_unit_id),
@@ -5577,7 +5577,7 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
     )
     bridge.append(
         ProviderAttemptPayload(
-            provider=Role.IMPLEMENTER,
+            provider="codex",
             role=Role.IMPLEMENTER,
             operation=WorkflowStep.IMPLEMENTER_CORRECTION.value,
             work_unit_id=str(state.current_work_unit_id),
@@ -7470,7 +7470,7 @@ def test_quota_pause_replays_and_resumes_review_before_next_slice(
         calls.append(f"implement-{invocation.work_unit_id - 1}")
         if invocation.work_unit_id == 3:
             raise agent_runtime.classify_agent_failure(
-                AgentRole.IMPLEMENTER.value,
+                "codex",
                 agent_runtime.AgentProcessError("usage limit", exit_code=1),
                 invocation_id="second-slice-quota",
             )
@@ -7489,7 +7489,7 @@ def test_quota_pause_replays_and_resumes_review_before_next_slice(
         calls.append(f"review-{invocation.work_unit_id - 1}-{review_attempts}")
         if review_attempts == 1:
             raise agent_runtime.classify_agent_failure(
-                AgentRole.REVIEWER.value,
+                "claude",
                 agent_runtime.AgentProcessError("usage limit", exit_code=1),
                 invocation_id="first-slice-review-quota",
             )
@@ -7536,7 +7536,7 @@ def test_quota_pause_replays_and_resumes_review_before_next_slice(
         if isinstance(record.payload, WorkflowTransitionPayload)
     ]
     assert any(
-        item.work_unit_id == "2" and item.step == "claude_slice_review"
+        item.work_unit_id == "2" and item.step == "reviewer_slice_review"
         and item.work_unit_status == "awaiting_resume"
         for item in transitions
     )

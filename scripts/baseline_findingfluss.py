@@ -53,9 +53,9 @@ def work_unit_kinds(records: list[dict]) -> tuple[dict[str, str], dict[str, str]
 
     kinds = {}
     for unit, unit_steps in steps.items():
-        if 'claude_final_review' in unit_steps:  # allowlist:provider -- persisted step
+        if 'reviewer_final_review' in unit_steps:  # allowlist:provider -- persisted step
             kinds[unit] = 'abschlussreview'
-        elif {'claude_slice_review', 'codex_implementation'} & unit_steps:  # allowlist:provider -- persisted steps
+        elif {'reviewer_slice_review', 'implementer_implementation'} & unit_steps:  # allowlist:provider -- persisted steps
             kinds[unit] = 'slice'
         else:
             kinds[unit] = 'sonstige'

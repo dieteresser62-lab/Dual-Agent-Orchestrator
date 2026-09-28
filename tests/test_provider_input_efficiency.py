@@ -32,8 +32,9 @@ from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/provider_input_efficiency/native-only-cutover-baseline-v1.json"
 LOCK = FIXTURE.with_name("native-only-cutover-baseline-v1.lock.json")
-REVIEWED_BASELINE_SHA256 = "66cad69014a7407d5fd0fdf2bc07f062b4da8c2c88f8a81b4e0dcef948d036a5"
-REVIEWED_LOCK_SHA256 = "f8a25a2d6c9d080984934da28d3f168bf684f7513c9f809e375f8bb8ba8f4152"
+# Slice 8b wire cut: role and operation metadata in the reviewed baseline.
+REVIEWED_BASELINE_SHA256 = "35a6856429189bd1e7b07baa76aab03f9fe4b166e194a25d26149c749fa44b26"
+REVIEWED_LOCK_SHA256 = "f93893fb30b8dfa8ada40b1f12ab7c6915d73fb5ecc7c91386baac2b07aaafd6"
 
 
 def _sha256(data: bytes) -> str:
@@ -47,6 +48,17 @@ def test_reviewed_baseline_and_lock_are_immutable() -> None:
 
     assert _sha256(baseline_bytes) == REVIEWED_BASELINE_SHA256
     assert _sha256(lock_bytes) == REVIEWED_LOCK_SHA256
+    # Slice 8b wire cut: only operation and role labels changed in the frozen
+    # baseline; rebinding the lock digest recreates both prior byte pins.
+    prior = json.loads(baseline_bytes)
+    for row in prior["operations"]:
+        row["operation"] = row["operation"].replace("implementer_", "codex_")
+        row["role"] = "codex"
+    prior_bytes = (json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    assert _sha256(prior_bytes) == "66cad69014a7407d5fd0fdf2bc07f062b4da8c2c88f8a81b4e0dcef948d036a5"
+    prior_lock = {**lock, "baseline_sha256": _sha256(prior_bytes)}
+    prior_lock_bytes = (json.dumps(prior_lock, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    assert _sha256(prior_lock_bytes) == "f8a25a2d6c9d080984934da28d3f168bf684f7513c9f809e375f8bb8ba8f4152"
     assert lock["baseline_sha256"] == REVIEWED_BASELINE_SHA256
     assert lock["fixture_version"] == "native-only-cutover-baseline-v1"
     assert lock["expected_removed_evidence_ids"] == [
@@ -60,10 +72,10 @@ def test_frozen_baseline_component_bindings_are_internally_complete() -> None:
     assert document["fixture_version"] == "native-only-cutover-baseline-v1"
     operations = document["operations"]
     assert [item["operation"] for item in operations] == [
-        "codex_plan",
-        "codex_plan_revision",
-        "codex_implementation",
-        "codex_correction",
+        "implementer_plan",
+        "implementer_plan_revision",
+        "implementer_implementation",
+        "implementer_correction",
     ]
     for row in operations:
         components = {item["name"]: item for item in row["components"]}
@@ -188,7 +200,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
         {
             "finding_id": "C-02",
             "finding_class": "FINDING",
-            "reporter": "claude",
+            "reporter": "reviewer",
             "summary": "Open imported finding",
             "acceptance_test": "Codex receives the exact imported acceptance test.",
         }
@@ -227,12 +239,12 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
     fingerprint = hashlib.sha256(f"fingerprint:{operation}".encode()).hexdigest()
     request_kind = (
         NativeImplementerRequestKind.IMPLEMENTATION
-        if operation == "codex_implementation"
+        if operation == "implementer_implementation"
         else NativeImplementerRequestKind.CORRECTION
     )
     context = NativeImplementerContext(
         run_id="baseline-native-only-cutover",
-        work_unit_id="3" if operation == "codex_implementation" else "4",
+        work_unit_id="3" if operation == "implementer_implementation" else "4",
         operation=operation,
         current_fingerprint=fingerprint,
         request_kind=request_kind,
@@ -337,7 +349,7 @@ def test_current_execution_packages_have_exact_frozen_baseline_deltas() -> None:
     assert lock["baseline_sha256"] == _sha256(baseline_bytes)
     document = json.loads(baseline_bytes)
 
-    for operation in ("codex_implementation", "codex_correction"):
+    for operation in ("implementer_implementation", "implementer_correction"):
         row = next(
             item for item in document["operations"] if item["operation"] == operation
         )

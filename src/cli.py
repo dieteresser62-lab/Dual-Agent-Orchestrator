@@ -971,7 +971,7 @@ def parse_args(
 
     args.agent_profile_overrides = frozenset(
         (role, field)
-        for role in ("codex", "claude")
+        for role in ("implementer", "reviewer")
         for field in ("model", "effort")
         if getattr(args, f"{role}_{field}") is not None
         or bool(env.get(f"RUN_TASK_{role.upper()}_{field.upper()}", "").strip())

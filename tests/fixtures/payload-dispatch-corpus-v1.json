@@ -26,7 +26,7 @@
           "effort": "max"
         },
         "orchestrator_code_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
         "merge_completed_branch": true,
         "base_branch": "main"
       }
@@ -38,7 +38,7 @@
         "slice_id": "1",
         "slice_status": "in_progress",
         "work_unit_id": "work-01",
-        "step": "codex_implementation",
+        "step": "implementer_implementation",
         "work_unit_status": "in_progress"
       }
     },
@@ -159,7 +159,7 @@
       "record_type": "agent_result",
       "expected_class": "AgentResultPayload",
       "input": {
-        "role": "codex",
+        "role": "implementer",
         "work_unit_id": "work-01",
         "outcome": "ready",
         "test_files": [
@@ -183,7 +183,7 @@
       "record_type": "diagnostic",
       "expected_class": "DiagnosticPayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "work_unit_id": "work-01",
         "attempt": 1,
         "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -194,7 +194,7 @@
       "record_type": "review",
       "expected_class": "ReviewPayload",
       "input": {
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "work_unit_id": "work-01",
         "verdict": "stop",
         "finding_ids": [],
@@ -225,7 +225,7 @@
       "record_type": "final_review_completed",
       "expected_class": "FinalReviewCompletedPayload",
       "input": {
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "work_unit_id": "work-final",
         "new_findings": [],
         "occurrences": [],
@@ -272,8 +272,8 @@
       "expected_class": "FindingTransitionPayload",
       "input": {
         "finding_id": "C-01",
-        "reporter": "claude",
-        "actor": "claude",
+        "reporter": "reviewer",
+        "actor": "reviewer",
         "action": "opened",
         "severity": "FINDING",
         "finding_status": "open",
@@ -372,10 +372,10 @@
       "record_type": "provider_content",
       "expected_class": "ProviderContentPayload",
       "input": {
-        "role": "codex",
+        "role": "implementer",
         "work_unit_id": "work-01",
         "round_number": 1,
-        "operation": "codex_implementation",
+        "operation": "implementer_implementation",
         "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "content_kind": "agent_result",
@@ -438,7 +438,7 @@
         "paths": [
           "tests/test_payload_dispatch.py"
         ],
-        "resume_step": "claude_slice_review"
+        "resume_step": "reviewer_slice_review"
       }
     },
     {
@@ -459,7 +459,7 @@
       "input": {
         "invocation_id": "invocation-01",
         "idempotency_key": "invoke:01",
-        "role": "codex",
+        "role": "implementer",
         "failure_kind": "process",
         "failure_class": "resumable_halt",
         "diagnostic_code": "AGENT-PROCESS",
@@ -471,7 +471,7 @@
         "technical_text_bytes": 9,
         "received_at": "2026-09-05T10:00:00+00:00",
         "decision_at_utc": "2026-09-05T10:00:01+00:00",
-        "step": "codex_implementation",
+        "step": "implementer_implementation",
         "slice_id": "1",
         "work_unit_id": "work-01",
         "diagnostic_exit_code": 3,
@@ -491,7 +491,7 @@
       "record_type": "quota_pause",
       "expected_class": "QuotaPausePayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "retry_at": "2026-09-05T10:01:00+00:00"
       }
@@ -500,7 +500,7 @@
       "record_type": "transient_retry",
       "expected_class": "TransientRetryPayload",
       "input": {
-        "role": "claude",
+        "role": "reviewer",
         "repository_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "retry_at": "2026-09-05T10:01:00+00:00",
         "attempt": 1
@@ -528,8 +528,8 @@
       "expected_class": "ProviderInputMeasurementPayload",
       "input": {
         "provider": "codex",
-        "role": "codex",
-        "operation": "codex_implementation",
+        "role": "implementer",
+        "operation": "implementer_implementation",
         "work_unit_id": "work-01",
         "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -563,8 +563,8 @@
       "expected_class": "ProviderAttemptPayload",
       "input": {
         "provider": "codex",
-        "role": "codex",
-        "operation": "codex_implementation",
+        "role": "implementer",
+        "operation": "implementer_implementation",
         "work_unit_id": "work-01",
         "logical_operation_id": "provider-operation-01",
         "binding_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -610,8 +610,8 @@
       "expected_class": "FinalReviewPreflightPayload",
       "input": {
         "provider": "claude",
-        "role": "claude",
-        "operation": "claude_final_review",
+        "role": "reviewer",
+        "operation": "reviewer_final_review",
         "work_unit_id": "work-01",
         "transition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "relevant_record_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

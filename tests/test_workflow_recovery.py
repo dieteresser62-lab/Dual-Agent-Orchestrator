@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_PATH = ROOT / "src/workflow_recovery.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
+    "agent_config",
     "agent_runtime",
     "artifact_bridge",
     "artifact_models",

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from contracts import (
     AgentRole,
@@ -82,7 +83,7 @@ def _context() -> NativeReviewContext:
     return NativeReviewContext(
         run_id="run-native-request",
         work_unit_id="work-unit-1",
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.REVIEWER,
         approval_marker=ApprovalMarker.SLICE,
@@ -164,13 +165,23 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
 def test_cutover_review_request_bytes_match_the_contract_baseline() -> None:
     bundle = build_native_review_request(_spec())
 
-    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+    # Slice 8b wire cut: reviewer constants and request fields are the only changes.
+    prior_schema = (
+        bundle.provider_response_schema_json
+        .replace('"const":"reviewer"', '"const":"claude"')
+        .replace('"enum":["reviewer"]', '"enum":["claude"]')
+    )
+    prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
+    assert prior_schema_digest == "5e215e1e6bb8520ec065149af641cc16130ed6db156f1af739e0521afd23c82d"
+    prior = prior_role_wire_document(bundle.document, prior_schema_sha256=prior_schema_digest)
+    assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
         "195353b47801aa00ef0c856397abdf44848383fbeb480777a35f6ad155ff51fc"
     )
-    assert hashlib.sha256(
-        bundle.provider_response_schema_json.encode("utf-8")
-    ).hexdigest() == (
-        "5e215e1e6bb8520ec065149af641cc16130ed6db156f1af739e0521afd23c82d"
+    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+        "b63f28bc53f5a021a05af8ebca87ebb3105d024e53adaf3d31c9ed55a483143e"
+    )
+    assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
+        "cb17d795f19bf1436400150519610bfb739c5a578d4b87bd4ffd7b9a504b659e"
     )
 
 
@@ -218,7 +229,7 @@ def test_plan_disposition_overflow_stops_before_request_construction(
     )
     context = replace(
         _context(),
-        operation="claude_plan_review",
+        operation="reviewer_plan_review",
         approval_marker=ApprovalMarker.PLAN,
         previous_findings=findings,
         plan_artifact_path="docs/internal/plan.md",
@@ -238,7 +249,7 @@ def test_final_review_request_binds_default_and_hard_capacity(
 ) -> None:
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -288,7 +299,7 @@ def test_final_review_request_rejects_capacity_outside_one_to_512(
     with pytest.raises(NativeReviewContractError, match="from 1 to 512"):
         replace(
             _context(),
-            operation="claude_final_review",
+            operation="reviewer_final_review",
             approval_marker=ApprovalMarker.FINAL_REVIEW,
             anchor_origin=None,
             max_new_findings=capacity,
@@ -300,7 +311,7 @@ def test_final_review_contract_has_no_pagination_or_cursor_fields(
 ) -> None:
     context = replace(
         _context(),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -376,7 +387,7 @@ def _writer_response(*, decision: str = "approved") -> dict[str, object]:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "c" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": decision,
         "new_findings": [],
         "status_changes": [],
@@ -418,7 +429,7 @@ def test_writer_schema_is_operation_independent_but_round_and_marker_bound() -> 
     )
     final_review = replace(
         context,
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         anchor_origin=None,
     )
@@ -739,7 +750,7 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
         "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": "native-review-request-" + "c" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "Additional scope is required.",
         "remediation_paths": [],
@@ -759,7 +770,7 @@ def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() 
             review_kind=NativeReviewKind.PLAN,
             context=replace(
                 base.context,
-                operation="claude_plan_review",
+                operation="reviewer_plan_review",
                 approval_marker=ApprovalMarker.PLAN,
             ),
         ),
@@ -775,7 +786,7 @@ def test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests() 
             review_kind=NativeReviewKind.FINAL_REVIEW,
             context=replace(
                 base.context,
-                operation="claude_final_review",
+                operation="reviewer_final_review",
                 approval_marker=ApprovalMarker.FINAL_REVIEW,
                 anchor_origin=None,
             ),
@@ -964,7 +975,7 @@ def _response(request_id: str) -> dict[str, object]:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],
@@ -1098,7 +1109,7 @@ def test_only_plan_requests_carry_the_mandatory_artifact_path_decision() -> None
         review_kind=NativeReviewKind.PLAN,
         context=replace(
             _context(),
-            operation="claude_plan_review",
+            operation="reviewer_plan_review",
             approval_marker=ApprovalMarker.PLAN,
             plan_artifact_path=None,
         ),

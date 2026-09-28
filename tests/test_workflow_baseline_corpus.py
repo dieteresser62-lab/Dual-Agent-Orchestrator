@@ -454,11 +454,11 @@ def _state_binding(state: WorkflowState) -> dict[str, object]:
             if binding is None
             else {
                 "mode": binding.mode.value,
-                "codex_profile": {
+                "implementer_profile": {
                     "model": binding.implementer_profile.model,
                     "effort": binding.implementer_profile.effort,
                 },
-                "claude_profile": {
+                "reviewer_profile": {
                     "model": binding.reviewer_profile.model,
                     "effort": binding.reviewer_profile.effort,
                 },

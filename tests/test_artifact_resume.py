@@ -339,8 +339,8 @@ def test_authoritative_side_effect_result_projects_without_a_mirror_write(
         (("state", "target_branch"), "feature/cache-lie"),
         (("state", "protocol_binding", "mode"), "legacy-state-v3"),
         (("state", "protocol_binding", "schema_version"), "999"),
-        (("state", "protocol_binding", "codex_profile", "model"), "cache-model"),
-        (("state", "protocol_binding", "claude_profile", "effort"), "low"),
+        (("state", "protocol_binding", "implementer_profile", "model"), "cache-model"),
+        (("state", "protocol_binding", "reviewer_profile", "effort"), "low"),
         (("state", "bootstrap_checks"), [{"invented": True}]),
     ),
 )
@@ -588,7 +588,7 @@ def test_record_chain_with_foreign_bound_reducer_is_rejected(
     path = store.records_dir / f"{profile.record_id}.json"
     document = json.loads(path.read_text(encoding="utf-8"))
     document["record"]["payload"]["reducer_version"] = (
-        artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION
+        artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION
     )
     document["content_sha256"] = hashlib.sha256(
         canonical_json(document["record"])
@@ -602,7 +602,7 @@ def test_record_chain_with_foreign_bound_reducer_is_rejected(
     ) as raised:
         resolve_resume_state(tmp_path, locator.run_id)
 
-    assert artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION in str(raised.value)
+    assert artifact_models.PRE_ROLE_WIRE_REDUCER_VERSION in str(raised.value)
     assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
 
     with pytest.raises(

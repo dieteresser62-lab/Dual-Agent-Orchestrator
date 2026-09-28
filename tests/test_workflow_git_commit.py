@@ -431,7 +431,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         logical_id="review-claude-b30",
         idempotency_key="review:b30",
         fingerprint_sha256=changes.fingerprint,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     carried_finding = FindingRecord(
         finding_id="C-01",

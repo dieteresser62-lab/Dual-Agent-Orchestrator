@@ -245,7 +245,7 @@ def _context(
 def test_plan_artifact_path_is_exact_and_reserved_for_plan_reviews() -> None:
     plan = replace(
         _context(approval=ApprovalMarker.PLAN),
-        operation="claude_plan_review",
+        operation="reviewer_plan_review",
         plan_artifact_path="docs/internal/plan.md",
     )
     assert plan.plan_artifact_path == "docs/internal/plan.md"
@@ -496,7 +496,7 @@ def test_final_review_completion_is_not_an_approval_and_keeps_open_findings(
     )
     context = replace(
         _context(previous=(existing,), anchor_origin=None),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         slice_id="FINAL",
     )
@@ -504,7 +504,7 @@ def test_final_review_completion_is_not_an_approval_and_keeps_open_findings(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "final_review_completed",
         "request_id": context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "scan_complete": True,
         "new_findings": [
             {
@@ -564,7 +564,7 @@ def test_final_review_requires_complete_scan_and_never_truncates_at_capacity(
 ) -> None:
     context = replace(
         _context(anchor_origin=None),
-        operation="claude_final_review",
+        operation="reviewer_final_review",
         approval_marker=ApprovalMarker.FINAL_REVIEW,
         slice_id="FINAL",
         max_new_findings=1,
@@ -573,7 +573,7 @@ def test_final_review_requires_complete_scan_and_never_truncates_at_capacity(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "final_review_completed",
         "request_id": context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "scan_complete": True,
         "new_findings": [
             {
@@ -1823,7 +1823,7 @@ def test_whitespace_stop_fields_are_a_typed_native_error() -> None:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "rule_id": "   ",
         "rationale": "Cannot continue.",
         "remediation_paths": [],
@@ -1917,7 +1917,7 @@ def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "A required path is outside the bound scope.",
         "remediation_paths": [],

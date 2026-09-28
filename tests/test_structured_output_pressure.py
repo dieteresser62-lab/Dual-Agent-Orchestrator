@@ -88,9 +88,9 @@ def _context(form: str) -> NativeReviewContext:
         run_id="structured-output-pressure",
         work_unit_id=f"work-{form}",
         operation={
-            ApprovalMarker.PLAN: "claude_plan_review",
-            ApprovalMarker.SLICE: "claude_slice_review",
-            ApprovalMarker.FINAL_REVIEW: "claude_final_review",
+            ApprovalMarker.PLAN: "reviewer_plan_review",
+            ApprovalMarker.SLICE: "reviewer_slice_review",
+            ApprovalMarker.FINAL_REVIEW: "reviewer_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.REVIEWER,

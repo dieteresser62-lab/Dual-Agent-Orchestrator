@@ -872,8 +872,8 @@ class WorkflowHistory:
             "work_unit_id": self.work_unit_id,
             "findings": [_finding_to_dict(item) for item in self.findings],
             "attestations": [_attestation_to_dict(item) for item in self.attestations],
-            "last_claude_fingerprint": self.last_reviewer_fingerprint,
-            "latest_claude_review": _review_to_dict(self.latest_reviewer_review),
+            "last_reviewer_fingerprint": self.last_reviewer_fingerprint,
+            "latest_reviewer_review": _review_to_dict(self.latest_reviewer_review),
         }
         if self.active_review_packet is not None:
             packet = self.active_review_packet
@@ -892,7 +892,7 @@ class WorkflowHistory:
             raise ValueError("workflow history must be an object")
         expected = {
             "work_unit_id", "findings", "attestations",
-            "last_claude_fingerprint", "latest_claude_review",
+            "last_reviewer_fingerprint", "latest_reviewer_review",
         }
         allowed = {*expected, "active_review_packet"}
         if not expected.issubset(raw) or not set(raw).issubset(allowed):
@@ -923,10 +923,10 @@ class WorkflowHistory:
                 _attestation_from_dict(item) for item in _json_list(raw["attestations"])
             ),
             last_reviewer_fingerprint=(
-                None if raw["last_claude_fingerprint"] is None
-                else str(raw["last_claude_fingerprint"])
+                None if raw["last_reviewer_fingerprint"] is None
+                else str(raw["last_reviewer_fingerprint"])
             ),
-            latest_reviewer_review=_review_from_dict(raw["latest_claude_review"]),
+            latest_reviewer_review=_review_from_dict(raw["latest_reviewer_review"]),
             active_review_packet=active_review_packet,
         )
 
@@ -2580,7 +2580,7 @@ class WorkflowEngine:
                         f"Validator error: {detail}\n"
                         f"{repair_action}\n"
                         "Keep the approved task scope unchanged and follow the complete "
-                        "parser-derived codex_contract.plan_artifact_format_contract "
+                        "parser-derived implementer_contract.plan_artifact_format_contract "
                         "included in this request. Emit the "
                         "normal PLAN_READY and "
                         "single PLAN_ONLY SLICE_PLAN records; do not request user input."

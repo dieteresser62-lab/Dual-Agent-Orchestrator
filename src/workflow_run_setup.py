@@ -363,18 +363,18 @@ def _apply_resumed_agent_profiles(
         raise StateSchemaError("structured resume requires persisted agent profiles")
     explicit = set(getattr(args, "agent_profile_overrides", ()))
     settings = dict(args.agent_settings)
-    for role, profile in (
-        ("codex", binding.implementer_profile),
-        ("claude", binding.reviewer_profile),
+    for role, provider, profile in (
+        ("implementer", "codex", binding.implementer_profile),
+        ("reviewer", "claude", binding.reviewer_profile),
     ):
-        current = settings[role]
+        current = settings[provider]
         for field in ("model", "effort"):
             if (role, field) in explicit and getattr(current, field) != getattr(profile, field):
                 raise StateSchemaError(
                     "AGENT-PROFILE-DIFF | explicit "
                     f"{role} {field} differs from the immutable persisted profile"
                 )
-        settings[role] = replace(
+        settings[provider] = replace(
             current,
             model=profile.model,
             effort=profile.effort,
@@ -449,8 +449,8 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
         for key in (
             "findings",
             "attestations",
-            "last_claude_fingerprint",  # allowlist:provider -- wire until slice 8/9: canonical history field
-            "latest_claude_review",  # allowlist:provider -- wire until slice 8/9: canonical history field
+            "last_reviewer_fingerprint",
+            "latest_reviewer_review",
             "active_review_packet",
         )
     ):

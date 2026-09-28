@@ -351,7 +351,7 @@ def _native_review_approval(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": [],

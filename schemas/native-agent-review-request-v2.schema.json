@@ -84,7 +84,7 @@
             },
             "reporter": {
               "enum": [
-                "claude"
+                "reviewer"
               ]
             }
           },
@@ -527,7 +527,7 @@
           "$ref": "#/$defs/request_id"
         },
         "reviewer": {
-          "const": "claude"
+          "const": "reviewer"
         },
         "transport": {
           "const": "native-claude-review-v2"
@@ -545,9 +545,9 @@
         },
         "operation": {
           "enum": [
-            "claude_plan_review",
-            "claude_slice_review",
-            "claude_final_review"
+            "reviewer_plan_review",
+            "reviewer_slice_review",
+            "reviewer_final_review"
           ]
         },
         "review_kind": {

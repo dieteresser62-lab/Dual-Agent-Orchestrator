@@ -375,7 +375,7 @@ def _journey(
         slice_id="1",
         slice_status="in_progress",
         work_unit_id="1",
-        step="codex_plan",
+        step="implementer_plan",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="1")
@@ -395,7 +395,7 @@ def _journey(
         slice_id="1",
         slice_status="in_progress",
         work_unit_id="2",
-        step="codex_implementation",
+        step="implementer_implementation",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="2")
@@ -416,7 +416,7 @@ def _journey(
         slice_id="2",
         slice_status="in_progress",
         work_unit_id="3",
-        step="codex_implementation",
+        step="implementer_implementation",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="3")
@@ -437,7 +437,7 @@ def _journey(
         slice_id="2",
         slice_status="awaiting_user_decision",
         work_unit_id="3",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="awaiting_user_decision",
     )
     bridge.append(
@@ -463,7 +463,7 @@ def _journey(
         slice_id="2",
         slice_status="in_progress",
         work_unit_id="3",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="in_progress",
     )
     bridge.append(
@@ -481,7 +481,7 @@ def _journey(
 
     correction_transition = bridge.append(
         WorkflowTransitionPayload(
-            "3", "in_progress", "4", "codex_correction", "in_progress"
+            "3", "in_progress", "4", "implementer_correction", "in_progress"
         ),
         logical_id="workflow-transition",
         idempotency_key="workflow-transition:7",
@@ -552,7 +552,7 @@ def _journey(
         logical_id="review-correction-1",
         idempotency_key="review:correction:1",
         fingerprint_sha256=FINGERPRINT,
-        operation="codex_correction",
+        operation="implementer_correction",
     )
     assert review.payload.work_unit_id == "4"
     bridge.append(
@@ -605,7 +605,7 @@ def _append_projection_gate_override(bridge: ArtifactBridge) -> None:
             "operator confirmation is required before correction resumes",
             "d" * 64,
             ("src/three.py",),
-            "codex_correction",
+            "implementer_correction",
             active_test_fingerprint,
             active_test_paths,
         ),
@@ -631,7 +631,7 @@ def _append_projection_gate_override(bridge: ArtifactBridge) -> None:
             "4",
             gate.record_id,
             active_test_paths,
-            "codex_correction",
+            "implementer_correction",
         ),
         logical_id="gate-decision-4-projection-anchor",
         idempotency_key="gate-decision:4:projection-anchor",
@@ -664,7 +664,7 @@ def _append_projection_invocation_failure(bridge: ArtifactBridge) -> None:
             technical_bytes,
             STATE_PROJECTION_FIXED_TIME,
             STATE_PROJECTION_FIXED_TIME,
-            "codex_correction",
+            "implementer_correction",
             "3",
             "4",
             2,
@@ -720,7 +720,7 @@ def _append_projection_denied_slice_review(bridge: ArtifactBridge) -> None:
         slice_id="3",
         slice_status="in_progress",
         work_unit_id="5",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="5")
@@ -752,7 +752,7 @@ def _append_projection_denied_slice_review(bridge: ArtifactBridge) -> None:
         logical_id="review-final-denied-anchor",
         idempotency_key="review:final:denied-anchor",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
 
 
@@ -820,13 +820,23 @@ def test_history_wire_roundtrip_matches_starting_head_bytes() -> None:
     document = history.to_dict()
     assert set(document) == {
         "work_unit_id", "findings", "attestations",
-        "last_claude_fingerprint", "latest_claude_review",
+        "last_reviewer_fingerprint", "latest_reviewer_review",
     }
     encoded = json.dumps(
         document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
-    assert hashlib.sha256(encoded).hexdigest() == (
+    # Slice 8b wire cut: the previous history differs only in these two keys.
+    prior = {
+        ("last_claude_fingerprint" if key == "last_reviewer_fingerprint" else
+         "latest_claude_review" if key == "latest_reviewer_review" else key): value
+        for key, value in document.items()
+    }
+    prior_bytes = json.dumps(prior, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    assert hashlib.sha256(prior_bytes).hexdigest() == (
         "5f45d8ba33fe205010ee9681de8dca98983c84914ae44cf07a6421eb2cdb1a15"
+    )
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "464f7a409d02d4c76a38e1225620a0552654c9b077ee1bebe803c948ebe0dd48"
     )
     assert WorkflowHistory.from_dict(json.loads(encoded)) == history
 
@@ -1195,7 +1205,7 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
     )
     gate_override = documents["gate-override"]["work_units"][-1]
     assert gate_override["status"] == "awaiting_user_decision"
-    assert gate_override["gate"]["resume_step"] == "codex_correction"
+    assert gate_override["gate"]["resume_step"] == "implementer_correction"
     assert gate_override["active_test_paths"] == [
         "tests/test_workflow_history_projection.py"
     ]
@@ -1209,7 +1219,7 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
     )
     denied_review = documents["denied-slice-review"]["work_units"][-1]
     assert denied_review["kind"] == "slice"
-    assert denied_review["reviewer"] == "claude"
+    assert denied_review["reviewer"] == "reviewer"
     assert denied_review["open_findings"] == ["C-01"]
 
 
@@ -1244,7 +1254,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
         slice_id="4",
         slice_status="in_progress",
         work_unit_id="5",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="5")
@@ -1299,7 +1309,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
         logical_id="review-slice-findings-1",
         idempotency_key="review:slice-findings:1",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
 
     _append_transition(
@@ -1308,7 +1318,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
         slice_id="5",
         slice_status="in_progress",
         work_unit_id="6",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="6")
@@ -1402,7 +1412,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
         logical_id="review-slice-findings-2",
         idempotency_key="review:slice-findings:2",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
 
     original_result = artifact_replay_module._result
@@ -1450,7 +1460,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     cached = json.loads(state_file.read_text(encoding="utf-8"))
     assert cached["reducer_version"] == (
-        "structured-v2-schema-2-state-v3-target-class-round-exit-v1"
+        "structured-v2-schema-2-state-v3-role-wire-v1"
     )
     assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
 
@@ -1486,7 +1496,7 @@ def test_state_projection_anchor_detects_schema_valid_value_change(
         document = original(*args, **kwargs)
         if document["work_unit_id"] == 4:
             document = dict(document)
-            document["codex_return_count"] = 1
+            document["implementer_return_count"] = 1
         return document
 
     monkeypatch.setattr(
@@ -1655,7 +1665,7 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
         for unit in item["work_units"]
     )
     assert any(
-        unit["status"] == "in_progress" and unit["current_step"] == "claude_slice_review"
+        unit["status"] == "in_progress" and unit["current_step"] == "reviewer_slice_review"
         for item in projected_prefixes
         for unit in item["work_units"]
     )
@@ -1777,7 +1787,7 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
         slice_id="3",
         slice_status="in_progress",
         work_unit_id="5",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         work_unit_status="in_progress",
     )
     _append_policy_gate(bridge, work_unit_id="5")
@@ -1809,7 +1819,7 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
         logical_id="review-final-carried-validation",
         idempotency_key="review:final:carried-validation",
         fingerprint_sha256=FINGERPRINT,
-        operation="claude_slice_review",
+        operation="reviewer_slice_review",
     )
     replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
     assert not any(
@@ -1960,7 +1970,7 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
         logical_id="review-malicious-origin",
         idempotency_key="review:malicious-origin",
         fingerprint_sha256=FINGERPRINT,
-        operation="codex_correction",
+        operation="implementer_correction",
     )
     replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
 
@@ -1999,7 +2009,7 @@ def test_chain_without_workflow_events_is_rejected_fail_closed(tmp_path: Path) -
     )
     bridge.append(
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_plan", "in_progress"
+            "1", "in_progress", "1", "implementer_plan", "in_progress"
         ),
         logical_id="workflow-transition",
         idempotency_key="workflow-transition:1",
@@ -2024,7 +2034,7 @@ def test_retired_runtime_history_events_cannot_return_to_state() -> None:
         "updated_at": "2026-08-31T10:00:00+00:00",
         "current_slice_id": 1,
         "current_work_unit_id": 1,
-        "current_step": "codex_plan",
+        "current_step": "implementer_plan",
         "slices": [
             {
                 "slice_id": 1,
@@ -2042,10 +2052,10 @@ def test_retired_runtime_history_events_cannot_return_to_state() -> None:
                 "slice_id": 1,
                 "kind": "plan",
                 "status": "in_progress",
-                "current_step": "codex_plan",
+                "current_step": "implementer_plan",
                 "round_number": 1,
-                "codex_return_count": 0,
-                "max_codex_returns": 6,
+                "implementer_return_count": 0,
+                "max_implementer_returns": 6,
                 "gate": {
                     "status": "clear", "reason": "none", "detail": None,
                     "fingerprint": None, "paths": [], "resume_step": None,

@@ -12,6 +12,7 @@ import sys
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -101,8 +102,13 @@ def test_implementer_request_and_response_bytes_match_pre_rename_baseline() -> N
         ),
     )
     bundle = build_native_implementer_request(spec)
-    assert hashlib.sha256(bundle.canonical_json.encode()).hexdigest() == (
+    # Slice 8b wire cut: inverse fields recreate the f6bb5cc document digest.
+    prior = prior_role_wire_document(bundle.document)
+    assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
         "6adf7dd5b487653a47abaa8f7e246ff900d36a7208af9c0f910aaadff1372479"
+    )
+    assert hashlib.sha256(bundle.canonical_json.encode()).hexdigest() == (
+        "90c4fd0814650f424610249cafebf48e7ea884c474aa2c43da52e3ede5ecd352"
     )
     assert hashlib.sha256(bundle.provider_response_schema_json.encode()).hexdigest() == (
         "60971f697d26147b616139c96e27ca07a35c63064c27a2cff8d3342d25e64e07"
@@ -353,9 +359,9 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         run_id="differential-claude",
         work_unit_id=f"work-{form}",
         operation={
-            ApprovalMarker.PLAN: "claude_plan_review",
-            ApprovalMarker.SLICE: "claude_slice_review",
-            ApprovalMarker.FINAL_REVIEW: "claude_final_review",
+            ApprovalMarker.PLAN: "reviewer_plan_review",
+            ApprovalMarker.SLICE: "reviewer_slice_review",
+            ApprovalMarker.FINAL_REVIEW: "reviewer_final_review",
         }[marker],
         diff_fingerprint=FINGERPRINT,
         reviewer=AgentRole.REVIEWER,
@@ -390,7 +396,7 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
             "schema_version": "native-agent-review-result-v2",
             "result_type": "final_review_completed",
             "request_id": bound.request_id,
-            "reviewer": "claude",
+            "reviewer": "reviewer",
             "scan_complete": True,
             "new_findings": [],
             "occurrences": [],
@@ -405,7 +411,7 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bound.request_id,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [],
         "status_changes": (
@@ -462,7 +468,30 @@ def test_all_writer_forms_accept_their_local_domain_result() -> None:
     assert baseline["schema_version"] == "native-provider-projection-baseline-v1"
     expected = baseline["writers"]
     assert expected == sorted(expected, key=lambda item: (item["provider"], item["form"]))
-    assert sorted(actual, key=lambda item: (item["provider"], item["form"])) == expected
+    # Slice 8b wire cut: the historical writer baseline differs only in the
+    # reviewer constants. Preserve it as an inverse transformation oracle.
+    current_reviewer_digests = {
+        "plan": "9eac3e85f3426420260b9fa0bb367750953565612817321f5ee3e6a7898e59d8",
+        "initial_slice": "cb17d795f19bf1436400150519610bfb739c5a578d4b87bd4ffd7b9a504b659e",
+        "convergence": "f3a228920d1203b962a6cd3fb7d4e6b27d6037fc2244791b47ad3f42ac3961db",
+        "final_review": "f1bbf6a9b8ab87ba017b3c11a3f5aaf92ee4d8ae444678a04d22520ce008b687",
+    }
+    for item in actual:
+        if item["provider"] == "claude":
+            assert item["sha256"] == current_reviewer_digests[item["form"]]
+    historical = []
+    for item in actual:
+        if item["provider"] == "codex":  # allowlist:provider -- transport: provider baseline
+            historical.append(item)
+            continue
+        writer = native_review_provider_response_schema(_review_bound(item["form"]).context)
+        prior_json = (
+            _canonical(writer)
+            .replace('"const":"reviewer"', '"const":"claude"')
+            .replace('"enum":["reviewer"]', '"enum":["claude"]')
+        )
+        historical.append({**item, "sha256": hashlib.sha256(prior_json.encode()).hexdigest()})
+    assert sorted(historical, key=lambda item: (item["provider"], item["form"])) == expected
 
 
 def test_provider_projection_losses_are_exact_and_locally_compensated() -> None:

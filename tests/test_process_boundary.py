@@ -449,10 +449,10 @@ def _limited_budget_policy(char_limit: int, byte_limit: int) -> ProviderInputBud
                 rule.role,
                 rule.operation,
                 char_limit
-                if rule.key == ("codex", "codex", "codex_implementation")
+                if rule.key == ("codex", "implementer", "implementer_implementation")
                 else rule.max_chars,
                 byte_limit
-                if rule.key == ("codex", "codex", "codex_implementation")
+                if rule.key == ("codex", "implementer", "implementer_implementation")
                 else rule.max_bytes,
             )
             for rule in defaults.rules
@@ -1006,9 +1006,17 @@ def test_every_abort_is_reachable_and_bound_to_its_exact_type_and_message() -> N
     for abort in PRE_CUT_DOCUMENT["aborts"]:
         scenario = cases[abort["scenario_id"]]
         error = scenario["expected"]["error_chain"][abort["error_chain_index"]]
+        historical_message = abort["message"]
+        if abort["scenario_id"] == "budget-exceeded":
+            # Slice 8b wire cut: keep the pre-b59 source quote intact while
+            # comparing its role and operation to the active budget axis.
+            historical_message = historical_message.replace(
+                "role=codex operation=codex_implementation",
+                "role=implementer operation=implementer_implementation",
+            )
         assert error == {
             "type": abort["exception_type"],
-            "message": abort["message"],
+            "message": historical_message,
         }, abort["scenario_id"]
 
 

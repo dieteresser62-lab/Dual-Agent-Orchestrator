@@ -298,7 +298,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "2", "codex_implementation", "in_progress"
+            "1", "in_progress", "2", "implementer_implementation", "in_progress"
         ),
         revision=3,
     )
@@ -340,7 +340,7 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "2", "codex_correction", "in_progress"
+            "1", "in_progress", "2", "implementer_correction", "in_progress"
         ),
         revision=4,
     )
@@ -363,17 +363,17 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
         ),
     }
     mirror = {
-        "cursor": asdict(ReplayedWorkflowCursor("1", "2", "codex_correction")),
+        "cursor": asdict(ReplayedWorkflowCursor("1", "2", "implementer_correction")),
         "slice_statuses": (("1", "in_progress"), ("2", "pending")),
         "work_units": (
             asdict(ReplayedWorkUnitState("1", "1", "completed", "completed")),
-            asdict(ReplayedWorkUnitState("2", "1", "in_progress", "codex_correction")),
+            asdict(ReplayedWorkUnitState("2", "1", "in_progress", "implementer_correction")),
         ),
         "policies": (
             asdict(WorkflowPolicyPayload("1", 0, 4)),
             asdict(WorkflowPolicyPayload("2", 1, 4)),
         ),
-        "reviewers": (("1", None), ("2", "claude")),
+        "reviewers": (("1", None), ("2", "reviewer")),
     }
 
     assert canonical_json(projected) == canonical_json(mirror)
@@ -389,7 +389,7 @@ def test_replay_projects_r3_slice_boundaries_without_flattening_groups() -> None
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_implementation", "in_progress"
+            "1", "in_progress", "1", "implementer_implementation", "in_progress"
         ),
     )
     grouped = SliceBoundaryPayload(
@@ -403,7 +403,7 @@ def test_replay_projects_r3_slice_boundaries_without_flattening_groups() -> None
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "2", "in_progress", "2", "codex_implementation", "in_progress"
+            "2", "in_progress", "2", "implementer_implementation", "in_progress"
         ),
         revision=2,
     )
@@ -430,7 +430,7 @@ def test_slice_boundary_revision_preserves_start_and_monotonically_extends_group
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_implementation", "in_progress"
+            "1", "in_progress", "1", "implementer_implementation", "in_progress"
         ),
     )
     _append(
@@ -473,7 +473,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         records,
         "workflow-transition",
         WorkflowTransitionPayload(
-            "1", "in_progress", "1", "codex_plan", "in_progress"  # allowlist:provider -- wire until slice 8/9: persisted step vocabulary
+            "1", "in_progress", "1", "implementer_plan", "in_progress"
         ),
     )
 
@@ -780,15 +780,13 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
     measurement = _append(
         records,
         "measurement-1",
-        ProviderInputMeasurementPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1", "a" * 64,
+        ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1", "a" * 64,
             "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
         ),
     )
-    started_payload = ProviderAttemptPayload(
-        Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+    started_payload = ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
         "provider-operation-01", "a" * 64, measurement.record_id, "c" * 64, 1,
         "started", "2026-08-21T10:00:01+00:00", None, None, None, None,
     )
@@ -890,7 +888,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
     _append(
         records,
         "workflow-transition",
-        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+        WorkflowTransitionPayload("1", "in_progress", "1", "implementer_plan", "in_progress"),
     )
     transition = GateTransitionPayload(
         work_unit_id="1",
@@ -914,7 +912,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
         work_unit_id="1",
         gate_record_id=gate.record_id,
         paths=("tests/test_gate.py",),
-        resume_step="claude_slice_review",
+        resume_step="reviewer_slice_review",
     )
     binding = _append(
         records,
@@ -930,7 +928,7 @@ def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> Non
     projected = replay.gate_decisions[0]
     assert projected.work_unit_id == "1"
     assert projected.paths == ("tests/test_gate.py",)
-    assert projected.resume_step == "claude_slice_review"
+    assert projected.resume_step == "reviewer_slice_review"
     assert projected.authority is Role.USER
     assert projected.gate_created_at == gate.created_at
     assert projected.gate_record_id == gate.record_id
@@ -942,7 +940,7 @@ def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference
     _append(
         records,
         "workflow-transition",
-        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+        WorkflowTransitionPayload("1", "in_progress", "1", "implementer_plan", "in_progress"),
     )
     partial = GateTransitionPayload(
         "1", "clear", "none", None, None, (), None, None, ()
@@ -957,7 +955,7 @@ def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference
     _append(
         records,
         "gate-decision-1",
-        GateDecisionPayload("1", "ar1-" + "d" * 64, (), "codex_plan"),
+        GateDecisionPayload("1", "ar1-" + "d" * 64, (), "implementer_plan"),
         fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "c" * 64),
     )
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)

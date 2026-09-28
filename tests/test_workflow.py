@@ -12,6 +12,7 @@ import plan_handoff
 import workflow_requests
 
 from agent_adapters import AgentOutputError
+from agent_config import current_provider_for_role
 from audit_trail import ReviewAuditEvent, managed_slice_document_path
 from artifact_models import (
     InvocationFailurePayload,
@@ -1487,7 +1488,7 @@ def test_native_implementation_package_matches_request_open_findings(
         ),
     )
     contract = ImplementerStepContract(
-        name="work-unit-2-codex_implementation",
+        name="work-unit-2-implementer_implementation",
         readiness_marker=ReadinessMarker.IMPLEMENTATION,
         slice_id="01",
         round_number=1,
@@ -1535,14 +1536,14 @@ def _invocation_failure(
     reset = (
         QuotaReset(
             received_at + timedelta(seconds=reset_after_seconds),
-            f"{role.value}:structured:retry_after_seconds",
+            f"{current_provider_for_role(role.value)}:structured:retry_after_seconds",
             "UTC",
         )
         if reset_after_seconds is not None
         else None
     )
     return AgentInvocationError(
-        agent_key=role.value,
+        agent_key=current_provider_for_role(role.value),
         kind=kind,
         invocation_id=invocation_id,
         provider_text=(
@@ -1579,7 +1580,7 @@ def _native_review_contract_failure(
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         output_error,
         invocation_id=invocation_id,
         received_at=received_at,
@@ -1592,7 +1593,7 @@ def _structured_output_failure(
     invocation_id: str, *, received_at: datetime
 ) -> AgentInvocationError:
     return classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         AgentProcessError(
             "native Claude error",
             exit_code=1,
@@ -1628,7 +1629,7 @@ def _native_implementer_contract_failure(
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
-        AgentRole.IMPLEMENTER.value,
+        "codex",
         output_error,
         invocation_id=invocation_id,
         received_at=received_at,
@@ -1657,7 +1658,7 @@ def _native_review_limit_failure(
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         output_error,
         invocation_id=invocation_id,
         received_at=received_at,
@@ -1672,7 +1673,7 @@ def test_provider_process_failure_reaches_record_with_actual_diagnostics(
     now = datetime(2026, 9, 1, 18, 30, tzinfo=timezone.utc)
     raw_technical_text = "stderr sentinel: provider worker was killed"
     error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         AgentProcessError(raw_technical_text, exit_code=137),
         invocation_id="canary-review-process-failure",
         received_at=now,
@@ -1832,7 +1833,7 @@ def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redact
     )
     output_error.__cause__ = contract_error
     error = classify_agent_failure(
-        AgentRole.IMPLEMENTER.value,
+        "codex",
         output_error,
         invocation_id="canary-20260905-221308Z",
         received_at=now,
@@ -1881,7 +1882,7 @@ def test_mutated_orchestrator_diagnostic_cannot_expose_provider_text(caplog) -> 
         ),
     )
     error = classify_agent_failure(
-        AgentRole.IMPLEMENTER.value,
+        "codex",
         output_error,
         invocation_id="mutated-provider-diagnostic",
         received_at=now,
@@ -1931,7 +1932,7 @@ def test_workflow_execution_halt_has_closed_value_free_diagnostic(caplog) -> Non
         OrchestratorDiagnostic.WORKFLOW_EXECUTION_RULE
     )
     error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         execution_error,
         invocation_id="workflow-execution-diagnostic",
         received_at=now,
@@ -1988,7 +1989,7 @@ def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> Non
         "usage limit reached; your limit will reset at 3pm (Europe/Berlin)"
     )
     classified_error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         source,
         invocation_id="r6-wrapped-quota",
         received_at=now,
@@ -3998,7 +3999,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     assert recovered.findings == (persisted,)
 
 
-def test_managed_audit_paths_are_added_after_codex_plan_only() -> None:
+def test_managed_audit_paths_are_added_after_implementer_plan_only() -> None:
     state = init_workflow_state(
         run_id="run-managed-audit",
         task_file="/repo/inbox/Bug.md",
@@ -4735,7 +4736,7 @@ def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnosti
         for attempt in range(1, 3)
     ]
     failures[0] = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         AgentProcessError(
             "native review output exhausted",
             exit_code=1,
@@ -5405,7 +5406,7 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "a" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {
@@ -5630,7 +5631,7 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
                 "schema_version": "native-agent-review-result-v2",
                 "result_type": "review_result",
                 "request_id": "native-review-request-" + "a" * 64,
-                "reviewer": "claude",
+                "reviewer": "reviewer",
                 "decision": "approved",
                 "new_findings": [],
                 "status_changes": [

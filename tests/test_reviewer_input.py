@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from agent_adapters import NativeClaudeReviewAdapter, AgentOutputError
 from agent_config import AgentSettings
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
@@ -22,18 +23,42 @@ def _adapter() -> NativeClaudeReviewAdapter:
 
 
 def test_reviewer_components_match_start_head_bytes() -> None:
-    # Measured on HEAD 7064367 from the same _review_bundle() input.
+    # Slice 8b wire cut; the historical component digests are checked below.
     expected = {
-        "request_chunk_001": ("4fb5228491380660239a220d115f2246418d769e339a213aec1a5cadae53523c", 1809),
-        "packet_manifest": ("686b23c62d2817f79043478ce9d5392d38a05a729e1046f7cb87c63f835b31ca", 502),
+        "request_chunk_001": ("9bff9d073fec27b0c0fa0ffc5e3032fdddb1b4be801964fbb97be65d3158e96a", 1813),
+        "packet_manifest": ("2f8b526000004c7beffaa4f1e6bbecf82de26a829c99fd637b7580eeaf51d428", 502),
         "system_policy": ("3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6", 2440),
-        "response_schema": ("e25e390e6c895a7549e0645b66987419c373e0c25358e8a8ead20c5f8045c107", 24277),
+        "response_schema": ("64077c1c6a27523fac345e3e32555b6bfcdcea8e569473cee4cf211985032933", 24291),
         "start_directive": ("344363a35fdc403d7803b5c1edfaf731becbade36c37b941d7b8e204c65db6a0", 280),
     }
     adapter = _adapter()
     try:
         prepared = adapter.prepare_native_provider_input(_review_bundle())
         assert list(expected) == [item.name for item in prepared.components]
+        # Slice 8b wire cut: inverse request/schema values recreate the old
+        # request-chunk pin and its digest-bound manifest line exactly.
+        bundle = _review_bundle()
+        prior_schema = (bundle.provider_response_schema_json
+            .replace('"const":"reviewer"', '"const":"claude"')
+            .replace('"enum":["reviewer"]', '"enum":["claude"]'))
+        prior_schema_digest = hashlib.sha256(prior_schema.encode()).hexdigest()
+        assert prior_schema_digest == "e25e390e6c895a7549e0645b66987419c373e0c25358e8a8ead20c5f8045c107"
+        prior_request = prior_role_wire_document(
+            bundle.document, prior_schema_sha256=prior_schema_digest
+        )
+        prior_chunk = json.dumps(prior_request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        prior_chunk_digest = hashlib.sha256(prior_chunk.encode()).hexdigest()
+        assert (prior_chunk_digest, len(prior_chunk.encode())) == (
+            "4fb5228491380660239a220d115f2246418d769e339a213aec1a5cadae53523c", 1809
+        )
+        current_chunk = next(item for item in prepared.components if item.name == "request_chunk_001")
+        current_manifest = next(item for item in prepared.components if item.name == "packet_manifest")
+        prior_manifest = (current_manifest.content
+            .replace(str(len(current_chunk.content.encode())), str(len(prior_chunk.encode())))
+            .replace(hashlib.sha256(current_chunk.content.encode()).hexdigest(), prior_chunk_digest))
+        assert hashlib.sha256(prior_manifest.encode()).hexdigest() == (
+            "686b23c62d2817f79043478ce9d5392d38a05a729e1046f7cb87c63f835b31ca"
+        )
         assert {
             item.name: (hashlib.sha256(item.content.encode()).hexdigest(), len(item.content.encode()))
             for item in prepared.components
@@ -43,7 +68,7 @@ def test_reviewer_components_match_start_head_bytes() -> None:
         assert b"".join(path.read_bytes() for path in inputs.request_files) == _review_bundle().canonical_json.encode()
         assert inputs.manifest_file.read_text().startswith("# Native review request manifest\n")
         measurement = measure_provider_input(
-            prepared, provider="claude", role="claude", operation="claude_slice_review",
+            prepared, provider="claude", role="reviewer", operation="reviewer_slice_review",
             binding_fingerprint="a" * 64, policy=default_provider_input_budget_policy(),
         )
         assert measurement.total_bytes == sum(size for _, size in expected.values())
@@ -92,9 +117,9 @@ def test_paged_manifest_and_chunk_bytes_match_start_head(
             sort_keys=True, separators=(",", ":"),
         ).encode()
         assert hashlib.sha256(encoded).hexdigest() == (
-            "ef664c4cc85dc5f22f5866b6e96a724cf30e13781ab923ec3c96234336306891"
+            "edaaee7f19d315109e60be2026958758cb6c59d5af872ae2a24db12712531aa1"
         )
-        assert sum(len(item.content.encode()) for item in prepared.components) == 300_975
+        assert sum(len(item.content.encode()) for item in prepared.components) == 300_993
     finally:
         adapter.cleanup()
 

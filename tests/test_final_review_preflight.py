@@ -25,7 +25,7 @@ def test_transition_fingerprint_binds_every_dispatch_dimension() -> None:
     baseline = transition_fingerprint(**common)
 
     for key, replacement in (
-        ("operation", "claude_slice_review"),
+        ("operation", "reviewer_slice_review"),
         ("work_unit_id", "2"),
         ("record_head", "e" * 64),
         ("repository_fingerprint", "f" * 64),

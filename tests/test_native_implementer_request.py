@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from contracts import (
     AgentRole,
     ImplementerStepContract,
@@ -48,7 +49,7 @@ def _spec(*, assignment: str = "Implement the native boundary.") -> NativeImplem
     context = NativeImplementerContext(
         run_id="run-1",
         work_unit_id="work-unit-1",
-        operation="codex_plan",
+        operation="implementer_plan",
         current_fingerprint="a" * 64,
         request_kind=NativeImplementerRequestKind.PLAN,
         contract=contract,
@@ -81,7 +82,7 @@ def test_native_implementer_request_is_deterministic_and_digest_bound() -> None:
     assert changed.bound_context.request_id != first.bound_context.request_id
     document = json.loads(first.canonical_json)
     assert document["request_id"] == first.bound_context.request_id
-    assert document["codex_contract"]["readiness_kind"] == "plan"
+    assert document["implementer_contract"]["readiness_kind"] == "plan"
     assert document["response_contract"]["schema_version"] == (
         "native-agent-codex-result-v2"
     )
@@ -126,7 +127,7 @@ def test_context_invalid_cannot_be_bound_as_codex_retry_feedback() -> None:
 def test_plan_artifact_format_contract_is_the_parser_derived_contract() -> None:
     bundle = build_native_implementer_request(_spec())
 
-    communicated = bundle.document["codex_contract"][
+    communicated = bundle.document["implementer_contract"][
         "plan_artifact_format_contract"
     ]
     parser_derived = plan_handoff.render_plan_artifact_format_contract()
@@ -141,7 +142,7 @@ def test_plan_artifact_format_contract_is_the_parser_derived_contract() -> None:
     assert "free-text paragraph without a list marker is invalid" in communicated
 
     without_contract = copy.deepcopy(bundle.document)
-    without_contract["codex_contract"].pop("plan_artifact_format_contract")
+    without_contract["implementer_contract"].pop("plan_artifact_format_contract")
     with pytest.raises(NativeImplementerRequestError, match="schema validation failed"):
         validate_native_implementer_request_document(without_contract)
 
@@ -161,14 +162,19 @@ def test_non_artifact_request_does_not_communicate_plan_artifact_format() -> Non
 
     bundle = build_native_implementer_request(replace(spec, context=context))
 
-    assert "plan_artifact_format_contract" not in bundle.document["codex_contract"]
+    assert "plan_artifact_format_contract" not in bundle.document["implementer_contract"]
 
 
 def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     bundle = build_native_implementer_request(_spec())
 
-    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+    # Slice 8b wire cut: reversing only the bound names recreates the old bytes.
+    prior = prior_role_wire_document(bundle.document)
+    assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
         "1b3d4acca62302ce29011b92def17b6cbf4139764b1c5ef531d76795d55cfa3a"
+    )
+    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+        "763459517f5d65df5d536bd6ed4f34bea6131ac1402b774bc4532a043839d5ca"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")

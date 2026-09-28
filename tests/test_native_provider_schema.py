@@ -145,15 +145,15 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     }
     setup_defaults = inspect.signature(_fresh_state).parameters
     expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
-    for role in ("codex", "claude"):
+    for role, provider in (("implementer", "codex"), ("reviewer", "claude")):
         role_field = AgentRole(role).name.lower() + "_profile"
-        assert expected[role][0] in MODEL_FAMILIES[role].values()
-        assert (settings[role].model, settings[role].effort) == expected[role]
+        assert expected[provider][0] in MODEL_FAMILIES[provider].values()
+        assert (settings[provider].model, settings[provider].effort) == expected[provider]
         for default in (
             binding_defaults[role_field],
             setup_defaults[role_field].default,
         ):
-            assert (default.model, default.effort) == expected[role]
+            assert (default.model, default.effort) == expected[provider]
 
 
 def test_model_and_effort_are_recorded_but_do_not_bind_the_transport() -> None:

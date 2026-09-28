@@ -307,7 +307,7 @@ def test_drvfs_first_path_hit_rejects_without_any_probe_or_start(
     message = str(failure.value)
     assert str(windows) in message
     assert "not permitted (Windows/DrvFS), not inspected" in message
-    assert "--codex-binary" in message and "RUN_TASK_CODEX_BINARY" in message
+    assert "--implementer-binary" in message and "RUN_TASK_IMPLEMENTER_BINARY" in message
     assert "Remedy:" in message and "adjust PATH" in message
     assert probes == starts == []
 

@@ -119,7 +119,7 @@ TRANSITION_ORACLE = (
         "plan-denial-round-2",
         "plan-review-denied",
         "plan",
-        "codex_plan_revision",
+        "implementer_plan_revision",
         2,
         ("C-01:open:blocker",),
         ("C-01",),
@@ -135,7 +135,7 @@ TRANSITION_ORACLE = (
         "plan-to-slice",
         "plan-approved",
         "slice",
-        "codex_implementation",
+        "implementer_implementation",
         1,
         (),
         (),
@@ -151,7 +151,7 @@ TRANSITION_ORACLE = (
         "slice-denial-round-2",
         "slice-review-denied",
         "slice",
-        "codex_correction",
+        "implementer_correction",
         2,
         ("C-01:open:blocker",),
         ("C-01",),
@@ -167,7 +167,7 @@ TRANSITION_ORACLE = (
         "mirror-before-checkpoint",
         "slice-review-denied-mirror-persisted",
         "slice",
-        "codex_correction",
+        "implementer_correction",
         2,
         ("C-01:open:blocker",),
         ("C-01",),
@@ -199,7 +199,7 @@ TRANSITION_ORACLE = (
         "slice-boundary-policy-gate",
         "slice-boundary-head-drift",
         "slice",
-        "codex_implementation",
+        "implementer_implementation",
         1,
         (),
         (),
@@ -215,7 +215,7 @@ TRANSITION_ORACLE = (
         "scope-user-gate",
         "scope-violation",
         "slice",
-        "claude_slice_review",
+        "reviewer_slice_review",
         1,
         (),
         (),
@@ -463,7 +463,7 @@ GATE_SOURCE_MAP = (
         ("workflow_failure_recording.persist_invocation_failure",),
         ("invocation-failure",),
         (
-            r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
+            r"role=(?:implementer|reviewer) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
             r"kind=[a-z_]+ resume=.+ auto=(?:true|false) continuations=[0-9]+ "
             r"provider=.+"
         ),
@@ -1367,7 +1367,7 @@ def _invocation_failure(state: WorkflowState) -> InvocationFailureRecord:
     return InvocationFailureRecord(
         invocation_id="matrix-invocation",
         idempotency_key="matrix-invocation-key",
-        role="codex",
+        role="implementer",
         failure_kind=AgentFailureKind.PROCESS,
         provider_text="provider process stopped",
         received_at="2026-08-27T10:00:30+00:00",
@@ -2454,8 +2454,7 @@ def _append_completed_provider_attempt(
     """Persist one real, completed provider call for the transition fixture."""
 
     measurement = bridge.append(
-        ProviderInputMeasurementPayload(
-            Role.REVIEWER,
+        ProviderInputMeasurementPayload("claude",
             Role.REVIEWER,
             "claude_transition_matrix_review",
             str(work_unit_id),

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
+from agent_config import current_provider_for_role
 from agent_runtime import (
     NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
@@ -919,7 +920,7 @@ class WorkflowPersistence:
             if item.effect_class == "provider_start"
             and item.work_unit_id == str(invocation.work_unit_id)
             and len(item.operation) == 7
-            and item.operation[0] == Role.IMPLEMENTER.value
+            and item.operation[0] == current_provider_for_role(Role.IMPLEMENTER.value)
             and item.operation[1] == invocation.step.value
             and item.operation[4] in {
                 f"request:{invocation.request_sequence}",
@@ -937,7 +938,7 @@ class WorkflowPersistence:
             if not any(
                 isinstance(record.payload, ProviderAttemptPayload)
                 and record.payload.phase == "failed"
-                and record.payload.provider is Role.IMPLEMENTER
+                and record.payload.role is Role.IMPLEMENTER
                 and record.payload.work_unit_id == str(invocation.work_unit_id)
                 and record.payload.operation == invocation.step.value
                 and record.payload.input_digest == item.operation[2]

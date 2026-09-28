@@ -961,7 +961,7 @@ class ProductionWorkflowDriver:
             record
             for record in bridge.store.current_chain()
             if isinstance(record.payload, ProviderAttemptPayload)
-            and record.payload.provider.value == spec.operation[0]
+            and record.payload.provider == spec.operation[0]
             and record.payload.operation == spec.operation[1]
             and record.payload.work_unit_id == spec.work_unit_id
             and record.payload.input_digest == spec.operation[2]
@@ -1089,7 +1089,7 @@ class ProductionWorkflowDriver:
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.phase == "started"
             and record.payload.work_unit_id == item.work_unit_id
-            and record.payload.provider.value == item.operation[0]
+            and record.payload.provider == item.operation[0]
             and record.payload.operation == item.operation[1]
             and record.payload.input_digest == item.operation[2]
             and record.payload.binding_fingerprint == item.operation[3]
@@ -1181,7 +1181,7 @@ class ProductionWorkflowDriver:
                 "native Codex invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.IMPLEMENTER.value]
+        native_adapter = self.agents["codex"]
         if not isinstance(native_adapter, NativeCodexAdapter):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
@@ -1530,12 +1530,12 @@ class ProductionWorkflowDriver:
                 current_fingerprint=fingerprint,
                 contract=replace(
                     context.contract,
-                    round_number=request_document["codex_contract"][  # allowlist:provider -- wire until slice 8/9: canonical field
+                    round_number=request_document["implementer_contract"][
                         "round_number"
                     ],
-                    request_sequence=request_document["codex_contract"].get(  # allowlist:provider -- wire until slice 8/9: canonical field
+                    request_sequence=request_document["implementer_contract"].get(
                         "request_sequence",
-                        request_document["codex_contract"]["round_number"],  # allowlist:provider -- wire until slice 8/9: canonical field
+                        request_document["implementer_contract"]["round_number"],
                     ),
                 ),
             )
@@ -1616,7 +1616,7 @@ class ProductionWorkflowDriver:
                 "native Claude invocation lacks its immutable state binding"
             )
         self.assert_structured_decision_context()
-        native_adapter = self.agents[AgentRole.REVIEWER.value]
+        native_adapter = self.agents["claude"]
         if not isinstance(native_adapter, NativeClaudeReviewAdapter):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"

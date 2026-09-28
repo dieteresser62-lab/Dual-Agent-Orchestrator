@@ -432,7 +432,7 @@ def bootstrap_fact(
     return BootstrapCheckFact(
         check_kind=check_kind,
         transition_fingerprint=payload.transition_fingerprint,
-        provider=payload.provider.value,
+        provider=payload.provider,
         role=payload.role.value,
         operation=payload.operation,
         work_unit_id=int(payload.work_unit_id),

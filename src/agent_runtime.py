@@ -85,8 +85,10 @@ from provider_identity import (
     ProviderIdentity, capture_provider_identity, check_provider_candidate,
     executable_candidates, inspect_provider_installations,
 )
+from role_occupancy import role_for_provider
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
+    PROVIDER_ROLES,
     PreparedProviderInput,
     ProviderInputComponent,
     ProviderInputBudgetError,
@@ -914,8 +916,14 @@ def _resolve_agent_binary(binary: str, *, path: str | None = None) -> str | None
 
 
 def _binary_remedy(adapter: AgentAdapter) -> str:
+    role = role_for_provider(adapter.name)
+    if role is None:
+        return (
+            f"Remedy: no role is assigned to provider {adapter.name!r}; "
+            "configure a supported provider binary or adjust PATH"
+        )
     return (
-        f"Remedy: set --{adapter.name}-binary or RUN_TASK_{adapter.name.upper()}_BINARY "
+        f"Remedy: set --{role.value}-binary or RUN_TASK_{role.value.upper()}_BINARY "
         "to an absolute Linux path, or adjust PATH"
     )
 
@@ -1513,15 +1521,15 @@ def run_agent(
                 (ProviderInputComponent("stdin_prompt", prompt),),
             )
         effective_operation = operation or {
-            "codex": "codex_implementation",
-            "claude": "claude_slice_review",
+            "codex": "implementer_implementation",
+            "claude": "reviewer_slice_review",
         }.get(agent_key)
         if effective_operation is None:
             raise ValueError(f"provider input operation is required for {agent_key}")
         measurement = measure_provider_input(
             prepared,
             provider=agent_key,
-            role=agent_key,
+            role=PROVIDER_ROLES[agent_key],
             operation=effective_operation,
             binding_fingerprint=binding_fingerprint,
             policy=config.provider_input_budget,

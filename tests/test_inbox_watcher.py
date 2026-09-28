@@ -926,7 +926,7 @@ def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
             run_id=args.watch_run_id,
             disposition=WatchTaskDisposition.RESUMABLE_HALT,
             status=status,
-            step="claude_slice_review",
+            step="reviewer_slice_review",
             work_unit_id=2,
             gate_reason=gate_reason,
         )
@@ -1234,7 +1234,7 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
             args.watch_run_id,
             WatchTaskDisposition.RESUMABLE_HALT,
             "awaiting_user_decision",
-            "codex_implementation",
+            "implementer_implementation",
             2,
             "test_change",
         )
@@ -1298,7 +1298,7 @@ def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
             run_id=args.watch_run_id,
             disposition=WatchTaskDisposition.RESUMABLE_HALT,
             status="awaiting_resume",
-            step="claude_final_review",
+            step="reviewer_final_review",
             work_unit_id=4,
             gate_reason=GateReason.BOOTSTRAP_CHECK.value,
             failure_detail="FINAL-REVIEW-PREFLIGHT | restore matching records",
@@ -1620,7 +1620,7 @@ def test_changed_paused_task_halts_without_retry_or_poison(tmp_path: Path) -> No
             args.watch_run_id,
             WatchTaskDisposition.RESUMABLE_HALT,
             "awaiting_user_decision",
-            "codex_implementation",
+            "implementer_implementation",
             2,
             "test_change",
         )

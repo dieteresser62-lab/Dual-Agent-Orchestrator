@@ -168,7 +168,7 @@ class NativeReviewRequestSpec:
         if self.context.reviewer is not AgentRole.REVIEWER:
             raise NativeReviewRequestError(
                 NativeReviewRequestErrorCode.CONTEXT_INVALID,
-                "native Claude request requires reviewer=claude",
+                "native Claude request requires reviewer=reviewer",
             )
         if not isinstance(self.review_kind, NativeReviewKind):
             raise NativeReviewRequestError(
@@ -203,9 +203,9 @@ class NativeReviewRequestSpec:
                 "retry_feedback must be a NativeReviewRetryFeedback",
             )
         expected_operation = {
-            NativeReviewKind.PLAN: "claude_plan_review",
-            NativeReviewKind.SLICE: "claude_slice_review",
-            NativeReviewKind.FINAL_REVIEW: "claude_final_review",  # allowlist:provider -- wire until slice 8/9: canonical operation
+            NativeReviewKind.PLAN: "reviewer_plan_review",
+            NativeReviewKind.SLICE: "reviewer_slice_review",
+            NativeReviewKind.FINAL_REVIEW: "reviewer_final_review",
         }[self.review_kind]
         if self.context.operation != expected_operation:
             raise NativeReviewRequestError(
@@ -581,9 +581,9 @@ def _review_context_request_projection(
 ) -> dict[str, Any]:
     context_binding = native_review_context_binding(context)
     review_kind = {
-        "claude_plan_review": NativeReviewKind.PLAN.value,
-        "claude_slice_review": NativeReviewKind.SLICE.value,
-        "claude_final_review": NativeReviewKind.FINAL_REVIEW.value,
+        "reviewer_plan_review": NativeReviewKind.PLAN.value,
+        "reviewer_slice_review": NativeReviewKind.SLICE.value,
+        "reviewer_final_review": NativeReviewKind.FINAL_REVIEW.value,
     }.get(context.operation)
     if review_kind is None:
         raise NativeReviewRequestError(
@@ -622,7 +622,7 @@ def _review_context_request_projection(
         ]
     review_contract["planned_slices"] = context_binding["planned_slices"]
     return {
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,

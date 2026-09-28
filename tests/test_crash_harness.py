@@ -515,7 +515,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
         "network",
         "process",
     ]
-    assert all(item["resume_step"] == "codex_plan" for item in retries)
+    assert all(item["resume_step"] == "implementer_plan" for item in retries)
     assert all(item["evidence_count"] == 1 for item in retries)
     journeys = {item["scenario_id"]: item for item in result["journeys"]}
     assert set(journeys) == {

@@ -427,8 +427,8 @@ def test_provider_start_guard_uses_the_attempt_specific_response_path(
     _initialize_ledger(bridge)
     measurement = ProviderInputMeasurement(
         provider="claude",
-        role="claude",
-        operation="claude_slice_review",
+        role="reviewer",
+        operation="reviewer_slice_review",
         binding_fingerprint="b" * 64,
         input_digest="c" * 64,
         policy_digest="d" * 64,
@@ -456,7 +456,7 @@ def test_provider_start_guard_uses_the_attempt_specific_response_path(
     )
     bootstrap = bridge.append(
         payload,
-        logical_id="provider-input-2-claude_slice_review",
+        logical_id="provider-input-2-reviewer_slice_review",
         idempotency_key="provider-input:test",
         fingerprint_sha256=DIGEST,
     )

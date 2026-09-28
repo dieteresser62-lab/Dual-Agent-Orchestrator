@@ -31,15 +31,7 @@
     "agents_file": "<ROOT>/AGENTS.md",
     "approve_gate": false,
     "auto_resume": false,
-    "claude_binary": null,
-    "claude_effort": null,
     "claude_max_budget_usd": null,
-    "claude_model": null,
-    "claude_timeout": null,
-    "codex_binary": null,
-    "codex_effort": null,
-    "codex_model": null,
-    "codex_timeout": null,
     "completed_state_replaced": false,
     "config": null,
     "config_file": null,
@@ -50,6 +42,10 @@
     "force_overwrite_state": false,
     "gate_decision": null,
     "gate_rationale": null,
+    "implementer_binary": null,
+    "implementer_effort": null,
+    "implementer_model": null,
+    "implementer_timeout": null,
     "inbox_dir": "inbox",
     "manual_slice_gate": false,
     "outbox_dir": "outbox",
@@ -124,56 +120,56 @@
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "claude",
-            "role": "claude",
-            "operation": "claude_final_review",
+            "role": "reviewer",
+            "operation": "reviewer_final_review",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "claude",
-            "role": "claude",
-            "operation": "claude_plan_review",
+            "role": "reviewer",
+            "operation": "reviewer_plan_review",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "claude",
-            "role": "claude",
-            "operation": "claude_slice_review",
+            "role": "reviewer",
+            "operation": "reviewer_slice_review",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "codex",
-            "role": "codex",
-            "operation": "codex_correction",
+            "role": "implementer",
+            "operation": "implementer_correction",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "codex",
-            "role": "codex",
-            "operation": "codex_implementation",
+            "role": "implementer",
+            "operation": "implementer_implementation",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "codex",
-            "role": "codex",
-            "operation": "codex_plan",
+            "role": "implementer",
+            "operation": "implementer_plan",
             "max_chars": 4000000,
             "max_bytes": 16000000
           },
           {
             "__type__": "ProviderInputBudgetRule",
             "provider": "codex",
-            "role": "codex",
-            "operation": "codex_plan_revision",
+            "role": "implementer",
+            "operation": "implementer_plan_revision",
             "max_chars": 4000000,
             "max_bytes": 16000000
           }
@@ -188,6 +184,10 @@
     "resume_explicit": false,
     "retry_failed_validation": false,
     "retry_incomplete_validation": false,
+    "reviewer_binary": null,
+    "reviewer_effort": null,
+    "reviewer_model": null,
+    "reviewer_timeout": null,
     "skip_git_check": false,
     "skip_git_check_source": "default",
     "state_was_frozen": false,
@@ -568,7 +568,7 @@
       "description": "An invalid agent setting is rethrown as ConfigError.",
       "arguments": [],
       "environment": {
-        "RUN_TASK_CLAUDE_EFFORT": "extreme"
+        "RUN_TASK_REVIEWER_EFFORT": "extreme"
       },
       "source": {
         "function": "parse_args",
@@ -586,13 +586,13 @@
           "function": "parse_args",
           "site": "args.agent_settings = resolve_agent_settings(args, env)",
           "type": "AgentConfigError",
-          "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+          "message": "reviewer effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         },
         {
           "function": "parse_args",
           "site": "raise ConfigError(str(exc)) from exc",
           "type": "ConfigError",
-          "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+          "message": "reviewer effort must be one of low, medium, high, xhigh, max; got 'extreme'"
         }
       ],
       "process_starts": 0,
@@ -601,11 +601,11 @@
         "error_chain": [
           {
             "type": "ConfigError",
-            "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+            "message": "reviewer effort must be one of low, medium, high, xhigh, max; got 'extreme'"
           },
           {
             "type": "AgentConfigError",
-            "message": "claude effort must be one of low, medium, high, xhigh, max; got 'extreme'"
+            "message": "reviewer effort must be one of low, medium, high, xhigh, max; got 'extreme'"
           }
         ],
         "stderr": ""
@@ -639,7 +639,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "ebfec813a5d8e9ed6b7704d53231da2054cd09abb38a83a4b7138db63352d917",
+        "namespace_sha256": "41c9cc956a944b97441b4b18d786a088c107b675e3301fb96386f2edd31cf967",
         "return_trace": [
           {
             "function": "quota_int",
@@ -722,7 +722,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "c8ceaf6a9d2da2e369365ed8ed248760c1c999f1357e0be41a2f67b3ed9364db",
+        "namespace_sha256": "fd60f780aa68fad3492272c9940292632f922580e74f4f6777ebffbadc03e43b",
         "return_trace": [
           {
             "function": "quota_int",
@@ -796,7 +796,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "9511c27f15f5c6fb21a23d0575e8b61d8d717b736e1a6e4ffcf04e363922dd57",
+        "namespace_sha256": "3023f9445d3a550541bb323f15ba10ccbc8573806b34d757aa44b388b54ed2b1",
         "return_trace": [
           {
             "function": "quota_int",
@@ -877,7 +877,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 69,
-        "namespace_sha256": "af07b6f93c1a7a8d7c508ad8cc18c3f7264becad886d805fede677835d18708c",
+        "namespace_sha256": "0ae1d8c7e6aedc3ef30a2a48bb9ee91460dbb6aabc5caea0804a9ff4e2703567",
         "return_trace": [
           {
             "function": "quota_int",

@@ -310,7 +310,7 @@ def test_record_authority_module_headers_match_the_root_contract() -> None:
         assert all(fragment in header for fragment in fragments), filename
 
 
-def test_claude_profile_is_persistently_opus_high() -> None:
+def test_reviewer_profile_is_persistently_opus_high() -> None:
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "Opus" in claude and "`high`" in claude
@@ -670,7 +670,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
     )
     dynamic_role_names = {
         f"RUN_TASK_{role.upper()}_{field.upper()}"
-        for role in ("codex", "claude")
+        for role in ("implementer", "reviewer")
         for field in ("binary", "model", "timeout", "effort")
     }
     consumed_names = dynamic_role_names | {
@@ -910,7 +910,7 @@ _PROVIDER_NAMES = ("codex", "claude")
 _PROVIDER_REFERENCE_CATEGORIES = (
     "transport", "schema-bound diagnostic", "wire until slice 8/9",
     "certification data", "role policy file", "legacy branch syntax",
-    "stable audit marker",
+    "stable audit marker", "historical wire proof",
 )
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"

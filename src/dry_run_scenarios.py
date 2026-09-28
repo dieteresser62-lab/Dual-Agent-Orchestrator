@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
+from agent_config import current_provider_for_role
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
@@ -105,7 +106,7 @@ PREFIXLESS_GATE_RULES = (
             reason,
             "PREFIXLESS:INVOCATION-FAILURE",
             re.compile(
-                r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
+                r"role=(?:implementer|reviewer) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
                 r"kind=[a-z_]+ resume=.+ auto=(?:true|false) continuations=[0-9]+ "
                 r"provider=.+"
             ),
@@ -254,7 +255,7 @@ class ScriptedFailure:
             provider_data=self.provider_data,
         )
         classified = classify_agent_failure(
-            role.value,
+            current_provider_for_role(role.value),
             error,
             invocation_id=invocation_id,
             received_at=self.received_at,
@@ -444,7 +445,7 @@ class ScriptedInitialState:
             raw,
             set(),
             {
-                "kind", "branch", "slice_count", "max_codex_returns", "scope_paths",
+                "kind", "branch", "slice_count", "max_implementer_returns", "scope_paths",
                 "execution_mode", "work_plan_path", "approved_plan_commit",
                 "planned_slices",
             },
@@ -504,8 +505,8 @@ class ScriptedInitialState:
             branch=_string(raw.get("branch", "feature/dry-run"), "scenario.initial.branch"),
             slice_count=_positive_int(raw.get("slice_count", 1), "scenario.initial.slice_count"),
             max_implementer_returns=_positive_int(
-                raw.get("max_codex_returns", 6),
-                "scenario.initial.max_codex_returns",
+                raw.get("max_implementer_returns", 6),
+                "scenario.initial.max_implementer_returns",
             ),
             scope_paths=_string_tuple(
                 raw.get("scope_paths", []),
@@ -1998,7 +1999,7 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                 1,
                 WorkflowStep.IMPLEMENTER_PLAN,
                 {
-                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
+                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
                     "request_id": "$BOUND_REQUEST_ID",
                     "result_type": "plan_result",
                     "ready": True,
@@ -2030,7 +2031,7 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "review_result",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
+                    "reviewer": "reviewer",
                     "decision": "approved",
                     "new_findings": [],
                     "status_changes": [],
@@ -2061,7 +2062,7 @@ def _s5_implementer_result(
     result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
 ) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
+        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
         "request_id": "$BOUND_REQUEST_ID",
         "result_type": result_type,
         "ready": True,
@@ -2105,7 +2106,7 @@ def _s5_review_result(
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "$BOUND_REQUEST_ID",
-        "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9: persisted reviewer role
+        "reviewer": "reviewer",
         "decision": "approved" if approved else "denied",
         "new_findings": findings,
         "status_changes": [
@@ -2198,7 +2199,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
+                    "reviewer": "reviewer",
                     "scan_complete": True,
                     "new_findings": [
                         {
@@ -2310,7 +2311,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
         result_type: str, findings: tuple[str, ...] = ()
     ) -> dict[str, object]:
         return {
-            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- wire until slice 8/9
+            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
             "request_id": "$BOUND_REQUEST_ID",
             "result_type": result_type,
             "ready": True,
@@ -2335,7 +2336,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
             "schema_version": "native-agent-review-result-v2",
             "result_type": "review_result",
             "request_id": "$BOUND_REQUEST_ID",
-            "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
+            "reviewer": "reviewer",
             "decision": "approved" if approved else "denied",
             "new_findings": [
                 {
@@ -2428,7 +2429,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                     "schema_version": "native-agent-review-result-v2",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
-                    "reviewer": "claude",  # allowlist:provider -- wire until slice 8/9
+                    "reviewer": "reviewer",
                     "scan_complete": True,
                     "new_findings": [],
                     "occurrences": [],

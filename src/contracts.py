@@ -29,8 +29,8 @@ VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
 
 
 class AgentRole(str, Enum):
-    IMPLEMENTER = "codex"
-    REVIEWER = "claude"
+    IMPLEMENTER = "implementer"
+    REVIEWER = "reviewer"
 
 
 class ApprovalMarker(str, Enum):
@@ -121,7 +121,7 @@ class FindingOrigin:
         if self.round_number < 1:
             raise ValueError("finding origin round must be 1-based")
         if self.reporter is not AgentRole.REVIEWER:
-            raise ValueError("finding reporter must be claude")
+            raise ValueError("finding reporter must be reviewer")
 
 
 @dataclass(frozen=True)
@@ -463,7 +463,7 @@ class StepContract:
         if not self.name.strip():
             raise ValueError("step contract requires a name")
         if self.reviewer is not AgentRole.REVIEWER:
-            raise ValueError("review step requires claude")
+            raise ValueError("review step requires reviewer")
         if not self.slice_id.strip():
             raise ValueError("step contract requires a slice id")
         if self.round_number < 1:

@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from content_authority_support import prior_role_wire_values
 from artifact_models import technical_text_evidence
 from contracts import PlannedSlice
 from plan_handoff import PlanHandoffError
@@ -509,8 +510,8 @@ def _initial_state(task: Path, kind: str) -> WorkflowState:
         state = _base_state(task)
         failure = InvocationFailureRecord(
             invocation_id="b48-quota",
-            idempotency_key="transition-run:1:codex_plan:codex",
-            role="codex",
+            idempotency_key="transition-run:1:implementer_plan:codex",
+            role="implementer",
             failure_kind=AgentFailureKind.QUOTA,
             provider_text="usage cap reached",
             received_at="2026-09-04T00:00:00+00:00",
@@ -842,8 +843,10 @@ def test_provider_free_transition_corpus_matches_pre_cut_baseline(
     assert actual["source_blob"] == baseline["source_blob"]
     scenarios = actual["scenarios"]
     assert [item["scenario_id"] for item in scenarios] == baseline["scenario_order"]
+    # Slice 8b wire cut: every prior digest must be recovered by inverse naming alone.
     assert {
-        item["scenario_id"]: _canonical_sha256(item) for item in scenarios
+        item["scenario_id"]: _canonical_sha256(prior_role_wire_values(item))
+        for item in scenarios
     } == baseline["scenario_sha256"]
 
 

@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
+        "request_id": "native-codex-request-84d725652635c741a1af4c5d427fff69e8f4459f3ff6168a6a93d988dec30603",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
-          "role": "codex",
+          "role": "implementer",
           "work_unit_id": 1,
           "request_sequence": 1,
-          "operation": "codex_implementation",
-          "request_id": "native-codex-request-21c472a6cc51a5606fd922decac5fc626616b0ffc6b9c7a6102ba7b59737acdf",
-          "response_sha256": "9d81b602f5046556881425884428ac98339986d914647dcc40215aa065591aab",
+          "operation": "implementer_implementation",
+          "request_id": "native-codex-request-84d725652635c741a1af4c5d427fff69e8f4459f3ff6168a6a93d988dec30603",
+          "response_sha256": "c70ddb10e6ef140c620f297427b55a01856ff84f0537359e10c0345bef414ae1",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },
@@ -146,15 +146,15 @@
       "state": {
         "approved": true,
         "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "request_id": "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30",
+        "request_id": "native-review-request-3cceea485059dedacfc13a0b08ac3abc49faf1de9ae9136513aac65a1c26cb6b",
         "round_number": 1,
         "content_binding": {
-          "role": "claude",
+          "role": "reviewer",
           "work_unit_id": 1,
           "request_sequence": 1,
-          "operation": "claude_slice_review",
-          "request_id": "native-review-request-0e6cd771e548771821113d313cc7dd891e6ebd5f47e22f0de10997c60d5afd30",
-          "response_sha256": "1b0cbd085b9a1245aab05c32043535257c932ff03375cedfa7d30b480e26aee4",
+          "operation": "reviewer_slice_review",
+          "request_id": "native-review-request-3cceea485059dedacfc13a0b08ac3abc49faf1de9ae9136513aac65a1c26cb6b",
+          "response_sha256": "21376ef474f704e841e41e7e488f774f21a936b1ac6022a21c80854ec18c009f",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

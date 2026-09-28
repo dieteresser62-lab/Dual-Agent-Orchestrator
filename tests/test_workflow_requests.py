@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from content_authority_support import prior_role_wire_document
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -273,11 +274,28 @@ def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
 
 
 def test_canonical_requests_match_the_current_bound_bytes() -> None:
-    assert _canonical_digest(_codex_bundle().canonical_json) == (
+    # Slice 8b wire cut: inverse names recover both pre-cut request documents.
+    implementer = _codex_bundle()
+    prior_implementer = prior_role_wire_document(implementer.document)
+    assert _canonical_digest(json.dumps(prior_implementer, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
         LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256
     )
-    assert _canonical_digest(_review_bundle().canonical_json) == (
+    assert _canonical_digest(implementer.canonical_json) == (
+        "3db2618adaf9334479e484472eabfaf458a7512f18b43aaf1cbc498957ad7ef3"
+    )
+    review = _review_bundle()
+    prior_schema = (review.provider_response_schema_json
+        .replace('"const":"reviewer"', '"const":"claude"')
+        .replace('"enum":["reviewer"]', '"enum":["claude"]'))
+    assert _canonical_digest(prior_schema) == "e25e390e6c895a7549e0645b66987419c373e0c25358e8a8ead20c5f8045c107"
+    prior_review = prior_role_wire_document(
+        review.document, prior_schema_sha256=_canonical_digest(prior_schema)
+    )
+    assert _canonical_digest(json.dumps(prior_review, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) == (
         PRE_CUT_REVIEW_REQUEST_SHA256
+    )
+    assert _canonical_digest(review.canonical_json) == (
+        "e48b0842d67a000122761f383e45f8dea6a6f5e470540a4423d61e1619b91343"
     )
 
 
@@ -390,7 +408,7 @@ def test_b78_codex_request_projects_the_exact_runtime_stop_rule_set() -> None:
     )
 
 
-def test_canary_33_codex_plan_schema_uses_the_runtime_validation_declarations() -> None:
+def test_canary_33_implementer_plan_schema_uses_the_runtime_validation_declarations() -> None:
     source_only = _codex_bundle()
     configured = _codex_bundle(
         context=replace(

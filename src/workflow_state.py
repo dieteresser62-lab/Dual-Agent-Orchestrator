@@ -48,14 +48,14 @@ class WorkUnitKind(str, Enum):
 
 
 class WorkflowStep(str, Enum):
-    IMPLEMENTER_PLAN = "codex_plan"
-    REVIEWER_PLAN_REVIEW = "claude_plan_review"
-    IMPLEMENTER_PLAN_REVISION = "codex_plan_revision"
-    IMPLEMENTER_IMPLEMENTATION = "codex_implementation"
-    REVIEWER_SLICE_REVIEW = "claude_slice_review"
-    IMPLEMENTER_CORRECTION = "codex_correction"
+    IMPLEMENTER_PLAN = "implementer_plan"
+    REVIEWER_PLAN_REVIEW = "reviewer_plan_review"
+    IMPLEMENTER_PLAN_REVISION = "implementer_plan_revision"
+    IMPLEMENTER_IMPLEMENTATION = "implementer_implementation"
+    REVIEWER_SLICE_REVIEW = "reviewer_slice_review"
+    IMPLEMENTER_CORRECTION = "implementer_correction"
     SLICE_COMMIT = "slice_commit"
-    REVIEWER_FINAL_REVIEW = "claude_final_review"
+    REVIEWER_FINAL_REVIEW = "reviewer_final_review"
     COMPLETED = "completed"
 
 
@@ -116,7 +116,7 @@ class AgentFailureKind(str, Enum):
 
 
 class Reviewer(str, Enum):
-    REVIEWER = "claude"
+    REVIEWER = "reviewer"
 
 
 NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
@@ -289,8 +289,8 @@ class ProtocolBinding:
             result["claude_review_transport"] = self.claude_review_transport
         if self.codex_result_transport is not None:
             result["codex_result_transport"] = self.codex_result_transport
-        result["codex_profile"] = self.implementer_profile.to_dict()
-        result["claude_profile"] = self.reviewer_profile.to_dict()
+        result["implementer_profile"] = self.implementer_profile.to_dict()
+        result["reviewer_profile"] = self.reviewer_profile.to_dict()
         return result
 
     @classmethod
@@ -302,8 +302,8 @@ class ProtocolBinding:
                 "schema_version",
                 "claude_review_transport",
                 "codex_result_transport",
-                "codex_profile",
-                "claude_profile",
+                "implementer_profile",
+                "reviewer_profile",
             }
         ):
             raise WorkflowStateValidationError(
@@ -329,12 +329,12 @@ class ProtocolBinding:
                 else None
             ),
             implementer_profile=AgentProfileBinding.from_dict(
-                _mapping(raw.get("codex_profile"), "protocol codex_profile"),
-                "protocol codex_profile",
+                _mapping(raw.get("implementer_profile"), "protocol implementer_profile"),
+                "protocol implementer_profile",
             ),
             reviewer_profile=AgentProfileBinding.from_dict(
-                _mapping(raw.get("claude_profile"), "protocol claude_profile"),
-                "protocol claude_profile",
+                _mapping(raw.get("reviewer_profile"), "protocol reviewer_profile"),
+                "protocol reviewer_profile",
             ),
         )
 
@@ -378,7 +378,7 @@ class InvocationFailureRecord:
             _require_non_empty(value, label)
         if self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError(
-                "invocation failure role must be codex or claude"
+                "invocation failure role must be implementer or reviewer"
             )
         _require_timestamp(self.received_at, "invocation failure received_at")
         _require_positive_int(self.slice_id, "invocation failure slice_id")
@@ -1043,11 +1043,11 @@ class WorkUnitRecord:
             object.__setattr__(self, "request_sequence", self.round_number)
         assert self.request_sequence is not None
         _require_positive_int(self.request_sequence, "request_sequence")
-        _require_positive_int(self.max_implementer_returns, "max_codex_returns")
+        _require_positive_int(self.max_implementer_returns, "max_implementer_returns")
         if isinstance(self.implementer_return_count, bool) or not isinstance(self.implementer_return_count, int):
-            raise WorkflowStateValidationError("codex_return_count must be an integer")
+            raise WorkflowStateValidationError("implementer_return_count must be an integer")
         if not 0 <= self.implementer_return_count <= self.max_implementer_returns:
-            raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
+            raise WorkflowStateValidationError("implementer_return_count is outside its configured limit")
         if self.round_number > self.max_implementer_returns:
             raise WorkflowStateValidationError("round_number exceeds its configured limit")
         _require_unique_non_empty(self.open_findings, "open_findings")
@@ -1162,8 +1162,8 @@ class WorkUnitRecord:
             "current_step": self.current_step.value,
             "round_number": self.round_number,
             "request_sequence": self.request_sequence,
-            "codex_return_count": self.implementer_return_count,
-            "max_codex_returns": self.max_implementer_returns,
+            "implementer_return_count": self.implementer_return_count,
+            "max_implementer_returns": self.max_implementer_returns,
             "gate": self.gate.to_dict(),
             "reviewer": self.reviewer.value if self.reviewer is not None else None,
             "open_findings": list(self.open_findings),
@@ -1183,8 +1183,8 @@ class WorkUnitRecord:
                 "status",
                 "current_step",
                 "round_number",
-                "codex_return_count",
-                "max_codex_returns",
+                "implementer_return_count",
+                "max_implementer_returns",
                 "gate",
                 "reviewer",
                 "open_findings",
@@ -1262,10 +1262,10 @@ class WorkUnitRecord:
                 "work_unit.request_sequence",
             ),
             implementer_return_count=_non_negative_int(
-                raw["codex_return_count"], "work_unit.codex_return_count"
+                raw["implementer_return_count"], "work_unit.implementer_return_count"
             ),
             max_implementer_returns=_positive_int(
-                raw["max_codex_returns"], "work_unit.max_codex_returns"
+                raw["max_implementer_returns"], "work_unit.max_implementer_returns"
             ),
             gate=GateRecord.from_dict(_mapping(raw["gate"], "work_unit.gate")),
             reviewer=(

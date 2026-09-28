@@ -195,7 +195,7 @@ def _append_implementer_pair(
                 Role.IMPLEMENTER,
                 "1",
                 content_round or invocation_round,
-                "codex_implementation",
+                "implementer_implementation",
                 request_id,
                 blob.sha256,
                 "agent_result",
@@ -216,7 +216,7 @@ def _append_implementer_pair(
             request_id,
             blob.sha256,
         ),
-        logical_id=f"agent-1-codex_implementation-{invocation_round}",
+        logical_id=f"agent-1-implementer_implementation-{invocation_round}",
         idempotency_key=f"agent-result:test:{invocation_round}",
         fingerprint_sha256=FINGERPRINT,
     )
@@ -302,7 +302,7 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
         role=Role.IMPLEMENTER,
         work_unit_id=1,
         request_sequence=1,
-        operation="codex_implementation",
+        operation="implementer_implementation",
         request_id="native-codex-request-" + ("b" * 64),
         canonical=canonical,
         content_kind="agent_result",
@@ -441,7 +441,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
             role=Role.IMPLEMENTER,
             work_unit_id=7,
             request_sequence=request_sequence,
-            operation="codex_implementation",
+            operation="implementer_implementation",
             request_id=request_id,
             canonical=canonical,
             content_kind="agent_result",
@@ -452,7 +452,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
         role=Role.IMPLEMENTER,
         work_unit_id=7,
         request_sequence=2,
-        operation="codex_implementation",
+        operation="implementer_implementation",
     )
 
     assert recovered is not None
@@ -531,7 +531,7 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
             Role.REVIEWER,
             "1",
             2,
-            "claude_slice_review",
+            "reviewer_slice_review",
             request_id,
             blob.sha256,
             "review_result",

@@ -9,50 +9,50 @@ default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_h
 
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_plan"
+role = "implementer"
+operation = "implementer_plan"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_plan_revision"
+role = "implementer"
+operation = "implementer_plan_revision"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_implementation"
+role = "implementer"
+operation = "implementer_implementation"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_correction"
+role = "implementer"
+operation = "implementer_correction"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "claude"
-role = "claude"
-operation = "claude_plan_review"
+role = "reviewer"
+operation = "reviewer_plan_review"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "claude"
-role = "claude"
-operation = "claude_slice_review"
+role = "reviewer"
+operation = "reviewer_slice_review"
 max_chars = 4000000
 max_bytes = 16000000
 
 [[provider_input_budget]]
 provider = "claude"
-role = "claude"
-operation = "claude_final_review"
+role = "reviewer"
+operation = "reviewer_final_review"
 max_chars = 4000000
 max_bytes = 16000000
 

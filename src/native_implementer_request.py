@@ -460,7 +460,7 @@ def _implementer_context_request_projection(
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,
         "current_fingerprint": context.current_fingerprint,
-        "codex_contract": _contract_document(context),
+        "implementer_contract": _contract_document(context),
         "open_findings": [
             {
                 "finding_id": item.finding_id,

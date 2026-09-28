@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
+from agent_config import current_provider_for_role
+
 from agent_runtime import (
     AgentInvocationError,
     is_structured_output_retry_exhaustion,
@@ -660,7 +662,8 @@ class WorkflowFailureRecording:
         disposition_limit_failure: bool = False,
         native_response_retry_allowed: bool = True,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
-        if error.agent_key != role.value:
+        expected_provider = current_provider_for_role(role.value)
+        if error.agent_key != expected_provider:
             raise self._dependencies.execution_error(
                 "agent failure role differs from the required workflow role"
             )

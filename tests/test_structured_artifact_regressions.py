@@ -411,7 +411,7 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     raw_technical_text = "stderr sentinel: provider worker was killed"
     raw_provider_text = "provider process rejected the request"
     error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         AgentOutputError(
             "review invocation failed",
             provider_text=raw_provider_text,
@@ -498,7 +498,7 @@ def test_structured_output_subtype_reaches_safe_halt_diagnostic(
     model_text = "MODEL_OUTPUT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error_text = "PROVIDER_ERROR_TEXT_MUST_NOT_REACH_THE_DIAGNOSTIC"
     error = AgentInvocationError(
-        agent_key=AgentRole.REVIEWER.value,
+        agent_key="claude",
         kind=AgentFailureKind.OUTPUT,
         invocation_id="structured-output-diagnostic-1",
         received_at=now,
@@ -665,7 +665,7 @@ def test_unwritable_cleartext_diagnostic_warns_once_and_record_still_appends(
     monkeypatch.setattr(Path, "mkdir", reject_diagnostic_directory)
     now = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
     error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         AgentOutputError(
             "native Claude error",
             exit_code=1,
@@ -1210,7 +1210,7 @@ def _pending_reviewer_recovery_case(
     bridge.append(
         finding_payload(prior_finding),
         logical_id="finding-C-07",
-        idempotency_key="finding:C-07:opened:1:claude",
+        idempotency_key="finding:C-07:opened:1:reviewer",
         fingerprint_sha256=fingerprint,
     )
     bridge.append(
@@ -1249,7 +1249,7 @@ def _pending_reviewer_recovery_case(
     driver.log_dir.mkdir(parents=True, exist_ok=True)
     (
         driver.log_dir
-        / f"work-unit-{state.current_work_unit_id:04d}-claude_slice_review.attempt-1.log"
+        / f"work-unit-{state.current_work_unit_id:04d}-reviewer_slice_review.attempt-1.log"
     ).write_text(output + "\n", encoding="utf-8")
     return driver, state, output
 
@@ -1286,8 +1286,8 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
                 rule.provider,
                 rule.role,
                 rule.operation,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
-                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "implementer", "implementer_implementation") else rule.max_bytes,
             )
             for rule in defaults.rules
         )
@@ -1299,8 +1299,8 @@ def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
             components=(ProviderInputComponent("stdin_prompt", "oversized"),),
         ),
         provider="codex",
-        role="codex",
-        operation="codex_implementation",
+        role="implementer",
+        operation="implementer_implementation",
         binding_fingerprint="b" * 64,
         policy=policy,
     )
@@ -1450,7 +1450,7 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:codex"
         ),
-        role="codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -1529,7 +1529,7 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:claude"
         ),
-        role="claude",
+        role="reviewer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at="2026-08-31T10:00:00+00:00",
@@ -1585,8 +1585,8 @@ def test_gate_transition_after_invocation_failure_supersedes_failure_projection(
     driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
     failure = InvocationFailureRecord(
         invocation_id="failure-before-policy-gate",
-        idempotency_key=f"{state.run_id}:1:codex_plan:codex",
-        role="codex",
+        idempotency_key=f"{state.run_id}:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at="2026-08-31T10:00:00+00:00",
@@ -1647,7 +1647,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
             f"{state.run_id}:{state.current_work_unit_id}:"
             f"{state.current_step.value}:claude"
         ),
-        role="claude",
+        role="reviewer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="HTTP 529 overloaded",
         received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -1739,7 +1739,7 @@ def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     )
     output_error.__cause__ = contract_error
     failure_error = classify_agent_failure(
-        AgentRole.REVIEWER.value,
+        "claude",
         output_error,
         invocation_id="review-form-retry-1",
         received_at=now,
@@ -1908,8 +1908,7 @@ def test_pre_r1_failure_artifact_chain_is_rejected_without_synthesized_facts(
         fingerprint_sha256="a" * 64,
     )
     measurement = bridge.append(
-        ProviderInputMeasurementPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+        ProviderInputMeasurementPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "a" * 64, "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt_file", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,

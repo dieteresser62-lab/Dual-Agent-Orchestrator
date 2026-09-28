@@ -14,7 +14,7 @@ def _rejected_review_document() -> dict[str, object]:
         "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "a" * 64,
-        "reviewer": "claude",
+        "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {

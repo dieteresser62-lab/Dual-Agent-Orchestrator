@@ -781,10 +781,10 @@ def _project_work_unit_round_and_kind(
         "correction"
         if isinstance(definition, CorrectionWorkUnitPayload)
         else "final_review"
-        if first_step == "claude_final_review"  # allowlist:provider -- wire until slice 8/9: canonical state-v3 step
+        if first_step == "reviewer_final_review"
         else "plan"
         if unit.work_unit_id == "1"
-        or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- wire until slice 8/9: canonical state-v3 steps
+        or first_step in {"implementer_plan", "reviewer_plan_review", "implementer_plan_revision"}
         else "slice"
     )
     return round_number, kind
@@ -955,10 +955,10 @@ def _project_work_unit_document(
                 ),
             )
         ),
-        "codex_return_count": (  # allowlist:provider -- wire until slice 8/9: canonical state-v3 field
+        "implementer_return_count": (
             0 if policy is None else policy.implementer_return_count
         ),
-        "max_codex_returns": (  # allowlist:provider -- wire until slice 8/9: canonical state-v3 field
+        "max_implementer_returns": (
             6 if policy is None else policy.max_implementer_returns
         ),
         "gate": gate_document,
@@ -1056,11 +1056,11 @@ def _assemble_workflow_state_document(
             "schema_version": "2",
             "claude_review_transport": "native-claude-review-v2",  # allowlist:provider -- transport: canonical protocol binding
             "codex_result_transport": "native-codex-v2",  # allowlist:provider -- transport: canonical protocol binding
-            "codex_profile": {  # allowlist:provider -- wire until slice 8/9: canonical state-v3 field
+            "implementer_profile": {
                 "model": profile.implementer.model,
                 "effort": profile.implementer.effort,
             },
-            "claude_profile": {  # allowlist:provider -- wire until slice 8/9: canonical state-v3 field
+            "reviewer_profile": {
                 "model": profile.reviewer.model,
                 "effort": profile.reviewer.effort,
             },
@@ -1227,7 +1227,7 @@ def _project_bootstrap_fact(
     return {
         "check_kind": payload.record_type.value,
         "transition_fingerprint": payload.transition_fingerprint,
-        "provider": payload.provider.value,
+        "provider": payload.provider,
         "role": payload.role.value,
         "operation": payload.operation,
         "work_unit_id": int(payload.work_unit_id),

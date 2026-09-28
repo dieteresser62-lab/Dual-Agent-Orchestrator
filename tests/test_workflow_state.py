@@ -127,8 +127,8 @@ def test_init_workflow_state_does_not_inherit_first_slice_start_from_branch_base
 
 def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     fact = BootstrapCheckFact(
-        "provider_input_measurement", "a" * 64, "codex", "codex",
-        "codex_plan", 1, "b" * 64, "allowed",
+        "provider_input_measurement", "a" * 64, "codex", "implementer",
+        "implementer_plan", 1, "b" * 64, "allowed",
     )
     state = make_state().with_bootstrap_check(fact).with_bootstrap_check(fact)
     halted = state.await_bootstrap_resume(
@@ -149,8 +149,8 @@ def test_denied_provider_input_measurement_becomes_a_terminal_visible_verdict() 
         "provider_input_measurement",
         "a" * 64,
         "codex",
-        "codex",
-        "codex_plan",
+        "implementer",
+        "implementer_plan",
         1,
         "b" * 64,
         "denied",
@@ -524,8 +524,8 @@ def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
 
     document = binding.to_dict()
-    document.pop("codex_profile")
-    with pytest.raises(WorkflowStateValidationError, match="codex_profile"):
+    document.pop("implementer_profile")
+    with pytest.raises(WorkflowStateValidationError, match="implementer_profile"):
         ProtocolBinding.from_dict(document)
     with pytest.raises(WorkflowStateValidationError, match="unsupported"):
         AgentProfileBinding("sonnet", "extreme")
@@ -650,8 +650,8 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     state = make_state()
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached; retry in 60 seconds",
         received_at="2026-08-12T10:00:00+00:00",
@@ -687,8 +687,8 @@ def test_native_implementer_retry_feedback_roundtrips_in_state() -> None:
     diagnostic = OrchestratorDiagnostic.IMPLEMENTER_SLICE_PLAN_INVALID.text
     failure = InvocationFailureRecord(
         invocation_id="inv-codex-form-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.OUTPUT,
         provider_text="native Codex result violates its bound contract",
         received_at="2026-09-19T20:24:00+00:00",
@@ -718,8 +718,8 @@ def test_native_implementer_retry_feedback_roundtrips_in_state() -> None:
 def test_nonautomatic_quota_failure_remains_resumable_on_same_step() -> None:
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-terminal",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached without reset",
         received_at="2026-08-12T10:00:00+00:00",
@@ -752,8 +752,8 @@ def test_nonautomatic_quota_failure_remains_resumable_on_same_step() -> None:
 def test_prior_terminal_quota_record_fails_closed_before_next_work_unit() -> None:
     failure = InvocationFailureRecord(
         invocation_id="prior-quota",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage limit",
         received_at="2026-08-12T10:00:00+00:00",
@@ -792,8 +792,8 @@ def test_prior_terminal_quota_record_fails_closed_before_next_work_unit() -> Non
 def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() -> None:
     failure = InvocationFailureRecord(
         invocation_id="inv-quota-diff",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.QUOTA,
         provider_text="usage cap reached",
         received_at="2026-08-12T10:00:00+00:00",
@@ -892,8 +892,8 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     state = make_state()
     failure = InvocationFailureRecord(
         invocation_id="inv-network-1",
-        idempotency_key="run-1:1:codex_plan:codex",
-        role="codex",
+        idempotency_key="run-1:1:implementer_plan:codex",
+        role="implementer",
         failure_kind=AgentFailureKind.NETWORK,
         provider_text="connection reset by peer",
         received_at="2026-08-12T10:00:00+00:00",

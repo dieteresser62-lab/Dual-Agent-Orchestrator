@@ -37,6 +37,7 @@ PERSISTENCE_PATH = ROOT / "src/workflow_persistence.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
+    "agent_config",
     "agent_runtime",
     "artifact_bridge",
     "artifact_models",
@@ -359,7 +360,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
         "role": Role.IMPLEMENTER,
         "work_unit_id": 4500,
         "request_sequence": 1,
-        "operation": "codex_implementation",
+        "operation": "implementer_implementation",
         "request_id": (
             "native-codex-request-"
             "a18a0c6b0b7822fd97d5cf80b8e0fd57b18b84744ba8c2b4b656a45c3e8bd960"
@@ -376,7 +377,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
         {**fields, "role": Role.REVIEWER},
         {**fields, "work_unit_id": 4600},
         {**fields, "request_sequence": 2},
-        {**fields, "operation": "claude_slice_review"},
+        {**fields, "operation": "reviewer_slice_review"},
         {**fields, "request_id": "native-review-request-" + "b" * 64},
         {**fields, "response_sha256": "c" * 64},
     )
@@ -384,7 +385,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
         provider_content_idempotency_key(**item) for item in distinct_inputs
     }
     incident_key = (
-        "provider-content:codex:4500:1:codex_implementation:"
+        "provider-content:codex:4500:1:implementer_implementation:"
         f"{fields['request_id']}:{fields['response_sha256']}"
     )
 
@@ -393,7 +394,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
     assert len(first) < 200
     assert len(distinct_keys) == len(distinct_inputs)
     assert all(_IDENTIFIER_RE.fullmatch(key) for key in distinct_keys)
-    assert len(incident_key) == 201
+    assert len(incident_key) == 207
     assert _IDENTIFIER_RE.fullmatch(incident_key) is None
 
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "final-correction-content-key"))

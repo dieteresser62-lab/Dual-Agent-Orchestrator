@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 import json
+from types import SimpleNamespace
 
 import artifact_models
 import pytest
+import role_occupancy
 
 from acceptance_criteria import MeasuredAgainst, acceptance_criteria_from_texts
 from artifact_models import (
@@ -71,6 +73,92 @@ from orchestrator_diagnostics import (
     OrchestratorDiagnostic,
 )
 from rejected_response_shape import extract_rejected_native_response_shape
+from agent_config import current_pre_toml_occupancy
+from agent_roles import AgentSlot
+from agent_runtime import _binary_remedy
+from provider_input_budget import (
+    PROVIDER_OPERATIONS,
+    PROVIDER_ROLES,
+    default_provider_input_budget_policy,
+)
+
+_PROVIDER_ONE = "codex"  # allowlist:provider -- transport: occupancy test input
+_PROVIDER_TWO = "claude"  # allowlist:provider -- transport: occupancy test input
+
+
+def _measurement_for_pair(provider: str, role: Role) -> ProviderInputMeasurementPayload:
+    return ProviderInputMeasurementPayload(
+        provider, role, "implementer_implementation", "work-01", DIGEST, "b" * 64,
+        "c" * 64, "d" * 64,
+        (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
+        3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
+    )
+
+
+def _attempt_for_pair(provider: str, role: Role) -> ProviderAttemptPayload:
+    return ProviderAttemptPayload(
+        provider, role, "implementer_implementation", "work-01",
+        "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
+        "started", CREATED_AT, None, None, None, None,
+    )
+
+
+def _preflight_for_pair(provider: str, role: Role) -> FinalReviewPreflightPayload:
+    return FinalReviewPreflightPayload(
+        provider, role, "reviewer_final_review", "work-01", DIGEST, "b" * 64,
+        "measurement-01", "passed", None, None, (), (), None,
+    )
+
+
+@pytest.mark.parametrize(
+    "make_payload",
+    (_measurement_for_pair, _attempt_for_pair, _preflight_for_pair),
+    ids=("measurement", "attempt", "preflight"),
+)
+@pytest.mark.parametrize(
+    ("provider", "role"),
+    ((_PROVIDER_TWO, Role.IMPLEMENTER), (_PROVIDER_ONE, Role.REVIEWER)),
+)
+def test_provider_payloads_reject_wrong_role_pair(
+    make_payload, provider: str, role: Role,
+) -> None:
+    with pytest.raises(ArtifactValidationError, match="provider and role"):
+        make_payload(provider, role)
+
+
+def test_occupancy_patch_changes_payload_budget_and_binary_remedy_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        role_occupancy, "current_pre_toml_occupancy",
+        lambda: {
+            AgentSlot.IMPLEMENTER: _PROVIDER_TWO,
+            AgentSlot.REVIEWER: _PROVIDER_ONE,
+            AgentSlot.FINAL_REVIEWER: _PROVIDER_ONE,
+        },
+    )
+    assert current_pre_toml_occupancy()[AgentSlot.IMPLEMENTER] == _PROVIDER_TWO
+    assert dict(PROVIDER_ROLES) == {
+        _PROVIDER_TWO: "implementer", _PROVIDER_ONE: "reviewer",
+    }
+    assert "implementer_implementation" in PROVIDER_OPERATIONS[_PROVIDER_TWO]
+    assert "reviewer_final_review" in PROVIDER_OPERATIONS[_PROVIDER_ONE]
+    assert (_PROVIDER_TWO, "implementer", "implementer_implementation") in {
+        rule.key for rule in default_provider_input_budget_policy().rules
+    }
+    for make_payload in (_measurement_for_pair, _attempt_for_pair):
+        assert make_payload(_PROVIDER_TWO, Role.IMPLEMENTER).provider == _PROVIDER_TWO
+        with pytest.raises(ArtifactValidationError, match="provider and role"):
+            make_payload(_PROVIDER_ONE, Role.IMPLEMENTER)
+    assert _preflight_for_pair(_PROVIDER_ONE, Role.REVIEWER).provider == _PROVIDER_ONE
+    with pytest.raises(ArtifactValidationError, match="provider and role"):
+        _preflight_for_pair(_PROVIDER_TWO, Role.REVIEWER)
+    assert "--implementer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
+    assert "RUN_TASK_IMPLEMENTER_BINARY" in _binary_remedy(SimpleNamespace(name=_PROVIDER_TWO))
+    assert "--reviewer-binary" in _binary_remedy(SimpleNamespace(name=_PROVIDER_ONE))
+    unknown = _binary_remedy(SimpleNamespace(name="unknown-provider"))
+    assert "no role is assigned" in unknown
+    assert "--unknown-provider-binary" not in unknown
 
 
 DIGEST = "a" * 64
@@ -166,10 +254,9 @@ def test_final_review_finding_generation_pair_accepts_both_or_neither() -> None:
 def test_measurement_technical_limit_pair_names_the_complete_three_field_rule(
     technical_fields: dict[str, object],
 ) -> None:
-    measurement = ProviderInputMeasurementPayload(
+    measurement = ProviderInputMeasurementPayload("codex",
         Role.IMPLEMENTER,
-        Role.IMPLEMENTER,
-        "codex_implementation",
+        "implementer_implementation",
         "work-01",
         DIGEST,
         "b" * 64,
@@ -211,7 +298,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
-        "reducer_version": "structured-v2-schema-2-state-v3-target-class-round-exit-v1",
+        "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
         "merge_completed_branch": True,
         "base_branch": None,
         "archive_run_directory": None,
@@ -554,7 +641,7 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         RoleProfilePayload("opus", "high"),
     ),
     WorkflowTransitionPayload(
-        "1", "in_progress", "2", "codex_implementation", "in_progress"
+        "1", "in_progress", "2", "implementer_implementation", "in_progress"
     ),
     WorkflowPolicyPayload("2", 1, 4),
     SliceBoundaryPayload(
@@ -586,22 +673,22 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "test approval required",
         DIGEST,
         ("tests/test_gate.py",),
-        "claude_slice_review",
+        "reviewer_slice_review",
         DIGEST,
         ("tests/test_gate.py",),
     ),
     GateDecisionPayload(
         "work-01", "gate-record-01", ("tests/test_gate.py",),
-        "claude_slice_review",
+        "reviewer_slice_review",
     ),
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
     InvocationFailurePayload(
-        "invocation-01", "run-01:work-01:claude_slice_review:claude",
+        "invocation-01", "run-01:work-01:reviewer_slice_review:claude",
         Role.REVIEWER, "network", "transient", "AGENT-INVOCATION",
         PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES,
         TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES,
         "2026-08-18T11:30:00+00:00", "2026-08-18T11:30:00+00:00",
-        "claude_slice_review", "1", "work-01", 3, None,
+        "reviewer_slice_review", "1", "work-01", 3, None,
         None, None, None, "2026-08-18T11:30:05+00:00", 0, 5, 1, True,
         DIGEST,
     ),
@@ -609,19 +696,16 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     TransientRetryPayload(Role.REVIEWER, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
-    ProviderInputMeasurementPayload(
-        Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01", DIGEST, "b" * 64,
+    ProviderInputMeasurementPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01", DIGEST, "b" * 64,
         "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
     ),
-    ProviderAttemptPayload(
-        Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01",
+    ProviderAttemptPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01",
         "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
         "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None,
         ProviderUsagePayload(input_tokens=0, output_tokens=7, turns=1),
     ),
-    FinalReviewPreflightPayload(
-        Role.REVIEWER, Role.REVIEWER, "claude_final_review", "work-01", DIGEST, "b" * 64,
+    FinalReviewPreflightPayload("claude", Role.REVIEWER, "reviewer_final_review", "work-01", DIGEST, "b" * 64,
         "measurement-01", "passed", None, None, (), (), None,
     ),
 ])
@@ -643,7 +727,7 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
 
 def test_gate_decision_optional_invocation_binding_is_backward_compatible() -> None:
     historical = GateDecisionPayload(
-        "work-01", "gate-record-01", ("src/runtime.py",), "codex_implementation"
+        "work-01", "gate-record-01", ("src/runtime.py",), "implementer_implementation"
     )
     bound = replace(historical, invocation_id="timeout-invocation-17")
 
@@ -682,7 +766,7 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
     marker, digest, byte_count = technical_text_evidence(raw)
     payload = InvocationFailurePayload(
         invocation_id="invocation-process-diagnostic",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
         role=Role.REVIEWER,
         failure_kind="process",
         failure_class="transient",
@@ -695,7 +779,7 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
         technical_text_bytes=byte_count,
         received_at="2026-09-01T18:30:00+00:00",
         decision_at_utc="2026-09-01T18:30:01+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -740,7 +824,7 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     marker, digest, byte_count = technical_text_evidence("schema-invalid")
     payload = InvocationFailurePayload(
         invocation_id="native-review-form-output",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
         role=Role.REVIEWER,
         failure_kind="output",
         failure_class="transient",
@@ -753,7 +837,7 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
         technical_text_bytes=byte_count,
         received_at="2026-09-07T20:24:00+00:00",
         decision_at_utc="2026-09-07T20:24:00+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -785,16 +869,16 @@ def test_automatic_output_retry_is_limited_to_typed_native_response_forms() -> N
     with pytest.raises(ArtifactValidationError):
         replace(payload, diagnostic_code="AGENT-OUTPUT")
     with pytest.raises(ArtifactValidationError):
-        replace(payload, role=Role.IMPLEMENTER, step="codex_implementation")
+        replace(payload, role=Role.IMPLEMENTER, step="implementer_implementation")
 
     codex_diagnostic = OrchestratorDiagnostic.IMPLEMENTER_RESULT_CONTENT_INVALID.text
     codex = replace(
         payload,
         invocation_id="native-codex-form-output",
-        idempotency_key="run-01:work-01:codex_implementation:codex",
+        idempotency_key="run-01:work-01:implementer_implementation:codex",
         role=Role.IMPLEMENTER,
         diagnostic_code="NATIVE-IMPLEMENTER-FORM",
-        step="codex_implementation",
+        step="implementer_implementation",
         orchestrator_diagnostic=codex_diagnostic,
         native_review_rejection=None,
         native_review_retry_round=None,
@@ -828,7 +912,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
     assert shape is not None
     payload = InvocationFailurePayload(
         invocation_id="native-review-terminal-output",
-        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        idempotency_key="run-01:work-01:reviewer_slice_review:claude",
         role=Role.REVIEWER,
         failure_kind="output",
         failure_class="resumable_halt",
@@ -841,7 +925,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
         technical_text_bytes=byte_count,
         received_at="2026-09-21T20:24:00+00:00",
         decision_at_utc="2026-09-21T20:24:00+00:00",
-        step="claude_slice_review",
+        step="reviewer_slice_review",
         slice_id="4",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -896,7 +980,7 @@ def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> 
     marker, digest, byte_count = technical_text_evidence(raw)
     payload = InvocationFailurePayload(
         invocation_id="invocation-readable-diagnostic",
-        idempotency_key="run-01:work-01:codex_plan:codex",
+        idempotency_key="run-01:work-01:implementer_plan:codex",
         role=Role.IMPLEMENTER,
         failure_kind="output",
         failure_class="resumable_halt",
@@ -909,7 +993,7 @@ def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> 
         technical_text_bytes=byte_count,
         received_at="2026-09-05T22:13:08+00:00",
         decision_at_utc="2026-09-05T22:13:09+00:00",
-        step="codex_plan",
+        step="implementer_plan",
         slice_id="1",
         work_unit_id="work-01",
         diagnostic_exit_code=3,
@@ -991,7 +1075,7 @@ def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -
 
     with pytest.raises(ArtifactValidationError, match="response_sha256"):
         replace(payload, response_sha256=None)
-    with pytest.raises(ArtifactValidationError, match="role=codex"):
+    with pytest.raises(ArtifactValidationError, match="role=implementer"):
         replace(payload, role=Role.REVIEWER)
     with pytest.raises(ArtifactValidationError, match="request_id"):
         replace(payload, request_id="native-codex-request-invalid")
@@ -1387,7 +1471,7 @@ def test_review_schema_rejects_simultaneous_legacy_and_structured_evidence() -> 
 
 
 def test_native_review_transport_rejects_foreign_reviewer() -> None:
-    with pytest.raises(ArtifactValidationError, match="reviewer must be claude"):
+    with pytest.raises(ArtifactValidationError, match="reviewer must be reviewer"):
         replace(_review(), reviewer=Role.IMPLEMENTER)
 
 
@@ -1432,15 +1516,13 @@ def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
 
 def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     with pytest.raises(ArtifactValidationError, match="started provider attempt"):
-        ProviderAttemptPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "started", CREATED_AT, None, None, None,
             ProviderUsagePayload(input_tokens=0),
         )
     with pytest.raises(ArtifactValidationError, match="failure_kind"):
-        ProviderAttemptPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None, None,
         )
@@ -1448,8 +1530,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
         ProviderUsagePayload(output_tokens=-1)
 
     failed = _record(
-        ProviderAttemptPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-failed", DIGEST, "measurement-failed", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             "network",
@@ -1462,8 +1543,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     failed_without_usage = replace(failed.payload, usage=None)
     assert failed_without_usage.usage is None
     succeeded = _record(
-        ProviderAttemptPayload(
-            Role.IMPLEMENTER, Role.IMPLEMENTER, "codex_implementation", "work-01",
+        ProviderAttemptPayload("codex", Role.IMPLEMENTER, "implementer_implementation", "work-01",
             "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
             "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             None, ProviderUsagePayload(output_tokens=1),
@@ -1476,8 +1556,7 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
 
 def test_failed_network_attempt_with_usage_roundtrips_model_and_schema() -> None:
     failed = _record(
-        ProviderAttemptPayload(
-            Role.REVIEWER, Role.REVIEWER, "claude_slice_review", "1",
+        ProviderAttemptPayload("claude", Role.REVIEWER, "reviewer_slice_review", "1",
             "provider-operation-network", DIGEST, "measurement-network",
             "b" * 64, 1, "failed", CREATED_AT,
             "2026-08-18T10:30:01+00:00", 1.0, "network",

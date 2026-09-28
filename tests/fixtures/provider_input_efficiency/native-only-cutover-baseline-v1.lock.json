@@ -1,1 +1,1 @@
-{"base_commit":"bdb955d4ca56ca292dd8bcbd4d1e776a2acb7a1b","baseline_sha256":"66cad69014a7407d5fd0fdf2bc07f062b4da8c2c88f8a81b4e0dcef948d036a5","expected_removed_evidence_ids":["approved-plan","workflow-prompt"],"fixture_version":"native-only-cutover-baseline-v1"}
+{"base_commit":"bdb955d4ca56ca292dd8bcbd4d1e776a2acb7a1b","baseline_sha256":"35a6856429189bd1e7b07baa76aab03f9fe4b166e194a25d26149c749fa44b26","expected_removed_evidence_ids":["approved-plan","workflow-prompt"],"fixture_version":"native-only-cutover-baseline-v1"}

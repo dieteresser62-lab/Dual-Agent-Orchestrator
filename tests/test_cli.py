@@ -35,7 +35,7 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     config = load_repo_config(Path(__file__).resolve().parents[1] / "orchestrator.toml")
 
     rule = config.provider_input_budget.select(
-        "claude", "claude", "claude_final_review"
+        "claude", "reviewer", "reviewer_final_review"
     )
     assert rule.max_chars == 4_000_000
     assert rule.max_bytes == 16_000_000
@@ -89,8 +89,8 @@ def test_provider_input_budget_config_is_closed_and_complete(tmp_path: Path) -> 
         """
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_implementation"
+role = "implementer"
+operation = "implementer_implementation"
 max_chars = 10
 max_bytes = 20
 unexpected = true
@@ -103,8 +103,8 @@ unexpected = true
         """
 [[provider_input_budget]]
 provider = "codex"
-role = "codex"
-operation = "codex_implementation"
+role = "implementer"
+operation = "implementer_implementation"
 max_chars = 10
 max_bytes = 20
 """,
@@ -112,10 +112,10 @@ max_bytes = 20
     )
     config = load_repo_config(path)
     assert config.provider_input_budget.select(
-        "codex", "codex", "codex_implementation"
+        "codex", "implementer", "implementer_implementation"
     ).max_chars == 10
     assert config.provider_input_budget.select(
-        "claude", "claude", "claude_final_review"
+        "claude", "reviewer", "reviewer_final_review"
     ).max_chars == 4_000_000
 
     path.write_text(path.read_text(encoding="utf-8") * 2, encoding="utf-8")
@@ -130,14 +130,14 @@ def _isolate_process_environment(monkeypatch) -> None:
         "RUN_TASK_SKIP_GIT_CHECK",
         "RUN_TASK_TEST_CMD",
         "RUN_TASK_WATCH_STREAM_CHANNELS",
-        "RUN_TASK_CODEX_BINARY",
-        "RUN_TASK_CODEX_MODEL",
-        "RUN_TASK_CODEX_TIMEOUT",
-        "RUN_TASK_CODEX_EFFORT",
-        "RUN_TASK_CLAUDE_BINARY",
-        "RUN_TASK_CLAUDE_MODEL",
-        "RUN_TASK_CLAUDE_TIMEOUT",
-        "RUN_TASK_CLAUDE_EFFORT",
+        "RUN_TASK_IMPLEMENTER_BINARY",
+        "RUN_TASK_IMPLEMENTER_MODEL",
+        "RUN_TASK_IMPLEMENTER_TIMEOUT",
+        "RUN_TASK_IMPLEMENTER_EFFORT",
+        "RUN_TASK_REVIEWER_BINARY",
+        "RUN_TASK_REVIEWER_MODEL",
+        "RUN_TASK_REVIEWER_TIMEOUT",
+        "RUN_TASK_REVIEWER_EFFORT",
         "RUN_TASK_CLAUDE_MAX_BUDGET_USD",
         "RUN_TASK_QUOTA_AUTO_RESUME",
         "RUN_TASK_QUOTA_SAFETY_MARGIN",
@@ -470,26 +470,26 @@ def test_every_public_parser_action_has_help_text() -> None:
 def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Path) -> None:
     args = parse_args(
         [
-            "--claude-binary",
+            "--reviewer-binary",
             "/cli/claude",
-            "--claude-model",
+            "--reviewer-model",
             "opus",
-            "--claude-timeout",
+            "--reviewer-timeout",
             "321",
-            "--claude-effort",
+            "--reviewer-effort",
             "high",
             "--claude-max-budget-usd",
             "2.5",
         ],
         cwd=tmp_path,
         environ={
-            "RUN_TASK_CLAUDE_BINARY": "/env/claude",
-            "RUN_TASK_CLAUDE_MODEL": "sonnet",
-            "RUN_TASK_CLAUDE_TIMEOUT": "999",
-            "RUN_TASK_CLAUDE_EFFORT": "low",
+            "RUN_TASK_REVIEWER_BINARY": "/env/claude",
+            "RUN_TASK_REVIEWER_MODEL": "sonnet",
+            "RUN_TASK_REVIEWER_TIMEOUT": "999",
+            "RUN_TASK_REVIEWER_EFFORT": "low",
             "RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1.0",
-            "RUN_TASK_CODEX_MODEL": "luna",
-            "RUN_TASK_CODEX_EFFORT": "high",
+            "RUN_TASK_IMPLEMENTER_MODEL": "luna",
+            "RUN_TASK_IMPLEMENTER_EFFORT": "high",
         },
     )
 
@@ -518,31 +518,31 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
 
 def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
     settings = parse_args(
-        ["--codex-timeout", "0", "--claude-timeout", "47"],
+        ["--implementer-timeout", "0", "--reviewer-timeout", "47"],
         cwd=tmp_path,
-        environ={"RUN_TASK_CODEX_TIMEOUT": "17", "RUN_TASK_CLAUDE_TIMEOUT": "0"},
+        environ={"RUN_TASK_IMPLEMENTER_TIMEOUT": "17", "RUN_TASK_REVIEWER_TIMEOUT": "0"},
     ).agent_settings
     assert settings["codex"].timeout_seconds is None
     assert settings["claude"].timeout_seconds == 47
     assert parse_args(
-        [], cwd=tmp_path, environ={"RUN_TASK_CLAUDE_TIMEOUT": "0"}
+        [], cwd=tmp_path, environ={"RUN_TASK_REVIEWER_TIMEOUT": "0"}
     ).agent_settings["claude"].timeout_seconds is None
 
 
 def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
     for argv, codex, claude in (
-        (["--codex-model", "sol"], "gpt-6-sol", "opus"),
-        (["--codex-model", "Terra"], "gpt-5.6-terra", "opus"),
-        (["--codex-model", "gpt-6-luna", "--claude-model", "SONNET"], "gpt-6-luna", "sonnet"),
-        (["--codex-model", "astra", "--claude-model", "fable"], "gpt-6-astra", "fable"),
+        (["--implementer-model", "sol"], "gpt-6-sol", "opus"),
+        (["--implementer-model", "Terra"], "gpt-5.6-terra", "opus"),
+        (["--implementer-model", "gpt-6-luna", "--reviewer-model", "SONNET"], "gpt-6-luna", "sonnet"),
+        (["--implementer-model", "astra", "--reviewer-model", "fable"], "gpt-6-astra", "fable"),
     ):
         settings = parse_args(argv, cwd=tmp_path, environ={}).agent_settings
         assert (settings["codex"].model, settings["claude"].model) == (codex, claude)
 
     for argv, message in (
-        (["--codex-model", "gpt-5.6-luna"], "codex model must be one of sol"),
-        (["--codex-model", "gpt-5.5"], "codex model must be one of sol"),
-        (["--claude-model", "haiku"], "claude model must be one of opus"),
+        (["--implementer-model", "gpt-5.6-luna"], "codex model must be one of sol"),
+        (["--implementer-model", "gpt-5.5"], "codex model must be one of sol"),
+        (["--reviewer-model", "haiku"], "claude model must be one of opus"),
     ):
         with pytest.raises(ConfigError, match=message):
             parse_args(argv, cwd=tmp_path, environ={})
@@ -550,7 +550,7 @@ def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
 
 def test_effort_is_freely_selectable_within_the_known_levels(tmp_path: Path) -> None:
     settings = parse_args(
-        ["--codex-effort", "xhigh", "--claude-effort", "max"], cwd=tmp_path, environ={}
+        ["--implementer-effort", "xhigh", "--reviewer-effort", "max"], cwd=tmp_path, environ={}
     ).agent_settings
     assert (settings["codex"].effort, settings["claude"].effort) == ("xhigh", "max")
 
@@ -678,8 +678,8 @@ def test_post_merge_acknowledgment_parses_exact_commit(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("environment", "message"),
     [
-        ({"RUN_TASK_CLAUDE_TIMEOUT": "-1"}, "claude timeout"),
-        ({"RUN_TASK_CLAUDE_EFFORT": "extreme"}, "claude effort"),
+        ({"RUN_TASK_REVIEWER_TIMEOUT": "-1"}, "reviewer timeout"),
+        ({"RUN_TASK_REVIEWER_EFFORT": "extreme"}, "reviewer effort"),
         ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "claude max budget"),
     ],
 )
@@ -1130,7 +1130,7 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| `--agent-output <none\\|summary\\|full>` | `none` |" in readme
     assert "| `--agent-live-stream` / `--no-agent-live-stream` | an |" in readme
     assert "| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an |" in readme
-    assert "| Claude | `--claude-binary`, `--claude-model`" in readme
+    assert "| Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`" in readme
     assert "`claude`, `opus`, ohne \u005aeitlimit, `high`" in readme
     assert "nicht Modell und Effort" in readme
     assert "`gpt-6-sol`" in readme

@@ -135,7 +135,7 @@ def _transition(
     work_unit_id: str = "1",
     *,
     slice_id: str = "1",
-    step: str = "codex_implementation",
+    step: str = "implementer_implementation",
 ) -> WorkflowTransitionPayload:
     return WorkflowTransitionPayload(
         slice_id, "in_progress", work_unit_id, step, "in_progress"
@@ -192,7 +192,7 @@ def _failure(
     *,
     invocation_id: str = "invocation-1",
     work_unit_id: str = "1",
-    step: str = "codex_implementation",
+    step: str = "implementer_implementation",
     slice_id: str = "1",
     failure_kind: str = "quota",
     resume_at: str = "2026-09-03T10:01:00+00:00",
@@ -320,10 +320,9 @@ def _append_attestation(
 
 
 def _measurement(
-    *, operation: str = "codex_implementation", input_digest: str = "1" * 64
+    *, operation: str = "implementer_implementation", input_digest: str = "1" * 64
 ) -> ProviderInputMeasurementPayload:
-    return ProviderInputMeasurementPayload(
-        Role.IMPLEMENTER,
+    return ProviderInputMeasurementPayload("codex",
         Role.IMPLEMENTER,
         operation,
         "1",
@@ -352,15 +351,14 @@ def _measurement(
 def _attempt(
     measurement: ArtifactRecord,
     *,
-    operation: str = "codex_implementation",
+    operation: str = "implementer_implementation",
     logical_operation_id: str = "provider-operation-1",
     attempt_number: int = 1,
     phase: str = "started",
 ) -> ProviderAttemptPayload:
     assert isinstance(measurement.payload, ProviderInputMeasurementPayload)
     terminal = phase != "started"
-    return ProviderAttemptPayload(
-        Role.IMPLEMENTER,
+    return ProviderAttemptPayload("codex",
         Role.IMPLEMENTER,
         operation,
         "1",
@@ -388,7 +386,7 @@ def _provider_pair(
             Role.IMPLEMENTER,
             "1",
             1,
-            "codex_implementation",
+            "implementer_implementation",
             REQUEST_ID,
             RESPONSE_SHA,
             content_kind,
@@ -399,7 +397,7 @@ def _provider_pair(
     decision = _append(
         records,
         _agent(),
-        logical_id="agent-1-codex_implementation-1",
+        logical_id="agent-1-implementer_implementation-1",
     )
     return content, decision
 
@@ -469,7 +467,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             _append(
                 records,
                 replace(_agent(), outcome="stopped"),
-                logical_id="agent-1-codex_implementation-1",
+                logical_id="agent-1-implementer_implementation-1",
             )
         _append(
             records,
@@ -585,7 +583,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     elif case_id == "invocation-failure-has-no-earlier-work-unit-transition":
         _append_failure(records, _failure())
     elif case_id == "invocation-failure-step-differs-from-the-active-transition":
-        _append(records, _transition(step="codex_plan"))
+        _append(records, _transition(step="implementer_plan"))
         _append_failure(records, _failure())
     elif case_id == "invocation-failure-record-fingerprint-differs-from-retry-binding":
         _append(records, _transition())
@@ -688,13 +686,13 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         _append(records, _agent(), logical_id="agent-without-round")
         return RejectionInput(tuple(records), require_content_authority=True)
     elif case_id == "native-decision-has-no-matching-provider-content-record":
-        _append(records, _agent(), logical_id="agent-1-codex_implementation-1")
+        _append(records, _agent(), logical_id="agent-1-implementer_implementation-1")
         return RejectionInput(tuple(records), require_content_authority=True)
     elif case_id == "provider-content-kind-differs-from-its-native-decision":
         _provider_pair(records, content_kind="final_report")
     elif case_id == "non-tail-provider-content-has-no-native-decision":
         blob = BlobReference(RESPONSE_SHA, 3)
-        _append(records, ProviderContentPayload(Role.IMPLEMENTER, "1", 1, "codex_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
+        _append(records, ProviderContentPayload(Role.IMPLEMENTER, "1", 1, "implementer_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
         _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
     elif case_id == "review-anchor-references-a-missing-review":
         _append(records, ReviewAnchorPayload("ar1-" + "4" * 64, ()), logical_id="review-anchors-missing")
@@ -805,15 +803,14 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             fingerprint=FP_B,
         )
     elif case_id == "final-preflight-references-a-missing-measurement":
-        _append(records, FinalReviewPreflightPayload(Role.REVIEWER, Role.REVIEWER, "claude_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
+        _append(records, FinalReviewPreflightPayload("claude", Role.REVIEWER, "reviewer_final_review", "1", "a" * 64, "b" * 64, "missing-measurement", "passed", None, None, (), (), None))
     elif case_id == "final-preflight-fingerprint-differs-from-its-measurement":
         measurement = _append(records, _measurement())
         _append(
             records,
-            FinalReviewPreflightPayload(
+            FinalReviewPreflightPayload("claude",
                 Role.REVIEWER,
-                Role.REVIEWER,
-                "claude_final_review",
+                "reviewer_final_review",
                 "1",
                 "a" * 64,
                 "b" * 64,
@@ -845,7 +842,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             _append(records, _attempt(fake))
         elif case_id == "provider-attempt-operation-differs-from-bound-measurement":
             measurement = _append(records, _measurement())
-            _append(records, _attempt(measurement, operation="codex_plan"))
+            _append(records, _attempt(measurement, operation="implementer_plan"))
         elif case_id == "provider-attempt-numbering-starts-at-two":
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement, attempt_number=2))
@@ -857,19 +854,19 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement, phase="succeeded"), revision=1)
         elif case_id == "second-provider-attempt-changes-immutable-operation":
-            first_measurement = _append(records, _measurement(operation="codex_implementation"))
-            _append(records, _attempt(first_measurement, operation="codex_implementation", attempt_number=1))
-            second_measurement = _append(records, _measurement(operation="codex_plan", input_digest="2" * 64))
-            _append(records, _attempt(second_measurement, operation="codex_plan", attempt_number=2))
+            first_measurement = _append(records, _measurement(operation="implementer_implementation"))
+            _append(records, _attempt(first_measurement, operation="implementer_implementation", attempt_number=1))
+            second_measurement = _append(records, _measurement(operation="implementer_plan", input_digest="2" * 64))
+            _append(records, _attempt(second_measurement, operation="implementer_plan", attempt_number=2))
         elif case_id == "second-provider-attempt-revision-remains-in-started-phase":
             measurement = _append(records, _measurement())
             _append(records, _attempt(measurement), logical_id="attempt-start", revision=1)
             _append(records, _attempt(measurement), logical_id="attempt-terminal", revision=2)
         else:
-            first_measurement = _append(records, _measurement(operation="codex_implementation"))
+            first_measurement = _append(records, _measurement(operation="implementer_implementation"))
             _append(records, _attempt(first_measurement), logical_id="attempt-start", revision=1)
-            second_measurement = _append(records, _measurement(operation="codex_plan", input_digest="2" * 64))
-            _append(records, _attempt(second_measurement, operation="codex_plan", phase="succeeded"), logical_id="attempt-terminal", revision=2)
+            second_measurement = _append(records, _measurement(operation="implementer_plan", input_digest="2" * 64))
+            _append(records, _attempt(second_measurement, operation="implementer_plan", phase="succeeded"), logical_id="attempt-terminal", revision=2)
     elif case_id in {
         "side-effect-has-three-physical-phases",
         "side-effect-begins-with-a-result-phase",

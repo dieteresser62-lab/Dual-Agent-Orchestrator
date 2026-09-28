@@ -158,7 +158,7 @@ REJECTION_SPECS = (
         "invalid-agent-setting",
         "An invalid agent setting is rethrown as ConfigError.",
         (),
-        {"RUN_TASK_CLAUDE_EFFORT": "extreme"},
+        {"RUN_TASK_REVIEWER_EFFORT": "extreme"},
         "raise",
         3,
         4,
@@ -1000,6 +1000,9 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     ).replace(
         "Absolute quota-loop safety backstop per blocked role step (default: 32).",
         "Maximum automatic continuations per blocked role step (default: 1).",
+    ).replace(
+        'for role in ("implementer", "reviewer")',
+        'for role in ("codex", "claude")',  # allowlist:provider -- historical wire proof: pre-b65 AST
     )
     active_tree = ast.parse(active_source)
     active_parser = copy.deepcopy(_top_level_function(active_tree, "build_parser"))

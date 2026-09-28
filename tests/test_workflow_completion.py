@@ -1394,7 +1394,7 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
     def codex(_driver, invocation):  # type: ignore[no-untyped-def]
         target = root / "src/one.py"
         target.parent.mkdir(parents=True, exist_ok=True)
-        if invocation.step.value == "codex_plan":
+        if invocation.step.value == "implementer_plan":
             target.write_text("value = 0\n")
             return _native_plan_output(invocation, summary="add value",
                                        scope_paths=(audit_path, "src/one.py"))
@@ -1402,7 +1402,7 @@ def test_production_acknowledgment_resumes_real_open_hook_intent(
         return _native_implementation_output(invocation)
 
     def review(driver, invocation):  # type: ignore[no-untyped-def]
-        if invocation.step.value == "claude_final_review":
+        if invocation.step.value == "reviewer_final_review":
             return _native_final_review_output(driver, invocation, finding_id=None)
         return _native_review_approval(invocation)
 

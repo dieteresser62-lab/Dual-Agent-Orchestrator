@@ -18,6 +18,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -37,6 +38,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -78,7 +80,12 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
+          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
+          "merge_completed_branch": true,
+          "base_branch": null,
+          "archive_run_directory": "{run_id}",
+          "post_merge_hook_enabled": true
         }
       },
       {
@@ -170,7 +177,7 @@
           "slice_id": "1",
           "slice_status": "in_progress",
           "work_unit_id": "2",
-          "step": "codex_implementation",
+          "step": "implementer_implementation",
           "work_unit_status": "in_progress"
         }
       },
@@ -205,7 +212,7 @@
         "payload": {
           "work_unit_id": "1",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -220,7 +227,7 @@
         "payload": {
           "work_unit_id": "2",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -318,8 +325,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       }
     ],
@@ -337,6 +343,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -378,7 +385,12 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
+          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
+          "merge_completed_branch": true,
+          "base_branch": null,
+          "archive_run_directory": "{run_id}",
+          "post_merge_hook_enabled": true
         }
       },
       {
@@ -506,7 +518,7 @@
           "slice_id": "1",
           "slice_status": "in_progress",
           "work_unit_id": "2",
-          "step": "codex_implementation",
+          "step": "implementer_implementation",
           "work_unit_status": "in_progress"
         }
       },
@@ -541,7 +553,7 @@
         "payload": {
           "work_unit_id": "1",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -556,7 +568,7 @@
         "payload": {
           "work_unit_id": "2",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -654,8 +666,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       }
     ],
@@ -673,6 +684,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -714,7 +726,12 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
+          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
+          "merge_completed_branch": true,
+          "base_branch": null,
+          "archive_run_directory": "{run_id}",
+          "post_merge_hook_enabled": true
         }
       },
       {
@@ -806,7 +823,7 @@
           "slice_id": "1",
           "slice_status": "in_progress",
           "work_unit_id": "2",
-          "step": "codex_implementation",
+          "step": "implementer_implementation",
           "work_unit_status": "in_progress"
         }
       },
@@ -841,7 +858,7 @@
         "payload": {
           "work_unit_id": "1",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -856,7 +873,7 @@
         "payload": {
           "work_unit_id": "2",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -954,8 +971,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       },
       {
@@ -996,6 +1012,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -1037,7 +1054,12 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
+          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
+          "merge_completed_branch": true,
+          "base_branch": null,
+          "archive_run_directory": "{run_id}",
+          "post_merge_hook_enabled": true
         }
       },
       {
@@ -1129,7 +1151,7 @@
           "slice_id": "1",
           "slice_status": "in_progress",
           "work_unit_id": "2",
-          "step": "codex_implementation",
+          "step": "implementer_implementation",
           "work_unit_status": "in_progress"
         }
       },
@@ -1164,7 +1186,7 @@
         "payload": {
           "work_unit_id": "1",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -1179,7 +1201,7 @@
         "payload": {
           "work_unit_id": "2",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -1277,8 +1299,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       },
       {
@@ -1296,8 +1317,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       }
     ],
@@ -1315,6 +1335,7 @@
           "task_file": "inbox/baseline.md",
           "branch": "feature/backlog-followups",
           "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "first_slice_start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "execution_mode": "IMPLEMENT",
           "audit_report_path": null
         }
@@ -1356,7 +1377,12 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "reducer_version": "structured-v2-schema-2-state-v3-joint-67-68-v1"
+          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
+          "merge_completed_branch": true,
+          "base_branch": null,
+          "archive_run_directory": "{run_id}",
+          "post_merge_hook_enabled": true
         }
       },
       {
@@ -1488,7 +1514,7 @@
           "slice_id": "1",
           "slice_status": "in_progress",
           "work_unit_id": "2",
-          "step": "codex_implementation",
+          "step": "implementer_implementation",
           "work_unit_status": "in_progress"
         }
       },
@@ -1523,7 +1549,7 @@
         "payload": {
           "work_unit_id": "1",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -1538,7 +1564,7 @@
         "payload": {
           "work_unit_id": "2",
           "implementer_return_count": 0,
-          "max_implementer_returns": 4
+          "max_implementer_returns": 6
         }
       },
       {
@@ -1636,8 +1662,7 @@
           "paths": [
             "src/baseline.py"
           ],
-          "open_finding_ids": [],
-          "finding_import_record_id": null
+          "open_finding_ids": []
         }
       }
     ]
@@ -1651,11 +1676,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -1710,11 +1735,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -1813,11 +1838,11 @@
           "schema_version": "2",
           "claude_review_transport": "native-claude-review-v2",
           "codex_result_transport": "native-codex-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -1835,11 +1860,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -1898,11 +1923,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -1963,11 +1988,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2031,11 +2056,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2094,11 +2119,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2157,11 +2182,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2218,11 +2243,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2281,11 +2306,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2346,11 +2371,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }
@@ -2411,11 +2436,11 @@
         "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "protocol_binding": {
           "mode": "structured-v2",
-          "codex_profile": {
+          "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"
           },
-          "claude_profile": {
+          "reviewer_profile": {
             "model": "sonnet",
             "effort": "high"
           }

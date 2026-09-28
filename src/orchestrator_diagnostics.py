@@ -249,8 +249,7 @@ class OrchestratorDiagnostic(StrEnum):
         "context-invalid: request_sequence must be 1-based"
     )
     REVIEW_CONTEXT_REVIEWER_INVALID = (
-        "context-invalid: reviewer must be clau"
-        "de"
+        "context-invalid: reviewer must be reviewer"
     )
     REVIEW_CONTEXT_DIFF_FINGERPRINT_INVALID = (
         "context-invalid: diff_fingerprint must be lowercase SHA-256"
@@ -331,8 +330,7 @@ class OrchestratorDiagnostic(StrEnum):
     )
     REVIEW_CONTEXT_REVIEWER_WRITER = (
         "context-invalid: native Clau"
-        "de writer schema requires reviewer=clau"
-        "de"
+        "de writer schema requires reviewer=reviewer"
     )
     REVIEW_RESPONSE_REQUEST_MISMATCH = (
         "request-mismatch: response request_id does not match bound context"
@@ -365,8 +363,7 @@ class OrchestratorDiagnostic(StrEnum):
         "finding-id-invalid: finding origin round must be 1-based"
     )
     REVIEW_FINDING_REPORTER_INVALID = (
-        "finding-id-invalid: finding reporter must be clau"
-        "de"
+        "finding-id-invalid: finding reporter must be reviewer"
     )
     REVIEW_FINDING_SUMMARY_REQUIRED = (
         "finding-id-invalid: finding summary must not be empty"
