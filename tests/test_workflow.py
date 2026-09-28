@@ -140,7 +140,7 @@ def _test_native_implementer_output(
     assert invocation.native_request is not None
     findings = list(invocation.previous_findings)
     for finding_id, decision, rationale in re.findall(
-        r"^FINDING_RESPONSE: (C-\d+) \| (ACCEPTED|REJECTED) \| (.+)$",
+        r"^FINDING_RESPONSE: (R-\d+) \| (ACCEPTED|REJECTED) \| (.+)$",
         text,
         re.MULTILINE,
     ):
@@ -203,7 +203,7 @@ def _test_native_review_output(
     context = invocation.native_request.bound_context.context
     findings = list(invocation.previous_findings)
     for finding_id, kind, summary, acceptance in re.findall(
-        r"^NEW_FINDING: (C-\d+) \| (BLOCKER|FINDING) \| ([^|]+) \| (.+)$",
+        r"^NEW_FINDING: (R-\d+) \| (BLOCKER|FINDING) \| ([^|]+) \| (.+)$",
         text,
         re.MULTILINE,
     ):
@@ -218,7 +218,7 @@ def _test_native_review_output(
             )
         )
     for finding_id, status, rationale in re.findall(
-        r"^FINDING_STATUS: (C-\d+) \| (OPEN|CLOSED) \| (.+)$",
+        r"^FINDING_STATUS: (R-\d+) \| (OPEN|CLOSED) \| (.+)$",
         text,
         re.MULTILINE,
     ):
@@ -900,7 +900,7 @@ def _with_open_findings(
 
 def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -> None:
     open_finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Imported finding remains open.",
@@ -908,7 +908,7 @@ def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -
         origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
     )
     closed_finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="Imported finding was already closed.",
@@ -923,9 +923,9 @@ def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -
         ),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     history = WorkflowHistory(
@@ -936,9 +936,9 @@ def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -
 
     result = WorkflowEngine(driver).run_current_work_unit(state, _context(), history)
 
-    assert result.state.current_work_unit.open_findings == ("C-01",)
+    assert result.state.current_work_unit.open_findings == ("R-01",)
     assert result.history.findings == (open_finding, closed_finding)
-    assert driver.checkpoints[-1].current_work_unit.open_findings == ("C-01",)
+    assert driver.checkpoints[-1].current_work_unit.open_findings == ("R-01",)
 
 
 def _packet_plan() -> str:
@@ -961,16 +961,16 @@ def _combined_native_slice_state() -> WorkflowState:
         _slice_state(),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
 
 
 def test_recomposed_request_round_builds_slice_packet_and_keeps_open_findings() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="A carried observation remains visible.",
@@ -1049,9 +1049,9 @@ def test_green_binary_asset_slice_reaches_reviewer_request() -> None:
     state = replace(
         _slice_state(scope_paths=changes.paths),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2, "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            ProtocolMode.STRUCTURED_V2, "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = FakeDriver(
@@ -1156,7 +1156,7 @@ def _denied_review_result(
 
 def test_later_review_uses_the_slice_convergence_measure() -> None:
     existing = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Existing local blocker",
@@ -1164,7 +1164,7 @@ def test_later_review_uses_the_slice_convergence_measure() -> None:
         FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     newly_opened = FindingRecord(
-        "C-02",
+        "R-02",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Newly discovered blocker",
@@ -1199,7 +1199,7 @@ def test_later_review_uses_the_slice_convergence_measure() -> None:
 
 def test_convergence_stall_ends_gate_free_without_slice_commit() -> None:
     finding = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Still-open local blocker",
@@ -1241,7 +1241,7 @@ def test_convergence_stall_ends_gate_free_without_slice_commit() -> None:
 
 def test_discovery_stall_rejection_detail_names_the_discovery_phase() -> None:
     finding = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Unassigned discovery blocker",
@@ -1295,8 +1295,8 @@ def _second_slice_review_state(finding_id: str) -> WorkflowState:
 def _negative_convergence() -> SliceConvergenceEvaluation:
     return SliceConvergenceEvaluation(
         phase=SliceReviewPhase.CONVERGENCE,
-        cohort_finding_ids=("C-01",),
-        newly_opened_finding_ids=("C-02",),
+        cohort_finding_ids=("R-01",),
+        newly_opened_finding_ids=("R-02",),
         closed_local_finding_ids=(),
         attested_remediation_finding_ids=(),
         progress_made=False,
@@ -1322,8 +1322,8 @@ def _negative_discovery() -> SliceConvergenceEvaluation:
 def _discovery_convergence() -> SliceConvergenceEvaluation:
     return SliceConvergenceEvaluation(
         phase=SliceReviewPhase.DISCOVERY,
-        cohort_finding_ids=("C-01",),
-        newly_opened_finding_ids=("C-01",),
+        cohort_finding_ids=("R-01",),
+        newly_opened_finding_ids=("R-01",),
         closed_local_finding_ids=(),
         attested_remediation_finding_ids=(),
         progress_made=True,
@@ -1333,7 +1333,7 @@ def _discovery_convergence() -> SliceConvergenceEvaluation:
 
 def test_retired_iteration_gate_terminates_without_extending_the_round_limit() -> None:
     prior = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Prior blocker",
@@ -1341,7 +1341,7 @@ def test_retired_iteration_gate_terminates_without_extending_the_round_limit() -
         origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     replacement = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Newly exposed blocker",
@@ -1376,7 +1376,7 @@ def test_retired_iteration_gate_terminates_without_extending_the_round_limit() -
 
 def test_review_denial_round_builds_correction_packet_with_affected_findings() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The rejected Slice needs a correction.",
@@ -1411,7 +1411,7 @@ def test_review_denial_round_builds_correction_packet_with_affected_findings() -
 
 def test_recomposition_after_review_denial_keeps_correction_semantics() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The rejected Slice needs a correction.",
@@ -1461,7 +1461,7 @@ def test_native_implementation_package_matches_request_open_findings(
         (*plan_handoff._ACCEPTANCE_HEADINGS, "**Acceptance Criteria**"),
     )
     open_finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Imported lifecycle reaches Codex.",
@@ -1469,7 +1469,7 @@ def test_native_implementation_package_matches_request_open_findings(
         origin=FindingOrigin("PLAN", 1, AgentRole.REVIEWER),
     )
     closed_finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="Closed lifecycle remains reviewer-only context.",
@@ -1516,7 +1516,7 @@ def test_native_implementation_package_matches_request_open_findings(
     package = json.loads(manifest_item["content"])
     assert package["slice"]["open_findings"] == bundle.document["open_findings"]
     assert [item["finding_id"] for item in bundle.document["open_findings"]] == [
-        "C-01"
+        "R-01"
     ]
     assert bundle.bound_context.context.previous_findings == (
         open_finding,
@@ -2373,9 +2373,9 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = NativeDriver(
@@ -2410,7 +2410,7 @@ def test_native_implementer_result_bypasses_legacy_marker_parser(
     monkeypatch, step: WorkflowStep, request_type: str
 ) -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The native correction stays structured.",
@@ -2485,12 +2485,12 @@ def test_native_implementer_result_bypasses_legacy_marker_parser(
         _slice_state().with_current_step(step),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     if previous_findings:
-        state = _with_open_findings(state, ("C-01",))
+        state = _with_open_findings(state, ("R-01",))
     previous_findings_expected = previous_findings
     driver = NativeImplementerDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
@@ -2520,7 +2520,7 @@ def test_native_implementer_result_bypasses_legacy_marker_parser(
 def test_native_implementer_correction_merges_offered_blocker_into_complete_ledger() -> None:
     findings = tuple(
         FindingRecord(
-            finding_id=f"C-{index:02d}",
+            finding_id=f"R-{index:02d}",
             finding_class=(
                 FindingClass.BLOCKER if index == 3 else FindingClass.FINDING
             ),
@@ -2549,7 +2549,7 @@ def test_native_implementer_correction_merges_offered_blocker_into_complete_ledg
             assert tuple(
                 item.finding_id
                 for item in invocation.native_request.bound_context.context.previous_findings
-            ) == ("C-03",)
+            ) == ("R-03",)
             return NativeAgentImplementerOutput(
                 result=ImplementerContractResult(
                     ready=True,
@@ -2579,11 +2579,11 @@ def test_native_implementer_correction_merges_offered_blocker_into_complete_ledg
         _slice_state().with_current_step(WorkflowStep.IMPLEMENTER_CORRECTION),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
-    state = _with_open_findings(state, ("C-03",))
+    state = _with_open_findings(state, ("R-03",))
     driver = SubsetCorrectionDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -2663,7 +2663,7 @@ Implement TARGET-GOAL-SENTINEL only.
     assert implementation.document["work_context"] == _context().distilled_context
 
     affected = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="AFFECTED-FINDING-SENTINEL",
@@ -2671,7 +2671,7 @@ Implement TARGET-GOAL-SENTINEL only.
         origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
     )
     unrelated = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="UNRELATED-CLOSED-SENTINEL",
@@ -2681,7 +2681,7 @@ Implement TARGET-GOAL-SENTINEL only.
     )
     correction_state = _with_open_findings(
         implementation_state.with_current_step(WorkflowStep.IMPLEMENTER_CORRECTION),
-        ("C-01",),
+        ("R-01",),
     )
     correction_contract = replace(implementation_contract, round_number=2)
     correction = workflow_requests.native_implementer_request(
@@ -2772,8 +2772,8 @@ def test_native_implementer_plan_bypasses_legacy_marker_parser(monkeypatch) -> N
         ),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     context = replace(
@@ -2802,7 +2802,7 @@ def test_combined_native_implementer_finding_steps_fail_before_provider_on_mirro
     step: WorkflowStep,
 ) -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The mirror differs from replay.",
@@ -2822,9 +2822,9 @@ def test_combined_native_implementer_finding_steps_fail_before_provider_on_mirro
             target_branch="feature/workflow",
             protocol_binding=ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
-                claude_review_transport="native-claude-review-v2",
-                codex_result_transport="native-codex-v2",
+                "3",
+                claude_review_transport="native-claude-review-v3",
+                codex_result_transport="native-codex-v3",
             ),
         ).with_current_step(step)
     else:
@@ -2832,12 +2832,12 @@ def test_combined_native_implementer_finding_steps_fail_before_provider_on_mirro
             _slice_state().with_current_step(step),
             protocol_binding=ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
-                claude_review_transport="native-claude-review-v2",
-                codex_result_transport="native-codex-v2",
+                "3",
+                claude_review_transport="native-claude-review-v3",
+                codex_result_transport="native-codex-v3",
             ),
         )
-        state = _with_open_findings(state, ("C-01",))
+        state = _with_open_findings(state, ("R-01",))
     driver = FakeDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -2858,7 +2858,7 @@ def test_combined_native_implementer_finding_steps_fail_before_provider_on_mirro
 
 def test_combined_native_claude_review_fails_before_provider_on_mirror_drift() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The mirror differs from replay.",
@@ -2869,12 +2869,12 @@ def test_combined_native_claude_review_fails_before_provider_on_mirror_drift() -
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
-    state = _with_open_findings(state, ("C-01",))
+    state = _with_open_findings(state, ("R-01",))
     driver = FakeDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -2915,7 +2915,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
             assert attestation is not None
             if not bound.context.previous_findings:
                 finding = FindingRecord(
-                    finding_id="C-01",
+                    finding_id="R-01",
                     finding_class=FindingClass.FINDING,
                     status=FindingStatus.OPEN,
                     summary="The native convergence path needs a correction.",
@@ -3028,9 +3028,9 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = ConvergingNativeDriver(
@@ -3088,7 +3088,7 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
             if not bound.context.previous_findings:
                 findings = (
                     FindingRecord(
-                        finding_id="C-01",
+                        finding_id="R-01",
                         finding_class=FindingClass.BLOCKER,
                         status=FindingStatus.OPEN,
                         summary="The native plan omits a required boundary.",
@@ -3214,9 +3214,9 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         target_branch="feature/workflow",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     ).with_current_step(WorkflowStep.REVIEWER_PLAN_REVIEW)
     context = replace(
@@ -3354,7 +3354,7 @@ def _batched_final_review_case(
 ) -> tuple[WorkflowRunResult, BatchedFinalReviewDriver]:
     findings = tuple(
         FindingRecord(
-            finding_id=f"C-{number:02d}",
+            finding_id=f"R-{number:02d}",
             finding_class=FindingClass.BLOCKER,
             status=FindingStatus.OPEN,
             summary=f"Final review finding {number}.",
@@ -3367,9 +3367,9 @@ def _batched_final_review_case(
         _completed_single_slice_state().start_final_review_work_unit(),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     ).with_current_step(WorkflowStep.REVIEWER_FINAL_REVIEW)
     history = WorkflowHistory(
@@ -3407,7 +3407,7 @@ def test_subset_merge_diagnostics_name_the_actual_review_type(
     expected: str,
 ) -> None:
     authoritative = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Existing finding",
@@ -3444,7 +3444,7 @@ def test_subset_merge_diagnostics_name_the_actual_review_type(
 
 def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
     authoritative = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Earlier finding",
@@ -3459,7 +3459,7 @@ def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
 
     with pytest.raises(
         WorkflowExecutionError,
-        match=r"slice review.*collision.*C-01",
+        match=r"slice review.*collision.*R-01",
     ):
         WorkflowEngine._merge_review_request_subset(
             (authoritative,),
@@ -3471,7 +3471,7 @@ def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
 
 def test_recovered_implementer_subset_is_validated_at_request_time_then_confirmed_now() -> None:
     offered = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The request offered this finding before record-ahead persistence.",
@@ -3500,14 +3500,14 @@ def test_recovered_implementer_subset_is_validated_at_request_time_then_confirme
 
 def test_recovered_final_review_subset_uses_the_historical_disposition_batch() -> None:
     first = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="First final-review disposition.",
         acceptance_test="Close the first historical item.",
         origin=FindingOrigin("FINAL", 1, AgentRole.REVIEWER),
     )
-    second = replace(first, finding_id="C-02", summary="Second disposition.")
+    second = replace(first, finding_id="R-02", summary="Second disposition.")
     closed_first = replace(
         first,
         status=FindingStatus.CLOSED,
@@ -3535,7 +3535,7 @@ def test_invalid_recovered_subset_diagnostic_names_request_and_recovery_time(
     reviewer: bool,
 ) -> None:
     offered = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The original request offered this finding.",
@@ -3574,7 +3574,7 @@ def test_invalid_recovered_subset_diagnostic_names_request_and_recovery_time(
 def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> None:
     ledger = tuple(
         FindingRecord(
-            finding_id=f"C-{number:02d}",
+            finding_id=f"R-{number:02d}",
             finding_class=FindingClass.FINDING,
             status=(FindingStatus.CLOSED if number == 23 else FindingStatus.OPEN),
             summary=f"Finding {number}",
@@ -3604,9 +3604,9 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
         ).with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = AuthoritativeReviewDriver(
@@ -3617,8 +3617,8 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
                 (
                     "REVIEWER: claude",
                     f"TEST_FILES_TOUCHED: {TEST_FILE}",
-                    "NEW_FINDING: C-66 | FINDING | new issue | verify later",
-                    "REVIEW_EVIDENCE: chain numbering | stale subset | C-01 is reused",
+                    "NEW_FINDING: R-66 | FINDING | new issue | verify later",
+                    "REVIEW_EVIDENCE: chain numbering | stale subset | R-01 is reused",
                     "PRE_MORTEM: a reduced request could reset the sequence",
                     "SLICE_APPROVAL: 01 | YES",
                     "STATUS: DONE",
@@ -3636,7 +3636,7 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
 
     assert next_state.current_step is WorkflowStep.SLICE_COMMIT
     assert tuple(item.finding_id for item in next_history.findings) == tuple(
-        f"C-{number:02d}" for number in range(1, 67)
+        f"R-{number:02d}" for number in range(1, 67)
     )
     assert len(driver.reviewer_calls) == 1
     invocation = driver.reviewer_calls[0]
@@ -3644,13 +3644,13 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
     assert invocation.native_request is not None
     assert (
         invocation.native_request.document["review_contract"]["next_finding_id"]
-        == "C-66"
+        == "R-66"
     )
 
 
 def test_native_implementer_correction_binds_record_authority_before_recovery() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The durable response is ahead of state.",
@@ -3677,7 +3677,7 @@ def test_native_implementer_correction_binds_record_authority_before_recovery() 
     recovered_output = NativeAgentImplementerOutput(
         result=result,
         canonical_json='{"result_type":"correction_result"}',
-        request_id="native-codex-request-" + "a" * 64,
+        request_id="native-implementer-request-" + "a" * 64,
         response_sha256="b" * 64,
         recovered_finding_comparison=RecoveredFindingComparison(
             request_findings=(finding,),
@@ -3728,12 +3728,12 @@ def test_native_implementer_correction_binds_record_authority_before_recovery() 
         _slice_state().with_current_step(WorkflowStep.IMPLEMENTER_CORRECTION),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
-    state = _with_open_findings(state, ("C-01",))
+    state = _with_open_findings(state, ("R-01",))
     driver = RecoveryDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -3788,8 +3788,8 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
         _slice_state().with_current_step(step),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
+            "3",
+            "native-claude-review-v3",
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id)
@@ -3831,8 +3831,8 @@ def test_native_request_reuses_restored_legacy_review_packet_without_semantic_di
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
+            "3",
+            "native-claude-review-v3",
         ),
     )
     canonical = json.dumps(
@@ -3884,7 +3884,7 @@ def test_native_request_reuses_restored_legacy_review_packet_without_semantic_di
 def test_native_record_ahead_recovery_receives_full_history_and_skips_provider() -> None:
     changes = _changes("d", "src/early.py", TEST_FILE)
     offered = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The recovered review received the request-time state.",
@@ -3971,9 +3971,9 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            "native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id, findings=(persisted,))
@@ -4397,7 +4397,7 @@ def test_immediate_repeated_quota_without_provider_work_pauses() -> None:
         WorkflowRunResult(
             replace(
                 result.state,
-                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
             ),
             result.history,
         )
@@ -5214,14 +5214,14 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
             f"codex-content-invalid-{attempt}",
             received_at=now[0],
             provider_data={
-                "schema_version": "native-agent-codex-result-v2",
+                "schema_version": "native-agent-implementer-result-v3",
                 "result_type": "implementation_result",
-                "request_id": "native-codex-request-" + "a" * 64,
+                "request_id": "native-implementer-request-" + "a" * 64,
                 "ready": True,
                 "test_files": ["provider/path/must-not-survive.py"],
                 "finding_dispositions": [
                     {
-                        "finding_id": "C-01",
+                        "finding_id": "R-01",
                         "decision": "accepted",
                         "rationale": "provider rationale must not survive",
                     }
@@ -5271,7 +5271,7 @@ def test_response_dependent_codex_rejection_uses_shared_bounded_retry_limit() ->
     implementer_shape = driver.failure_payloads[-1].rejected_response_shape
     assert implementer_shape is not None
     assert implementer_shape.release_decision == "ready"
-    assert implementer_shape.finding_dispositions[0].finding_id == "C-01"
+    assert implementer_shape.finding_dispositions[0].finding_id == "R-01"
     assert "provider rationale must not survive" not in json.dumps(
         driver.failure_payloads[-1].native_response_feedback_document
     )
@@ -5400,17 +5400,17 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     detail = (
         "approval leaves open findings assigned to the current Slice: "
-        "C-01 (opened in this response)"
+        "R-01 (opened in this response)"
     )
     rejected_document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "a" * 64,
         "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "finding_class": "FINDING",
                 "summary": "provider summary must not survive",
             }
@@ -5453,7 +5453,7 @@ def test_approval_invalid_review_retries_with_slice_decision_guidance() -> None:
     )
     assert feedback["rejection_code"] == "approval-invalid"
     instruction = feedback["correction_instruction"]
-    assert "opened in the rejected response: C-01" in instruction
+    assert "opened in the rejected response: R-01" in instruction
     assert "status_changes" in instruction
     assert "status=CLOSED" in instruction
     assert "opened in new_findings and decided in that same response" in instruction
@@ -5472,8 +5472,8 @@ def test_rejected_first_review_then_two_findings_remains_discovery_round() -> No
         (
             f"REVIEWER: {AgentRole.REVIEWER.value}",
             f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            "NEW_FINDING: C-01 | BLOCKER | first defect | cover first defect",
-            "NEW_FINDING: C-02 | BLOCKER | second defect | cover second defect",
+            "NEW_FINDING: R-01 | BLOCKER | first defect | cover first defect",
+            "NEW_FINDING: R-02 | BLOCKER | second defect | cover second defect",
             "SLICE_APPROVAL: 01 | NO",
             "STATUS: DONE",
         )
@@ -5493,8 +5493,8 @@ def test_rejected_first_review_then_two_findings_remains_discovery_round() -> No
         convergence_evaluations=[
             SliceConvergenceEvaluation(
                 phase=SliceReviewPhase.DISCOVERY,
-                cohort_finding_ids=("C-01", "C-02"),
-                newly_opened_finding_ids=("C-01", "C-02"),
+                cohort_finding_ids=("R-01", "R-02"),
+                newly_opened_finding_ids=("R-01", "R-02"),
                 closed_local_finding_ids=(),
                 attested_remediation_finding_ids=(),
                 progress_made=True,
@@ -5514,8 +5514,8 @@ def test_rejected_first_review_then_two_findings_remains_discovery_round() -> No
     assert [call.request_sequence for call in driver.reviewer_calls] == [1, 2]
     assert driver.convergence_calls == [(result.state.current_work_unit_id, 1)]
     assert tuple(item.finding_id for item in result.history.findings) == (
-        "C-01",
-        "C-02",
+        "R-01",
+        "R-02",
     )
     assert result.state.current_work_unit.round_number == 2
     assert result.state.current_work_unit.request_sequence == 3
@@ -5525,8 +5525,8 @@ def test_rejected_first_review_then_two_findings_remains_discovery_round() -> No
 def test_duplicate_review_rejection_logs_the_safe_exact_mapping(caplog) -> None:
     now = datetime(2026, 9, 13, 16, 21, tzinfo=timezone.utc)
     detail = (
-        "new finding C-17 has no unique offered open finding occurrence target; "
-        "known matches: C-03 (signature " + ("a" * 64) + ")"
+        "new finding R-17 has no unique offered open finding occurrence target; "
+        "known matches: R-03 (signature " + ("a" * 64) + ")"
     )
     driver = FakeDriver(
         snapshots=[_changes("1", "src/early.py", TEST_FILE)],
@@ -5628,7 +5628,7 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
             f"review-content-invalid-{attempt}",
             received_at=now[0],
             provider_data={
-                "schema_version": "native-agent-review-result-v2",
+                "schema_version": "native-agent-review-result-v3",
                 "result_type": "review_result",
                 "request_id": "native-review-request-" + "a" * 64,
                 "reviewer": "reviewer",
@@ -5636,7 +5636,7 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
                 "new_findings": [],
                 "status_changes": [
                     {
-                        "finding_id": "C-01",
+                        "finding_id": "R-01",
                         "status": "OPEN",
                         "rationale": "provider status rationale must not survive",
                         "closure": None,
@@ -5699,7 +5699,7 @@ def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
     review_shape = driver.failure_payloads[-1].rejected_response_shape
     assert review_shape is not None
     assert review_shape.release_decision == "approved"
-    assert review_shape.status_changes[0].finding_id == "C-01"
+    assert review_shape.status_changes[0].finding_id == "R-01"
     assert review_shape.status_changes[0].status == "OPEN"
     assert "provider status rationale must not survive" not in json.dumps(
         driver.failure_payloads[-1].native_response_feedback_document
@@ -5961,7 +5961,7 @@ def test_branch_mismatch_halts_before_first_agent() -> None:
 
 def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="domain choice remains unresolved",
@@ -6748,7 +6748,7 @@ def test_approved_scope_extension_changes_only_current_slice_and_restarts_halted
         for kind, value in driver.structured_events
         if kind == "scope-extension"
     )
-    assert extension.source_request_id.startswith("native-codex-request-")
+    assert extension.source_request_id.startswith("native-implementer-request-")
     assert tuple(item.path for item in extension.additions) == (path,)
 
     driver.codex_outputs.append(_codex_ready())
@@ -7196,7 +7196,7 @@ def test_rejected_scope_extension_keeps_stop_and_opens_no_path() -> None:
 
 def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="required validation remains red",
@@ -7205,7 +7205,7 @@ def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
     )
     driver = FakeDriver(
         snapshots=[],
-        codex_outputs=[_codex_not_ready("C-01")],
+        codex_outputs=[_codex_not_ready("R-01")],
         reviewer_outputs=[],
     )
     state = _slice_state()
@@ -7452,8 +7452,8 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
         _slice_state().with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
         ),
     )
     attestation = ValidationAttestation(
@@ -7472,7 +7472,7 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
         "passed",
     )
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="record-ahead finding",
@@ -7527,8 +7527,8 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
         convergence_evaluations=[
             SliceConvergenceEvaluation(
                 phase=SliceReviewPhase.DISCOVERY,
-                cohort_finding_ids=("C-01",),
-                newly_opened_finding_ids=("C-01",),
+                cohort_finding_ids=("R-01",),
+                newly_opened_finding_ids=("R-01",),
                 closed_local_finding_ids=(),
                 attested_remediation_finding_ids=(),
                 progress_made=True,

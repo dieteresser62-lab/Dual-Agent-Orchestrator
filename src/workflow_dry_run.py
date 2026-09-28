@@ -28,7 +28,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
 
     def review() -> dict[str, object]:
         return {
-            "schema_version": "native-agent-review-result-v2",
+            "schema_version": "native-agent-review-result-v3",
             "result_type": "review_result",
             "request_id": "$BOUND_REQUEST_ID",
             "reviewer": "reviewer",
@@ -46,7 +46,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
 
     def codex_result(result_type: str, **fields: object) -> dict[str, object]:
         return {
-            "schema_version": "native-agent-codex-result-v2",
+            "schema_version": "native-agent-implementer-result-v3",
             "request_id": "$BOUND_REQUEST_ID",
             "result_type": result_type,
             "ready": True,
@@ -99,7 +99,7 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                 1,
                 WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
-                    "schema_version": "native-agent-review-result-v2",
+                    "schema_version": "native-agent-review-result-v3",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
                     "reviewer": "reviewer",

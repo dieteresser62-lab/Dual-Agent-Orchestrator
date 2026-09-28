@@ -1618,7 +1618,7 @@ def build_scenario_state(
         work_plan_path=scenario.initial.work_plan_path,
         approved_plan_commit=scenario.initial.approved_plan_commit,
         target_branch=scenario.initial.branch,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp=scenario.clock_start.isoformat(),
     )
     if scenario.initial.planned_slices:
@@ -1999,7 +1999,7 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                 1,
                 WorkflowStep.IMPLEMENTER_PLAN,
                 {
-                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
+                    "schema_version": "native-agent-implementer-result-v3",
                     "request_id": "$BOUND_REQUEST_ID",
                     "result_type": "plan_result",
                     "ready": True,
@@ -2028,7 +2028,7 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
                 1,
                 WorkflowStep.REVIEWER_PLAN_REVIEW,
                 {
-                    "schema_version": "native-agent-review-result-v2",
+                    "schema_version": "native-agent-review-result-v3",
                     "result_type": "review_result",
                     "request_id": "$BOUND_REQUEST_ID",
                     "reviewer": "reviewer",
@@ -2062,7 +2062,7 @@ def _s5_implementer_result(
     result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
 ) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": "$BOUND_REQUEST_ID",
         "result_type": result_type,
         "ready": True,
@@ -2103,7 +2103,7 @@ def _s5_review_result(
         for finding_id in identities
     ]
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": "$BOUND_REQUEST_ID",
         "reviewer": "reviewer",
@@ -2196,7 +2196,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 1,
                 WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
-                    "schema_version": "native-agent-review-result-v2",
+                    "schema_version": "native-agent-review-result-v3",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
                     "reviewer": "reviewer",
@@ -2311,7 +2311,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
         result_type: str, findings: tuple[str, ...] = ()
     ) -> dict[str, object]:
         return {
-            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider -- transport: schema identifier
+            "schema_version": "native-agent-implementer-result-v3",
             "request_id": "$BOUND_REQUEST_ID",
             "result_type": result_type,
             "ready": True,
@@ -2333,7 +2333,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
         closed: tuple[str, ...] = (),
     ) -> dict[str, object]:
         return {
-            "schema_version": "native-agent-review-result-v2",
+            "schema_version": "native-agent-review-result-v3",
             "result_type": "review_result",
             "request_id": "$BOUND_REQUEST_ID",
             "reviewer": "reviewer",
@@ -2426,7 +2426,7 @@ def build_progressive_correction_scenario(*, stalled: bool = False) -> DryRunSce
                 1,
                 WorkflowStep.REVIEWER_FINAL_REVIEW,
                 {
-                    "schema_version": "native-agent-review-result-v2",
+                    "schema_version": "native-agent-review-result-v3",
                     "result_type": "final_review_completed",
                     "request_id": "$BOUND_REQUEST_ID",
                     "reviewer": "reviewer",

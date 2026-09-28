@@ -17,7 +17,7 @@ from workflow_state import WorkflowStep
 
 def _native_plan_result() -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": "$BOUND_REQUEST_ID",
         "result_type": "plan_result",
         "ready": True,

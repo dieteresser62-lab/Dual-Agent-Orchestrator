@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 
-FINDING_ID_PREFIX = "C-"
+FINDING_ID_PREFIX = "R-"
 FINDING_ID_PATTERN_TEXT = rf"^{FINDING_ID_PREFIX}(0[1-9]|[1-9][0-9]*)$"
 FINDING_ID_PATTERN = re.compile(FINDING_ID_PATTERN_TEXT)
 FINDING_ID_EXAMPLE = f"{FINDING_ID_PREFIX}01"

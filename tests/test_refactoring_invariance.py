@@ -312,7 +312,7 @@ def _native_plan_output(invocation: ImplementerInvocation) -> NativeAgentImpleme
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -348,7 +348,7 @@ def _native_review_approval(
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",

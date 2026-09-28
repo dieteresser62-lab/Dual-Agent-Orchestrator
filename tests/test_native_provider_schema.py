@@ -13,6 +13,7 @@ from agent_config import MODEL_FAMILIES, add_agent_arguments, resolve_agent_sett
 from contracts import AgentRole
 from native_provider_schema import (
     NativeProviderSchemaError,
+    OPENAI_PROVIDER,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
     assert_projected_provider_schema,
     assert_provider_capabilities,
@@ -118,7 +119,7 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         )
     }
     assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
-    assert len(registered_exceptions("codex")) == 7
+    assert len(registered_exceptions("codex")) == 6
     assert len(registered_exceptions("claude")) == 6
 
 
@@ -271,14 +272,22 @@ def test_defensive_projection_does_not_mutate_reader_schema() -> None:
     }
     before = copy.deepcopy(base)
 
-    projected = defensive_provider_projection(
-        base,
-        provider="codex",
-        required_features=("closed_object",),
-    )
-
+    with pytest.raises(NativeProviderSchemaError, match="non-portable"):
+        defensive_provider_projection(
+            base, provider=OPENAI_PROVIDER, required_features=("closed_object",)
+        )
     assert base == before
-    assert "pattern" not in projected["properties"]["path"]
+    base["properties"]["path"]["pattern"] = r"^[^/\x00]+$"
+    with pytest.raises(NativeProviderSchemaError, match="no local compensation"):
+        defensive_provider_projection(
+            base, provider=OPENAI_PROVIDER, required_features=("closed_object",)
+        )
+    projected = defensive_provider_projection(
+        base, provider="codex", required_features=("closed_object",),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=("/properties/items/uniqueItems",),
+    )
+    assert projected["properties"]["path"]["pattern"] == r"^[^/\x00]+$"
     assert "uniqueItems" not in projected["properties"]["items"]
 
 

@@ -35,7 +35,7 @@ MISSING_PREDECESSOR_DETAIL = (
 
 def _finding(*, status: FindingStatus = FindingStatus.OPEN) -> FindingRecord:
     return FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=status,
         summary="Native contract gap",
@@ -50,7 +50,7 @@ def _generation_finding(
     evidence_anchor_sha256: str | None = None,
 ) -> FindingRecord:
     return FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Rediscovered defect",
@@ -63,7 +63,7 @@ def _generation_finding(
 
 def _assert_u14_pair_diagnostics_are_complete() -> None:
     cases = (
-        ({"predecessor_finding_ref": "C-01"}, MISSING_ANCHOR_DETAIL),
+        ({"predecessor_finding_ref": "R-01"}, MISSING_ANCHOR_DETAIL),
         ({"evidence_anchor_sha256": "a" * 64}, MISSING_PREDECESSOR_DETAIL),
     )
     for arguments, expected in cases:
@@ -94,10 +94,10 @@ def test_finding_generation_identity_requires_both_fields_or_neither() -> None:
 
     assert _generation_finding().predecessor_finding_ref is None
     complete = _generation_finding(
-        predecessor_finding_ref="C-01",
+        predecessor_finding_ref="R-01",
         evidence_anchor_sha256="a" * 64,
     )
-    assert complete.predecessor_finding_ref == "C-01"
+    assert complete.predecessor_finding_ref == "R-01"
     assert complete.evidence_anchor_sha256 == "a" * 64
 
 

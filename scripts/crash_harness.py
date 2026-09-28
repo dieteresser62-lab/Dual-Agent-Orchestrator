@@ -542,7 +542,7 @@ def _production_state(root: Path, run_id: str) -> WorkflowState:
         task_digest=FINGERPRINT,
         task_scope_patterns=("src/harness.py",),
         target_branch="feature/state-authority-consolidation",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp=FIXED_TIME,
     ).complete_current_work_unit(updated_at=FIXED_TIME).start_work_unit(
         slice_id=1,
@@ -1807,7 +1807,7 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     if (
         "The final branch review found a follow-up defect." not in followup_content
         or "src/second.py" not in followup_content
-        or "C-02" in followup_content
+        or "R-02" in followup_content
         or long_run_id in followup_content
     ):
         raise CrashHarnessError(
@@ -1827,14 +1827,14 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         or long.result.state.execution_mode != "IMPLEMENT"
         or long.result.state.approved_plan_commit != plan_commit
         or long.result.state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
-        or tuple(item.finding_id for item in findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in findings) != ("R-01", "R-02")
         or journey_resolutions["long"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("combined long-run did not close its complete ledger")
     if (
         not second_long.result.workflow_completed
-        or tuple(item.finding_id for item in second_findings) != ("C-01", "C-02")
+        or tuple(item.finding_id for item in second_findings) != ("R-01", "R-02")
         or journey_resolutions["independent"].state.current_step
         is not WorkflowStep.COMPLETED
     ):
@@ -1943,7 +1943,7 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
             branch_base="a" * 40,
             first_slice_start_commit=FIRST_SLICE_START_COMMIT,
             slice_count=1,
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
             timestamp=FIXED_TIME,
         )
         automatic = kind in {AgentFailureKind.QUOTA, AgentFailureKind.NETWORK}

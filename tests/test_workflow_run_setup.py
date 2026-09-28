@@ -260,7 +260,7 @@ def test_context_matches_every_workflow_context_field(
         task_scope_patterns=("src/core.py",),
         audit_report_path="docs/internal/context-review-12345678.md",
         target_branch="feature/context-field-equality",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(

@@ -325,7 +325,7 @@ def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> N
     }
     assert manifest.runtime_boundaries == RUNTIME_BOUNDARY_EFFECTS
     schema = json.loads(
-        (ROOT / "schemas/orchestrator-artifact-v2.schema.json").read_text(
+        (ROOT / "schemas/orchestrator-artifact-v3.schema.json").read_text(
             encoding="utf-8"
         )
     )
@@ -544,7 +544,7 @@ def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     assert journeys["multi-slice-correction-observation-resume"]["correction_round_count"] == 1
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
-    ] == ["C-01:CLOSED", "C-02:OPEN"]
+    ] == ["R-01:CLOSED", "R-02:OPEN"]
     assert journeys["final-review-followup-document"][
         "source_execution_mode"
     ] == "IMPLEMENT"

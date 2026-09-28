@@ -69,13 +69,13 @@ class OrchestratorDiagnostic(StrEnum):
         "workflow-execution: native review persistence has no unique earlier validation record"
     )
     WORKFLOW_REVIEW_BINDING_MISSING = (
-        "workflow-execution: native review persistence lacks its immutable Claude binding"  # allowlist:provider -- schema-bound diagnostic: closed static diagnostic
+        "workflow-execution: native review persistence lacks its immutable reviewer binding"
     )
     WORKFLOW_REVIEW_CONTENT_DIGEST_MISMATCH = (
         "workflow-execution: native reviewer content digest differs from its review binding"
     )
     WORKFLOW_IMPLEMENTER_BINDING_MISSING = (
-        "workflow-execution: native Codex persistence lacks its immutable transport binding"  # allowlist:provider -- schema-bound diagnostic: closed static diagnostic
+        "workflow-execution: native implementer persistence lacks its immutable transport binding"
     )
     WORKFLOW_IMPLEMENTER_LOGICAL_BINDING_MISMATCH = (
         "workflow-execution: native agent result logical binding differs"
@@ -177,33 +177,26 @@ class OrchestratorDiagnostic(StrEnum):
 
     IMPLEMENTER_CONTEXT_REQUEST_KIND_INVALID = "context-invalid: request_kind is invalid"
     IMPLEMENTER_CONTEXT_REQUIRES_TYPED_CONTRACT = (
-        "context-invalid: native Co"
-        "dex context requires Co"
-        "dexStepContract and a non-empty "
-        "frozenset of known stop rule ids"
+        "context-invalid: native implementer context requires ImplementerStepContract "
+        "and a non-empty frozenset of known stop rule ids"
     )
     IMPLEMENTER_CONTEXT_PREVIOUS_FINDINGS_SORTED = (
         "context-invalid: previous findings must be sorted and unique"
     )
     IMPLEMENTER_CONTEXT_BOUND_CONTEXT_TYPED = (
-        "context-invalid: bound native Co"
-        "dex context requires NativeCo"
-        "dexContext"
+        "context-invalid: bound native implementer context requires NativeImplementerContext"
     )
     IMPLEMENTER_CONTEXT_BOUND_REQUEST_ID = (
         "context-invalid: bound request_id must contain request_digest"
     )
     IMPLEMENTER_SCHEMA_BUNDLED_OBJECT = (
-        "schema-invalid: bundled native Co"
-        "dex schema must be an object"
+        "schema-invalid: bundled native implementer schema must be an object"
     )
     IMPLEMENTER_CONTEXT_PROVIDER_PROJECTION = (
-        "context-invalid: provider schema projection requires NativeCo"
-        "dexContext"
+        "context-invalid: provider schema projection requires NativeImplementerContext"
     )
     IMPLEMENTER_CONTEXT_PARSING_BOUND = (
-        "context-invalid: native parsing requires BoundNativeCo"
-        "dexContext"
+        "context-invalid: native parsing requires BoundNativeImplementerContext"
     )
     IMPLEMENTER_RESPONSE_REQUEST_MISMATCH = (
         "request-mismatch: response request_id does not match bound request"
@@ -222,8 +215,7 @@ class OrchestratorDiagnostic(StrEnum):
         "slice-plan-invalid: plan result requires a slice plan contract"
     )
     IMPLEMENTER_RESPONSE_VARIANT_UNSUPPORTED = (
-        "result-kind-mismatch: unsupported Co"
-        "dex response variant"
+        "result-kind-mismatch: unsupported implementer response variant"
     )
     IMPLEMENTER_FINDING_DISPOSITIONS_SORTED = (
         "finding-reference-invalid: finding dispositions must be sorted and unique"
@@ -329,8 +321,7 @@ class OrchestratorDiagnostic(StrEnum):
         "context-invalid: provider schema projection requires NativeReviewContext"
     )
     REVIEW_CONTEXT_REVIEWER_WRITER = (
-        "context-invalid: native Clau"
-        "de writer schema requires reviewer=reviewer"
+        "context-invalid: native reviewer writer schema requires reviewer=reviewer"
     )
     REVIEW_RESPONSE_REQUEST_MISMATCH = (
         "request-mismatch: response request_id does not match bound context"

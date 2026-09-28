@@ -199,8 +199,8 @@ class ProtocolMode(str, Enum):
     STRUCTURED_V2 = "structured-v2"
 
 
-NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
-NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v2"
+NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v3"
+NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v3"
 
 
 @dataclass(frozen=True)
@@ -251,7 +251,7 @@ class ProtocolBinding:
         expected = {
             ProtocolMode.LEGACY_STATE_V3: "3",
             ProtocolMode.STRUCTURED_V1: "1",
-            ProtocolMode.STRUCTURED_V2: "2",
+            ProtocolMode.STRUCTURED_V2: "3",
         }[self.mode]
         if self.schema_version != expected:
             raise WorkflowStateValidationError(

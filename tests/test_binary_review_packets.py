@@ -328,7 +328,7 @@ def test_correction_packet_uses_same_binary_metadata_path() -> None:
     diff = (f"diff --git a/{path} b/{path}\nnew file mode 100644\n"
             f"--- /dev/null\n+++ b/{path}\nBinary file; size=1; sha256={digest}\n")
     finding = FindingRecord(
-        "C-01", FindingClass.FINDING, FindingStatus.OPEN,
+        "R-01", FindingClass.FINDING, FindingStatus.OPEN,
         "Asset needs review", "Metadata is complete",
         FindingOrigin("01", 1, AgentRole.REVIEWER),
     )

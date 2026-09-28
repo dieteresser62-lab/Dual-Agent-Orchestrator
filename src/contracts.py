@@ -20,6 +20,7 @@ from native_finding_decisions import (
     NativeFindingClosure,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
+from path_policy import is_canonical_repository_relative_path
 
 
 SOURCE_FINDING_ID_PATTERN = FINDING_ID_PATTERN
@@ -163,15 +164,7 @@ class FindingRecord:
                 raise ValueError(
                     "finding affected paths must be canonical repository-relative POSIX paths"
                 )
-            path = PurePosixPath(raw_path)
-            if (
-                not raw_path
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or any(part in {"", ".", ".."} for part in path.parts)
-            ):
+            if not is_canonical_repository_relative_path(raw_path):
                 raise ValueError(
                     "finding affected paths must be canonical repository-relative POSIX paths"
                 )
@@ -395,14 +388,9 @@ class StopRequest:
         if normalized != self.remediation_paths:
             raise ValueError("remediation paths must be sorted and unique")
         for raw_path in normalized:
-            path = PurePosixPath(raw_path)
             if (
-                not raw_path.strip()
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or path.parts[0] == ".orchestrator"
+                not is_canonical_repository_relative_path(raw_path)
+                or PurePosixPath(raw_path).parts[0] == ".orchestrator"
             ):
                 raise ValueError(
                     "remediation paths must be canonical repository-relative POSIX paths "
@@ -625,14 +613,9 @@ class PlannedSlice:
             raise ValueError(diagnostic.detail)
         normalized = self.scope_paths
         for raw_path in normalized:
-            path = PurePosixPath(raw_path)
             if (
-                not raw_path.strip()
-                or path.is_absolute()
-                or "\\" in raw_path
-                or ".." in path.parts
-                or raw_path != path.as_posix()
-                or path.parts[0] == ".orchestrator"
+                not is_canonical_repository_relative_path(raw_path)
+                or PurePosixPath(raw_path).parts[0] == ".orchestrator"
             ):
                 raise ValueError(
                     "planned slice paths must be canonical repository-relative POSIX paths outside .orchestrator"
@@ -694,14 +677,9 @@ class ImplementerStepContract:
         if self.require_slice_plan and self.readiness_marker is not ReadinessMarker.PLAN:
             raise ValueError("slice planning records are reserved for Codex plan steps")
         if self.plan_artifact_path is not None:
-            path = PurePosixPath(self.plan_artifact_path)
             if (
                 not self.require_slice_plan
-                or not self.plan_artifact_path.strip()
-                or path.is_absolute()
-                or "\\" in self.plan_artifact_path
-                or ".." in path.parts
-                or self.plan_artifact_path != path.as_posix()
+                or not is_canonical_repository_relative_path(self.plan_artifact_path)
             ):
                 raise ValueError(
                     "plan artifact path requires a canonical plan-step SLICE_PLAN"

@@ -43,6 +43,8 @@ from schema_validation import (
     validate_schema_document,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
+from path_policy import is_canonical_repository_relative_path
+from schema_patterns import has_visible_text
 from native_provider_schema import (
     OPENAI_PROVIDER,
     assert_projected_provider_schema,
@@ -51,13 +53,13 @@ from native_provider_schema import (
 )
 
 
-SCHEMA_VERSION = "native-agent-codex-result-v2"
+SCHEMA_VERSION = "native-agent-implementer-result-v3"
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-codex-result-v2.schema.json"
+    / "native-agent-implementer-result-v3.schema.json"
 )
-REQUEST_ID_PREFIX = "native-codex-request-"
+REQUEST_ID_PREFIX = "native-implementer-request-"
 
 
 class NativeImplementerErrorCode(StrEnum):
@@ -264,7 +266,7 @@ class NativeImplementerContext:
         if not isinstance(self.contract, ImplementerStepContract) or not stop_rule_ids_valid:
             raise NativeImplementerContractError(
                 NativeImplementerErrorCode.CONTEXT_INVALID,
-                "native Codex context requires CodexStepContract and a non-empty "  # allowlist:provider -- schema-bound diagnostic
+                "native implementer context requires ImplementerStepContract and a non-empty "
                 "frozenset of known stop rule ids",
             )
         if not isinstance(self.build_output_declared, bool) or not isinstance(
@@ -302,7 +304,7 @@ class BoundNativeImplementerContext:
         if not isinstance(self.context, NativeImplementerContext):
             raise NativeImplementerContractError(
                 NativeImplementerErrorCode.CONTEXT_INVALID,
-                "bound native Codex context requires NativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
+                "bound native implementer context requires NativeImplementerContext",
             )
         _require_sha256(
             self.request_digest,
@@ -360,7 +362,7 @@ def load_native_implementer_schema() -> dict[str, Any]:
     if not isinstance(schema, dict):
         raise NativeImplementerContractError(
             NativeImplementerErrorCode.SCHEMA_INVALID,
-            "bundled native Codex schema must be an object",
+            "bundled native implementer schema must be an object",
             source=NativeImplementerRejectionSource.REQUEST_LEDGER,
         )
     _enable_native_finding_decision_schema(schema)
@@ -377,6 +379,7 @@ def load_native_implementer_schema() -> dict[str, Any]:
 
 def native_implementer_provider_response_schema(
     context: NativeImplementerContext,
+    profile: str = OPENAI_PROVIDER,
 ) -> dict[str, Any]:
     """Project the immutable reader schema into one request-specific writer.
 
@@ -392,13 +395,21 @@ def native_implementer_provider_response_schema(
     if not isinstance(context, NativeImplementerContext):
         raise NativeImplementerContractError(
             NativeImplementerErrorCode.CONTEXT_INVALID,
-            "provider schema projection requires NativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
+            "provider schema projection requires NativeImplementerContext",
         )
-    provider = "codex"
+    provider = profile
     schema = defensive_provider_projection(
         load_native_implementer_schema(),
         provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=(
+            "/$defs/planned_slice/properties/scope_paths/uniqueItems",
+            "/$defs/planned_slice/properties/acceptance_criteria/uniqueItems",
+            "/$defs/implementation_result/properties/test_files/uniqueItems",
+            "/$defs/correction_result/properties/test_files/uniqueItems",
+            "/$defs/stop_result/properties/remediation_paths/uniqueItems",
+        ),
     )
     if context.request_kind.value == "plan":
         measured_against = schema["$defs"]["planned_slice"]["properties"][
@@ -452,7 +463,7 @@ def native_implementer_provider_response_schema(
             items["minItems"] = 0
             items["maxItems"] = len(open_ids)
         else:
-            _bind_required_empty_array(items)
+            _bind_required_empty_array(items, profile=provider)
 
     contract = context.contract
     expected_result = {
@@ -475,7 +486,7 @@ def native_implementer_provider_response_schema(
         work_result = schema["$defs"][expected_result]
         test_files = work_result["properties"]["test_files"]
         if not contract.require_test_files_record:
-            _bind_required_empty_array(test_files)
+            _bind_required_empty_array(test_files, profile=provider)
         elif contract.enforce_expected_test_files:
             expected_tests = tuple(contract.expected_test_files)
             if expected_tests:
@@ -486,7 +497,7 @@ def native_implementer_provider_response_schema(
                     "enum": list(expected_tests),
                 }
             else:
-                _bind_required_empty_array(test_files)
+                _bind_required_empty_array(test_files, profile=provider)
         if not contract.test_changes_approved:
             ready_false_name = f"bound_{expected_result}_ready_false"
             ready_false = copy.deepcopy(work_result)
@@ -504,7 +515,7 @@ def native_implementer_provider_response_schema(
                 ready_true = copy.deepcopy(work_result)
                 ready_true["properties"]["ready"]["const"] = True
                 _bind_required_empty_array(
-                    ready_true["properties"]["test_files"]
+                    ready_true["properties"]["test_files"], profile=provider
                 )
                 schema["$defs"][ready_true_name] = ready_true
                 readiness_refs.append(
@@ -538,8 +549,8 @@ def _available_measurement_stages(
     return stages
 
 
-def _bind_required_empty_array(schema: dict[str, Any]) -> None:
-    bind_provider_required_empty_array(schema, provider=OPENAI_PROVIDER)
+def _bind_required_empty_array(schema: dict[str, Any], *, profile: str) -> None:
+    bind_provider_required_empty_array(schema, provider=profile)
 
 
 def validate_native_implementer_document(document: Mapping[str, Any]) -> None:
@@ -559,7 +570,7 @@ def parse_native_implementer_response(
     if not isinstance(bound_context, BoundNativeImplementerContext):
         raise NativeImplementerContractError(
             NativeImplementerErrorCode.CONTEXT_INVALID,
-            "native parsing requires BoundNativeCodexContext",  # allowlist:provider -- schema-bound diagnostic
+            "native parsing requires BoundNativeImplementerContext",
         )
     validate_native_implementer_document(document)
     if document["request_id"] != bound_context.request_id:
@@ -718,7 +729,7 @@ def native_implementer_response_to_contract_result(
     else:
         raise NativeImplementerContractError(
             NativeImplementerErrorCode.RESULT_KIND_MISMATCH,
-            "unsupported Codex response variant",
+            "unsupported implementer response variant",
         )
     findings = _apply_dispositions(
         prior,
@@ -950,8 +961,7 @@ def _require_text(
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value, first_line=True)
         or len(value) > maximum
     ):
         raise NativeImplementerContractError(
@@ -982,14 +992,9 @@ def _require_sorted_paths(
             code, f"{label} must be sorted and unique" + ("" if allow_empty else " and non-empty")
         )
     for raw_path in values:
-        path = PurePosixPath(raw_path)
         if (
-            not raw_path.strip()
-            or path.is_absolute()
-            or "\\" in raw_path
-            or ".." in path.parts
-            or raw_path != path.as_posix()
-            or path.parts[0] == ".orchestrator"
+            not is_canonical_repository_relative_path(raw_path)
+            or PurePosixPath(raw_path).parts[0] == ".orchestrator"
         ):
             raise NativeImplementerContractError(
                 code, f"{label} contains an unsafe repository path"

@@ -163,6 +163,12 @@
       "limit": 3000,
       "sample_lengths": [],
       "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "repository_path",
+      "limit": 1000,
+      "sample_lengths": [],
+      "sample_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
     }
   ],
   "schema_inventory": [
@@ -369,6 +375,72 @@
       "pointer": "$defs/bound_final_review_stop/properties/rationale",
       "limit": 3000,
       "context_scope": "final_review"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/bound_final_review_stop/properties/remediation_paths/items",
+      "limit": 1000,
+      "context_scope": "final_review"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/bound_plan_stop/properties/remediation_paths/items",
+      "limit": 1000,
+      "context_scope": "plan"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/bound_slice_convergence_stop/properties/remediation_paths/items",
+      "limit": 1000,
+      "context_scope": "slice_convergence"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/bound_slice_initial_stop/properties/remediation_paths/items",
+      "limit": 1000,
+      "context_scope": "slice_initial"
+    },
+    {
+      "field": "new_findings[].summary",
+      "pointer": "$defs/finding/properties/summary",
+      "limit": 3000,
+      "context_scope": "all"
+    },
+    {
+      "field": "pre_mortem",
+      "pointer": "$defs/review_result/allOf/*/properties/pre_mortem/anyOf/*",
+      "limit": 3000,
+      "context_scope": "all"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/safe_path",
+      "limit": 1000,
+      "context_scope": "all"
+    },
+    {
+      "field": "status_changes[].rationale",
+      "pointer": "$defs/status_change/properties/rationale",
+      "limit": 3000,
+      "context_scope": "all"
+    },
+    {
+      "field": "stop_request.rationale",
+      "pointer": "$defs/stop_request/allOf/*/properties/rationale",
+      "limit": 3000,
+      "context_scope": "all"
+    },
+    {
+      "field": "repository_path",
+      "pointer": "$defs/stop_request/allOf/*/properties/remediation_paths/items",
+      "limit": 1000,
+      "context_scope": "all"
+    },
+    {
+      "field": "stop_request.rule_id",
+      "pointer": "$defs/stop_request/allOf/*/properties/rule_id",
+      "limit": 200,
+      "context_scope": "all"
     }
   ],
   "diagnostic": {

@@ -73,8 +73,8 @@
 
 ## Native JSON results
 
-- Codex receives `native-agent-codex-request-v2` documents and returns only request-bound `native-agent-codex-result-v2` JSON. Planning, implementation, same-Slice correction, and stop results use their distinct typed variants; the legacy final-report variant is removed.
-- Claude receives `native-agent-review-request-v2` documents and returns only request-specific `native-agent-review-result-v2` JSON. The writer schema binds the decision, findings, status changes, evidence, pre-mortem, and stop variant to the current review context.
+- Codex receives `native-agent-implementer-request-v3` documents and returns only request-bound `native-agent-implementer-result-v3` JSON. Planning, implementation, same-Slice correction, and stop results use their distinct typed variants; the legacy final-report variant is removed.
+- Claude receives `native-agent-review-request-v3` documents and returns only request-specific `native-agent-review-result-v3` JSON. The writer schema binds the decision, findings, status changes, evidence, pre-mortem, and stop variant to the current review context.
 - The provider-facing writer schema and the local domain validator are both mandatory. A schema-valid result is not authoritative until request binding and domain validation also succeed.
 - Codex never creates or switches branches and never stages or commits. Those Git transactions belong to the user and orchestrator.
 - Agents do not emit validation attestations. The orchestrator creates and binds deterministic validation evidence.

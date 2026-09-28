@@ -6,6 +6,25 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable
 
 
+def is_canonical_repository_relative_path(value: object, *, max_length: int = 1000) -> bool:
+    """Check the path constraints that portable schema patterns cannot express."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or not any(not (character.isspace() or character == "\ufeff") for character in value)
+        or len(value) > max_length
+        or any(character in value for character in "\x00\r\n\\")
+    ):
+        return False
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == value
+        and bool(path.parts)
+        and all(part not in {"", ".", ".."} for part in path.parts)
+    )
+
+
 class PathPolicyError(ValueError):
     """Raised when an untrusted path cannot be confined to an allowed root."""
 

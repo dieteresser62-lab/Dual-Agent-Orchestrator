@@ -34,14 +34,14 @@ def test_discovery_round_treats_new_findings_as_progress() -> None:
         chain,
         round_number=1,
         fingerprint=OLD_FINGERPRINT,
-        transitions=(_opening("C-01", round_number=1),),
-        finding_ids=("C-01",),
+        transitions=(_opening("R-01", round_number=1),),
+        finding_ids=("R-01",),
     )
 
     result = _evaluate(chain, round_number=1)
 
     assert result.phase is SliceReviewPhase.DISCOVERY
-    assert result.newly_opened_finding_ids == ("C-01",)
+    assert result.newly_opened_finding_ids == ("R-01",)
     assert result.progress_made
 
 
@@ -54,17 +54,17 @@ def test_discovery_round_counts_two_origin_bound_findings_from_the_round() -> No
         round_number=1,
         fingerprint=OLD_FINGERPRINT,
         transitions=(
-            _opening_with_severity("C-01", FindingSeverity.BLOCKER),
-            _opening_with_severity("C-02", FindingSeverity.FINDING),
+            _opening_with_severity("R-01", FindingSeverity.BLOCKER),
+            _opening_with_severity("R-02", FindingSeverity.FINDING),
         ),
-        finding_ids=("C-01", "C-02"),
+        finding_ids=("R-01", "R-02"),
     )
 
     result = _evaluate(chain, round_number=1)
 
     assert result.phase is SliceReviewPhase.DISCOVERY
-    assert result.cohort_finding_ids == ("C-01", "C-02")
-    assert result.newly_opened_finding_ids == ("C-01", "C-02")
+    assert result.cohort_finding_ids == ("R-01", "R-02")
+    assert result.newly_opened_finding_ids == ("R-01", "R-02")
     assert result.progress_made
 
 
@@ -74,13 +74,13 @@ def test_convergence_round_does_not_count_a_bare_new_opening() -> None:
         chain,
         round_number=2,
         fingerprint=NEW_FINGERPRINT,
-        transitions=(_opening("C-02", round_number=2),),
-        finding_ids=("C-01", "C-02"),
+        transitions=(_opening("R-02", round_number=2),),
+        finding_ids=("R-01", "R-02"),
     )
 
     result = _evaluate(chain, round_number=2)
 
-    assert result.newly_opened_finding_ids == ("C-02",)
+    assert result.newly_opened_finding_ids == ("R-02",)
     assert result.closed_local_finding_ids == ()
     assert not result.progress_made
 
@@ -91,13 +91,13 @@ def test_convergence_round_counts_a_closed_previously_local_finding() -> None:
         chain,
         round_number=2,
         fingerprint=OLD_FINGERPRINT,
-        transitions=(_closure("C-01", kind="rejected"),),
-        finding_ids=("C-01",),
+        transitions=(_closure("R-01", kind="rejected"),),
+        finding_ids=("R-01",),
     )
 
     result = _evaluate(chain, round_number=2)
 
-    assert result.closed_local_finding_ids == ("C-01",)
+    assert result.closed_local_finding_ids == ("R-01",)
     assert result.progress_made
 
 
@@ -108,14 +108,14 @@ def test_attested_fixed_closure_proves_fingerprint_changing_remediation() -> Non
         chain,
         round_number=2,
         fingerprint=NEW_FINGERPRINT,
-        transitions=(_closure("C-01", kind="fixed"),),
-        finding_ids=("C-01",),
+        transitions=(_closure("R-01", kind="fixed"),),
+        finding_ids=("R-01",),
         attestation=attestation,
     )
 
     result = _evaluate(chain, round_number=2)
 
-    assert result.attested_remediation_finding_ids == ("C-01",)
+    assert result.attested_remediation_finding_ids == ("R-01",)
     assert result.progress_made
 
 
@@ -127,7 +127,7 @@ def test_fingerprint_change_alone_does_not_prove_remediation() -> None:
         round_number=2,
         fingerprint=NEW_FINGERPRINT,
         transitions=(),
-        finding_ids=("C-01",),
+        finding_ids=("R-01",),
     )
 
     result = _evaluate(chain, round_number=2)
@@ -143,16 +143,16 @@ def test_equal_cardinality_still_progresses_when_old_closes_and_new_opens() -> N
         round_number=2,
         fingerprint=OLD_FINGERPRINT,
         transitions=(
-            _closure("C-01", kind="rejected"),
-            _opening("C-02", round_number=2),
+            _closure("R-01", kind="rejected"),
+            _opening("R-02", round_number=2),
         ),
-        finding_ids=("C-01", "C-02"),
+        finding_ids=("R-01", "R-02"),
     )
 
     result = _evaluate(chain, round_number=2)
 
-    assert result.newly_opened_finding_ids == ("C-02",)
-    assert result.closed_local_finding_ids == ("C-01",)
+    assert result.newly_opened_finding_ids == ("R-02",)
+    assert result.closed_local_finding_ids == ("R-01",)
     assert result.progress_made
 
 
@@ -186,8 +186,8 @@ def _chain_after_discovery() -> list[ArtifactRecord]:
         chain,
         round_number=1,
         fingerprint=OLD_FINGERPRINT,
-        transitions=(_opening("C-01", round_number=1),),
-        finding_ids=("C-01",),
+        transitions=(_opening("R-01", round_number=1),),
+        finding_ids=("R-01",),
     )
     return chain
 
@@ -290,7 +290,7 @@ def _append_review_round(
             "denied",
             finding_ids,
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + f"{round_number:x}" * 64,
             f"{round_number + 5:x}" * 64,
         ),

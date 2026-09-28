@@ -34,13 +34,13 @@ class RoleBinding:
 _ROLE_BINDINGS = {
     AgentRoleName.IMPLEMENTER: RoleBinding(
         AgentRoleName.IMPLEMENTER,
-        "native-agent-codex-result-v2",
+        "native-agent-implementer-result-v3",
         NATIVE_IMPLEMENTER_SYSTEM_POLICY,
         MappingProxyType({"sandbox": "workspace-write"}),
     ),
     AgentRoleName.REVIEWER: RoleBinding(
         AgentRoleName.REVIEWER,
-        "native-agent-review-result-v2",
+        "native-agent-review-result-v3",
         NATIVE_REVIEWER_SYSTEM_POLICY,
         MappingProxyType({
             "tools": "Read",

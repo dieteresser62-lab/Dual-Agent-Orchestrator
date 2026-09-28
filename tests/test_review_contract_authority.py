@@ -99,7 +99,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     attestation = _attestation(bridge)
     bridge.append(
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="opened",
@@ -108,12 +108,12 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
             rationale="Cross-cutting follow-up remains visible.",
             work_unit_id="7",
             summary="Retain the cross-cutting review note.",
-            acceptance_test="The next Slice keeps C-01 visible.",
+            acceptance_test="The next Slice keeps R-01 visible.",
             origin_slice_id="7",
             origin_round_number=3,
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding-C-01-opened",
+        logical_id="finding-R-01",
+        idempotency_key="finding-R-01-opened",
         fingerprint_sha256=FINGERPRINT,
     )
     review = append_provider_decision_authority(
@@ -122,9 +122,9 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
             reviewer=Role.REVIEWER,
             work_unit_id="7",
             verdict="approved",
-            finding_ids=("C-01",),
+            finding_ids=("R-01",),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "a" * 64,
             response_sha256="b" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -200,7 +200,7 @@ def test_review_contract_preserves_specific_finding_reducer_diagnostic(
             verdict="approved",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "f" * 64,
             response_sha256="a" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -252,7 +252,7 @@ def test_review_contract_stop_request_and_missing_component_are_fail_closed(
             verdict="stop",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "c" * 64,
             response_sha256="e" * 64,
             stop_request=ReviewStopRequestPayload(

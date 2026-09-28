@@ -495,7 +495,7 @@ def _initial_state(task: Path, kind: str) -> WorkflowState:
             start_commit="c" * 40,
             scope_paths=("src/correction.py",),
             start_fingerprint="2" * 64,
-            finding_ids=("C-01",),
+            finding_ids=("R-01",),
         )
     if kind == "pending_slice":
         return _slice_state(task, count=2).complete_current_slice(

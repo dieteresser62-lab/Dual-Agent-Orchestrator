@@ -59,12 +59,16 @@ from finding_signature import (
 )
 from native_provider_schema import (
     ANTHROPIC_PROVIDER,
+    OPENAI_PROVIDER,
     assert_projected_provider_schema,
     bind_required_empty_array as bind_provider_required_empty_array,
     defensive_provider_projection,
+    lower_reviewer_writer_for_openai,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from rejected_response_shape import RejectedNativeResponseShape
+from schema_patterns import ANY_LINE_VISIBLE_PATTERN, VISIBLE_LINE_PATTERN, has_visible_text
+from path_policy import is_canonical_repository_relative_path
 from native_finding_decisions import (
     NativeClosureKind,
     NativeFindingClosure,
@@ -72,19 +76,17 @@ from native_finding_decisions import (
 )
 
 
-SCHEMA_VERSION = "native-agent-review-result-v2"
+SCHEMA_VERSION = "native-agent-review-result-v3"
 MAX_NATIVE_REVIEW_DISPOSITIONS = 32
 DEFAULT_FINAL_REVIEW_MAX_NEW_FINDINGS = 128
 MAX_FINAL_REVIEW_NEW_FINDINGS = 512
 DISCOVERY_OUTPUT_LIMIT_RULE_ID = "DISCOVERY_OUTPUT_LIMIT"
-NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
-NONBLANK_LINE_PATTERN = (
-    "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
-)
+NONBLANK_TEXT_PATTERN = ANY_LINE_VISIBLE_PATTERN
+NONBLANK_LINE_PATTERN = VISIBLE_LINE_PATTERN
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-review-result-v2.schema.json"
+    / "native-agent-review-result-v3.schema.json"
 )
 
 
@@ -660,15 +662,10 @@ class NativeReviewContext:
                 "red_state_followup_slice must be non-empty when present",
             )
         if self.plan_artifact_path is not None:
-            path = PurePosixPath(self.plan_artifact_path)
             if (
-                not self.plan_artifact_path.strip()
-                or "\\" in self.plan_artifact_path
-                or path.is_absolute()
-                or ".." in path.parts
+                not is_canonical_repository_relative_path(self.plan_artifact_path)
                 or any(character in self.plan_artifact_path for character in "*?[")
-                or self.plan_artifact_path != path.as_posix()
-                or path.suffix.lower() != ".md"
+                or PurePosixPath(self.plan_artifact_path).suffix.lower() != ".md"
             ):
                 raise NativeReviewContractError(
                     NativeReviewErrorCode.CONTEXT_INVALID,
@@ -972,7 +969,8 @@ def _final_review_provider_response_schema(
 
 
 def native_review_provider_response_schema(
-    context: NativeReviewContext, *, base_schema: Mapping[str, Any] | None = None,
+    context: NativeReviewContext, profile: str = ANTHROPIC_PROVIDER,
+    *, base_schema: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project the reader contract into a request-bound reviewer writer schema.
 
@@ -986,16 +984,20 @@ def native_review_provider_response_schema(
     if context.reviewer is not AgentRole.REVIEWER:
         raise NativeReviewContractError(
             NativeReviewErrorCode.CONTEXT_INVALID,
-            "native Claude writer schema requires reviewer=reviewer",
+            "native reviewer writer schema requires reviewer=reviewer",
         )
     schema = defensive_provider_projection(
         base_schema if base_schema is not None else load_native_review_schema(),
-        provider="claude",
+        provider=profile,
         required_features=(
             "closed_object",
             "min_max_items",
             "nested_any_of",
-            "nested_one_of",
+        ),
+        compensated_features=("uniqueItems",),
+        compensated_unique_item_paths=(
+            "/$defs/finding/properties/affected_paths/uniqueItems",
+            "/$defs/stop_request/allOf/1/properties/remediation_paths/uniqueItems",
         ),
     )
     definitions = schema["$defs"]
@@ -1023,9 +1025,9 @@ def native_review_provider_response_schema(
         projected_schema = _final_review_provider_response_schema(
             context, definitions
         )
-        assert_projected_provider_schema(
-            projected_schema, provider="claude"
-        )
+        if profile == OPENAI_PROVIDER:
+            projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+        assert_projected_provider_schema(projected_schema, provider=profile)
         return projected_schema
     own_findings = tuple(
         item
@@ -1203,9 +1205,9 @@ def native_review_provider_response_schema(
         "additionalProperties": False,
         "$defs": definitions,
     }
-    assert_projected_provider_schema(
-        projected_schema, provider="claude"
-    )
+    if profile == OPENAI_PROVIDER:
+        projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+    assert_projected_provider_schema(projected_schema, provider=profile)
     return projected_schema
 
 
@@ -2675,8 +2677,7 @@ def _require_native_text(
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value)
         or len(value) > max_length
     ):
         raise NativeReviewContractError(

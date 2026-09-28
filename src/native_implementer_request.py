@@ -21,6 +21,9 @@ from native_implementer_contract import (
     NativeImplementerRequestKind,
     native_implementer_provider_response_schema,
 )
+from native_provider_schema import OPENAI_PROVIDER
+from path_policy import is_canonical_repository_relative_path
+from schema_patterns import has_visible_text
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -29,14 +32,14 @@ from schema_validation import (
 )
 
 
-REQUEST_SCHEMA_VERSION = "native-agent-codex-request-v2"
-RESPONSE_SCHEMA_VERSION = "native-agent-codex-result-v2"
-NATIVE_IMPLEMENTER_TRANSPORT = "native-codex-v2"
+REQUEST_SCHEMA_VERSION = "native-agent-implementer-request-v3"
+RESPONSE_SCHEMA_VERSION = "native-agent-implementer-result-v3"
+NATIVE_IMPLEMENTER_TRANSPORT = "native-codex-v3"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-codex-request-v2.schema.json"
+    / "native-agent-implementer-request-v3.schema.json"
 )
 SAFE_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,199}")
 INVOCATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
@@ -214,6 +217,7 @@ class NativeImplementerRequestBundle:
     bound_context: BoundNativeImplementerContext
     provider_response_schema_json: str
     evidence_assets: tuple[NativeImplementerEvidenceAsset, ...] = ()
+    capability_profile: str = OPENAI_PROVIDER
 
     def __post_init__(self) -> None:
         try:
@@ -238,7 +242,7 @@ class NativeImplementerRequestBundle:
         calculated_digest = _sha256_text(_canonical_json(binding))
         if (
             calculated_digest != self.bound_context.request_digest
-            or document["request_id"] != "native-codex-request-" + calculated_digest
+            or document["request_id"] != "native-implementer-request-" + calculated_digest
         ):
             raise NativeImplementerRequestError(
                 NativeImplementerRequestErrorCode.REQUEST_INVALID,
@@ -266,7 +270,7 @@ class NativeImplementerRequestBundle:
                 "bundle provider response schema is not a canonical object",
             )
         expected_schema = native_implementer_provider_response_schema(
-            self.bound_context.context
+            self.bound_context.context, self.capability_profile
         )
         if provider_schema != expected_schema:
             raise NativeImplementerRequestError(
@@ -341,7 +345,7 @@ def load_native_implementer_request_schema() -> dict[str, Any]:
             "bundled native Codex request schema must be an object",
         )
     try:
-        check_schema(schema, location="<native-codex-request-schema>")
+        check_schema(schema, location="<native-implementer-request-schema>")
     except SchemaDefinitionError as exc:
         raise NativeImplementerRequestError(
             NativeImplementerRequestErrorCode.SCHEMA_INVALID, str(exc)
@@ -379,6 +383,7 @@ def validate_native_implementer_provider_response(
 def build_native_implementer_request(
     spec: NativeImplementerRequestSpec,
     *,
+    profile: str = OPENAI_PROVIDER,
     inline_evidence_chars: int = DEFAULT_INLINE_EVIDENCE_CHARS,
 ) -> NativeImplementerRequestBundle:
     if inline_evidence_chars < 1:
@@ -410,7 +415,7 @@ def build_native_implementer_request(
 
     context = spec.context
     context_projection = _implementer_context_request_projection(context)
-    response_schema = native_implementer_provider_response_schema(context)
+    response_schema = native_implementer_provider_response_schema(context, profile)
     response_schema_json = _canonical_json(response_schema)
     response_schema_digest = _sha256_text(response_schema_json)
     binding: dict[str, Any] = {
@@ -435,7 +440,7 @@ def build_native_implementer_request(
             "correction_instruction": spec.retry_feedback.correction_instruction,
         }
     request_digest = _sha256_text(_canonical_json(binding))
-    request_id = "native-codex-request-" + request_digest
+    request_id = "native-implementer-request-" + request_digest
     document = {**binding, "request_id": request_id}
     canonical = canonical_native_implementer_request_json(document)
     return NativeImplementerRequestBundle(
@@ -443,6 +448,7 @@ def build_native_implementer_request(
         bound_context=BoundNativeImplementerContext(context, request_id, request_digest),
         provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
+        capability_profile=profile,
     )
 
 
@@ -552,8 +558,7 @@ def _require_text(
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value, first_line=True)
         or len(value) > maximum
     ):
         raise NativeImplementerRequestError(
@@ -575,14 +580,9 @@ def _require_sha256(
 def _require_repository_path(
     value: str, label: str, code: NativeImplementerRequestErrorCode
 ) -> None:
-    path = PurePosixPath(value)
     if (
-        path.is_absolute()
-        or not path.parts
-        or ".." in path.parts
-        or "\\" in value
-        or path.as_posix() != value
-        or path.parts[0] == ".orchestrator"
+        not is_canonical_repository_relative_path(value)
+        or PurePosixPath(value).parts[0] == ".orchestrator"
     ):
         raise NativeImplementerRequestError(
             code, f"{label} must be a canonical repository-relative path"

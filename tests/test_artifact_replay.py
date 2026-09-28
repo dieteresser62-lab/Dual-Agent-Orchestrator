@@ -65,8 +65,8 @@ def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentR
         work_unit_id,
         "ready",
         test_files,
-        "native-codex-v2",
-        "native-codex-request-" + "b" * 64,
+        "native-codex-v3",
+        "native-implementer-request-" + "b" * 64,
         "c" * 64,
     )
 
@@ -78,7 +78,7 @@ def _review(work_unit_id: str, evidence: str) -> ReviewPayload:
         "approved",
         (),
         evidence,
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         "native-review-request-" + "b" * 64,
         "c" * 64,
     )
@@ -306,9 +306,9 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
     _append(records, "work-unit-2", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            "C-01",
+            "R-01",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -329,9 +329,9 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
             Role.REVIEWER,
             "2",
             "denied",
-            ("C-01",),
+            ("R-01",),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "d" * 64,
             "e" * 64,
         ),
@@ -490,7 +490,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
 
     state = state.record_review_denial(
         reviewer=Reviewer.REVIEWER,
-        open_findings=("C-01",),
+        open_findings=("R-01",),
         return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
     )
@@ -501,9 +501,9 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
             Role.REVIEWER,
             "1",
             "denied",
-            ("C-01",),
+            ("R-01",),
             None,
-            "native-claude-review-v2",  # allowlist:provider -- transport: closed transport fixture
+            "native-claude-review-v3",  # allowlist:provider -- transport: closed transport fixture
             "native-review-request-" + "f" * 64,
             "d" * 64,
         ),
@@ -516,9 +516,9 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="opened",
@@ -534,9 +534,9 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     )
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.IMPLEMENTER,
             action="responded",
@@ -550,9 +550,9 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     )
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="status_changed",
@@ -579,9 +579,9 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
         for number in (1, 2):
             _append(
                 records,
-                f"finding-C-{number:02d}",
+                f"finding-R-{number:02d}",
                 FindingTransitionPayload(
-                    finding_id=f"C-{number:02d}",
+                    finding_id=f"R-{number:02d}",
                     reporter=Role.REVIEWER,
                     actor=Role.REVIEWER,
                     action="opened",
@@ -597,9 +597,9 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
             )
     _append(
         verbose,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.IMPLEMENTER,
             action="responded",
@@ -623,7 +623,7 @@ def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() ->
         item.finding_id
         for item in verbose_findings
         if item.status is FindingStatus.OPEN
-    ) == ("C-01", "C-02")
+    ) == ("R-01", "R-02")
 
 
 def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> None:
@@ -631,9 +631,9 @@ def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> No
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            "C-01",
+            "R-01",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -655,9 +655,9 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="opened",
@@ -674,9 +674,9 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     _append(records, "work-unit-2", WorkUnitPayload("1", 2, ("src/a.py",)))
     _append(
         records,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.IMPLEMENTER,
             action="responded",
@@ -695,7 +695,7 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     with pytest.raises(ArtifactReplayError) as caught:
         replay_findings(replay, "2")
     assert caught.value.code is ReplayDiagnosticCode.RECORD_REFERENCE_MISSING
-    assert len(replay_findings(replay, finding_ids=("C-01",))[0].responses) == 1
+    assert len(replay_findings(replay, finding_ids=("R-01",))[0].responses) == 1
     assert len(replay_findings(replay)[0].responses) == 1
 
 

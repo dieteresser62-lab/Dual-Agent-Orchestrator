@@ -87,7 +87,7 @@
       "input": {
         "work_unit_id": "work-01",
         "slice_id": "1",
-        "source_request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "stop_rule_id": "SCOPE-EXTENSION-REQUESTED",
         "rationale": "The current Slice requires its documentation path.",
         "additions": [
@@ -137,7 +137,7 @@
           "src/artifact_models.py"
         ],
         "open_finding_ids": [
-          "C-01"
+          "R-01"
         ]
       }
     },
@@ -151,7 +151,7 @@
           "src/artifact_models.py"
         ],
         "finding_ids": [
-          "C-01"
+          "R-01"
         ]
       }
     },
@@ -165,8 +165,8 @@
         "test_files": [
           "tests/test_payload_dispatch.py"
         ],
-        "transport_schema": "native-codex-v2",
-        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "transport_schema": "native-codex-v3",
+        "request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "slice_plan": [
           {
@@ -199,7 +199,7 @@
         "verdict": "stop",
         "finding_ids": [],
         "evidence": null,
-        "transport_schema": "native-claude-review-v2",
+        "transport_schema": "native-claude-review-v3",
         "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "review_evidence": {
@@ -237,7 +237,7 @@
         "pre_mortem": "An unreviewed path could hide a regression.",
         "validation_attestation_record_id": "ar1-4444444444444444444444444444444444444444444444444444444444444444",
         "reviewed_head_commit": "2222222222222222222222222222222222222222",
-        "transport_schema": "native-claude-review-v2",
+        "transport_schema": "native-claude-review-v3",
         "request_id": "native-review-request-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "response_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "scan_complete": true
@@ -271,7 +271,7 @@
       "record_type": "finding_transition",
       "expected_class": "FindingTransitionPayload",
       "input": {
-        "finding_id": "C-01",
+        "finding_id": "R-01",
         "reporter": "reviewer",
         "actor": "reviewer",
         "action": "opened",
@@ -376,7 +376,7 @@
         "work_unit_id": "work-01",
         "round_number": 1,
         "operation": "implementer_implementation",
-        "request_id": "native-codex-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "request_id": "native-implementer-request-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "response_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "content_kind": "agent_result",
         "content_bytes": 3,

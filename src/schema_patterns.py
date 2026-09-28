@@ -1,8 +1,4 @@
-"""Audit the portable, deliberately small grammar for schema ``pattern`` values.
-
-This module is an inventory tool until the v3 schema cutover.  Runtime schema
-loading continues to use the existing v2 rules in Slice 9a.
-"""
+"""Closed portable grammar and full-string matcher for schema patterns."""
 
 from __future__ import annotations
 
@@ -17,6 +13,19 @@ _BOUNDED_QUANTIFIER = re.compile(r"\{([0-9]+)(?:,([0-9]*))?\}")
 _PORTABLE_QUANTIFIER_LIMIT = 1000
 _PORTABLE_QUANTIFIER_LIMIT_KEY = (4, str(_PORTABLE_QUANTIFIER_LIMIT))
 _INVISIBLE_WHITESPACE = frozenset("\u00a0\u3000\ufeff\u0085")
+FIRST_LINE_VISIBLE_PATTERN = r"^[ \x09\x0B\x0C]*[^\x00 \x09\x0A\x0B\x0C\x0D][^\x00]*$"
+ANY_LINE_VISIBLE_PATTERN = r"^[^\x00]*[^\x00 \x09\x0A\x0B\x0C\x0D][^\x00]*$"
+VISIBLE_LINE_PATTERN = r"^[^\x00\x0A\x0D]*[^\x00 \x09\x0A\x0B\x0C\x0D][^\x00\x0A\x0D]*$"
+
+
+def has_visible_text(value: object, *, first_line: bool = False) -> bool:
+    """Compensate Unicode nonblank rules omitted from portable patterns."""
+    if not isinstance(value, str) or "\x00" in value:
+        return False
+    candidate = value
+    if first_line:
+        candidate = re.split("[\r\n\u2028\u2029]", value, maxsplit=1)[0]
+    return any(not (character.isspace() or character == "\ufeff") for character in candidate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +165,11 @@ def _scan_class(body: str, index: int, issues: set[str]) -> int:
                 issues.add("empty-character-class")
             return index + 1
         else:
-            if body[index] == "\x00":
+            if (
+                body[index] == "\x00"
+                or body[index] in _INVISIBLE_WHITESPACE
+                or (body[index].isspace() and body[index] != " ")
+            ):
                 issues.add("implicit-whitespace-or-nul")
             index += 1
     issues.add("unclosed-character-class")

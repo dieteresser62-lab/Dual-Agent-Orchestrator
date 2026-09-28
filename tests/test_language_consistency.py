@@ -194,10 +194,10 @@ def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> 
         assert "validation" in text.lower()
     shared = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for native_contract_term in (
-        "native-agent-codex-request-v2",
-        "native-agent-codex-result-v2",
-        "native-agent-review-request-v2",
-        "native-agent-review-result-v2",
+        "native-agent-implementer-request-v3",
+        "native-agent-implementer-result-v3",
+        "native-agent-review-request-v3",
+        "native-agent-review-result-v3",
         "request binding",
         "domain validation",
         "Plain-text result markers",
@@ -825,10 +825,10 @@ def test_readme_native_json_contract_matches_the_active_root_contract() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     native_contract_terms = (
-        "native-agent-codex-request-v2",
-        "native-agent-codex-result-v2",
-        "native-agent-review-request-v2",
-        "native-agent-review-result-v2",
+        "native-agent-implementer-request-v3",
+        "native-agent-implementer-result-v3",
+        "native-agent-review-request-v3",
+        "native-agent-review-result-v3",
         "native JSON",
     )
     for term in native_contract_terms:
@@ -1381,7 +1381,7 @@ def test_retirement_guard_ignores_only_managed_audit_projection() -> None:
     ("relative_path", "synthetic"),
     (
         (
-            "schemas/native-agent-codex-result-v2.schema.json",
+            "schemas/native-agent-implementer-result-v3.schema.json",
             '{"pattern": "^[CA]-(0[1-9]|[1-9][0-9]*)$"}',
         ),
         ("src/workflow.py", 'LEGACY_FINDING = "A-02"'),

@@ -160,7 +160,7 @@ def _state(repository: Path, run_id: str = "structured-regression"):
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-regression",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
 
 
@@ -757,7 +757,7 @@ def test_code_version_change_is_warned_and_recorded_before_provider_start(
         {
             "protocol_binding": ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
+                "3",
                 implementer_profile=AgentProfileBinding("foreign-codex", "medium"),
             )
         },
@@ -841,7 +841,7 @@ def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
             verdict="approved",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -874,7 +874,7 @@ def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
 def _legacy_final_denial_recovery_case(
     repository: Path,
     *,
-    correction_finding_ids: tuple[str, ...] = ("C-01",),
+    correction_finding_ids: tuple[str, ...] = ("R-01",),
 ) -> tuple[WorkflowState, tuple[object, ...], tuple[ArtifactRecord, ...]]:
     head = _git(repository, "rev-parse", "HEAD")
     state = _state(repository, "structured-final-denial-transition").bind_slice_plan(
@@ -923,14 +923,14 @@ def _legacy_final_denial_recovery_case(
         start_commit=head,
         scope_paths=("src/runtime.py",),
         start_fingerprint="e" * 64,
-        finding_ids=("C-01",),
+        finding_ids=("R-01",),
     )
     signature = (
         str(state.current_work_unit_id),
         "claude",
         attestation.diff_fingerprint,
         "denied",
-        ("C-01",),
+        ("R-01",),
     )
 
     bridge = ArtifactBridge(ArtifactStore(repository, correction.run_id))
@@ -1012,7 +1012,7 @@ def _legacy_final_denial_recovery_case(
             verdict="denied",
             finding_ids=signature[4],
             evidence="legacy final denial",
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
@@ -1100,7 +1100,7 @@ def _pending_reviewer_recovery_case(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
-            finding_ids=("C-07",),
+            finding_ids=("R-07",),
         )
         .with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     )
@@ -1123,7 +1123,7 @@ def _pending_reviewer_recovery_case(
         ),
     )
     prior_finding = FindingRecord(
-        finding_id="C-07",
+        finding_id="R-07",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="pre-existing observation",
@@ -1135,7 +1135,7 @@ def _pending_reviewer_recovery_case(
     )
     if mirrored_partial_review:
         partial_finding = FindingRecord(
-            finding_id="C-99",
+            finding_id="R-99",
             finding_class=FindingClass.BLOCKER,
             status=FindingStatus.OPEN,
             summary="partially mirrored reviewer result",
@@ -1180,7 +1180,7 @@ def _pending_reviewer_recovery_case(
                 "REVIEWER: claude",
                 "REVIEW_EVIDENCE: replay identity and binding | stale durable "
                 "verdict | the replay record differs from its provider log",
-                "FINDING_STATUS: C-07 | CLOSED | The correction resolves the prior finding.",
+                "FINDING_STATUS: R-07 | CLOSED | The correction resolves the prior finding.",
                 "PRE_MORTEM: A future adapter change could weaken replay identity.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | YES",
                 "STATUS: DONE",
@@ -1190,8 +1190,8 @@ def _pending_reviewer_recovery_case(
         output = "\n".join(
             (
                 "REVIEWER: claude",
-                "NEW_FINDING: C-01 | BLOCKER | replay near miss | Keep replay fail closed.",
-                "FINDING_STATUS: C-07 | OPEN | Preserve the prior finding for correction.",
+                "NEW_FINDING: R-01 | BLOCKER | replay near miss | Keep replay fail closed.",
+                "FINDING_STATUS: R-07 | OPEN | Preserve the prior finding for correction.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | NO",
                 "STATUS: DONE",
             )
@@ -1209,8 +1209,8 @@ def _pending_reviewer_recovery_case(
     )
     bridge.append(
         finding_payload(prior_finding),
-        logical_id="finding-C-07",
-        idempotency_key="finding:C-07:opened:1:reviewer",
+        logical_id="finding-R-07",
+        idempotency_key="finding:R-07:opened:1:reviewer",
         fingerprint_sha256=fingerprint,
     )
     bridge.append(
@@ -1219,9 +1219,9 @@ def _pending_reviewer_recovery_case(
             work_unit_id=str(state.current_work_unit_id),
             verdict=verdict,
             finding_ids=(
-                ("C-07",)
+                ("R-07",)
                 if output_verdict == "approved" and verdict == "approved"
-                else ("C-01", "C-07")
+                else ("R-01", "R-07")
             ),
             evidence=(
                 "replay identity and binding | stale durable verdict | "
@@ -1231,7 +1231,7 @@ def _pending_reviewer_recovery_case(
                 if verdict == "approved"
                 else None
             ),
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
@@ -1839,7 +1839,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             verdict="stop",
             finding_ids=(),
             evidence=None,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
             stop_request=ReviewStopRequestPayload(

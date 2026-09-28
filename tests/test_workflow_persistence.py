@@ -362,7 +362,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
         "request_sequence": 1,
         "operation": "implementer_implementation",
         "request_id": (
-            "native-codex-request-"
+            "native-implementer-request-"
             "a18a0c6b0b7822fd97d5cf80b8e0fd57b18b84744ba8c2b4b656a45c3e8bd960"
         ),
         "response_sha256": (
@@ -394,7 +394,7 @@ def test_implementation_provider_content_key_is_canonical_and_idempotent(
     assert len(first) < 200
     assert len(distinct_keys) == len(distinct_inputs)
     assert all(_IDENTIFIER_RE.fullmatch(key) for key in distinct_keys)
-    assert len(incident_key) == 207
+    assert len(incident_key) == 213
     assert _IDENTIFIER_RE.fullmatch(incident_key) is None
 
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "final-correction-content-key"))

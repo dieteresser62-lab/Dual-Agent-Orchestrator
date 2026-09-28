@@ -47,7 +47,7 @@ from rejected_response_shape import (
 )
 from role_occupancy import role_for_provider
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 STATE_PROJECTION_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-role-wire-v1"
 )
@@ -82,7 +82,7 @@ PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _FINDING_ID_RE = FINDING_ID_PATTERN
-_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v3.schema.json"
 
 
 def foreign_reducer_diagnostic(found: object, *, subject: str = "run profile reducer_version") -> str:
@@ -635,7 +635,7 @@ class AgentResultPayload:
         if self.outcome not in {"ready", "not_ready", "stopped"}:
             raise ArtifactValidationError("agent result outcome is invalid")
         _require_paths(self.test_files, allow_empty=True)
-        if self.transport_schema != "native-codex-v2":
+        if self.transport_schema != "native-codex-v3":
             raise ArtifactValidationError("agent result transport_schema is unsupported")
         if self.role is not Role.IMPLEMENTER:
             raise ArtifactValidationError(
@@ -643,7 +643,7 @@ class AgentResultPayload:
             )
         if (
             not isinstance(self.request_id, str)
-            or re.fullmatch(r"native-codex-request-[0-9a-f]{64}", self.request_id)
+            or re.fullmatch(r"native-implementer-request-[0-9a-f]{64}", self.request_id)
             is None
         ):
             raise ArtifactValidationError("native Codex result request_id is invalid")
@@ -768,7 +768,7 @@ class ReviewPayload:
             raise ArtifactValidationError(
                 "review stop verdict and structured stop request differ"
             )
-        if self.transport_schema != "native-claude-review-v2":
+        if self.transport_schema != "native-claude-review-v3":
             raise ArtifactValidationError("review transport_schema is unsupported")
         if (
             not isinstance(self.request_id, str)
@@ -908,7 +908,7 @@ class FinalReviewCompletedPayload:
             "validation_attestation_record_id",
         )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
-        if self.transport_schema != "native-claude-review-v2":  # allowlist:provider -- transport: persisted protocol vocabulary
+        if self.transport_schema != "native-claude-review-v3":  # allowlist:provider -- transport: persisted protocol vocabulary
             raise ArtifactValidationError(
                 "final review completion transport_schema is unsupported"
             )
@@ -2985,7 +2985,8 @@ def _json_value(value: Any) -> Any:
 
 
 def _require_text(value: str, name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
+    from schema_patterns import has_visible_text
+    if not has_visible_text(value):
         raise ArtifactValidationError(f"{name} must be a non-empty string")
 
 
@@ -3053,10 +3054,10 @@ def _require_utc_timestamp(value: str, name: str) -> None:
 
 
 def _require_path(value: str) -> None:
+    from path_policy import is_canonical_repository_relative_path
     if not isinstance(value, str) or not value or "\\" in value:
         raise ArtifactValidationError("paths must be non-empty POSIX paths")
-    path = PurePosixPath(value)
-    if path.is_absolute() or value != path.as_posix() or any(part in {"", ".", ".."} for part in path.parts):
+    if not is_canonical_repository_relative_path(value):
         raise ArtifactValidationError(f"path is not canonical repository-relative POSIX: {value!r}")
 
 

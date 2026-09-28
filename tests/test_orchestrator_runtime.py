@@ -200,7 +200,7 @@ from workflow_recovery import _require_provider_input_round
 
 def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
     fingerprint = state.task_digest or "a" * 64
-    binding = state.protocol_binding or ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2")
+    binding = state.protocol_binding or ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3")
     identity = bridge.append(
         RunIdentityPayload(
             state.task_file,
@@ -292,7 +292,7 @@ def _append_test_commit_authority(
             "approved",
             tuple(finding.finding_id for finding in findings),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + hashlib.sha256(
                 f"{review_state.run_id}:{slice_id}".encode("utf-8")
             ).hexdigest(),
@@ -339,9 +339,9 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
         target_branch="feature/native-review-dispatch",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-            claude_review_transport="native-claude-review-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
+            claude_review_transport="native-claude-review-v3",
         ),
     ).with_current_step(WorkflowStep.REVIEWER_PLAN_REVIEW)
     adapter = NativeClaudeReviewAdapter(
@@ -457,9 +457,9 @@ def test_rejected_reviewer_response_uses_side_effect_ledger_and_exact_bytes(
         target_branch="feature/native-review-response",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-            claude_review_transport="native-claude-review-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
+            claude_review_transport="native-claude-review-v3",
         ),
     ).with_current_step(WorkflowStep.REVIEWER_PLAN_REVIEW)
     driver = ProductionWorkflowDriver(
@@ -528,7 +528,7 @@ def _native_plan_output(
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -572,7 +572,7 @@ def _native_review_approval(
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",
@@ -602,7 +602,7 @@ def _native_implementation_output(
     bundle = invocation.native_request
     assert bundle is not None
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -653,7 +653,7 @@ def _native_final_review_output(
         ]
     )
     document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "final_review_completed",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",
@@ -776,8 +776,8 @@ def _failed_codex_attempt_harness(
         target_branch=branch,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
 
@@ -871,9 +871,9 @@ def _open_crashed_provider_attempt(
         slice_count=1, task_digest=digest,
         task_scope_patterns=("src/runtime.py",), target_branch=branch,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2, "2",
-            codex_result_transport="native-codex-v2",
-            claude_review_transport="native-claude-review-v2",
+            ProtocolMode.STRUCTURED_V2, "3",
+            codex_result_transport="native-codex-v3",
+            claude_review_transport="native-claude-review-v3",
         ),
     )
     step = WorkflowStep.IMPLEMENTER_PLAN if role == "codex" else WorkflowStep.REVIEWER_PLAN_REVIEW
@@ -1014,12 +1014,12 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
         task_digest=digest, task_scope_patterns=("src/runtime.py",),
         target_branch=branch,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2, "2",
-            codex_result_transport="native-codex-v2",
+            ProtocolMode.STRUCTURED_V2, "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     finding = FindingRecord(
-        finding_id="C-01", finding_class=FindingClass.FINDING,
+        finding_id="R-01", finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN, summary="Correct runtime.",
         acceptance_test="Runtime is corrected.",
         origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
@@ -1035,7 +1035,7 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
         )
     if step is WorkflowStep.IMPLEMENTER_CORRECTION:
         state = state._replace_current_unit(replace(
-            state.current_work_unit, open_findings=("C-01",),
+            state.current_work_unit, open_findings=("R-01",),
         ))
         (repository / "src").mkdir()
         (repository / "src" / "runtime.py").write_text(
@@ -1450,7 +1450,7 @@ def test_recomposed_request_opens_new_sequence_and_operation_but_binding_drift_s
             task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
             task_scope_patterns=("src/runtime.py",),
             target_branch=branch,
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         )
         .complete_current_work_unit()
         .start_work_unit(
@@ -1646,8 +1646,8 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
             target_branch=branch,
             protocol_binding=ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
-                claude_review_transport="native-claude-review-v2",
+                "3",
+                claude_review_transport="native-claude-review-v3",
             ),
         )
         .complete_current_work_unit()
@@ -1686,7 +1686,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
             policy=default_provider_input_budget_policy(),
         )
 
-    stale = measurement('{"next_finding_id":"C-01"}')
+    stale = measurement('{"next_finding_id":"R-01"}')
     stale_bootstrap = driver._persist_provider_bootstrap(stale)
     response_path = (
         repository
@@ -1705,12 +1705,12 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
     stored_response_path = started[2]
     stored_response_path.parent.mkdir(parents=True, exist_ok=True)
     stored_response_path.write_text(
-        '{"new_findings":[{"finding_id":"C-01"}]}',
+        '{"new_findings":[{"finding_id":"R-01"}]}',
         encoding="utf-8",
     )
     driver._finish_provider_attempt(started, 1.0, None, None)
 
-    corrected = measurement('{"next_finding_id":"C-66"}')
+    corrected = measurement('{"next_finding_id":"R-66"}')
     corrected_bootstrap = driver._persist_provider_bootstrap(corrected)
     advanced, output = WorkflowEngine(driver)._invoke_role(
         state,
@@ -1730,7 +1730,7 @@ def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
     assert advanced.current_work_unit.round_number == 1
     assert advanced.current_work_unit.request_sequence == 2
     assert stored_response_path.read_text(encoding="utf-8") == (
-        '{"new_findings":[{"finding_id":"C-01"}]}'
+        '{"new_findings":[{"finding_id":"R-01"}]}'
     )
     chain = ArtifactStore(repository, state.run_id).load_chain()
     policies = tuple(
@@ -2019,10 +2019,10 @@ def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
         task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
     )
     assert state.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2, "2"
+        ProtocolMode.STRUCTURED_V2, "3"
     )
-    assert state.protocol_binding.claude_review_transport == "native-claude-review-v2"
-    assert state.protocol_binding.codex_result_transport == "native-codex-v2"
+    assert state.protocol_binding.claude_review_transport == "native-claude-review-v3"
+    assert state.protocol_binding.codex_result_transport == "native-codex-v3"
 
 
 def test_final_review_structured_records_use_merge_base_fingerprint(
@@ -2294,7 +2294,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         task_digest="a" * 64,
         task_scope_patterns=(changed_path,),
         target_branch="feature/structured-red-state",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,
         scope_paths=(changed_path,),
@@ -2375,7 +2375,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         review_payload(
             review,
             work_unit_id=state.current_work_unit_id,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id=f"native-review-request-{'c' * 64}",
             response_sha256="d" * 64,
         ),
@@ -3203,7 +3203,7 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-bind",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3266,7 +3266,7 @@ def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_a
         work_plan_path="docs/internal/approved-plan.md",
         approved_plan_commit=head,
         target_branch="feature/r2-transition-order",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_slice_plan(
         (
             PlannedSlice(1, "first", ("src/one.py",)),
@@ -3359,7 +3359,7 @@ def test_r9_resume_reconciles_one_durable_transition_without_its_event(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/r9-event-recovery",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     first = ProductionWorkflowDriver(
         repository_root=repository,
@@ -3426,7 +3426,7 @@ def test_r2_policy_records_denial_count_against_the_fixed_configured_limit(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/r2-policy",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3489,7 +3489,7 @@ def test_r3_slice_boundary_precedes_reader_and_keeps_measured_start_after_tree_c
         task_digest="a" * 64,
         task_scope_patterns=("src/one.py", "src/old.py"),
         target_branch="feature/r3-boundary-order",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3562,7 +3562,7 @@ def test_r3_each_slice_start_writes_one_boundary_and_scope_extension_is_revision
         task_digest="a" * 64,
         task_scope_patterns=("src/shared.py", "tests/shared.py"),
         target_branch="feature/r3-boundary-count",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3638,7 +3638,7 @@ def test_r3_scope_extension_checkpoint_accepts_older_subset_revision(
         task_digest="a" * 64,
         task_scope_patterns=("docs/extra.md", "src/runtime.py"),
         target_branch="feature/r3-scope-extension-resume",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3704,7 +3704,7 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
         task_digest="a" * 64,
         task_scope_patterns=("docs/extra.md", "src/runtime.py"),
         target_branch="feature/scope-extension-record",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3724,7 +3724,7 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
     driver.bind_work_unit(state)
     bridge = driver._artifact_bridge
     assert bridge is not None
-    source_request_id = "native-codex-request-" + "c" * 64
+    source_request_id = "native-implementer-request-" + "c" * 64
     append_provider_decision_authority(
         bridge,
         AgentResultPayload(
@@ -3732,7 +3732,7 @@ def test_scope_extension_record_and_boundary_are_atomic_and_resume_authoritative
             str(state.current_work_unit_id),
             "stopped",
             (),
-            "native-codex-v2",
+            "native-codex-v3",
             source_request_id,
             "d" * 64,
         ),
@@ -3826,7 +3826,7 @@ def test_scope_extension_user_gate_records_exact_decision_and_originating_reques
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py", requested_path),
         target_branch="feature/scope-extension-user-gate",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -3846,7 +3846,7 @@ def test_scope_extension_user_gate_records_exact_decision_and_originating_reques
     driver.bind_work_unit(state)
     bridge = driver._artifact_bridge
     assert bridge is not None
-    source_request_id = "native-codex-request-" + "c" * 64
+    source_request_id = "native-implementer-request-" + "c" * 64
     append_provider_decision_authority(
         bridge,
         AgentResultPayload(
@@ -3854,7 +3854,7 @@ def test_scope_extension_user_gate_records_exact_decision_and_originating_reques
             str(state.current_work_unit_id),
             "stopped",
             (),
-            "native-codex-v2",
+            "native-codex-v3",
             source_request_id,
             "d" * 64,
         ),
@@ -4003,7 +4003,7 @@ def test_persisted_scope_stop_reprompts_new_implementer_request(
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py", requested_path),
         target_branch=branch,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_slice_plan(
         (PlannedSlice(1, "implement runtime", ("src/runtime.py",)),),
         first_start_commit=head,
@@ -4047,7 +4047,7 @@ def test_persisted_scope_stop_reprompts_new_implementer_request(
         assert bundle is not None
         if len(calls) == 1:
             document = {
-                "schema_version": "native-agent-codex-result-v2",
+                "schema_version": "native-agent-implementer-result-v3",
                 "result_type": "stop_result",
                 "request_id": bundle.bound_context.request_id,
                 "rule_id": "SCOPE-EXTENSION-REQUESTED",
@@ -4134,8 +4134,8 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         target_branch="feature/native-record-ahead",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
+            "3",
+            "native-claude-review-v3",
         ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -4210,14 +4210,14 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         )
     )
     response = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",
         "decision": "approved",
         "new_findings": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "finding_class": "FINDING",
                 "affected_paths": ["src/runtime.py"],
                 "summary": "Keep recovery transaction completeness visible.",
@@ -4229,7 +4229,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         ],
         "status_changes": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "status": "CLOSED",
                 "rationale": "The recovery evidence decides the finding.",
                 "closure": {"kind": "fixed"},
@@ -4355,7 +4355,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         item
         for item in completed_chain
         if isinstance(item.payload, FindingTransitionPayload)
-        and item.payload.finding_id == "C-01"
+        and item.payload.finding_id == "R-01"
     )
     assert tuple(item.payload.action for item in finding_transitions) == (
         "opened",
@@ -4409,8 +4409,8 @@ def test_native_implementer_record_ahead_recovery_reuses_raw_json_without_provid
         target_branch="feature/native-codex-record-ahead",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -4465,7 +4465,7 @@ def test_native_implementer_record_ahead_recovery_reuses_raw_json_without_provid
         )
     )
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -4556,7 +4556,7 @@ def test_native_implementer_record_ahead_recovery_reuses_raw_json_without_provid
     assert recovered_request.canonical_json == bundle.canonical_json
     assert recovered_request.bound_context.request_id == bundle.bound_context.request_id
     historical_finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The earlier request offered this finding.",
@@ -4787,9 +4787,9 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
         target_branch="feature/native-open-rationale-replay",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
-            claude_review_transport="native-claude-review-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
+            claude_review_transport="native-claude-review-v3",
         ),
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -4805,7 +4805,7 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
     )
     driver.bind_work_unit(state)
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The reviewer needs another correction round.",
@@ -4878,9 +4878,9 @@ def _finding_transition_driver(
         target_branch=f"feature/{run_id}",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            claude_review_transport="native-claude-review-v2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            claude_review_transport="native-claude-review-v3",
+            codex_result_transport="native-codex-v3",
         ),
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -4896,7 +4896,7 @@ def _finding_transition_driver(
     )
     driver.bind_work_unit(state)
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Finding transition identity must be durable.",
@@ -4954,12 +4954,12 @@ def test_correction_persistence_rejects_accepted_unchanged_fingerprint(
             ),
         ),
         canonical_json=canonical,
-        request_id=f"native-codex-request-{'b' * 64}",
+        request_id=f"native-implementer-request-{'b' * 64}",
         response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         context=context,
     )
 
-    with pytest.raises(NativeImplementerContractError, match=r"accepted finding IDs C-01"):
+    with pytest.raises(NativeImplementerContractError, match=r"accepted finding IDs R-01"):
         driver.persist_native_implementer_contract(output, 1, (finding,))
 
     bridge = driver._artifact_bridge
@@ -5097,7 +5097,7 @@ def test_recomposed_implementer_persistence_uses_request_time_sequence(
             findings=(),
         ),
         canonical_json=canonical,
-        request_id=f"native-codex-request-{'b' * 64}",
+        request_id=f"native-implementer-request-{'b' * 64}",
         response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
     )
 
@@ -5162,7 +5162,7 @@ def test_invalid_review_subset_publishes_no_review_or_finding_fact(
     assert bridge is not None
     before = bridge.store.load_chain()
 
-    with pytest.raises(WorkflowExecutionError, match=r"before publication.*C-01"):
+    with pytest.raises(WorkflowExecutionError, match=r"before publication.*R-01"):
         driver.persist_native_review_contract(
             output,
             "d" * 64,
@@ -5204,7 +5204,7 @@ def test_structured_finding_transition_reuses_semantically_identical_old_key(
         )
         rationale = current.status_rationale or current.summary
     fingerprint = "d" * 64
-    old_key = f"finding:C-01:{transition_identity}:1:reviewer"
+    old_key = f"finding:R-01:{transition_identity}:1:reviewer"
     bridge = driver._artifact_bridge
     assert bridge is not None
     old_record = bridge.append(
@@ -5214,7 +5214,7 @@ def test_structured_finding_transition_reuses_semantically_identical_old_key(
             rationale=rationale,
             work_unit_id=state.current_work_unit_id,
         ),
-        logical_id="finding-C-01",
+        logical_id="finding-R-01",
         idempotency_key=old_key,
         fingerprint_sha256=fingerprint,
     )
@@ -5241,19 +5241,19 @@ def test_structured_finding_transition_old_key_from_other_work_unit_is_rejected(
     driver, state, finding = _finding_transition_driver(tmp_path, "old-key-other-unit")
     bridge = driver._artifact_bridge
     assert bridge is not None
-    old_key = "finding:C-01:opened:1:reviewer"
+    old_key = "finding:R-01:opened:1:reviewer"
     bridge.append(
         finding_payload(
             finding,
             rationale=finding.summary,
             work_unit_id="999",
         ),
-        logical_id="finding-C-01",
+        logical_id="finding-R-01",
         idempotency_key=old_key,
         fingerprint_sha256="d" * 64,
     )
 
-    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*R-01"):
         driver._persist_review_finding_transitions(
             _finding_review(finding),
             fingerprint="d" * 64,
@@ -5281,12 +5281,12 @@ def test_structured_finding_transition_old_key_conflict_in_same_work_unit_fails_
             rationale="Conflicting historical rationale.",
             work_unit_id=state.current_work_unit_id,
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened:1:reviewer",
+        logical_id="finding-R-01",
+        idempotency_key="finding:R-01:opened:1:reviewer",
         fingerprint_sha256="d" * 64,
     )
 
-    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*R-01"):
         driver._persist_review_finding_transitions(
             _finding_review(finding),
             fingerprint="d" * 64,
@@ -5337,7 +5337,7 @@ def test_status_rationale_key_resume_boundary_keeps_existing_identity(
     )
     assert len(records) == 2
     assert records[1].idempotency_key == (
-        f"finding:C-01:status_rationale:{state.current_work_unit_id}:2:reviewer"
+        f"finding:R-01:status_rationale:{state.current_work_unit_id}:2:reviewer"
     )
     assert replay_findings(replay, state.current_work_unit_id) == (reaffirmed,)
 
@@ -5359,7 +5359,7 @@ def test_unstructured_finding_transition_key_is_unchanged(tmp_path: Path) -> Non
         if isinstance(item.payload, FindingTransitionPayload)
     )
     assert len(records) == 1
-    assert records[0].idempotency_key == "finding:C-01:opened:1:reviewer"
+    assert records[0].idempotency_key == "finding:R-01:opened:1:reviewer"
     assert records[0].payload.work_unit_id is None
 
 
@@ -5385,7 +5385,7 @@ def test_structured_finding_transition_rejects_reused_id_in_later_work_unit(
         start_fingerprint="c" * 64,
     )
     driver.bind_work_unit(next_state)
-    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*R-01"):
         driver._persist_review_finding_transitions(
             review,
             fingerprint="d" * 64,
@@ -5432,8 +5432,8 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
             target_branch="feature/native-codex-finding-recovery",
             protocol_binding=ProtocolBinding(
                 ProtocolMode.STRUCTURED_V2,
-                "2",
-                codex_result_transport="native-codex-v2",
+                "3",
+                codex_result_transport="native-codex-v3",
             ),
         )
         .complete_current_work_unit()
@@ -5457,7 +5457,7 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
     )
     driver.bind_work_unit(state)
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Native recovery must retain the Codex disposition.",
@@ -5498,14 +5498,14 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
         )
     )
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "correction_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "decision": "accepted",
                 "rationale": "The recovery path now completes durable responses.",
             }
@@ -5541,8 +5541,8 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
             rationale="Opened for recovery coverage.",
             work_unit_id=state.current_work_unit_id,
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened:recovery-test",
+        logical_id="finding-R-01",
+        idempotency_key="finding:R-01:opened:recovery-test",
         fingerprint_sha256="c" * 64,
     )
     measurement_record = bridge.append(
@@ -5754,7 +5754,7 @@ def test_native_implementer_record_ahead_recovery_completes_finding_responses(
     )
     assert durable_responses == (
         (
-            "C-01",
+            "R-01",
             response.rationale,
             response.decision.value.lower(),
             str(state.current_work_unit_id),
@@ -5806,8 +5806,8 @@ def test_native_implementer_plan_and_correction_recovery_are_raw_and_record_ahea
         target_branch=branch,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     current_fingerprint = task_digest
@@ -5881,7 +5881,7 @@ def test_native_implementer_plan_and_correction_recovery_are_raw_and_record_ahea
         )
     )
     document: dict[str, object] = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": result_type,
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -5974,7 +5974,7 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-round-transition",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -5995,7 +5995,7 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     driver.bind_work_unit(state)
     round_two = state.record_review_denial(
         reviewer=Reviewer.REVIEWER,
-        open_findings=("C-04",),
+        open_findings=("R-04",),
         return_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         progress_made=True,
     )
@@ -6041,7 +6041,7 @@ def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
         work_plan_path="docs/internal/approved-plan.md",
         approved_plan_commit=approved_plan_commit,
         target_branch="feature/structured-plan-binding",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_slice_plan(
         planned_slices,
         first_start_commit=approved_plan_commit,
@@ -6108,7 +6108,7 @@ def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audi
         task_scope_patterns=(slice_path, "src/runtime.py"),
         audit_report_path="docs/internal/structured-audit-review-12345678.md",
         target_branch="feature/structured-audit",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_slice_plan(
         (PlannedSlice(1, "Runtime", (slice_path, "src/runtime.py")),),
         first_start_commit=head,
@@ -6160,7 +6160,7 @@ def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-audit-mismatch",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -6577,7 +6577,7 @@ def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/r5-gate-order",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -6652,7 +6652,7 @@ def test_policy_gate_approval_error_preserves_chain_and_plain_resume(
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/policy-resume",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -6704,7 +6704,7 @@ def test_quota_resume_diff_approval_record_binds_timeout_invocation_and_time(
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/quota-resume-approval",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -6791,7 +6791,7 @@ def test_r5_repeated_identical_rejection_remains_resume_safe(tmp_path: Path) -> 
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/r5-repeat-rejection",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -7117,7 +7117,7 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
     assert captured["state"].run_id == "new-watch-run"
     assert captured["state"].branch == "feature/new-watch-target"
     assert captured["state"].protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2, "2"
+        ProtocolMode.STRUCTURED_V2, "3"
     )
     assert orchestrator.load_workflow_state(
         old_checkpoint,
@@ -7386,7 +7386,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
         driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
     ) -> NativeAgentReviewOutput:
         if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW:
-            return _native_final_review_output(driver, invocation, finding_id="C-01")
+            return _native_final_review_output(driver, invocation, finding_id="R-01")
         return _native_review_approval(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
@@ -7412,7 +7412,7 @@ def test_completed_implementation_runs_final_review_and_publishes_one_followup(
     followup_text = followup.read_text(encoding="utf-8")
     assert "The completed branch still needs remediation." in followup_text
     assert "`src/one.py`" in followup_text
-    assert "C-01" not in followup_text
+    assert "R-01" not in followup_text
     assert result.state.run_id not in followup_text
     assert "ACCEPTANCE_REVIEW_NUMBER: 2" in followup_text
     file_results = tuple(
@@ -7579,7 +7579,7 @@ def test_sixth_acceptance_review_keeps_evidence_and_creates_no_followup(
         driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
     ) -> NativeAgentReviewOutput:
         if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW:
-            return _native_final_review_output(driver, invocation, finding_id="C-01")
+            return _native_final_review_output(driver, invocation, finding_id="R-01")
         return _native_review_approval(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", codex)

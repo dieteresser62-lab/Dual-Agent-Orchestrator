@@ -311,7 +311,7 @@
       "case_id": "native-decision-has-no-matching-provider-content-record",
       "input": "native decision has no matching provider-content record",
       "code": "RECORD-MISSING",
-      "message": "native decision has no unique earlier provider-content record: feature=request_id expected='native-codex-request-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' actual='<missing>'",
+      "message": "native decision has no unique earlier provider-content record: feature=request_id expected='native-implementer-request-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' actual='<missing>'",
       "function": "_validate_provider_decision_content",
       "guard": "len(candidates) != 1",
       "message_expression": "_provider_content_mismatch_detail(provider_content_records, decision_record, role, decision_round if isinstance(decision, AgentResultPayload) else None, positions)"

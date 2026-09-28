@@ -16,7 +16,7 @@
         "version_policy": "same-major-forward"
       },
       "capability_sha256": "d57db52e04c2492e642512a6927ed4bac1e60a5b62bace486876c18ad21356fc",
-      "policy_sha256": "bfc0fe3376d4ba6e46b1c390bd95dcf1bc8ff9f6d44d59811d2d57f7a6e0253d",
+      "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
       "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
       "evidence": {
         "path": "docs/evidence/role-certification-v1.json",
@@ -50,7 +50,7 @@
         "version_policy": "same-major-forward"
       },
       "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
-      "policy_sha256": "3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6",
+      "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
       "evidence": {
         "path": "docs/evidence/role-certification-v1.json",
@@ -89,7 +89,7 @@
         "version_policy": "same-major-forward"
       },
       "capability_sha256": "3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
-      "policy_sha256": "3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6",
+      "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
       "evidence": {
         "path": "docs/evidence/role-certification-v1.json",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/schemas/native-agent-review-request-v2.schema.json",
+  "$id": "https://example.invalid/schemas/native-agent-review-request-v3.schema.json",
   "title": "Native Agent Review Request v2",
   "$defs": {
     "sha256": {
@@ -13,11 +13,15 @@
     },
     "safe_text": {
       "type": "string",
-      "pattern": "^[^\\u0000]{1,3000}$"
+      "pattern": "^[^\\x00]*$",
+      "minLength": 1,
+      "maxLength": 3000
     },
     "safe_path": {
       "type": "string",
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$"
+      "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+      "minLength": 1,
+      "maxLength": 1000
     },
     "finding_response": {
       "type": "object",
@@ -43,7 +47,7 @@
       "properties": {
         "finding_id": {
           "type": "string",
-          "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
+          "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
         },
         "finding_class": {
           "enum": [
@@ -127,7 +131,7 @@
       "properties": {
         "finding_id": {
           "type": "string",
-          "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
+          "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
         },
         "signature": {
           "$ref": "#/$defs/sha256"
@@ -277,7 +281,7 @@
         },
         "next_finding_id": {
           "type": "string",
-          "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
+          "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
         },
         "previous_findings": {
           "type": "array",
@@ -316,12 +320,20 @@
           ]
         },
         "red_state_followup_slice": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
         },
         "plan_artifact_path": {
-          "type": ["string", "null"],
-          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}\\.[mM][dD]$"
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*\\.[mM][dD]$",
+          "minLength": 1,
+          "maxLength": 1000
         },
         "disposition_budget": {
           "type": "object",
@@ -335,7 +347,7 @@
               "maxItems": 32,
               "items": {
                 "type": "string",
-                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
+                "pattern": "^R-(0[1-9]|[1-9][0-9]*)$"
               }
             },
             "pending_finding_count": {
@@ -473,7 +485,7 @@
       "type": "object",
       "properties": {
         "schema_version": {
-          "const": "native-agent-review-result-v2"
+          "const": "native-agent-review-result-v3"
         },
         "schema_sha256": {
           "$ref": "#/$defs/sha256"
@@ -486,7 +498,10 @@
       "additionalProperties": false
     },
     "retry_feedback": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "oneOf": [
         {
           "type": "object",
@@ -496,7 +511,23 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"
             },
             "rejection_code": {
-              "enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid", "dormant-finding-decision-field"]
+              "enum": [
+                "schema-invalid",
+                "request-mismatch",
+                "reviewer-mismatch",
+                "finding-id-invalid",
+                "finding-reference-unknown",
+                "finding-reference-not-open",
+                "finding-event-conflict",
+                "missing-own-finding-update",
+                "finding-content-invalid",
+                "finding-signature-duplicate",
+                "anchor-invalid",
+                "review-content-missing",
+                "stop-content-invalid",
+                "approval-invalid",
+                "dormant-finding-decision-field"
+              ]
             },
             "correction_instruction": {
               "$ref": "#/$defs/safe_text"
@@ -518,7 +549,7 @@
       "type": "object",
       "properties": {
         "schema_version": {
-          "const": "native-agent-review-request-v2"
+          "const": "native-agent-review-request-v3"
         },
         "request_type": {
           "const": "review_request"
@@ -530,7 +561,7 @@
           "const": "reviewer"
         },
         "transport": {
-          "const": "native-claude-review-v2"
+          "const": "native-claude-review-v3"
         },
         "persistence_protocol": {
           "const": "structured-v2"

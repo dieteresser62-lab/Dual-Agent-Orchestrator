@@ -32,18 +32,21 @@ from schema_validation import (
     validate_schema_document,
 )
 from review_packets import ReviewPacket, ReviewPacketError
+from native_provider_schema import ANTHROPIC_PROVIDER
+from path_policy import is_canonical_repository_relative_path
+from schema_patterns import has_visible_text
 
 
-REQUEST_SCHEMA_VERSION = "native-agent-review-request-v2"
-RESPONSE_SCHEMA_VERSION = "native-agent-review-result-v2"
-CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
+REQUEST_SCHEMA_VERSION = "native-agent-review-request-v3"
+RESPONSE_SCHEMA_VERSION = "native-agent-review-result-v3"
+CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v3"
 PERSISTENCE_PROTOCOL = "structured-v2"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
 PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND = "provider_input_boundary_notice"
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-review-request-v2.schema.json"
+    / "native-agent-review-request-v3.schema.json"
 )
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 REQUEST_ID_PATTERN = re.compile(r"native-review-request-[0-9a-f]{64}")
@@ -220,6 +223,7 @@ class NativeReviewRequestBundle:
     bound_context: BoundNativeReviewContext
     provider_response_schema_json: str
     evidence_assets: tuple[NativeReviewEvidenceAsset, ...] = ()
+    capability_profile: str = ANTHROPIC_PROVIDER
 
     def __post_init__(self) -> None:
         document = self.document
@@ -278,7 +282,7 @@ class NativeReviewRequestBundle:
                 "bundle provider response schema is not a canonical object",
             )
         expected_schema = native_review_provider_response_schema(
-            self.bound_context.context
+            self.bound_context.context, self.capability_profile
         )
         if provider_schema != expected_schema:
             raise NativeReviewRequestError(
@@ -491,6 +495,7 @@ def _validate_native_review_provider_response_schema(
 def build_native_review_request(
     spec: NativeReviewRequestSpec,
     *,
+    profile: str = ANTHROPIC_PROVIDER,
     inline_evidence_chars: int = DEFAULT_INLINE_EVIDENCE_CHARS,
 ) -> NativeReviewRequestBundle:
     _validate_plan_disposition_capacity(spec)
@@ -499,7 +504,7 @@ def build_native_review_request(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
             "inline evidence limit must be positive",
         )
-    response_schema = native_review_provider_response_schema(spec.context)
+    response_schema = native_review_provider_response_schema(spec.context, profile)
     response_schema_json = _canonical_json(response_schema)
     response_schema_digest = hashlib.sha256(
         response_schema_json.encode("utf-8")
@@ -573,6 +578,7 @@ def build_native_review_request(
         ),
         provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
+        capability_profile=profile,
     )
 
 
@@ -811,8 +817,7 @@ def _require_text(
 ) -> None:
     if (
         not isinstance(value, str)
-        or not value.strip()
-        or "\x00" in value
+        or not has_visible_text(value)
         or len(value) > maximum
     ):
         raise NativeReviewRequestError(
@@ -821,14 +826,7 @@ def _require_text(
 
 
 def _require_repository_path(value: str, label: str) -> None:
-    path = PurePosixPath(value)
-    if (
-        path.is_absolute()
-        or not path.parts
-        or ".." in path.parts
-        or path.as_posix() != value
-        or any(not part or part in {".", ".."} for part in path.parts)
-    ):
+    if not is_canonical_repository_relative_path(value):
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
             f"{label} must be a canonical repository-relative path",

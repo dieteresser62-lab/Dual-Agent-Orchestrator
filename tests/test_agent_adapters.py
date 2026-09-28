@@ -173,12 +173,12 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     (
         "codex",
         "7b25254cce9d482ceae43a8c9459093b17219c4588cf9e4917eb6449a888cdfc",
-        "b636f343fcc23a4796cfb4af4b388341cab60d4dc71975516fed2c462ac77a7e",
+        "c2650774782b0a5419577ef1f70d981d3a4186ed79b7338c6b76cb4f08163ba7",
     ),
     (
         "claude",
-        "d867adb63b0b9e041697fb815c1623a177ba3b006544ee08aec5042eaa47cb4a",
-        "d0b9059148043bb727d32ff09a279e1049bfec2511c3348921110993959c8977",
+        "5ed0c3eb1b0d482f43687fdad58e3c91f06352644ac9f79d2e6fee937eb4bbfc",
+        "9251537e4303a1c600ac7711e34608ce289c831face267ba890a2b34225001f2",
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
@@ -297,7 +297,7 @@ def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
         ),
     )
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "request_id": bundle.bound_context.request_id,
         "result_type": "plan_result",
         "ready": True,
@@ -315,7 +315,7 @@ def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
     assert adapter.invocation.last_message_file is not None
     adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     assert json.loads(adapter.extract_output("", "", {}))["request_id"] == bundle.bound_context.request_id
-    document["request_id"] = "native-codex-request-" + "0" * 64
+    document["request_id"] = "native-implementer-request-" + "0" * 64
     adapter.invocation.last_message_file.write_text(json.dumps({"result": document}), encoding="utf-8")
     with pytest.raises(AgentOutputError, match="request_id"):
         adapter.extract_output("", "", {})
@@ -352,7 +352,7 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
     assert prepared.command[prepared.command.index("--system-prompt") + 1] == policy
     assert "--json-schema" in prepared.command
     result = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",

@@ -48,11 +48,11 @@ def test_missing_dispositions_report_every_id_in_natural_order() -> None:
             acceptance_test="The result is correct.",
             origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
         )
-        for finding_id in ("C-01", "C-02", "C-10")
+        for finding_id in ("R-01", "R-02", "R-10")
     )
     with pytest.raises(ValueError) as raised:
         apply_finding_responses(findings, ())
-    assert str(raised.value) == "missing disposition for C-01, C-02, C-10"
+    assert str(raised.value) == "missing disposition for R-01, R-02, R-10"
 HISTORICAL_COMMITS = {
     "f09ed8b",
     "47b4ddc",
@@ -149,7 +149,7 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
                 "events": [
                     {
                         "op": "open",
-                        "finding_id": "C-01",
+                        "finding_id": "R-01",
                         "work_unit": "2",
                         "class": "FINDING",
                     }
@@ -157,13 +157,13 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
             }
         )
     )
-    revisions = {("finding_transition", "finding-C-01"): 1}
+    revisions = {("finding_transition", "finding-R-01"): 1}
     _append(
         records,
         revisions,
-        "finding-C-01",
+        "finding-R-01",
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.IMPLEMENTER,
             action="responded",
@@ -175,7 +175,7 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
         ),
     )
     escalation = FindingTransitionPayload(
-        finding_id="C-01",
+        finding_id="R-01",
         reporter=Role.REVIEWER,
         actor=Role.REVIEWER,
         action="escalated",
@@ -184,7 +184,7 @@ def test_escalation_record_requires_a_disposition_but_not_a_rejection() -> None:
         rationale="The reviewer did not verify the implemented fix.",
         work_unit_id="2",
     )
-    _append(records, revisions, "finding-C-01", escalation)
+    _append(records, revisions, "finding-R-01", escalation)
 
     finding = reduce_findings(replay_artifacts(records, RUN_ID)).ledger.findings[0]
     assert finding.finding_class.value == "BLOCKER"
@@ -267,7 +267,7 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
                     verdict=event["verdict"],
                     finding_ids=tuple(event.get("finding_ids", ())),
                     evidence="review evidence | residual risk | break condition",
-                    transport_schema="native-claude-review-v2",
+                    transport_schema="native-claude-review-v3",
                     request_id="native-review-request-" + f"{index:064x}",
                     response_sha256=f"{index + 100:064x}",
                 ),
@@ -369,10 +369,10 @@ def test_named_projections_are_independent_and_immutable() -> None:
     case = next(item for item in _corpus() if item["commit"] == "d24511e")
     reduction = reduce_findings(replay_artifacts(_build_case(case), RUN_ID))
     assert reduction.ledger.transitions
-    assert reduction.open_set.finding_ids == ("C-08",)
+    assert reduction.open_set.finding_ids == ("R-08",)
     assert reduction.request_subset(work_unit_id="2").finding_ids == (
-        "C-07",
-        "C-08",
+        "R-07",
+        "R-08",
     )
     assert tuple(
         item.payload.action for item in reduction.status_transitions.transitions
@@ -385,25 +385,25 @@ def test_ledger_subset_and_errors_share_natural_finding_order() -> None:
     records = _build_case(
         {
             "events": [
-                {"op": "open", "finding_id": "C-1000", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-101", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-62", "work_unit": "2"},
+                {"op": "open", "finding_id": "R-1000", "work_unit": "2"},
+                {"op": "open", "finding_id": "R-101", "work_unit": "2"},
+                {"op": "open", "finding_id": "R-62", "work_unit": "2"},
             ]
         }
     )
 
     reduction = reduce_findings(replay_artifacts(records, RUN_ID))
-    expected = ("C-62", "C-101", "C-1000")
+    expected = ("R-62", "R-101", "R-1000")
 
     assert tuple(item.finding_id for item in reduction.ledger.findings) == expected
     assert reduction.open_set.finding_ids == expected
     assert reduction.request_subset(
-        finding_ids=("C-1000", "C-62", "C-101")
+        finding_ids=("R-1000", "R-62", "R-101")
     ).finding_ids == expected
 
     with pytest.raises(ValueError) as raised:
-        reduction.request_subset(finding_ids=("C-1001", "C-102"))
-    assert str(raised.value).endswith("unknown id C-102")
+        reduction.request_subset(finding_ids=("R-1001", "R-102"))
+    assert str(raised.value).endswith("unknown id R-102")
 
 
 @pytest.mark.parametrize(
@@ -460,14 +460,14 @@ def test_reopening_same_finding_id_replays_with_first_opening_and_diagnostic() -
         {
             "events": [
                 {
-                    "op": "open", "finding_id": "C-01", "work_unit": "2",
+                    "op": "open", "finding_id": "R-01", "work_unit": "2",
                     "summary": "Original logical identity",
                 },
                 {
-                    "op": "open", "finding_id": "C-01", "work_unit": "3",
+                    "op": "open", "finding_id": "R-01", "work_unit": "3",
                     "summary": "Conflicting later identity",
                 },
-                {"op": "close", "finding_id": "C-01", "work_unit": "2"},
+                {"op": "close", "finding_id": "R-01", "work_unit": "2"},
             ]
         }
     )
@@ -479,7 +479,7 @@ def test_reopening_same_finding_id_replays_with_first_opening_and_diagnostic() -
     assert len(reduction.diagnostics) == 1
     diagnostic = reduction.diagnostics[0]
     assert diagnostic.code == "DUPLICATE-FINDING-OPENING"
-    assert diagnostic.finding_id == "C-01"
+    assert diagnostic.finding_id == "R-01"
     assert diagnostic.head_opening_record_id == records[2].record_id
     assert diagnostic.head_opening_revision == 1
     assert diagnostic.head_work_unit_id == "2"
@@ -497,15 +497,15 @@ def test_reopening_same_finding_id_within_one_work_unit_is_diagnosed() -> None:
     records = _build_case(
         {
             "events": [
-                {"op": "open", "finding_id": "C-01", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-01", "work_unit": "2"},
+                {"op": "open", "finding_id": "R-01", "work_unit": "2"},
+                {"op": "open", "finding_id": "R-01", "work_unit": "2"},
             ]
         }
     )
     reduction = reduce_findings(replay_artifacts(records, RUN_ID))
 
     assert len(reduction.ledger.lineages) == 1
-    assert tuple(item.finding_id for item in reduction.ledger.findings) == ("C-01",)
+    assert tuple(item.finding_id for item in reduction.ledger.findings) == ("R-01",)
     assert len(reduction.diagnostics) == 1
     assert reduction.diagnostics[0].head_opening_revision == 1
     assert reduction.diagnostics[0].conflicting_opening_revision == 2

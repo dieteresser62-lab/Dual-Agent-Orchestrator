@@ -80,7 +80,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "orchestrator_code_version": "f4fccc2c3967ab212ffc58a146af72d821d71c16d15c701a4121d2af7ab743bf",
           "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
           "merge_completed_branch": true,
           "base_branch": null,
@@ -385,7 +385,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "orchestrator_code_version": "f4fccc2c3967ab212ffc58a146af72d821d71c16d15c701a4121d2af7ab743bf",
           "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
           "merge_completed_branch": true,
           "base_branch": null,
@@ -726,7 +726,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "orchestrator_code_version": "f4fccc2c3967ab212ffc58a146af72d821d71c16d15c701a4121d2af7ab743bf",
           "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
           "merge_completed_branch": true,
           "base_branch": null,
@@ -1054,7 +1054,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "orchestrator_code_version": "f4fccc2c3967ab212ffc58a146af72d821d71c16d15c701a4121d2af7ab743bf",
           "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
           "merge_completed_branch": true,
           "base_branch": null,
@@ -1377,7 +1377,7 @@
             "model": "sonnet",
             "effort": "high"
           },
-          "orchestrator_code_version": "c6acfb9b785950d7b3b7b6ecd97dce5520c00ea32ea101f88b6de2598dd4954d",
+          "orchestrator_code_version": "f4fccc2c3967ab212ffc58a146af72d821d71c16d15c701a4121d2af7ab743bf",
           "reducer_version": "structured-v2-schema-2-state-v3-role-wire-v1",
           "merge_completed_branch": true,
           "base_branch": null,
@@ -1835,9 +1835,9 @@
         "path": "state.protocol_binding",
         "reference": {
           "mode": "structured-v2",
-          "schema_version": "2",
-          "claude_review_transport": "native-claude-review-v2",
-          "codex_result_transport": "native-codex-v2",
+          "schema_version": "3",
+          "claude_review_transport": "native-claude-review-v3",
+          "codex_result_transport": "native-codex-v3",
           "implementer_profile": {
             "model": "gpt-5.6-sol",
             "effort": "medium"

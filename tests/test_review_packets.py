@@ -83,13 +83,13 @@ def _attestation(
 
 def _findings() -> tuple[FindingRecord, ...]:
     open_finding = FindingRecord(
-        "C-01", FindingClass.BLOCKER, FindingStatus.OPEN,
+        "R-01", FindingClass.BLOCKER, FindingStatus.OPEN,
         "active defect", "run focused test",
         FindingOrigin("02", 1, AgentRole.REVIEWER),
         responses=(FindingResponse(FindingResponseDecision.ACCEPTED, "long response excluded"),),
     )
     closed = FindingRecord(
-        "C-02", FindingClass.BLOCKER, FindingStatus.CLOSED,
+        "R-02", FindingClass.BLOCKER, FindingStatus.CLOSED,
         "old defect", "old acceptance",
         FindingOrigin("02", 1, AgentRole.REVIEWER),
         status_rationale="  fixed by deterministic   delta  ",
@@ -125,7 +125,7 @@ def test_slice_packet_is_canonical_compact_and_binds_diff_coverage() -> None:
     assert first.digest == second.digest
     assert "long response excluded" not in first.text
     assert "implementation detail" not in first.text
-    assert payload["open_findings"][0]["id"] == "C-01"
+    assert payload["open_findings"][0]["id"] == "R-01"
     assert payload["closure_references"][0]["summary"] == "fixed by deterministic delta"
     assert "ignored output" not in first.text
     assert payload["schema"] == "review-packet-v2"
@@ -139,13 +139,13 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
         purpose="correction", fingerprint="a" * 64, start_fingerprint="c" * 64,
         paths=("src/core.py",), review_diff=_diff(content="+corrected"), plan_text=PLAN,
         slice_id=2, attestation=_attestation(), findings=_findings(),
-        affected_finding_ids=("C-01",),
+        affected_finding_ids=("R-01",),
     )
     payload = json.loads(packet.canonical_bytes)
 
     assert payload["purpose"] == "correction"
     assert payload["start_fingerprint"] == "c" * 64
-    assert [item["id"] for item in payload["open_findings"]] == ["C-01"]
+    assert [item["id"] for item in payload["open_findings"]] == ["R-01"]
     assert payload["closure_references"] == []
 
 
@@ -193,7 +193,7 @@ def test_s5_correction_diff_starts_with_marker_and_builds_review_packet() -> Non
         slice_id=2,
         attestation=_attestation(correction.fingerprint),
         findings=_findings(),
-        affected_finding_ids=("C-01",),
+        affected_finding_ids=("R-01",),
     )
 
     assert json.loads(packet.canonical_bytes)["diff"] == review_diff
@@ -203,7 +203,7 @@ def test_correction_packet_orders_affected_findings_naturally() -> None:
     base = _findings()[0]
     findings = tuple(
         replace(base, finding_id=finding_id)
-        for finding_id in ("C-62", "C-101", "C-1000")
+        for finding_id in ("R-62", "R-101", "R-1000")
     )
     packet = build_review_packet(
         purpose="correction",
@@ -215,17 +215,17 @@ def test_correction_packet_orders_affected_findings_naturally() -> None:
         slice_id=3,
         attestation=_attestation(),
         findings=findings,
-        affected_finding_ids=("C-1000", "C-62", "C-101"),
+        affected_finding_ids=("R-1000", "R-62", "R-101"),
     )
 
     payload = json.loads(packet.canonical_bytes)
     assert payload["slice"]["goal"] == (
-        "Resolve reviewer findings C-62, C-101, C-1000"
+        "Resolve reviewer findings R-62, R-101, R-1000"
     )
     assert [item["id"] for item in payload["open_findings"]] == [
-        "C-62",
-        "C-101",
-        "C-1000",
+        "R-62",
+        "R-101",
+        "R-1000",
     ]
 
 
@@ -240,16 +240,16 @@ def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_pl
         slice_id=3,
         attestation=_attestation(),
         findings=_findings(),
-        affected_finding_ids=("C-01",),
+        affected_finding_ids=("R-01",),
     )
 
     payload = json.loads(packet.canonical_bytes)
 
     assert payload["slice"] == {
         "id": 3,
-        "goal": "Resolve reviewer findings C-01",
+        "goal": "Resolve reviewer findings R-01",
         "acceptance_criteria": [
-            "C-01: run focused test",
+            "R-01: run focused test",
         ],
     }
 

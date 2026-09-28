@@ -81,7 +81,7 @@ def _record_run(
         task_digest="a" * 64,
         task_scope_patterns=("src/cutover.py",),
         target_branch="feature/cutover",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -261,7 +261,7 @@ def test_driver_configures_artifact_phase_progress_threshold(tmp_path: Path) -> 
         task_digest="a" * 64,
         task_scope_patterns=("src/cutover.py",),
         target_branch="feature/cutover",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=tmp_path,

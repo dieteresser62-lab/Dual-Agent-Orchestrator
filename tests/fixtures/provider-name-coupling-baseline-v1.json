@@ -5,13 +5,13 @@
       "codex": 4,
       "claude": 3
     },
-    "schemas/native-agent-codex-request-v2.schema.json": {
+    "schemas/native-agent-implementer-request-v3.schema.json": {
       "codex": 6
     },
-    "schemas/native-agent-codex-result-v2.schema.json": {
+    "schemas/native-agent-implementer-result-v3.schema.json": {
       "codex": 7
     },
-    "schemas/native-agent-review-request-v2.schema.json": {
+    "schemas/native-agent-review-request-v3.schema.json": {
       "claude": 1
     },
     "schemas/native-provider-schema-capabilities-v1.json": {
@@ -22,7 +22,7 @@
       "codex": 20,
       "claude": 12
     },
-    "schemas/orchestrator-artifact-v2.schema.json": {
+    "schemas/orchestrator-artifact-v3.schema.json": {
       "codex": 6,
       "claude": 5
     },

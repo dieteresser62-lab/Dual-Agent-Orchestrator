@@ -187,7 +187,7 @@ def _append_implementer_pair(
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    request_id = "native-codex-request-" + "b" * 64
+    request_id = "native-implementer-request-" + "b" * 64
     blob = store.put_blob(b'{"ready":true}')
     for index in range(content_count):
         bridge.append(
@@ -212,7 +212,7 @@ def _append_implementer_pair(
             "1",
             "ready",
             (),
-            "native-codex-v2",
+            "native-codex-v3",
             request_id,
             blob.sha256,
         ),
@@ -285,9 +285,9 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
 ) -> None:
     canonical = json.dumps(
         {
-            "schema_version": "native-agent-codex-result-v2",
+            "schema_version": "native-agent-implementer-result-v3",
             "result_type": "implementation_result",
-            "request_id": "native-codex-request-" + ("b" * 64),
+            "request_id": "native-implementer-request-" + ("b" * 64),
             "ready": True,
             "finding_dispositions": [],
             "self_check": "accepted provider bytes with a unique sentinel",
@@ -303,7 +303,7 @@ def test_accepted_provider_content_is_exact_but_failure_text_remains_redacted(
         work_unit_id=1,
         request_sequence=1,
         operation="implementer_implementation",
-        request_id="native-codex-request-" + ("b" * 64),
+        request_id="native-implementer-request-" + ("b" * 64),
         canonical=canonical,
         content_kind="agent_result",
         fingerprint=FINGERPRINT,
@@ -434,7 +434,7 @@ def test_provider_content_recovery_is_bound_to_the_exact_request_without_decisio
     store = ArtifactStore(tmp_path, "provider-round-recovery")
     driver = object.__new__(ProductionWorkflowDriver)
     driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
-    request_id = "native-codex-request-" + "b" * 64
+    request_id = "native-implementer-request-" + "b" * 64
     canonical = '{"request_id":"' + request_id + '","ready":true}'
     for request_sequence in (1, 2):
         driver._persist_provider_content(  # noqa: SLF001
@@ -549,7 +549,7 @@ def test_reviewer_request_sequence_remains_independent_from_semantic_round(
             "approved",
             (),
             "review round remains independently bound",
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             request_id,
             blob.sha256,
         ),

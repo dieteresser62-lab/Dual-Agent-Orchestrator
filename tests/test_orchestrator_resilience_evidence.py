@@ -138,7 +138,7 @@ def _active_slice_state():
         task_digest="b" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/dry-resilience",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-08-27T12:00:00+00:00",
     ).complete_current_work_unit(updated_at="2026-08-27T12:00:01+00:00")
     state = state.start_work_unit(
@@ -257,7 +257,7 @@ def test_provider_free_stalled_correction_is_a_named_terminal_verdict(
     assert "no attested fingerprint-changing remediation" in (
         result.rejection_detail
     )
-    assert "remaining open findings: C-01" in result.rejection_detail
+    assert "remaining open findings: R-01" in result.rejection_detail
     assert report.remaining_agent_events == 0
     assert sum(call.startswith("commit:") for call in report.calls) == 0
     watch_result = WatchTaskResult.from_workflow(result)
@@ -524,7 +524,7 @@ def test_gate_kind_uses_iteration_limit_state_semantics_not_fingerprint() -> Non
             detail="review denied by claude after 1 Codex returns",
         ),
         reviewer=Reviewer.REVIEWER,
-        open_findings=("C-01",),
+        open_findings=("R-01",),
     )
     state = replace(
         state,

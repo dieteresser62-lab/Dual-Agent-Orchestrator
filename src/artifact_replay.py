@@ -1053,9 +1053,9 @@ def _assemble_workflow_state_document(
         "target_branch": task.target_branch,
         "protocol_binding": {
             "mode": "structured-v2",
-            "schema_version": "2",
-            "claude_review_transport": "native-claude-review-v2",  # allowlist:provider -- transport: canonical protocol binding
-            "codex_result_transport": "native-codex-v2",  # allowlist:provider -- transport: canonical protocol binding
+            "schema_version": "3",
+            "claude_review_transport": "native-claude-review-v3",  # allowlist:provider -- transport: canonical protocol binding
+            "codex_result_transport": "native-codex-v3",  # allowlist:provider -- transport: canonical protocol binding
             "implementer_profile": {
                 "model": profile.implementer.model,
                 "effort": profile.implementer.effort,

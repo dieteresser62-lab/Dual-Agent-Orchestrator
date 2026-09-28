@@ -57,7 +57,7 @@ def _attestation() -> ValidationAttestation:
 
 def _finding() -> FindingRecord:
     return FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.OPEN,
         "Bound convergence finding.",
@@ -66,7 +66,7 @@ def _finding() -> FindingRecord:
     )
 
 
-def _observation(finding_id: str = "C-02") -> FindingRecord:
+def _observation(finding_id: str = "R-02") -> FindingRecord:
     return FindingRecord(
         finding_id,
         FindingClass.FINDING,

@@ -122,7 +122,7 @@ def _state(tmp_path: Path) -> WorkflowState:
             task_digest="a" * 64,
             task_scope_patterns=("src/baseline.py",),
             target_branch="feature/backlog-followups",
-            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
             timestamp="2026-09-02T00:00:00+00:00",
         )
         .complete_current_work_unit(updated_at="2026-09-02T00:00:00+00:00")

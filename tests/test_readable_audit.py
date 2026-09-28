@@ -80,7 +80,7 @@ def _facts(*, slices: int = 2, red: bool = False, hostile: bool = False, plan_on
         add(WorkUnitPayload(key, 1, specs[index - 1].paths), f"work-unit-{key}")
         prose = "Marker:\n<!-- audit:findings:end -->\n## false heading\n```\n| < & `" if hostile and index == 1 else f"Befund nur in Slice {index}."
         add(FindingTransitionPayload(
-            f"C-{index:02d}", Role.REVIEWER, Role.REVIEWER, "opened",
+            f"R-{index:02d}", Role.REVIEWER, Role.REVIEWER, "opened",
             FindingSeverity.FINDING, "open", prose, key,
             prose, "Prüfe < und & | ` mit &&.", f"{index:02d}", 1,
         ), f"finding-{index}")
@@ -96,8 +96,8 @@ def _facts(*, slices: int = 2, red: bool = False, hostile: bool = False, plan_on
         ), f"validation-{key}")
         add(WorkflowEventPayload("validation", key, key, 1, (att.record_id,)), f"validation-event-{key}")
         review = add(ReviewPayload(
-            Role.REVIEWER, key, "denied" if red else "approved", (f"C-{index:02d}",),
-            None, "native-claude-review-v2", "native-review-request-" + "1" * 64,
+            Role.REVIEWER, key, "denied" if red else "approved", (f"R-{index:02d}",),
+            None, "native-claude-review-v3", "native-review-request-" + "1" * 64,
             "2" * 64, ReviewEvidencePayload("Scope < checked.", "Risk & fallback.", "Break | condition."),
             pre_mortem="A later change could break this.",
         ), f"review-{key}")
@@ -130,12 +130,12 @@ def test_readable_documents_preserve_plan_and_slice_ownership() -> None:
         _assert_readable(document)
     assert "Zeile eins mit < und &.\nZeile zwei." in one
     assert "- `python3 -m pytest` prüft `a|b`." in one
-    assert one.count("### C-01") == 1
-    assert "### C-02" not in one
-    assert two.count("### C-02") == 1
-    assert "### C-01" not in two
+    assert one.count("### R-01") == 1
+    assert "### R-02" not in one
+    assert two.count("### R-02") == 1
+    assert "### R-01" not in two
     assert overall.count("Befund nur in Slice 1") == 1
-    assert "| C-01 | Slice 1 | Befund | offen |" in overall
+    assert "| R-01 | Slice 1 | Befund | offen |" in overall
     assert "Klasse: Befund · Stand: offen" in one
     assert "Vorab-Risikoanalyse:" in one
     assert "Vorab-Risikoanalyse:" in appendix
@@ -148,20 +148,20 @@ def test_final_review_uses_german_labels_for_new_findings_and_risk() -> None:
         reviewer=Role.REVIEWER,
         work_unit_id="1",
         new_findings=(FinalReviewFindingPayload(
-            "C-03", FindingSeverity.FINDING, "Neue Abweichung.", "Prüfe den Pfad."
+            "R-03", FindingSeverity.FINDING, "Neue Abweichung.", "Prüfe den Pfad."
         ),),
         occurrences=(),
         review_evidence=ReviewEvidencePayload("Geprüft.", "Risiko.", "Bruch."),
         pre_mortem="Ein Fehler kann wiederkehren.",
         validation_attestation_record_id="ar1-" + "e" * 64,
         reviewed_head_commit="a" * 40,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id="native-review-request-" + "1" * 64,
         response_sha256="2" * 64,
         scan_complete=True,
     )
     overall = render_overall(facts, task="Aufgabe", branch="feature/test")
-    assert "| C-03 | Abnahme | Befund | offen |" in overall
+    assert "| R-03 | Abnahme | Befund | offen |" in overall
     assert "Klasse: Befund · Stand: offen" in overall
     assert "Vorab-Risikoanalyse:" in overall
 
@@ -184,7 +184,7 @@ def test_red_validation_has_only_last_40_lines_and_green_has_no_output() -> None
 
 
 def test_slice_ownership_excludes_other_slice_findings() -> None:
-    assert "### C-02" not in render_slice(_facts(), 1)
+    assert "### R-02" not in render_slice(_facts(), 1)
 
 
 def test_prose_removes_long_hashes_and_record_ids() -> None:
@@ -222,7 +222,7 @@ def test_long_authored_implementation_does_not_stop_rendering() -> None:
     overall = render_overall(_facts(slices=1), task="T" * 140000, branch="feature/test")
     assert "T" * 140000 in overall
     plan_facts = _facts(slices=1, plan_only=True)
-    plan_facts.openings["C-01"] = replace(plan_facts.openings["C-01"], rationale="Z" * 70000)
+    plan_facts.openings["R-01"] = replace(plan_facts.openings["R-01"], rationale="Z" * 70000)
     assert "Z" * 70000 in render_plan_appendix(plan_facts)
 
 
@@ -256,7 +256,7 @@ def _round_facts(*, correction: bool = False, scope_extension: bool = False) -> 
             run_id=RUN, logical_id="scope-1", revision=1, fingerprint=fingerprint,
             predecessor_ids=(records[2].record_id,), created_at="2026-09-24T12:00:00+00:00",
             idempotency_key="scope-1", payload=ScopeExtensionPayload(
-                "1", "1", "native-codex-request-" + "1" * 64, "scope_extension",
+                "1", "1", "native-implementer-request-" + "1" * 64, "scope_extension",
                 "Zusätzlicher Pfad", (ScopeExtensionPathPayload("src/extra.py", "productive"),),
             ),
         ))
@@ -269,13 +269,13 @@ def _round_facts(*, correction: bool = False, scope_extension: bool = False) -> 
     if correction:
         review = add(replace(base.records[-2].payload, verdict="denied"), "review-denied")
         add(WorkflowEventPayload("review", "1", "1", 1, (review.record_id,)), "review-event-denied")
-        add(CorrectionWorkUnitPayload("1", 2, ("src/1.py",), ("C-01",)), "work-unit-2")
+        add(CorrectionWorkUnitPayload("1", 2, ("src/1.py",), ("R-01",)), "work-unit-2")
         add(FindingTransitionPayload(
-            "C-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.FINDING,
+            "R-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.FINDING,
             "open", "Korrektur umgesetzt.", "2", response_decision="accepted",
         ), "finding-response")
         add(FindingTransitionPayload(
-            "C-01", Role.REVIEWER, Role.REVIEWER, "status_changed", FindingSeverity.FINDING,
+            "R-01", Role.REVIEWER, Role.REVIEWER, "status_changed", FindingSeverity.FINDING,
             "closed", "Korrektur geprüft.", "2", closure_kind="fixed",
         ), "finding-closed")
         attestation = add(ValidationAttestationPayload(

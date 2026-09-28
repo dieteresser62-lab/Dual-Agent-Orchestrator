@@ -163,7 +163,7 @@ def test_occupancy_patch_changes_payload_budget_and_binary_remedy_together(
 
 DIGEST = "a" * 64
 CREATED_AT = "2026-08-18T10:30:00+00:00"
-CODEX_REQUEST_ID = "native-codex-request-" + "b" * 64
+CODEX_REQUEST_ID = "native-implementer-request-" + "b" * 64
 CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
 PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
     "provider diagnostic"
@@ -199,7 +199,7 @@ def test_post_merge_side_effect_rejects_invalid_digest_and_accepts_legacy() -> N
 @pytest.mark.parametrize(
     ("generation_fields", "missing_field"),
     (
-        ({"predecessor_finding_ref": "C-01"}, "evidence_anchor_sha256"),
+        ({"predecessor_finding_ref": "R-01"}, "evidence_anchor_sha256"),
         ({"evidence_anchor_sha256": DIGEST}, "predecessor_finding_ref"),
     ),
 )
@@ -209,7 +209,7 @@ def test_final_review_finding_generation_pair_diagnostic_is_complete(
 ) -> None:
     with pytest.raises(ArtifactValidationError) as raised:
         FinalReviewFindingPayload(
-            finding_id="C-02",
+            finding_id="R-02",
             severity=FindingSeverity.FINDING,
             summary="Rediscovered defect",
             acceptance_test="The generation identity is complete.",
@@ -225,17 +225,17 @@ def test_final_review_finding_generation_pair_diagnostic_is_complete(
 
 def test_final_review_finding_generation_pair_accepts_both_or_neither() -> None:
     absent = FinalReviewFindingPayload(
-        finding_id="C-02",
+        finding_id="R-02",
         severity=FindingSeverity.FINDING,
         summary="New defect",
         acceptance_test="The defect is fixed.",
     )
     complete = FinalReviewFindingPayload(
-        finding_id="C-02",
+        finding_id="R-02",
         severity=FindingSeverity.FINDING,
         summary="Rediscovered defect",
         acceptance_test="The generation identity is complete.",
-        predecessor_finding_ref="C-01",
+        predecessor_finding_ref="R-01",
         evidence_anchor_sha256=DIGEST,
     )
 
@@ -499,7 +499,7 @@ def test_scope_extension_record_roundtrips_paths_categories_and_reason() -> None
 
 def test_finding_opening_roundtrips_record_bound_affected_paths() -> None:
     payload = FindingTransitionPayload(
-        finding_id="C-01",
+        finding_id="R-01",
         reporter=Role.REVIEWER,
         actor=Role.REVIEWER,
         action="opened",
@@ -590,7 +590,7 @@ def _agent_result(
         work_unit_id,
         outcome,
         test_files,
-        "native-codex-v2",
+        "native-codex-v3",
         CODEX_REQUEST_ID,
         "c" * 64,
     )
@@ -608,7 +608,7 @@ def _review(
         verdict,
         finding_ids,
         evidence,
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         CLAUDE_REQUEST_ID,
         "c" * 64,
     )
@@ -653,11 +653,11 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     TaskPayload("feature/records", ("src/a.py",), DIGEST),
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),
-    CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("C-01",)),
+    CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("R-01",)),
     _agent_result(test_files=("tests/test_a.py",)),
     DiagnosticPayload(Role.REVIEWER, "work-01", 1, DIGEST, "malformed verdict"),
     _review(),
-    FindingTransitionPayload("C-01", Role.REVIEWER, Role.REVIEWER, "opened", FindingSeverity.BLOCKER, "open", "broken"),
+    FindingTransitionPayload("R-01", Role.REVIEWER, Role.REVIEWER, "opened", FindingSeverity.BLOCKER, "open", "broken"),
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload(
         (ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),),
@@ -901,7 +901,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
             "decision": "approved",
             "status_changes": [
                 {
-                    "finding_id": "C-01",
+                    "finding_id": "R-01",
                     "status": "CLOSED",
                     "closure": {"kind": "fixed"},
                     "rationale": "provider rationale is discarded",
@@ -1051,8 +1051,8 @@ def test_native_implementer_agent_result_roundtrips_with_closed_transport_bindin
         "work-01",
         "ready",
         ("tests/test_native_implementer_contract.py",),
-        transport_schema="native-codex-v2",
-        request_id="native-codex-request-" + "b" * 64,
+        transport_schema="native-codex-v3",
+        request_id="native-implementer-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
     record = _record(payload)
@@ -1068,8 +1068,8 @@ def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -
         "work-01",
         "ready",
         (),
-        transport_schema="native-codex-v2",
-        request_id="native-codex-request-" + "b" * 64,
+        transport_schema="native-codex-v3",
+        request_id="native-implementer-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
 
@@ -1078,7 +1078,7 @@ def test_native_implementer_agent_result_rejects_partial_or_foreign_bindings() -
     with pytest.raises(ArtifactValidationError, match="role=implementer"):
         replace(payload, role=Role.REVIEWER)
     with pytest.raises(ArtifactValidationError, match="request_id"):
-        replace(payload, request_id="native-codex-request-invalid")
+        replace(payload, request_id="native-implementer-request-invalid")
 
 
 def test_schema_is_bundled_and_self_contained() -> None:
@@ -1177,14 +1177,14 @@ def test_stable_id_binds_run_type_logical_identity_and_positive_revision() -> No
 
 def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> None:
     with pytest.raises(ArtifactValidationError, match="reporting reviewer"):
-        FindingTransitionPayload("C-01", Role.REVIEWER, Role.IMPLEMENTER, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("R-01", Role.REVIEWER, Role.IMPLEMENTER, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
     with pytest.raises(ArtifactValidationError, match="cannot close"):
-        FindingTransitionPayload("C-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("R-01", Role.REVIEWER, Role.IMPLEMENTER, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
 
 def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     escalation = FindingTransitionPayload(
-        "C-01",
+        "R-01",
         Role.REVIEWER,
         Role.REVIEWER,
         "escalated",
@@ -1229,7 +1229,7 @@ def test_finding_escalation_is_a_closed_reviewer_owned_record_move() -> None:
     ),
 )
 def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: ignore[no-untyped-def]
-    with pytest.raises(ArtifactValidationError, match=r"canonical C-\* finding ID"):
+    with pytest.raises(ArtifactValidationError, match=r"canonical R-\* finding ID"):
         factory()
 
 
@@ -1239,7 +1239,7 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
         (
             _record(
                 FindingTransitionPayload(
-                    "C-01",
+                    "R-01",
                     Role.REVIEWER,
                     Role.REVIEWER,
                     "opened",
@@ -1254,7 +1254,7 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
             _record(
                 _review(
                     verdict="denied",
-                    finding_ids=("C-01",),
+                    finding_ids=("R-01",),
                     evidence="valid namespace",
                 )
             ),
@@ -1266,7 +1266,7 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
                     "01",
                     2,
                     ("src/a.py",),
-                    ("C-01",),
+                    ("R-01",),
                 )
             ),
             "finding_ids",
@@ -1293,7 +1293,7 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
         (
             _record(
                 FindingTransitionPayload(
-                    "C-01",
+                    "R-01",
                     Role.REVIEWER,
                     Role.REVIEWER,
                     "opened",
@@ -1308,7 +1308,7 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
             _record(
                 _review(
                     verdict="denied",
-                    finding_ids=("C-01",),
+                    finding_ids=("R-01",),
                     evidence="valid namespace",
                 )
             ),
@@ -1320,7 +1320,7 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
                     "01",
                     2,
                     ("src/a.py",),
-                    ("C-01",),
+                    ("R-01",),
                 )
             ),
             "finding_ids",
@@ -1332,7 +1332,7 @@ def test_v2_schema_and_deserializer_reject_finding_id_with_trailing_newline(
     field: str,
 ) -> None:
     raw = record.to_dict()
-    raw["payload"][field] = "C-01\n" if field == "finding_id" else ["C-01\n"]
+    raw["payload"][field] = "R-01\n" if field == "finding_id" else ["R-01\n"]
 
     with pytest.raises(ArtifactValidationError, match="schema validation failed"):
         validate_artifact_document(raw)
@@ -1343,7 +1343,7 @@ def test_v2_schema_and_deserializer_reject_finding_id_with_trailing_newline(
 def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optional() -> None:
     structured = _record(
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="opened",
@@ -1361,7 +1361,7 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
 
     historical = _record(
         FindingTransitionPayload(
-            "C-01",
+            "R-01",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -1383,10 +1383,10 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
 
 
 def test_work_unit_open_findings_are_sorted_and_roundtrip() -> None:
-    payload = WorkUnitPayload("1", 1, ("src/a.py",), ("C-62", "C-101"))
+    payload = WorkUnitPayload("1", 1, ("src/a.py",), ("R-62", "R-101"))
     assert ArtifactRecord.from_dict(_record(payload).to_dict()).payload == payload
     with pytest.raises(ArtifactValidationError, match="must be sorted"):
-        replace(payload, open_finding_ids=("C-101", "C-62"))
+        replace(payload, open_finding_ids=("R-101", "R-62"))
 
 
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:
@@ -1406,7 +1406,7 @@ def test_native_review_transport_fields_roundtrip_together() -> None:
         "approved",
         (),
         "checked",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         f"native-review-request-{'b' * 64}",
         "c" * 64,
     )
@@ -1437,7 +1437,7 @@ def test_review_approval_requires_one_evidence_form_in_schema_and_domain() -> No
             "approved",
             (),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             CLAUDE_REQUEST_ID,
             "c" * 64,
         )
@@ -1487,7 +1487,7 @@ def test_review_record_without_native_fields_is_rejected() -> None:
 @pytest.mark.parametrize(
     "native_fields",
     (
-        ("native-claude-review-v2", None, None),
+        ("native-claude-review-v3", None, None),
         (None, f"native-review-request-{'b' * 64}", None),
     ),
 )

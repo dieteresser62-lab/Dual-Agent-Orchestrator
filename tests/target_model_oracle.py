@@ -622,7 +622,7 @@ def _finding(
     decision: FindingResponseDecision | None = None,
 ) -> FindingRecord:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=finding_class,
         status=FindingStatus.OPEN,
         summary="Executable target-model probe",
@@ -636,7 +636,7 @@ def _finding(
         (finding,),
         (
             FindingResponseEvent(
-                "C-01", decision, "Implementer response for the oracle probe."
+                "R-01", decision, "Implementer response for the oracle probe."
             ),
         ),
     )[0]
@@ -671,7 +671,7 @@ def _context(
 
 def _base_document(context: NativeReviewContext, *, approved: bool) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": context.request_id,
         "reviewer": "reviewer",
@@ -772,12 +772,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     context = _context((accepted,))
     closure = NativeFindingClosure(NativeClosureKind.FIXED)
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The implementation resolves the finding.", closure
+        "R-01", FindingStatus.CLOSED, "The implementation resolves the finding.", closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {"kind": "fixed"},
@@ -805,12 +805,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
         evidence="The named record evidence disproves the report.",
     )
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The reasoned rejection is accepted.", rejected_closure
+        "R-01", FindingStatus.CLOSED, "The reasoned rejection is accepted.", rejected_closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {
@@ -858,7 +858,7 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     # must all accept that pre-escalation state.
     context = _context(round_number=1)
     new_finding = NativeFinding(
-        "C-01",
+        "R-01",
         CurrentFindingClass.FINDING,
         "The first review discovered a correctable defect.",
         NativeProseAcceptance("Correct the defect before Slice approval."),
@@ -902,12 +902,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
     )
     context = _context((blocker,))
     status = NativeStatusChange(
-        "C-01", FindingStatus.CLOSED, "The blocker is fixed.", closure
+        "R-01", FindingStatus.CLOSED, "The blocker is fixed.", closure
     )
     document = _base_document(context, approved=True)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "CLOSED",
             "rationale": status.rationale,
             "closure": {"kind": "fixed"},
@@ -926,12 +926,12 @@ def _core_review_probes() -> tuple[ReviewProbe, ...]:
 
     context = _context((blocker,))
     status = NativeStatusChange(
-        "C-01", FindingStatus.OPEN, "The blocker remains reproducible."
+        "R-01", FindingStatus.OPEN, "The blocker remains reproducible."
     )
     document = _base_document(context, approved=False)
     document["status_changes"] = [
         {
-            "finding_id": "C-01",
+            "finding_id": "R-01",
             "status": "OPEN",
             "rationale": status.rationale,
             "closure": None,
@@ -1046,7 +1046,7 @@ def _semantic_match(
 ) -> bool:
     if probe.expected_status is None and probe.expected_class is None:
         return True
-    finding = next((item for item in findings if item.finding_id == "C-01"), None)
+    finding = next((item for item in findings if item.finding_id == "R-01"), None)
     if finding is None:
         return False
     if probe.expected_status is not None and finding.status is not probe.expected_status:
@@ -1281,7 +1281,7 @@ class _OracleWorkflowDriver:
                 "discovery" if round_number == 1 else "convergence"
             )),
             progress_made=True,
-            newly_opened_finding_ids=("C-01",),
+            newly_opened_finding_ids=("R-01",),
             closed_local_finding_ids=(),
             attested_remediation_finding_ids=(),
             reason="the oracle supplies a progressing record-backed review round",
@@ -1552,7 +1552,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
             blocker,
             (
                 NativeFindingDisposition(
-                    "C-01",
+                    "R-01",
                     FindingResponseDecision.REJECTED,
                     "The implementation disputes the blocker.",
                 ),
@@ -1595,7 +1595,7 @@ def _policy_probe_outcomes() -> tuple[ProbeOutcome, ...]:
     for index in range(DEFAULT_LOOP_ROUND_LIMIT):
         state = state.record_review_denial(
             reviewer=Reviewer.REVIEWER,
-            open_findings=("C-01",),
+            open_findings=("R-01",),
             return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
             progress_made=True,
             updated_at=f"oracle-round-{index + 1}",

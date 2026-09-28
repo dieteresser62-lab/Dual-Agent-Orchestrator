@@ -69,7 +69,7 @@ BASELINE = ROOT / "tests/fixtures/replay-rejection-corpus-v1.json"
 RUN_ID = "b40-rejection-corpus"
 FP_A = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 FP_B = Fingerprint(FingerprintKind.IMPLEMENTATION, "b" * 64)
-REQUEST_ID = "native-codex-request-" + "c" * 64
+REQUEST_ID = "native-implementer-request-" + "c" * 64
 RESPONSE_SHA = "d" * 64
 VALIDATION_PASSES = (
     "_validate_workflow_transitions_and_events",
@@ -167,7 +167,7 @@ def _agent(work_unit_id: str = "1") -> AgentResultPayload:
         work_unit_id,
         "ready",
         (),
-        "native-codex-v2",
+        "native-codex-v3",
         REQUEST_ID,
         RESPONSE_SHA,
     )
@@ -182,7 +182,7 @@ def _review(
         "approved",
         finding_ids,
         "checked",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         "native-review-request-" + "c" * 64,
         RESPONSE_SHA,
     )
@@ -536,7 +536,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                     else attestation.record_id
                 ),
                 reviewed_head_commit="2" * 40,
-                transport_schema="native-claude-review-v2",
+                transport_schema="native-claude-review-v3",
                 request_id="native-review-request-" + "c" * 64,
                 response_sha256=RESPONSE_SHA,
                 scan_complete=True,
@@ -729,7 +729,7 @@ def _case(case_id: str) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         if case_id == "review-finding-ids-differ-from-the-transition-prefix":
             attestation = _append_attestation(records)
         finding_ids = (
-            ("C-01",)
+            ("R-01",)
             if case_id == "review-finding-ids-differ-from-the-transition-prefix"
             else ()
         )

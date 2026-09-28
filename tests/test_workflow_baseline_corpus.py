@@ -358,7 +358,7 @@ def _state(
         # The frozen corpus records the role profiles in force when it was captured.
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
+            "3",
             implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
             reviewer_profile=AgentProfileBinding("sonnet", "high"),
         ),

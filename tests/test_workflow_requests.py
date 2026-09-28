@@ -51,10 +51,10 @@ from workflow_state import (
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256 = (
-    "4a1562a7710909f2dbed84a0b54f7214c8cf127a0fd3189eeeb2e6f89e099e85"
+    "3df05d6673e8134817cef501b58ff0a98baf926c4978e0b96d2d039fa415e682"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "1b0dc0c9479a690055eea95445dd8e6813096020085be3c78d6cfac352085b26"
+    "271c9f634fc0473cba8572a3f49e2daac0e5801a140da55e1fa726b27267f8b5"
 )
 
 
@@ -281,13 +281,13 @@ def test_canonical_requests_match_the_current_bound_bytes() -> None:
         LANGUAGE_RULE_IMPLEMENTER_REQUEST_SHA256
     )
     assert _canonical_digest(implementer.canonical_json) == (
-        "3db2618adaf9334479e484472eabfaf458a7512f18b43aaf1cbc498957ad7ef3"
+        "0eb8c72c3ed3c971361f4e4b24ef195cf8a2d018ff3c47886ff655d93c023510"
     )
     review = _review_bundle()
     prior_schema = (review.provider_response_schema_json
         .replace('"const":"reviewer"', '"const":"claude"')
         .replace('"enum":["reviewer"]', '"enum":["claude"]'))
-    assert _canonical_digest(prior_schema) == "e25e390e6c895a7549e0645b66987419c373e0c25358e8a8ead20c5f8045c107"
+    assert _canonical_digest(prior_schema) == "8892fb0113d102afa886f2be6421c393440a683fd6065e31198823205c2c9746"
     prior_review = prior_role_wire_document(
         review.document, prior_schema_sha256=_canonical_digest(prior_schema)
     )
@@ -295,13 +295,13 @@ def test_canonical_requests_match_the_current_bound_bytes() -> None:
         PRE_CUT_REVIEW_REQUEST_SHA256
     )
     assert _canonical_digest(review.canonical_json) == (
-        "e48b0842d67a000122761f383e45f8dea6a6f5e470540a4423d61e1619b91343"
+        "82e2a02f3bc289275c35392b37abae96fcdc4e2a1b4b17bc45b522e023187946"
     )
 
 
 def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Current Slice finding",
@@ -312,7 +312,7 @@ def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     empty = _review_bundle()
     populated = _review_bundle(
         findings=(finding,),
-        bound_open_finding_ids=("C-01", "C-02"),
+        bound_open_finding_ids=("R-01", "R-02"),
     )
 
     assert empty.document["review_contract"][
@@ -320,7 +320,7 @@ def test_slice_review_announces_the_exact_exit_decision_source_union() -> None:
     ] == []
     assert populated.document["review_contract"][
         "slice_commit_decision_finding_ids"
-    ] == ["C-01", "C-02"]
+    ] == ["R-01", "R-02"]
 
 
 

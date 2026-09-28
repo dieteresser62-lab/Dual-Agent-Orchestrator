@@ -66,7 +66,7 @@ def _bound_bridge(
 
 def test_finding_payload_preserves_legacy_shape_and_native_authority() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Persist the complete native finding snapshot.",
@@ -302,7 +302,7 @@ def test_bridge_rejects_legacy_correction_work_unit_under_cutover_reducer(
 
     with pytest.raises(ArtifactReplayError, match="legacy correction_work_unit"):
         bridge.append(
-            CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("C-01",)),
+            CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("R-01",)),
             logical_id="work-unit-3",
             idempotency_key="correction-work-unit:3:round:1",
             fingerprint_sha256=DIGEST,
@@ -395,12 +395,12 @@ def test_native_review_mapping_preserves_request_and_response_binding() -> None:
     payload = review_payload(
         result,
         work_unit_id=1,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
 
-    assert payload.transport_schema == "native-claude-review-v2"
+    assert payload.transport_schema == "native-claude-review-v3"
     assert payload.request_id == f"native-review-request-{'b' * 64}"
     assert payload.response_sha256 == "c" * 64
 
@@ -433,7 +433,7 @@ def test_review_evidence_roundtrips_losslessly_through_the_record_store(
         review_payload(
             result,
             work_unit_id=1,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id=f"native-review-request-{'b' * 64}",
             response_sha256="c" * 64,
         ),
@@ -483,7 +483,7 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
         "denied",
         (),
         "first | embedded | second | third",
-        "native-claude-review-v2",
+        "native-claude-review-v3",
         f"native-review-request-{'b' * 64}",
         "c" * 64,
     )
@@ -504,7 +504,7 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
 
 def test_request_bound_review_payload_matches_only_its_complete_ledger_projection() -> None:
     carried = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A prior finding remains in the complete ledger.",
@@ -513,11 +513,11 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
         status_rationale="Closed before this review.",
     )
     reviewed = FindingRecord(
-        finding_id="C-79",
+        finding_id="R-79",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="The compact request includes this finding.",
-        acceptance_test="The request-bound payload names C-79.",
+        acceptance_test="The request-bound payload names R-79.",
         origin=FindingOrigin("35", 1, AgentRole.REVIEWER),
     )
     request_result = ContractResult(
@@ -539,7 +539,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
     payload = review_payload(
         request_result,
         work_unit_id=36,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
@@ -559,7 +559,7 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
 
 def test_legacy_lexical_review_payload_matches_natural_result_projection() -> None:
     base = FindingRecord(
-        finding_id="C-62",
+        finding_id="R-62",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Historical finding.",
@@ -568,7 +568,7 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
     )
     findings = tuple(
         replace(base, finding_id=finding_id)
-        for finding_id in ("C-62", "C-71", "C-101", "C-105")
+        for finding_id in ("R-62", "R-71", "R-101", "R-105")
     )
     result = ContractResult(
         reviewer=AgentRole.REVIEWER,
@@ -585,19 +585,19 @@ def test_legacy_lexical_review_payload_matches_natural_result_projection() -> No
     payload = review_payload(
         result,
         work_unit_id=42,
-        transport_schema="native-claude-review-v2",
+        transport_schema="native-claude-review-v3",
         request_id=f"native-review-request-{'b' * 64}",
         response_sha256="c" * 64,
     )
     legacy = replace(
         payload,
-        finding_ids=("C-101", "C-105", "C-62", "C-71"),
+        finding_ids=("R-101", "R-105", "R-62", "R-71"),
     )
 
     assert review_payload_matches_result(legacy, result)
     assert review_payload_matches_complete_result(legacy, result)
     assert not review_payload_matches_result(
-        replace(legacy, finding_ids=("C-105", "C-101", "C-62", "C-71")),
+        replace(legacy, finding_ids=("R-105", "R-101", "R-62", "R-71")),
         result,
     )
 

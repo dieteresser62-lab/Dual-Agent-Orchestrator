@@ -104,16 +104,16 @@ IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
 REVIEW_RECORD_ID = "ar1-" + "2" * 64
 # Slice 8b wire cut: IDs and response digests bind the neutral wire values.
 IMPLEMENTER_REQUEST_ID = (
-    "native-codex-request-84d725652635c741a1af4c5d427fff69e8f4459f3ff6168a6a93d988dec30603"
+    "native-implementer-request-d5ee9c3972a558c6b5d00e8dc326104ba4d969909de3dfe8fc9751bb39fafe9c"
 )
 REVIEW_REQUEST_ID = (
-    "native-review-request-3cceea485059dedacfc13a0b08ac3abc49faf1de9ae9136513aac65a1c26cb6b"
+    "native-review-request-69a79fdd74c2a606827a6df1a75fa408a40bd02251d233cedfb4a060d08be24b"
 )
 IMPLEMENTER_RESPONSE_SHA256 = (
-    "c70ddb10e6ef140c620f297427b55a01856ff84f0537359e10c0345bef414ae1"
+    "1b78a9ea73300fa8dced16b0c660b74a6b751ab37dc16a611de668006a10c4e3"
 )
 REVIEW_RESPONSE_SHA256 = (
-    "21376ef474f704e841e41e7e488f774f21a936b1ac6022a21c80854ec18c009f"
+    "d76c1aaba450fe56f75ad6eb5eddd299241280e4f17b66805635be718bdbd7d3"
 )
 
 RECOVERY_HELPERS = {
@@ -527,7 +527,7 @@ def _implementer_base() -> dict[str, object]:
     )
     assert bundle.bound_context.request_id == IMPLEMENTER_REQUEST_ID
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -795,11 +795,11 @@ def _run_implementer_scenario(
         "implementer-request-time-replay-failure",
         "implementer-request-time-finding-subset",
     }:
-        offered = SimpleNamespace(finding_id="C-01")
+        offered = SimpleNamespace(finding_id="R-01")
         recovery_bundle = None
         bundle = SimpleNamespace(
             canonical_json=json.dumps(
-                {"open_findings": [{"finding_id": "C-01"}]},
+                {"open_findings": [{"finding_id": "R-01"}]},
                 sort_keys=True,
                 separators=(",", ":"),
             ),
@@ -840,7 +840,7 @@ def _run_implementer_scenario(
                 ledger=SimpleNamespace(findings=())
             )
     elif spec.scenario_id == "implementer-missing-original-binding-request-id":
-        divergent_request_id = "native-codex-request-" + "8" * 64
+        divergent_request_id = "native-implementer-request-" + "8" * 64
         candidate = replace(
             candidate,
             payload=replace(
@@ -886,7 +886,7 @@ def _run_implementer_scenario(
         persisted_content = (canonical, content)
     elif spec.scenario_id == "implementer-bound-response-invalid":
         document = dict(base["document"])
-        document["request_id"] = "native-codex-request-" + "9" * 64
+        document["request_id"] = "native-implementer-request-" + "9" * 64
         canonical = canonical_native_implementer_json(document)
         content = _content_record(
             "ar1-" + "3" * 64,
@@ -940,7 +940,7 @@ def _run_implementer_scenario(
                     state=SimpleNamespace(
                         current_work_unit_id=1,
                         current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
-                        current_work_unit=SimpleNamespace(open_findings=("C-01",)),
+                        current_work_unit=SimpleNamespace(open_findings=("R-01",)),
                     )
                 ),
             )
@@ -990,7 +990,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
     record_ahead: bool,
 ) -> None:
     finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="A finding opened in an earlier work unit remains open.",
@@ -1037,14 +1037,14 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
     original_bundle = request((finding,))
     rebuilt_bundle = request(())
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "implementation_result",
         "request_id": original_bundle.bound_context.request_id,
         "ready": True,
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-02",
+                "finding_id": "R-02",
                 "decision": "accepted",
                 "rationale": "The earlier finding remains valid and open.",
             }
@@ -1148,7 +1148,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
             state=SimpleNamespace(
                 current_work_unit_id=17,
                 current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
-                current_work_unit=SimpleNamespace(open_findings=("C-02",)),
+                current_work_unit=SimpleNamespace(open_findings=("R-02",)),
             )
         ),
     )
@@ -1187,7 +1187,7 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
 def test_implementer_request_ledger_rejects_already_closed_disposition_with_anchor(
 ) -> None:
     closed = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="The finding was already closed before this request.",
@@ -1230,14 +1230,14 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
         )
     )
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
         "test_files": [],
         "finding_dispositions": [
             {
-                "finding_id": "C-02",
+                "finding_id": "R-02",
                 "decision": "accepted",
                 "rationale": "This answer was stale when it was written.",
             }
@@ -1245,7 +1245,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
     }
     snapshot = recovery_module._RequestLedgerSnapshot(
         replay=SimpleNamespace(),
-        findings_by_id={"C-02": closed},
+        findings_by_id={"R-02": closed},
         open_finding_ids=(),
         measurement_record_id="ar1-" + "6" * 64,
         relevant_record_head="9" * 64,
@@ -1265,7 +1265,7 @@ def test_implementer_request_ledger_rejects_already_closed_disposition_with_anch
     with pytest.raises(
         ValueError,
         match=(
-            "disposition references non-open finding C-02.*"
+            "disposition references non-open finding R-02.*"
             "measurement=ar1-6666666666666666"
         ),
     ):
@@ -1317,7 +1317,7 @@ def _reviewer_base() -> dict[str, object]:
     )
     assert bundle.bound_context.request_id == REVIEW_REQUEST_ID
     document = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",
@@ -1409,7 +1409,7 @@ def _reviewer_base() -> dict[str, object]:
 def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None:
     base = _reviewer_base()
     finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="The request-time reviewer finding remains actionable.",
@@ -1427,7 +1427,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         round_number=1,
         previous_findings=(finding,),
         known_open_findings=(finding,),
-        authoritative_finding_ids=("C-02",),
+        authoritative_finding_ids=("R-02",),
         validation_attestation=base["attestation"],
     )
     bundle = build_native_review_request(
@@ -1449,7 +1449,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     document["request_id"] = bundle.bound_context.request_id
     document["status_changes"] = [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "status": "CLOSED",
             "rationale": "The request-time acceptance test is satisfied.",
             "closure": {"kind": "fixed"},
@@ -1465,8 +1465,8 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     snapshot = recovery_module._RequestLedgerSnapshot(
         replay=SimpleNamespace(),
-        findings_by_id={"C-02": finding},
-        open_finding_ids=("C-02",),
+        findings_by_id={"R-02": finding},
+        open_finding_ids=("R-02",),
         measurement_record_id="ar1-" + "6" * 64,
         relevant_record_head="9" * 64,
         prefix_head_record_id="ar1-" + "7" * 64,
@@ -1511,7 +1511,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
             context=replace(
                 current_context,
                 previous_findings=(),
-                authoritative_finding_ids=("C-02",),
+                authoritative_finding_ids=("R-02",),
             ),
             review_kind=NativeReviewKind.SLICE,
             target_branch="feature/recovery-response-kontext",
@@ -1620,7 +1620,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     request_state = SimpleNamespace(
         current_work_unit_id=1,
         current_step=WorkflowStep.REVIEWER_SLICE_REVIEW,
-        current_work_unit=SimpleNamespace(open_findings=("C-02",)),
+        current_work_unit=SimpleNamespace(open_findings=("R-02",)),
     )
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(recovery_module, "replay_artifacts", lambda *_args: snapshot.replay)
@@ -1654,7 +1654,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
     )
     closed_snapshot = replace(
         snapshot,
-        findings_by_id={"C-02": closed},
+        findings_by_id={"R-02": closed},
         open_finding_ids=(),
     )
     closed_context = recovery._rebind_reviewer_context_to_request_ledger(

@@ -787,7 +787,7 @@ def test_active_cutover_rejects_commit_for_exit_violation(
     append(WorkUnitPayload("9", 1, ("base.txt",)))
     append(
         FindingTransitionPayload(
-            finding_id="C-01",
+            finding_id="R-01",
             reporter=Role.REVIEWER,
             actor=Role.REVIEWER,
             action="opened",
@@ -1095,7 +1095,7 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
         payload=review_payload(
             authorized.reviewer_review,
             work_unit_id="1",
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id=f"native-review-request-{'b' * 64}",
             response_sha256="c" * 64,
         ),

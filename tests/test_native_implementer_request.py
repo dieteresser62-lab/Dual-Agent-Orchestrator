@@ -73,7 +73,7 @@ def _spec(*, assignment: str = "Implement the native boundary.") -> NativeImplem
 
 
 def test_native_implementer_request_is_deterministic_and_digest_bound() -> None:
-    assert load_native_implementer_request_schema()["$id"] == "native-agent-codex-request-v2"
+    assert load_native_implementer_request_schema()["$id"] == "native-agent-implementer-request-v3"
     first = build_native_implementer_request(_spec())
     second = build_native_implementer_request(_spec())
     changed = build_native_implementer_request(_spec(assignment="A changed assignment."))
@@ -84,7 +84,7 @@ def test_native_implementer_request_is_deterministic_and_digest_bound() -> None:
     assert document["request_id"] == first.bound_context.request_id
     assert document["implementer_contract"]["readiness_kind"] == "plan"
     assert document["response_contract"]["schema_version"] == (
-        "native-agent-codex-result-v2"
+        "native-agent-implementer-result-v3"
     )
     assert json.loads(first.provider_response_schema_json) == (
         first.provider_response_schema
@@ -171,16 +171,35 @@ def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     # Slice 8b wire cut: reversing only the bound names recreates the old bytes.
     prior = prior_role_wire_document(bundle.document)
     assert hashlib.sha256(json.dumps(prior, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == (
-        "1b3d4acca62302ce29011b92def17b6cbf4139764b1c5ef531d76795d55cfa3a"
+        "273a857534275427ceb50300b5bbf92b98e913d83da17868d7e66722d39c3be6"
     )
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "763459517f5d65df5d536bd6ed4f34bea6131ac1402b774bc4532a043839d5ca"
+        "4cde1043b4abcb1e20d24a28195a7fbbfde2229866853ad8b09a1dc07b2c8ae4"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "60971f697d26147b616139c96e27ca07a35c63064c27a2cff8d3342d25e64e07"
+        "8bf937f092c712f02515ebd9c8edc905c9bb64b893a619b485d057d88fb687e4"
     )
+
+
+def test_capability_profile_selects_writer_and_remains_request_bound() -> None:
+    from native_provider_schema import (
+        ANTHROPIC_PROVIDER, OPENAI_PROVIDER, NativeProviderSchemaError,
+    )
+
+    first = build_native_implementer_request(_spec(), profile=OPENAI_PROVIDER)
+    second = build_native_implementer_request(_spec(), profile=ANTHROPIC_PROVIDER)
+    assert first.provider_response_schema != second.provider_response_schema
+    assert first.bound_context.request_id != second.bound_context.request_id
+    for bundle in (first, second):
+        assert bundle.document["response_contract"]["schema_sha256"] == hashlib.sha256(
+            bundle.provider_response_schema_json.encode()
+        ).hexdigest()
+    with pytest.raises(NativeImplementerRequestError, match="differs from bound context"):
+        replace(first, capability_profile=ANTHROPIC_PROVIDER)
+    with pytest.raises(NativeProviderSchemaError, match="no capability entry"):
+        build_native_implementer_request(_spec(), profile="unknown")
 
 
 def test_plan_request_tells_provider_the_scope_path_order_contract() -> None:
@@ -433,7 +452,7 @@ def test_bundle_rejects_context_digest_and_evidence_misbinding() -> None:
             binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
     ).hexdigest()
-    inline["request_id"] = "native-codex-request-" + digest
+    inline["request_id"] = "native-implementer-request-" + digest
     with pytest.raises(NativeImplementerRequestError, match="metadata differs"):
         NativeImplementerRequestBundle(
             canonical_json=json.dumps(
@@ -451,7 +470,7 @@ def test_bundle_rejects_context_digest_and_evidence_misbinding() -> None:
 def test_closed_findings_are_record_authority_not_codex_request_fields() -> None:
     base = _spec()
     closed = FindingRecord(
-        "C-01",
+        "R-01",
         FindingClass.BLOCKER,
         FindingStatus.CLOSED,
         "Closed finding",

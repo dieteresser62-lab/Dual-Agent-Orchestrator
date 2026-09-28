@@ -75,7 +75,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
         first_slice_start_commit="a" * 40,
         slice_count=2,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -846,7 +846,7 @@ def test_workflow_result_completes_after_all_slice_commits() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail="S-001 | operator decision required",
@@ -874,7 +874,7 @@ def test_legacy_bootstrap_denial_maps_to_resumable_watch_halt() -> None:
         first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(
         detail="PROVIDER-INPUT-BUDGET | chars=101/100",
         fingerprint="b" * 64,
@@ -1054,7 +1054,7 @@ def test_recorded_final_review_rejection_is_archived_without_resume(
         )
         records.mkdir(parents=True)
         (records / "0001.json").write_text("{}\n", encoding="utf-8")
-        detail = "FINAL-REVIEW-DENIED | remaining open findings: C-85"
+        detail = "FINAL-REVIEW-DENIED | remaining open findings: R-85"
         return WatchTaskResult(
             exit_code=5,
             run_id=args.watch_run_id,

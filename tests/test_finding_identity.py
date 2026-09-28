@@ -27,11 +27,11 @@ from rejected_response_shape import _FINDING_ID_RE as REJECTED_FINDING_ID_RE
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = (
-    "orchestrator-artifact-v2.schema.json",
-    "native-agent-codex-request-v2.schema.json",
-    "native-agent-codex-result-v2.schema.json",
-    "native-agent-review-request-v2.schema.json",
-    "native-agent-review-result-v2.schema.json",
+    "orchestrator-artifact-v3.schema.json",
+    "native-agent-implementer-request-v3.schema.json",
+    "native-agent-implementer-result-v3.schema.json",
+    "native-agent-review-request-v3.schema.json",
+    "native-agent-review-result-v3.schema.json",
 )
 
 
@@ -54,21 +54,20 @@ def test_finding_id_producers_and_validators_share_one_definition() -> None:
     assert FINDING_ID_EXAMPLE == format_finding_id(1)
     assert FINDING_ID_EXAMPLE.startswith(FINDING_ID_PREFIX)
     assert [format_finding_id(number) for number in (1, 9, 10, 100)] == [
-        "C-01", "C-09", "C-10", "C-100"
+        "R-01", "R-09", "R-10", "R-100"
     ]
     for invalid in (0, -1, True, 1.0):
         with pytest.raises(ValueError):
             format_finding_id(invalid)
     for number in (1, 2, 10, 100):
         assert parse_finding_number(format_finding_id(number)) == number
-    assert parse_finding_number("C-1") == 1  # Existing domain pattern accepts unpadded IDs.
-    for invalid_id in ("C-00", "C-001", "R-01", "C-01\n", "C-01x", 1):
+    assert parse_finding_number("R-1") == 1  # Existing domain pattern accepts unpadded IDs.
+    for invalid_id in ("R-00", "R-001", "C-01", "R-01\n", "R-01x", 1):
         with pytest.raises(ValueError, match="invalid finding id"):
             parse_finding_number(invalid_id)
 
 
 def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -> None:
-    portable_end = FINDING_ID_PATTERN_TEXT.removesuffix("$") + r"(?![\s\S])"
     documents = [
         json.loads((ROOT / "schemas" / name).read_text(encoding="utf-8"))
         for name in SCHEMAS
@@ -84,11 +83,11 @@ def test_all_bundled_and_generated_schema_id_patterns_match_the_canonical_id() -
         )
         documents.append(native_review_provider_response_schema(context))
     expected_counts = (1, 1, 1, 4, 2, 4, 5, 7, 5)
-    samples = ("C-01", "C-10", "C-100", "C-00", "C-1", "C-01x", "R-01")
+    samples = ("R-01", "R-10", "R-100", "R-00", "R-1", "R-01x", "C-01")
     expected = tuple(FINDING_ID_PATTERN.fullmatch(sample) is not None for sample in samples)
     for document, count in zip(documents, expected_counts, strict=True):
         patterns = _finding_patterns(document)
         assert len(patterns) == count
         for pattern in patterns:
-            assert pattern in (FINDING_ID_PATTERN_TEXT, portable_end)
+            assert pattern == FINDING_ID_PATTERN_TEXT
             assert tuple(re.fullmatch(pattern, sample) is not None for sample in samples) == expected

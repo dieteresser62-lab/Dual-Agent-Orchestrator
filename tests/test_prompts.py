@@ -18,10 +18,10 @@ def test_native_policies_require_schema_bound_json() -> None:
 
 def test_role_policy_bytes_match_the_starting_head() -> None:
     assert hashlib.sha256(NATIVE_IMPLEMENTER_SYSTEM_POLICY.encode("utf-8")).hexdigest() == (
-        "bfc0fe3376d4ba6e46b1c390bd95dcf1bc8ff9f6d44d59811d2d57f7a6e0253d"
+        "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda"
     )
     assert hashlib.sha256(NATIVE_REVIEWER_SYSTEM_POLICY.encode("utf-8")).hexdigest() == (
-        "3418dced3a3674f0c7fa5e8569b2fdc88a01a1a3be51fb14056c9d1d352578f6"
+        "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d"
     )
 
 
@@ -40,7 +40,7 @@ def test_both_roles_receive_the_same_complete_language_rule() -> None:
         "Prüfevidenz",
         "Pre-Mortem",
         "Schlüssel und Enumwerte",
-        "Kennungen wie C-01",
+        "Kennungen wie R-01",
         "Code, Pfade, Befehle",
         "Commit-Betreffe",
         "wörtliche Zitate",

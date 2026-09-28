@@ -17,7 +17,7 @@ def test_projection_is_deterministic_and_semantically_bounded() -> None:
 
 def test_overall_projection_contains_each_finding_once() -> None:
     overall = render_overall(_facts(), task="Task", branch="feature/test")
-    assert overall.count("| C-01 |") == 1
-    assert overall.count("| C-02 |") == 1
-    assert "### C-01" not in overall
+    assert overall.count("| R-01 |") == 1
+    assert overall.count("| R-02 |") == 1
+    assert "### R-01" not in overall
     assert len(canonical_semantic_markdown(overall)) < len(overall)

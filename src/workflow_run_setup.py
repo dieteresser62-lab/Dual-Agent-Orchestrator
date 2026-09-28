@@ -326,7 +326,7 @@ def _fresh_state(
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
             mode=ProtocolMode.STRUCTURED_V2,
-            schema_version="2",
+            schema_version="3",
             claude_review_transport=NATIVE_CLAUDE_REVIEW_TRANSPORT,
             codex_result_transport=NATIVE_CODEX_RESULT_TRANSPORT,
             implementer_profile=implementer_profile,

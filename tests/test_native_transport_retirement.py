@@ -159,7 +159,7 @@ def test_retired_transport_flags_are_unknown(flag: str, tmp_path: Path) -> None:
     (
         {
             "mode": "structured-v2",
-            "schema_version": "2",
+            "schema_version": "3",
             "claude_review_transport": None,
             "codex_result_transport": None,
             "implementer_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
@@ -167,8 +167,8 @@ def test_retired_transport_flags_are_unknown(flag: str, tmp_path: Path) -> None:
         },
         {
             "mode": "structured-v2",
-            "schema_version": "2",
-            "claude_review_transport": "native-claude-review-v2",
+            "schema_version": "3",
+            "claude_review_transport": "native-claude-review-unsupported",
             "codex_result_transport": None,
             "implementer_profile": {"model": "gpt-5.6-sol", "effort": "medium"},
             "reviewer_profile": {"model": "sonnet", "effort": "high"},

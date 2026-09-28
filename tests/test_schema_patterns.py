@@ -67,6 +67,8 @@ def test_allowed_grammar_matches_entire_body(
         ("^a\u3000$", "implicit-whitespace-or-nul"),
         ("^a\ufeff$", "implicit-whitespace-or-nul"),
         ("^a\u0085$", "implicit-whitespace-or-nul"),
+        ("^[a\t]$", "implicit-whitespace-or-nul"),
+        ("^[a\u3000]$", "implicit-whitespace-or-nul"),
         (r"^a\x0$", "invalid-hex-escape"),
         (r"^[a-z$", "unclosed-character-class"),
         (r"^(a$", "unbalanced-group"),

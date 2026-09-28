@@ -466,7 +466,7 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
 
     structured = replace(
         historical,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     assert WorkflowState.from_dict(structured.to_dict()) == structured
     assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
@@ -475,8 +475,8 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
         historical,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            "native-claude-review-v2",
+            "3",
+            "native-claude-review-v3",
         ),
     )
     assert WorkflowState.from_dict(native.to_dict()) == native
@@ -490,7 +490,7 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            "native-claude-review-v2",
+            "native-claude-review-v3",
         )
 
     with pytest.raises(
@@ -500,15 +500,15 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            codex_result_transport="native-codex-v2",
+            codex_result_transport="native-codex-v3",
         )
 
 
 def test_protocol_binding_roundtrips_native_implementer_result_transport() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
-        "2",
-        codex_result_transport="native-codex-v2",
+        "3",
+        codex_result_transport="native-codex-v3",
     )
 
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
@@ -517,7 +517,7 @@ def test_protocol_binding_roundtrips_native_implementer_result_transport() -> No
 def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
-        "2",
+        "3",
         implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
         reviewer_profile=AgentProfileBinding("sonnet", "high"),
     )
@@ -533,7 +533,7 @@ def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "schema_version"),
-    [(ProtocolMode.STRUCTURED_V2, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
+    [(ProtocolMode.STRUCTURED_V2, "2"), (ProtocolMode.LEGACY_STATE_V3, "1")],
 )
 def test_protocol_binding_rejects_mode_schema_mismatch(
     mode: ProtocolMode, schema_version: str
@@ -585,7 +585,7 @@ def test_review_denials_stop_at_configured_loop_round_limit() -> None:
     for expected_count in range(1, DEFAULT_LOOP_ROUND_LIMIT + 1):
         state = state.record_review_denial(
             reviewer=Reviewer.REVIEWER,
-            open_findings=("C-01",),
+            open_findings=("R-01",),
             return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
             progress_made=True,
             updated_at=f"round-{expected_count}",
@@ -599,7 +599,7 @@ def test_review_denials_stop_at_configured_loop_round_limit() -> None:
     assert unit.gate.reason is GateReason.NONE
     assert unit.max_implementer_returns == DEFAULT_LOOP_ROUND_LIMIT
     assert unit.reviewer is Reviewer.REVIEWER
-    assert unit.open_findings == ("C-01",)
+    assert unit.open_findings == ("R-01",)
     assert state.current_step is WorkflowStep.COMPLETED
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
     assert state.current_slice.commit_ref is None
@@ -608,7 +608,7 @@ def test_review_denials_stop_at_configured_loop_round_limit() -> None:
 def test_review_denial_without_progress_completes_as_clear_terminal_verdict() -> None:
     state = make_state().record_review_denial(
         reviewer=Reviewer.REVIEWER,
-        open_findings=("C-01", "C-09"),
+        open_findings=("R-01", "R-09"),
         return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=False,
     )
@@ -617,7 +617,7 @@ def test_review_denial_without_progress_completes_as_clear_terminal_verdict() ->
     assert unit.status is WorkUnitStatus.COMPLETED
     assert unit.current_step is WorkflowStep.COMPLETED
     assert unit.gate == GateRecord()
-    assert unit.open_findings == ("C-01", "C-09")
+    assert unit.open_findings == ("R-01", "R-09")
     assert state.current_slice.status is SliceStatus.IN_PROGRESS
 
 
@@ -637,7 +637,7 @@ def test_recomposition_advances_only_request_sequence_until_review_is_recorded()
 
     recorded = third_request.record_review_denial(
         reviewer=Reviewer.REVIEWER,
-        open_findings=("C-01",),
+        open_findings=("R-01",),
         return_step=WorkflowStep.IMPLEMENTER_PLAN_REVISION,
         progress_made=True,
     )
@@ -930,7 +930,7 @@ def test_review_denial_requires_findings_and_unique_records() -> None:
     with pytest.raises(WorkflowStateValidationError, match="unique"):
         state.record_review_denial(
             reviewer=Reviewer.REVIEWER,
-            open_findings=("C-01", "C-01"),
+            open_findings=("R-01", "R-01"),
             return_step=WorkflowStep.IMPLEMENTER_CORRECTION,
             progress_made=False,
         )

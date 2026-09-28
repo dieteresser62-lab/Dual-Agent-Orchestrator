@@ -355,7 +355,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         task_digest=DIGEST,
         task_scope_patterns=(changed_path,),
         target_branch="feature/b30-commit-bracket",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,
         scope_paths=(changed_path,),
@@ -424,7 +424,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         review_payload(
             request_bound_review,
             work_unit_id=state.current_work_unit_id,
-            transport_schema="native-claude-review-v2",
+            transport_schema="native-claude-review-v3",
             request_id="native-review-request-" + "c" * 64,
             response_sha256="d" * 64,
         ),
@@ -434,7 +434,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         operation="reviewer_slice_review",
     )
     carried_finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.CLOSED,
         summary="A finding outside the compact request remains in the ledger.",

@@ -124,8 +124,8 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         slice_count=1,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
-            "2",
-            codex_result_transport="native-codex-v2",
+            "3",
+            codex_result_transport="native-codex-v3",
         ),
     )
     driver = object.__new__(ProductionWorkflowDriver)
@@ -146,7 +146,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
             work_unit_id=str(state.current_work_unit_id),
             round_number=1,
             operation=state.current_step.value,
-            request_id="native-codex-request-" + "b" * 64,
+            request_id="native-implementer-request-" + "b" * 64,
             response_sha256=blob.sha256,
             content_kind="agent_result",
             content_bytes=len(raw),
@@ -194,8 +194,8 @@ def _divergent_recovery_records() -> BaseException:
             work_unit_id="1",
             outcome="ready",
             test_files=(),
-            transport_schema="native-codex-v2",
-            request_id="native-codex-request-" + "b" * 64,
+            transport_schema="native-codex-v3",
+            request_id="native-implementer-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
     )
@@ -228,7 +228,7 @@ def _mismatched_persisted_request(tmp_path: Path) -> BaseException:
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = object.__new__(ProductionWorkflowDriver)
     driver.root = tmp_path
@@ -260,7 +260,7 @@ def _checkpoint_failure_with_prior_quota(tmp_path: Path) -> BaseException:
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     )
     driver = object.__new__(ProductionWorkflowDriver)
     driver.active_state = None

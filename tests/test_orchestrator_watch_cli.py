@@ -158,7 +158,7 @@ def test_nonterminal_direct_resume_keeps_bound_watch_task_in_inbox(
         task_digest=digest,
         task_scope_patterns=("src/**",),
         target_branch="feature/resume",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(detail="repair", fingerprint="b" * 64)
     monkeypatch.setattr(
         orchestrator,
@@ -508,7 +508,7 @@ def test_pipeline_exposes_bootstrap_denial_as_resumable_exit_four(
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
     ).await_bootstrap_resume(
         detail="FINAL-REVIEW-PREFLIGHT | restore the record mirror",
         fingerprint="b" * 64,

@@ -171,7 +171,7 @@ def test_slice_package_excludes_sibling_sentinels_and_binds_source_plan() -> Non
 
 def test_slice_package_projects_only_open_findings_in_id_order() -> None:
     closed = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.CLOSED,
         summary="Closed imported finding",
@@ -180,7 +180,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
         status_rationale="Closed in the source run.",
     )
     open_finding = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.FINDING,
         status=FindingStatus.OPEN,
         summary="Open imported finding",
@@ -198,7 +198,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
 
     assert json.loads(package.canonical_json)["slice"]["open_findings"] == [
         {
-            "finding_id": "C-02",
+            "finding_id": "R-02",
             "finding_class": "FINDING",
             "reporter": "reviewer",
             "summary": "Open imported finding",
@@ -209,7 +209,7 @@ def test_slice_package_projects_only_open_findings_in_id_order() -> None:
 
 def test_slice_package_rejects_duplicate_finding_identity() -> None:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Duplicated imported finding",
@@ -229,7 +229,7 @@ def test_slice_package_rejects_duplicate_finding_identity() -> None:
 
 def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
     finding = FindingRecord(
-        finding_id="C-01",
+        finding_id="R-01",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="Synthetic affected finding",
@@ -320,7 +320,7 @@ def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
 
 def test_correction_package_contains_only_affected_open_finding_and_current_delta() -> None:
     affected = FindingRecord(
-        finding_id="C-02",
+        finding_id="R-02",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
         summary="AFFECTED-SENTINEL",

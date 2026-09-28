@@ -274,13 +274,13 @@ Die wichtigsten Gates sind:
 
 Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen und keinen reviewer-eigenen offenen Blocker.
 
-Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `C-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
+Das Findingmodell kennt genau zwei Klassen und genau zwei Antworten. Claude eröffnet Findings mit `R-`-Kennungen; jedes ist entweder ein gewöhnliches `FINDING` oder ein `BLOCKER`. Codex muss jedes offene Finding genau einmal begründet beantworten: **Blocker müssen gelöst werden, Findings können gelöst oder abgelehnt werden.** Eine Ablehnung eines Blockers ist ungültig. Ebenso ungültig ist eine Annahme, hinter der keine Änderung steht — der Orchestrator vergleicht den Fingerprint des Arbeitsstands vor und nach der Korrektur und weist eine folgenlose Annahme zurück. Wer einen Befund für bereits erledigt hält, lehnt mit dieser Begründung ab; das ist eine prüfbare Aussage.
 
 Eine Eskalation wird nicht ausgesprochen, sondern geschieht: Ein gewöhnliches Finding, das Claude in einem abgelehnten Review nicht schließt, wird durch die kanonische Reduktion zum `BLOCKER`. Es gibt keinen Reklassifizierungszug und keine Observation-Klasse. Umgekehrt ist eine Freigabe mit einem eigenen offenen Finding widersprüchlich und wird zurückgewiesen — entweder im selben Zug schließen oder ablehnen.
 
 Jedes Finding gehört unveränderlich zu dem Slice, in dem es eröffnet wurde. Die einzige Commitbedingung lautet, dass die aus den Records abgeleitete Findingmenge dieses Slices keinen offenen Blocker enthält. Die erste Prüfung eines Slices entdeckt; jede weitere abgelehnte Prüfung ist eine Konvergenzrunde und muss einen bekannten Befund schließen oder eine attestierte, fingerprintändernde Behebung nachweisen. Eine Runde ohne beides beendet den Slice negativ, ebenso das Rundenlimit `max_rounds_per_loop`.
 
-Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `C-`-Kennung schließen.
+Testdateien werden im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur Claude darf Findings mit `R-`-Kennung schließen.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
@@ -329,7 +329,7 @@ Der Watch-Modus:
 - verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum Codex-Vollständigkeitscheck und Claude-Abschlussreview ab;
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an; das digestgebundene Gesamtaudit fasst deren Stand und Commit zusammen, ohne Slice-Inhalte zu wiederholen. Die vollständigen technischen Nachweise bleiben in der Recordkette;
 - streamt standardmäßig `stdout`;
-- verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
+- verschiebt abgeschlossene Aufgaben mit UTR-Zeitstempel nach `outbox/done/`;
 - wiederholt nur typisierte transiente Provider-, Netz- oder Prozessfehler und verschiebt erst ausgeschöpfte transiente Aufgaben als Poison Tasks nach `outbox/failed/`; daneben bleibt eine gleichnamige `.error.json` mit Fehlerklasse, Diagnosecode, Lauf-ID, Step und letzter Ursache erhalten;
 - hält bei deterministischen Record-, Mirror-, Schema-, Fingerprint-, Bindungs- oder Recoveryfehlern sofort mit Exitcode 4 an, ohne den Retryzähler zu erhöhen oder die Watch-Identität zu verlieren; nicht zentral zugeordnete Fehler fallen ebenfalls sicher in diesen Halt;
 - legt einen vor dem ersten Record erkannten terminalen Aufgabenvertragsfehler einmalig als `*.rejected` mit Diagnosebericht in `outbox/failed/` ab und verarbeitet die nächste Queue-Aufgabe weiter; nach Recordbeginn wird dieselbe Ablehnung zwingend zum resumierbaren Halt;
@@ -576,12 +576,12 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Opus-/High-Profil. |
 
 Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
-erhält `native-agent-codex-request-v2` und antwortet gemäß
-`native-agent-codex-result-v2` mit einer der strikt
+erhält `native-agent-implementer-request-v3` und antwortet gemäß
+`native-agent-implementer-result-v3` mit einer der strikt
 getrennten Varianten `plan_result`, `implementation_result`,
 `correction_result`, `final_report_result` oder `stop_result`. Claude erhält
-`native-agent-review-request-v2` und antwortet gemäß
-`native-agent-review-result-v2`; sein request-spezifisches Writerschema bindet
+`native-agent-review-request-v3` und antwortet gemäß
+`native-agent-review-result-v3`; sein request-spezifisches Writerschema bindet
 Freigabe, Findings, Statusänderungen, Reviewevidenz,
 Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
 persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder

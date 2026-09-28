@@ -225,7 +225,7 @@ def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
 ) -> None:
     bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -290,7 +290,7 @@ def test_native_implementer_exposes_schema_valid_bytes_before_domain_rejection(
 ) -> None:
     bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -354,7 +354,7 @@ def test_native_implementer_writer_invalid_bytes_never_reach_validated_callback(
 ) -> None:
     bundle = _runtime_native_implementer_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -418,7 +418,7 @@ def test_native_implementer_runtime_forwards_canary_execution_root(
         evidence_asset_root=evidence_root,
     )
     response = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -480,7 +480,7 @@ def test_native_implementer_checked_writes_raw_before_accepted_callback(
     result = parse_bound_native_implementer_contract_result_for_test(bundle)
     canonical = json.dumps(
         {
-            "schema_version": "native-agent-codex-result-v2",
+            "schema_version": "native-agent-implementer-result-v3",
             "result_type": "plan_result",
             "request_id": bundle.bound_context.request_id,
             "ready": True,
@@ -588,7 +588,7 @@ def test_native_implementer_checked_write_failure_prevents_callback(
 
 def parse_bound_native_implementer_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
     document = {
-        "schema_version": "native-agent-codex-result-v2",
+        "schema_version": "native-agent-implementer-result-v3",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -657,7 +657,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         )
     )
     response = {
-        "schema_version": "native-agent-review-result-v2",
+        "schema_version": "native-agent-review-result-v3",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "reviewer",
@@ -732,7 +732,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         **response,
         "new_findings": [
             {
-                "finding_id": "C-01",
+                "finding_id": "R-01",
                 "finding_class": "BLOCKER",
                 "affected_paths": [],
                 "summary": "Approval still contains an open blocker.",
@@ -773,7 +773,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
 def test_native_review_checked_preserves_schema_valid_domain_rejection(
     monkeypatch, tmp_path: Path
 ) -> None:
-    canonical = '{"schema_version":"native-agent-review-result-v2"}'
+    canonical = '{"schema_version":"native-agent-review-result-v3"}'
 
     def reject_after_persist(*args, **kwargs):  # type: ignore[no-untyped-def]
         kwargs["response_callback"](canonical)
@@ -937,7 +937,7 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
             "result_type": "review_result",
             "request_id": "native-review-request-" + "a" * 64,
             "decision": "denied",
-            "new_findings": [{"finding_id": "C-01"}],
+            "new_findings": [{"finding_id": "R-01"}],
             "status_changes": [],
         }
     )
@@ -1188,7 +1188,7 @@ def test_native_review_contract_failure_kind_is_output_for_all_codes(
 
 def test_native_review_content_rejection_cannot_masquerade_as_provider_failure() -> None:
     detail = (
-        "new finding C-17 duplicates known open finding C-03 "
+        "new finding R-17 duplicates known open finding R-03 "
         "(signature " + ("a" * 64) + ") despite network timeout quota wording"
     )
     contract_error = NativeReviewContractError(

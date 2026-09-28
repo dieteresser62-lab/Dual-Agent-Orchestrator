@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
+from schema_patterns import schema_pattern_violations
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -297,20 +298,113 @@ def defensive_provider_projection(
     *,
     provider: str,
     required_features: Iterable[str],
+    compensated_features: Iterable[str] = (),
+    compensated_unique_item_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
     assert_provider_capabilities(provider, required_features)
+    violations = schema_pattern_violations(base_schema)
+    if violations:
+        first = violations[0]
+        raise NativeProviderSchemaError(
+            f"non-portable provider schema pattern at {first.path}: {first.rule}"
+        )
     projected = copy.deepcopy(dict(base_schema))
+    compensated = frozenset(compensated_features)
+    unique_item_paths = frozenset(compensated_unique_item_paths)
     if provider == OPENAI_PROVIDER:
-        pending: list[object] = [projected]
+        pending: list[tuple[str, object]] = [("", projected)]
         while pending:
-            node = pending.pop()
+            pointer, node = pending.pop()
             if isinstance(node, dict):
-                node.pop("uniqueItems", None)
-                if "(?" in str(node.get("pattern", "")):
-                    node.pop("pattern")
-                pending.extend(node.values())
+                if "uniqueItems" in node:
+                    if (
+                        "uniqueItems" not in compensated
+                        or f"{pointer}/uniqueItems" not in unique_item_paths
+                    ):
+                        raise NativeProviderSchemaError(
+                            "unsupported uniqueItems has no local compensation"
+                        )
+                    node.pop("uniqueItems")
+                pending.extend(
+                    (f"{pointer}/{key}", child)
+                    for key, child in node.items()
+                    if key not in {"const", "enum"}
+                )
             elif isinstance(node, list):
-                pending.extend(node)
+                pending.extend((f"{pointer}/{index}", child) for index, child in enumerate(node))
+    return projected
+
+
+def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Lower only locally checked reviewer constraints for the OpenAI writer subset.
+
+    Unreachable reader definitions are removed first.  A new unsupported
+    feature therefore fails the provider guard instead of being silently lost.
+    """
+    projected = copy.deepcopy(dict(schema))
+    definitions = projected.get("$defs", {})
+    if not isinstance(definitions, dict):
+        raise NativeProviderSchemaError("reviewer writer definitions must be an object")
+    reachable: set[str] = set()
+
+    def references(value: Any) -> None:
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                name = ref[len("#/$defs/"):].split("/", 1)[0]
+                if name not in definitions:
+                    raise NativeProviderSchemaError(f"unknown reviewer writer definition {name}")
+                if name not in reachable:
+                    reachable.add(name)
+                    references(definitions[name])
+            for key, child in value.items():
+                if key not in {"const", "enum"}:
+                    references(child)
+        elif isinstance(value, list):
+            for child in value:
+                references(child)
+
+    references({key: value for key, value in projected.items() if key != "$defs"})
+    projected["$defs"] = {key: definitions[key] for key in definitions if key in reachable}
+
+    def nullable(node: Any) -> bool:
+        if not isinstance(node, dict):
+            return False
+        if node.get("type") == "null":
+            return True
+        return any(nullable(branch) for branch in node.get("oneOf", node.get("anyOf", [])))
+
+    def lower(node: Any) -> None:
+        if isinstance(node, dict):
+            if "uniqueItems" in node:
+                raise NativeProviderSchemaError(
+                    "generated reviewer uniqueItems has no local compensation"
+                )
+            if node.get("const") == [] and "const" in node:
+                node.pop("const")
+                node["minItems"] = node["maxItems"] = 0
+            if "oneOf" in node:
+                # Native review parsing still checks the exclusive union.
+                node["anyOf"] = node.pop("oneOf")
+            properties = node.get("properties")
+            if node.get("type") == "object" and isinstance(properties, dict):
+                optional = set(properties) - set(node.get("required", []))
+                if optional and not all(nullable(properties[key]) for key in optional):
+                    raise NativeProviderSchemaError(
+                        "reviewer writer has an optional non-nullable property without compensation"
+                    )
+                if node.get("additionalProperties") is not False:
+                    raise NativeProviderSchemaError("reviewer writer object is not closed")
+                node["required"] = sorted(properties)
+            for key, child in node.items():
+                if key not in {"const", "enum"}:
+                    lower(child)
+        elif isinstance(node, list):
+            for child in node:
+                lower(child)
+
+    lower(projected)
+    assert_projected_provider_schema(projected, provider=OPENAI_PROVIDER)
     return projected
 
 
@@ -338,6 +432,12 @@ def assert_projected_provider_schema(
     projected_schema: Mapping[str, Any], *, provider: str
 ) -> None:
     """Fail closed when a final writer schema violates provider rules."""
+    pattern_violations = schema_pattern_violations(projected_schema)
+    if pattern_violations:
+        first = pattern_violations[0]
+        raise NativeProviderSchemaError(
+            f"non-portable writer pattern at {first.path}: {first.rule}"
+        )
     if provider not in {ANTHROPIC_PROVIDER, OPENAI_PROVIDER}:
         raise NativeProviderSchemaError(
             "no projected-schema acceptance guard for the requested provider"
@@ -578,7 +678,7 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
         if ignored in values:
             _discard_pair(values, ignored)
     if "--max-budget-usd" in values:
-        # Cost policy is intentionally not a schema-capability input (C-25).
+        # Cost policy is intentionally not a schema-capability input (R-25).
         _discard_pair(values, "--max-budget-usd")
     _discard_pair(values, "--json-schema")
     flags = {

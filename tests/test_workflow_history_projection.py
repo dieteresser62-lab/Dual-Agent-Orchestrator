@@ -499,7 +499,7 @@ def _journey(
     # The correction definition must refer to an already-authoritative finding.
     bridge.append(
         FindingTransitionPayload(
-            "C-01",
+            "R-01",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -512,8 +512,8 @@ def _journey(
             "03",
             1,
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened",
+        logical_id="finding-R-01",
+        idempotency_key="finding:R-01:opened",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -522,7 +522,7 @@ def _journey(
         bridge, slice_id="3", path="src/three.py", fingerprint="3" * 64
     )
     bridge.append(
-        WorkUnitPayload("3", 1, ("src/three.py",), ("C-01",)),
+        WorkUnitPayload("3", 1, ("src/three.py",), ("R-01",)),
         logical_id="work-unit-4",
         idempotency_key="work-unit:4:round:1",
         fingerprint_sha256=FINGERPRINT,
@@ -539,7 +539,7 @@ def _journey(
             "approved",
             (),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "7" * 64,
             "8" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -556,7 +556,7 @@ def _journey(
     )
     assert review.payload.work_unit_id == "4"
     bridge.append(
-        WorkUnitPayload("3", 2, ("src/three.py",), ("C-01",)),
+        WorkUnitPayload("3", 2, ("src/three.py",), ("R-01",)),
         logical_id="work-unit-4",
         idempotency_key="work-unit:4:round:2",
         fingerprint_sha256=FINGERPRINT,
@@ -737,9 +737,9 @@ def _append_projection_denied_slice_review(bridge: ArtifactBridge) -> None:
             Role.REVIEWER,
             "5",
             "denied",
-            ("C-01",),
+            ("R-01",),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "9" * 64,
             "a" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -1022,7 +1022,7 @@ def _independent_mirror_snapshots(
     """Build the legacy mirror through WorkflowState transitions, not replay."""
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
-        "2",
+        "3",
         implementer_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
         reviewer_profile=AgentProfileBinding("opus", "max"),
     )
@@ -1145,7 +1145,7 @@ def _independent_mirror_snapshots(
         state,
         work_units=(
             *state.work_units[:-1],
-            replace(state.current_work_unit, open_findings=("C-01",)),
+            replace(state.current_work_unit, open_findings=("R-01",)),
         ),
     )
     for end in (35, 36):
@@ -1220,7 +1220,7 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
     denied_review = documents["denied-slice-review"]["work_units"][-1]
     assert denied_review["kind"] == "slice"
     assert denied_review["reviewer"] == "reviewer"
-    assert denied_review["open_findings"] == ["C-01"]
+    assert denied_review["open_findings"] == ["R-01"]
 
 
 
@@ -1233,7 +1233,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     _journey(bridge)
     bridge.append(
         FindingTransitionPayload(
-            "C-01",
+            "R-01",
             Role.REVIEWER,
             Role.REVIEWER,
             "status_changed",
@@ -1242,8 +1242,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             "the earlier correction finding is resolved",
             "4",
         ),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:closed",
+        logical_id="finding-R-01",
+        idempotency_key="finding:R-01:closed",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -1270,7 +1270,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     bridge.append(
         FindingTransitionPayload(
-            "C-02",
+            "R-02",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -1283,8 +1283,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             "04",
             1,
         ),
-        logical_id="finding-C-02",
-        idempotency_key="finding:C-02:opened",
+        logical_id="finding-R-02",
+        idempotency_key="finding:R-02:opened",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -1294,9 +1294,9 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.REVIEWER,
             "5",
             "approved",
-            ("C-02",),
+            ("R-02",),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "2" * 64,
             "3" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -1334,13 +1334,13 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     )
     next_slice_replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
     next_slice_open = reduce_findings(next_slice_replay).open_set.finding_ids
-    assert next_slice_open == ("C-02",)
+    assert next_slice_open == ("R-02",)
     assert project_workflow_state(
         next_slice_replay
     ).state.current_work_unit.open_findings == next_slice_open
     bridge.append(
         FindingTransitionPayload(
-            "C-02",
+            "R-02",
             Role.REVIEWER,
             Role.IMPLEMENTER,
             "responded",
@@ -1350,14 +1350,14 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             "6",
             response_decision="accepted",
         ),
-        logical_id="finding-C-02",
-        idempotency_key="finding:C-02:responded",
+        logical_id="finding-R-02",
+        idempotency_key="finding:R-02:responded",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
         FindingTransitionPayload(
-            "C-02",
+            "R-02",
             Role.REVIEWER,
             Role.REVIEWER,
             "status_changed",
@@ -1366,14 +1366,14 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             "the accepted observation is resolved",
             "6",
         ),
-        logical_id="finding-C-02",
-        idempotency_key="finding:C-02:closed",
+        logical_id="finding-R-02",
+        idempotency_key="finding:R-02:closed",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
         FindingTransitionPayload(
-            "C-03",
+            "R-03",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -1386,8 +1386,8 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             "05",
             1,
         ),
-        logical_id="finding-C-03",
-        idempotency_key="finding:C-03:opened",
+        logical_id="finding-R-03",
+        idempotency_key="finding:R-03:opened",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -1397,9 +1397,9 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
             Role.REVIEWER,
             "6",
             "approved",
-            ("C-02", "C-03"),
+            ("R-02", "R-03"),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "4" * 64,
             "5" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -1438,14 +1438,14 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     replay = replay_artifacts(chain, RUN_ID)
     reduction = reduce_findings(replay)
     projected = project_workflow_state(replay)
-    assert reduction.open_set.finding_ids == ("C-03",)
-    assert projected.state.work_units[-2].open_findings == ("C-02",)
+    assert reduction.open_set.finding_ids == ("R-03",)
+    assert projected.state.work_units[-2].open_findings == ("R-02",)
     assert projected.state.current_work_unit.open_findings == (
         reduction.open_set.finding_ids
     )
-    closed = next(item for item in reduction.ledger.findings if item.finding_id == "C-02")
+    closed = next(item for item in reduction.ledger.findings if item.finding_id == "R-02")
     assert closed.responses[0].decision.value == "ACCEPTED"
-    assert "C-02" not in projected.state.current_work_unit.open_findings
+    assert "R-02" not in projected.state.current_work_unit.open_findings
 
     state_file = tmp_path / ".orchestrator" / "state.json"
     write_workflow_state_projection(
@@ -1462,7 +1462,7 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     assert cached["reducer_version"] == (
         "structured-v2-schema-2-state-v3-role-wire-v1"
     )
-    assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
+    assert cached["state"]["work_units"][-1]["open_findings"] == ["R-03"]
 
 
 def test_state_projection_anchor_detects_omitted_assembly_field(
@@ -1758,7 +1758,7 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
     )
     assert hydrated.findings == reduce_findings(replay).request_subset(
         work_unit_id=4,
-        finding_ids=("C-01",),
+        finding_ids=("R-01",),
     ).findings
     assert hydrated.events == expected.events
     assert hydrated.attestations == expected.attestations
@@ -1806,7 +1806,7 @@ def test_slice_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
             "approved",
             (),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "9" * 64,
             "a" * 64,
             review_evidence=ReviewEvidencePayload(
@@ -1912,7 +1912,7 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
     _journey(bridge)
     bridge.append(
         FindingTransitionPayload(
-            "C-98",
+            "R-98",
             Role.REVIEWER,
             Role.REVIEWER,
             "opened",
@@ -1925,8 +1925,8 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
             "02",
             1,
         ),
-        logical_id="finding-C-98",
-        idempotency_key="finding:C-98:opened",
+        logical_id="finding-R-98",
+        idempotency_key="finding:R-98:opened",
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -1955,9 +1955,9 @@ def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
             Role.REVIEWER,
             "4",
             "denied",
-            ("C-98",),
+            ("R-98",),
             None,
-            "native-claude-review-v2",
+            "native-claude-review-v3",
             "native-review-request-" + "c" * 64,
             "d" * 64,
             review_evidence=ReviewEvidencePayload(
