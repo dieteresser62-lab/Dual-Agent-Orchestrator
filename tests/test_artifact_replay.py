@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 
 import pytest
+import artifact_models
 
 from artifact_models import (
     AgentResultPayload,
@@ -190,6 +191,21 @@ def _assert_code(records: tuple[ArtifactRecord, ...], code: ReplayDiagnosticCode
     with pytest.raises(ArtifactReplayError) as caught:
         replay_artifacts(records, "run-replay")
     assert caught.value.code is code
+
+
+def test_foreign_typed_profile_blocks_replay_before_projection() -> None:
+    chain = _chain()
+    profile = chain[1].payload
+    assert isinstance(profile, RunProfilePayload)
+    object.__setattr__(profile, "reducer_version", "foreign-reducer")
+
+    with pytest.raises(ArtifactReplayError) as raised:
+        replay_artifacts(chain, "run-replay")
+
+    assert raised.value.code is ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL
+    assert "foreign-reducer" in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+    assert "matching older orchestrator release" in str(raised.value)
 
 
 def test_replay_is_deterministic_and_does_not_mutate_input() -> None:

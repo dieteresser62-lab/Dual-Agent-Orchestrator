@@ -42,6 +42,7 @@ from artifact_models import (
     ReviewStopRequestPayload,
     ReviewEvidencePayload,
     Role,
+    STATE_PROJECTION_REDUCER_VERSION,
     SideEffectPayload,
     SliceSpec,
     TaskPayload,
@@ -588,8 +589,8 @@ class ArtifactBridge:
                 ReplayDiagnostic(
                     ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
                     "legacy correction_work_unit records cannot be written under "
-                    "the installed reducer; inspect historical chains with "
-                    "scripts/verify_legacy_chain.py",
+                    f"the installed reducer {STATE_PROJECTION_REDUCER_VERSION!r}; "
+                    "resume or inspect this run with the matching older orchestrator release",
                 )
             )
         fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)

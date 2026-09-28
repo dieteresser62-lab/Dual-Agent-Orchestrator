@@ -14,9 +14,9 @@ import artifact_store as artifact_store_module
 import orchestrator as orchestrator_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
-from artifact_models import FingerprintKind, canonical_json
+from artifact_models import FingerprintKind, WorkUnitPayload, canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
-from artifact_store import ArtifactStore
+from artifact_store import ArtifactCorruptionError, ArtifactStore
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from state_io import (
     STATE_PROJECTION_CACHE_FORMAT,
@@ -33,6 +33,7 @@ from workflow_state import (
     WorkUnitKind,
     init_workflow_state,
 )
+from workflow import WorkflowExecutionError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -567,14 +568,17 @@ def test_foreign_cache_reducer_is_rejected_by_direct_cache_reader(
     document["reducer_version"] = "foreign-reducer"
     driver.state_file.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(StateSchemaError, match="reducer is unsupported"):
+    with pytest.raises(
+        StateSchemaError,
+        match=r"foreign-reducer.*matching older orchestrator release",
+    ):
         load_workflow_state(driver.state_file, allowed_roots=(tmp_path,))
 
 
 def test_record_chain_with_foreign_bound_reducer_is_rejected(
     tmp_path: Path,
 ) -> None:
-    locator, _projected, _driver = _record_run(tmp_path)
+    locator, _projected, driver = _record_run(tmp_path)
     store = ArtifactStore(tmp_path, locator.run_id)
     profile = next(
         record
@@ -590,9 +594,34 @@ def test_record_chain_with_foreign_bound_reducer_is_rejected(
         canonical_json(document["record"])
     ).hexdigest()
     path.write_text(json.dumps(document), encoding="utf-8")
+    before = _record_bytes(tmp_path, locator.run_id)
 
     with pytest.raises(
         ArtifactResumeError,
-        match=r"reducer_version.*scripts/verify_legacy_chain\.py",
-    ):
+        match=r"reducer_version.*matching older orchestrator release",
+    ) as raised:
         resolve_resume_state(tmp_path, locator.run_id)
+
+    assert artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+
+    with pytest.raises(
+        ArtifactCorruptionError,
+        match=r"reducer_version.*matching older orchestrator release",
+    ):
+        ArtifactBridge(ArtifactStore(tmp_path, locator.run_id)).append(
+            WorkUnitPayload("3", 1, ("src/cutover.py",)),
+            logical_id="work-unit-3",
+            idempotency_key="foreign-reducer:append",
+            fingerprint_sha256="a" * 64,
+        )
+
+    # Dispatch on a new invocation starts from a fresh validated store.
+    driver._artifact_bridge = ArtifactBridge(ArtifactStore(tmp_path, locator.run_id))
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=r"reducer_version.*matching older orchestrator release",
+    ):
+        driver.assert_structured_decision_context()
+
+    assert _record_bytes(tmp_path, locator.run_id) == before

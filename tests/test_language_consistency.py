@@ -215,7 +215,7 @@ def test_root_roles_share_structured_artifact_authority_contract() -> None:
         "human audit view rather than a repair source",
         "state-projection reducer version",
         "foreign reducer semantics, including the pre-cutover reducer, is rejected fail-closed",
-        "scripts/verify_legacy_chain.py",
+        "the matching older orchestrator release",
         "exact cut of the canonical pre-work baseline append sequence",
         "Any non-prefix fact",
         "UNSUPPORTED-PROTOCOL",

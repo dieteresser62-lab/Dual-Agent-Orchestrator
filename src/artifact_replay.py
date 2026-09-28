@@ -41,6 +41,7 @@ from artifact_models import (
     STATE_PROJECTION_REDUCER_VERSION,
     RunIdentityPayload,
     RunProfilePayload,
+    foreign_reducer_diagnostic,
     QuotaPausePayload,
     SideEffectPayload,
     SliceSpec,
@@ -378,12 +379,21 @@ def replay_artifacts(
                 "record type does not match its typed payload",
                 record,
             )
+        if (
+            isinstance(record.payload, RunProfilePayload)
+            and record.payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION
+        ):
+            _fail(
+                ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+                foreign_reducer_diagnostic(record.payload.reducer_version),
+                record,
+            )
         if isinstance(record.payload, CorrectionWorkUnitPayload):
             _fail(
                 ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
-                "legacy correction_work_unit records cannot be written under the "
-                f"installed reducer; inspect historical chains with "
-                "scripts/verify_legacy_chain.py",
+                "legacy correction_work_unit records cannot be replayed under the "
+                f"installed reducer {STATE_PROJECTION_REDUCER_VERSION!r}; resume "
+                "or inspect this run with the matching older orchestrator release",
                 record,
             )
         if record.record_type in {

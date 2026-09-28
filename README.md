@@ -628,17 +628,16 @@ erzwingt dieses Betreiber-Gate nicht.
 
 ### Diagnosewerkzeuge
 
-Beide arbeiten ausschließlich lesend auf einer vorhandenen Recordkette.
+Das verbleibende Werkzeug arbeitet ausschließlich lesend auf einer vorhandenen Recordkette.
 
 ```bash
-python3 scripts/verify_legacy_chain.py <artefaktverzeichnis>
 python3 scripts/baseline_findingfluss.py <artefaktverzeichnis>
 ```
 
-`verify_legacy_chain.py` prüft eine archivierte structured-v2-Kette. Der
-installierte Reducer weist eine Kette mit fremder Reducer-Semantik
-fail-closed ab und verweist auf dieses Werkzeug; es interpretiert die Kette
-nicht und setzt sie nicht fort, sondern belegt nur ihren Zustand.
+Der installierte Reducer weist eine Kette mit fremder Reducer-Semantik
+fail-closed ab. Die Diagnose nennt die gefundene und erwartete Kennung und
+verweist auf die passende ältere Orchestrator-Version zur Prüfung oder
+Fortsetzung des Laufs.
 
 `baseline_findingfluss.py` rekonstruiert den Findingfluss eines Laufs aus
 seiner Recordkette: wie viele der am Laufende offenen Findings in einem

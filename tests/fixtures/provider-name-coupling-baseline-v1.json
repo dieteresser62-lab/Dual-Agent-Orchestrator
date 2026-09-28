@@ -270,9 +270,6 @@
       "codex": 46,
       "claude": 35
     },
-    "tests/test_legacy_verifier.py": {
-      "codex": 1
-    },
     "tests/test_native_contract_differential.py": {
       "codex": 31,
       "claude": 21

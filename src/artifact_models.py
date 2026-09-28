@@ -75,11 +75,18 @@ PRE_AFFECTED_PATHS_REDUCER_VERSION = (
     "structured-v2-schema-2-state-v3-joint-67-68-v1"
 )
 PRE_JOINT_67_68_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
-LEGACY_CHAIN_VERIFIER = "scripts/verify_legacy_chain.py"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _FINDING_ID_RE = FINDING_ID_PATTERN
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
+
+
+def foreign_reducer_diagnostic(found: object, *, subject: str = "run profile reducer_version") -> str:
+    return (
+        f"{subject} {found!r} is unsupported for resume with installed reducer "
+        f"{STATE_PROJECTION_REDUCER_VERSION!r}; resume or inspect this run with "
+        "the matching older orchestrator release"
+    )
 
 
 class ArtifactValidationError(ValueError):
@@ -270,10 +277,7 @@ class RunProfilePayload:
             self.orchestrator_code_version, "orchestrator_code_version"
         )
         if self.reducer_version != STATE_PROJECTION_REDUCER_VERSION:
-            raise ArtifactValidationError(
-                "run profile reducer_version is unsupported for resume; "
-                f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
-            )
+            raise ArtifactValidationError(foreign_reducer_diagnostic(self.reducer_version))
         if not isinstance(self.merge_completed_branch, bool):
             raise ArtifactValidationError("run profile merge_completed_branch must be boolean")
         if self.base_branch is not None and (
@@ -2573,10 +2577,7 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
         and isinstance(payload.get("reducer_version"), str)
         and payload["reducer_version"] != STATE_PROJECTION_REDUCER_VERSION
     ):
-        raise ArtifactValidationError(
-            "run profile reducer_version is unsupported for resume; "
-            f"inspect historical chains with {LEGACY_CHAIN_VERIFIER}"
-        )
+        raise ArtifactValidationError(foreign_reducer_diagnostic(payload["reducer_version"]))
     schema = _validated_schema()
     try:
         validate_schema_document(document, schema)

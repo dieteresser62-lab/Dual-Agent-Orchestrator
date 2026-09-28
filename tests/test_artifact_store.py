@@ -137,8 +137,9 @@ def test_scan_rejects_digest_tampering_missing_predecessor_and_unknown_schema(
     envelope = json.loads(path.read_text(encoding="utf-8"))
     envelope["record"]["logical_id"] = "tampered"
     path.write_text(json.dumps(envelope), encoding="utf-8")
-    with pytest.raises(ArtifactCorruptionError, match="digest mismatch"):
+    with pytest.raises(ArtifactCorruptionError, match="digest mismatch") as raised:
         store.load_chain()
+    assert path.name in str(raised.value)
 
     path.unlink()
     gap = make_record("gap", predecessors=("ar1-" + "f" * 64,))

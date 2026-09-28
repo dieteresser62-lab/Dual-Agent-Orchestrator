@@ -259,13 +259,28 @@ def test_pre_affected_paths_reducer_is_named_and_rejected_fail_closed() -> None:
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
             RoleProfilePayload("reviewer-model", "high"),
             reducer_version=artifact_models.PRE_AFFECTED_PATHS_REDUCER_VERSION,
         )
+
+
+def test_foreign_reducer_document_reports_found_and_installed_versions() -> None:
+    document = _record(RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+    )).to_dict()
+    document["payload"]["reducer_version"] = "foreign-reducer"
+
+    with pytest.raises(ArtifactValidationError) as raised:
+        validate_artifact_document(document)
+
+    assert "foreign-reducer" in str(raised.value)
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in str(raised.value)
+    assert "matching older orchestrator release" in str(raised.value)
 
 
 def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed() -> None:
@@ -275,7 +290,7 @@ def test_pre_target_class_round_exit_reducer_is_named_and_rejected_fail_closed()
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
@@ -293,7 +308,7 @@ def test_pre_scope_extension_reducer_is_named_and_rejected_fail_closed() -> None
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
@@ -309,7 +324,7 @@ def test_pre_family_from_entry_reducer_is_named_and_rejected_fail_closed() -> No
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
@@ -325,7 +340,7 @@ def test_pre_target_finding_lifecycle_reducer_is_named_and_rejected_fail_closed(
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
@@ -343,7 +358,7 @@ def test_pre_target_routing_removal_reducer_is_named_and_rejected_fail_closed() 
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),
@@ -361,7 +376,7 @@ def test_pre_target_acceptance_removal_reducer_is_named_and_rejected_fail_closed
 
     with pytest.raises(
         ArtifactValidationError,
-        match=r"unsupported for resume.*scripts/verify_legacy_chain\.py",
+        match=r"unsupported for resume.*matching older orchestrator release",
     ):
         RunProfilePayload(
             RoleProfilePayload("implementer-model", "medium"),

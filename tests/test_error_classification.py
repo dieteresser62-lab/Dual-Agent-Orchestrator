@@ -214,8 +214,8 @@ def _incomplete_final_attestation() -> BaseException:
     return ArtifactReplayError(
         ReplayDiagnostic(
             ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
-            "legacy final-review chain is read-only; inspect it with "
-            "scripts/verify_legacy_chain.py",
+            "legacy final-review chain is read-only under the installed reducer; "
+            "resume or inspect this run with the matching older orchestrator release",
         )
     )
 
@@ -364,6 +364,21 @@ def test_halt_diagnostic_inventory_rejects_a_missing_error_class_rule() -> None:
 
     with pytest.raises(AssertionError):
         _assert_halt_diagnostic_coverage(extended, _HALT_DIAGNOSTIC_BY_CODE)
+
+
+def test_foreign_reducer_diagnostic_is_a_typed_resumable_halt() -> None:
+    detail = artifact_models.foreign_reducer_diagnostic("foreign-reducer")
+    error = ArtifactReplayError(
+        ReplayDiagnostic(ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL, detail)
+    )
+
+    classified = classify_exception(error)
+
+    assert "foreign-reducer" in classified.detail
+    assert artifact_models.STATE_PROJECTION_REDUCER_VERSION in classified.detail
+    assert "matching older orchestrator release" in classified.detail
+    assert classified.failure_class is FailureClass.RESUMABLE_HALT
+    assert classified.diagnostic_code == "ARTIFACT-REPLAY"
 
 
 def test_wrapped_typed_cause_keeps_its_transient_class() -> None:
