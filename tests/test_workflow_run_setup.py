@@ -535,3 +535,28 @@ def test_every_entry_mode_uses_the_same_git_derived_merge_base(
     assert states[0].branch_base == states[1].branch_base == branch_base
     assert states[0].branch_review_base_commit == branch_base
     assert states[0].current_slice.start_commit == head
+
+
+def test_context_loads_at_most_twelve_thousand_shared_instruction_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli import parse_args
+    content = "Implementer and reviewer duties.\n" + "x" * 13_000 + "TAIL_SENTINEL"
+    (tmp_path / "AGENTS.md").write_text(content, encoding="utf-8")
+    args = parse_args([], cwd=tmp_path, environ={})
+    state = init_workflow_state(
+        run_id="role-loading", task_file=str(tmp_path / "task.md"),
+        branch="feature/role-loading", branch_base="a" * 40,
+        first_slice_start_commit="a" * 40, slice_count=1,
+        task_scope_patterns=("src/core.py",), target_branch="feature/role-loading",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(workflow_run_setup, "inspect_repository", lambda _root: SimpleNamespace(branch=state.branch))
+    context = workflow_run_setup._context(
+        args=args, assignment="Work.", state=state,
+        _managed_slice_scope_pattern=lambda path: path,
+    )
+    assert content[:12_000] in context.assignment
+    assert "TAIL_SENTINEL" not in context.assignment
+    assert "CLAUDE.md" not in context.assignment
+    assert "CODEX.md" not in context.assignment

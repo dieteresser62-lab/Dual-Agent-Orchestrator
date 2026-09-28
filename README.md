@@ -59,6 +59,8 @@ Für den echten Einstieg: [Quickstart.md](Quickstart.md) oder die ausführliche 
 
 ## Ablauf im Detail
 
+Die Rollenbesetzung wird aus TOML aufgelöst: Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen im Zielrepository gelten die mitgelieferten Profile aus dem Orchestrator-TOML (Codex für Implementierung, Claude für beide Reviews). Das Zielrepository kann Profile und den Finalslot ausdrücklich überschreiben.
+
 Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice liest Claude die vollständige Branchänderung im Abnahmereview; bleibt Restarbeit, erzeugt der Orchestrator daraus eine neue Aufgabe und beginnt von vorn.
 
 Der normale Ablauf ist:
@@ -69,12 +71,9 @@ Der normale Ablauf ist:
 4. Für jeden geplanten Slice:
    - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix für diesen Fingerprint aus. Ein grüner erster Durchgang bleibt einmalig; nach einem roten ersten Durchgang folgt eine vorab laufzeitabhängig begrenzte Flackerprobe, deren Einzelergebnisse vollständig und fail-closed attestiert werden.
-   - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
+   - Claude prüft in jeder Runde den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
-5. Codex einen branchweiten Vollständigkeitsbericht gegen die Branchbasis erstellen
-   lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude
-   für die Abschlussentscheidung übergeben.
-6. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
+5. Der Abnahmereview liest den gesamten Branch als letzte Arbeitseinheit desselben Laufs. Findet er Restarbeit, entsteht daraus eine gewöhnliche neue Aufgabe und der Prozess beginnt von vorn — mit dem Inhalt des Abnahmereviews als Arbeitsgrundlage. Am konfigurierten Limit (`max_acceptance_reviews`, Vorgabe 6) endet die Aufgabe ohne neues Dokument und ohne Rücknahme.
 
 Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
 abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
@@ -234,7 +233,7 @@ Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verw
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Claude verwendet standardmäßig Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
+Das mitgelieferte TOML-Profil verwendet für den Reviewer Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält Claude verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
 geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
@@ -326,7 +325,7 @@ Der Watch-Modus:
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
 - verwendet den vollständig automatischen Workflowstandard: Plan-, Teständerungs- und Slice-Commit-Gates sind aus, während echte Stopregeln, Scopeverletzungen, unauflösbare Vertragsfragen und fehlgeschlagene Pflichtvalidierungen weiterhin anhalten;
 - behandelt einen von Codex gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
-- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum Codex-Vollständigkeitscheck und Claude-Abschlussreview ab;
+- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum branchweiten Reviewer-Abschlussreview ab;
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an; das digestgebundene Gesamtaudit fasst deren Stand und Commit zusammen, ohne Slice-Inhalte zu wiederholen. Die vollständigen technischen Nachweise bleiben in der Recordkette;
 - streamt standardmäßig `stdout`;
 - verschiebt abgeschlossene Aufgaben mit UTR-Zeitstempel nach `outbox/done/`;
@@ -458,6 +457,7 @@ Beispiele:
 ./run_task --implementer-effort xhigh --reviewer-effort max
 ./run_task --implementer-model luna --reviewer-model sonnet --implementer-effort medium
 ./run_task --implementer-binary /opt/codex/bin/codex --implementer-timeout 2400
+./run_task --final-reviewer-model opus
 ```
 
 ### Watch- und Loggingoptionen
@@ -483,7 +483,7 @@ Die Konfigurationspräzedenz lautet:
 3. Wert aus `orchestrator.toml` des Repositorys;
 4. integrierter Standard oder automatische Erkennung des Testbefehls.
 
-Werte für Agentenprogramm, Modell, Effort, Timeout und Claude-Budget umgehen bewusst das Repository-TOML und verwenden ausschließlich CLI, Umgebung und Rollenstandards.
+Rollenbesetzung und persistente Profile werden aus den mitgelieferten TOML-Tabellen aufgelöst und können in `[roles]` und `[agent_profiles.*]` des Zielrepositorys überschrieben werden. Explizite Rollen-CLI-Optionen und `RUN_TASK_<ROLLE>_*` überschreiben Profilfelder; das Claude-Budget steht ausschließlich unter `agent_profiles.<name>.provider_options.claude.max_budget_usd`.
 
 Ein explizit leerer Testbefehl deaktiviert die Erkennung eines Validierungsbefehls:
 
@@ -514,13 +514,6 @@ required_artifacts = ["dist/**/*.css", "dist/index.html"]
 product_command = ["npm", "run", "test:product"]
 product_timeout_seconds = 300
 
-[[provider_input_budget]]
-provider = "codex"
-role = "implementer"
-operation = "implementer_implementation"
-max_chars = 4000000
-max_bytes = 16000000
-
 [[validation.rules]]
 patterns = ["frontend/**"]
 command = ["npm", "test"]
@@ -537,6 +530,29 @@ scope_extension_gate = false
 [repository]
 base_branch = "main"
 ```
+
+Die mitgelieferte TOML enthält die feste Startbesetzung und alle drei Slots.
+Für einen eigenen Finalreviewer kann das Zielrepository ein gesondertes Profil
+aktivieren (der Reviewer und der Finalreviewer dürfen denselben Provider nutzen):
+
+```toml
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "final_review"
+
+[agent_profiles.final_review]
+provider = "claude"
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.final_review.provider_options.claude]
+max_budget_usd = 5.0
+```
+
+`--final-reviewer-model` und `RUN_TASK_FINAL_REVIEWER_MODEL` überschreiben
+nur den aktivierten Finalslot. Ohne eigene Profilwahl erbt er das Reviewerprofil.
 
 `[repository] base_branch` nennt den Hauptbranch, von dessen Abzweigpunkt aus jeder Lauf misst und gegen den der Abnahmereview liest. Ohne Angabe ermittelt der Orchestrator ihn selbst: zuerst den Standardbranch des Remotes (`origin/HEAD`), sofern es ihn lokal gibt, dann den einzigen vorhandenen von `main` und `master`, dann den einzigen lokalen Branch außerhalb von `feature/…` und `codex/…`. Bleibt die Lage mehrdeutig, hält der Lauf mit einer Meldung an, die die Kandidaten nennt.
 
@@ -573,14 +589,14 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | Datei | Verantwortung |
 |---|---|
 | `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
-| `CODEX.md` | Implementiererrolle und native Ergebnisvarianten. |
-| `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Opus-/High-Profil. |
+| `CODEX.md` | Dünner Einstieg der Codex CLI; verweist auf `AGENTS.md`. |
+| `CLAUDE.md` | Dünner Einstieg der Claude CLI; verweist auf `AGENTS.md`. |
 
 Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
 erhält `native-agent-implementer-request-v3` und antwortet gemäß
 `native-agent-implementer-result-v3` mit einer der strikt
 getrennten Varianten `plan_result`, `implementation_result`,
-`correction_result`, `final_report_result` oder `stop_result`. Claude erhält
+`correction_result` oder `stop_result`. Claude erhält
 `native-agent-review-request-v3` und antwortet gemäß
 `native-agent-review-result-v3`; sein request-spezifisches Writerschema bindet
 Freigabe, Findings, Statusänderungen, Reviewevidenz,

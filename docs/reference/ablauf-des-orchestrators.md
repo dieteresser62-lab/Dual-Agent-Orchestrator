@@ -285,16 +285,16 @@ fail-closed an.
 ### Neun Schritte
 
 ```
-codex_plan  →  claude_plan_review  →  codex_plan_revision
-codex_implementation  →  claude_slice_review  →  codex_correction
-slice_commit  →  claude_final_review  →  completed
+implementer_plan  →  reviewer_plan_review  →  implementer_plan_revision
+implementer_implementation  →  reviewer_slice_review  →  implementer_correction
+slice_commit  →  reviewer_final_review  →  completed
 ```
 
 Und drei Arten von Arbeitseinheiten: `plan`, `slice`, `final_review`.
 
 ### Befunde: zwei Klassen, zwei Antworten
 
-Claude eröffnet Befunde mit Kennungen der Form `C-01`, `C-02`, … Jeder Befund
+Claude eröffnet Befunde mit Kennungen der Form `R-01`, `R-02`, … Jeder Befund
 hat eine von zwei Klassen:
 
 - **`FINDING`** — ein gewöhnlicher Befund.

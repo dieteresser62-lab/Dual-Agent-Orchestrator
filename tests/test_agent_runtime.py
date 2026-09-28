@@ -1642,6 +1642,9 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             _ = prompt
             return ["timeout"], True
 
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
+
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             _ = stdout
             _ = stderr
@@ -1676,6 +1679,7 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             "prompt",
             config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
             shorten=lambda text, _limit: text or "",
+            operation="implementer_implementation",
         )
     except RuntimeError:
         pass
@@ -1701,6 +1705,9 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
             return ["rejecting"], True
+
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             raise AgentOutputError(
@@ -1732,6 +1739,7 @@ def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch
             "prompt",
             config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
             shorten=lambda text, _limit: text or "",
+            operation="implementer_implementation",
         )
 
     assert exc_info.value.exit_code == 9
@@ -1911,6 +1919,9 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
 
         def build_command(self, prompt: str) -> tuple[list[str], bool]:
             return ["reviewer"], True
+
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
 
         def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
             return stdout
@@ -2144,3 +2155,34 @@ def test_exited_leader_with_escaped_pipe_holder_has_bounded_process_error(
             child = provider_process._proc_stat(pid)
             if child is not None and child.start_ticks == ticks and child.state not in {"Z", "X", "x"}:
                 os.kill(pid, signal.SIGKILL)
+
+
+def test_reviewer_root_files_follow_full_or_manifest_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+        (source / name).write_text(name, encoding="utf-8")
+    full = create_read_only_reviewer_workspace(source)
+    selected = create_read_only_reviewer_workspace(source, ("AGENTS.md",))
+    try:
+        assert {p.name for p in full.root.iterdir()} == {"AGENTS.md", "CLAUDE.md", "CODEX.md"}
+        assert {p.name for p in selected.root.iterdir()} == {"AGENTS.md"}
+    finally:
+        full.cleanup()
+        selected.cleanup()
+
+
+def test_run_agent_needs_explicit_operation_before_provider_preparation(tmp_path: Path) -> None:
+    class Adapter:
+        name = "codex"
+        reviewer = False
+        timeout = 1
+
+        def prepare_provider_input(self, prompt: str) -> None:
+            raise AssertionError("provider preparation must not run")
+
+        def cleanup(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="provider input operation is required for codex"):
+        run_agent(Adapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)

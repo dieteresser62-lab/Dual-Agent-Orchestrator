@@ -1397,11 +1397,9 @@ class BootstrapCheckFact:
         for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
             if not SHA256_PATTERN.fullmatch(value):
                 raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
-        bound_roles = {
-            "codex": AgentRole.IMPLEMENTER.value,
-            "claude": AgentRole.REVIEWER.value,
-        }
-        if self.provider not in bound_roles or self.role != bound_roles[self.provider]:
+        from role_occupancy import provider_roles
+
+        if self.provider not in provider_roles() or self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError("bootstrap provider and role are invalid")
         _require_non_empty(self.operation, "bootstrap operation")
         _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")

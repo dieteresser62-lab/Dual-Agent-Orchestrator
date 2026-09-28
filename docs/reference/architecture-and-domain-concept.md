@@ -22,8 +22,8 @@ Validierungsattestierungen.
 | Akteur | Verantwortung | Darf nicht |
 |---|---|---|
 | Benutzer | Aufgabe, optionaler Zielbranch und echte Policyentscheidungen | technische Records oder State manuell erfinden |
-| Codex | Planung, Implementierung, Korrektur und branchweiter Vollständigkeitsbericht | eigene Arbeit freigeben, committen, pushen oder mergen |
-| Claude | Read-only Plan-, Slice-, Korrektur- und Finalreview mit Opus/`high` | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
+| Implementer (TOML-Profil) | Planung, Implementierung und Korrektur | eigene Arbeit freigeben, committen, pushen oder mergen |
+| Reviewer (TOML-Profil) | Read-only Plan-, Slice-, Korrektur- und Finalreview | Produktcode ändern, Validierung attestieren oder Gittransaktionen ausführen |
 | Orchestrator | Scope, Zustand, Recordkette, Validierung, Attestierung und lokale Commits | Defekte Freigaben erfinden oder externe Gitaktionen ausführen |
 
 ## 4. Architekturprinzipien und Invarianten
@@ -33,7 +33,7 @@ Validierungsattestierungen.
    Writerschema und danach gegen die lokale Domäne geprüft.
 3. Die append-only Recordkette ist technische Autorität. State-v3 ist ein
    symmetrisch geprüfter Betriebsspiegel; Markdown ist nur Ansicht.
-4. Codex besitzt keine Selbstfreigabe. Nur Claude kann einen Plan, Slice oder
+4. Der Implementer besitzt keine Selbstfreigabe. Nur der Reviewer kann einen Plan, Slice oder
    Branch fachlich freigeben.
 5. Der Orchestrator führt die vollständige Matrix einmal je relevantem
    Fingerprint aus und bindet ihre Attestierung an den Review.
@@ -68,7 +68,7 @@ Wesentliche Module:
 
 - `task_contract` und `plan_handoff` binden Auftrag und Slicegrenzen;
 - `workflow` steuert Codex–Claude-Konvergenz und Gates;
-- `native_codex_request`/`native_codex_contract` und
+- `native_implementer_request`/`native_implementer_contract` und
   `native_review_request`/`native_review_contract` bilden die nativen
   Verträge;
 - `artifact_bridge`, `artifact_replay` und `workflow_state` sichern Autorität

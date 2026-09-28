@@ -14,6 +14,7 @@ import workflow_run_setup
 from agent_adapters import CapabilitySpec
 from agent_config import AgentSettings
 from agent_runtime import AgentCompatibilityError, OrchestratorConfig, run_agent
+from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from provider_identity import capture_provider_identity, executable_candidates
 from state_io import StateSchemaError
 from workflow_state import ProtocolBinding, ProtocolMode, scripted_profile_binding, init_workflow_state
@@ -45,6 +46,9 @@ class FakeAdapter:
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         return [self.cli_binary, "exec", "-"], True
+
+    def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+        return PreparedProviderInput(tuple(self.build_command(prompt)[0]), prompt, (ProviderInputComponent("stdin_prompt", prompt),))
 
     def validate_process_output(self, stderr: str) -> None:
         assert not stderr
@@ -176,7 +180,7 @@ def test_two_installations_bind_first_real_script_and_report_both(
     monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_start)
     adapter = FakeAdapter()
     caplog.set_level("WARNING")
-    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str) == "done"
+    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation") == "done"
     assert starts == [[str(first_node), str(first_target), "exec", "-"]]
     assert adapter.provider_identity.interpreter_real_path == str(first_node)
     assert "0.156.1" in caplog.text and "0.150.1" in caplog.text
@@ -199,7 +203,7 @@ def test_script_drift_stops_before_another_start(
         ),
     )
     adapter = FakeAdapter()
-    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     if drift == "symlink":
         replacement = _executable(tmp_path / "install" / "package" / "other.js", b"#!/usr/bin/env node\n")
         versions[str(replacement)] = "codex-cli 0.156.1"
@@ -215,7 +219,7 @@ def test_script_drift_stops_before_another_start(
     else:
         versions[str(node)] = "v23.0.0"
     with pytest.raises(AgentCompatibilityError, match="identity drift"):
-        run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+        run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     assert len(starts) == 1
 
 
@@ -230,7 +234,7 @@ def test_minimal_path_below_baseline_starts_nothing(
     starts: list[list[str]] = []
     monkeypatch.setattr(agent_runtime, "_run_agent_process", lambda *_a, **_k: starts.append([]))
     with pytest.raises(AgentCompatibilityError, match="Unsupported codex CLI version"):
-        run_agent(FakeAdapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+        run_agent(FakeAdapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     assert not starts
 
 
@@ -263,11 +267,11 @@ def test_binary_launch_uses_realpath_and_hash_drift_stops_start(
         ),
     )
     adapter = FakeAdapter()
-    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     assert starts == [[str(target), "exec", "-"]]
     target.write_bytes(b"ELF fake 2")
     with pytest.raises(AgentCompatibilityError, match="identity drift"):
-        run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+        run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     assert len(starts) == 1
 
 
@@ -288,7 +292,7 @@ def test_interpreter_uses_adapter_start_path(
     )
     adapter = FakeAdapter()
     adapter.env = {"PATH": str(link.parent)}
-    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+    run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     assert starts == [[str(node), str(starter), "exec", "-"]]
 
 
@@ -355,7 +359,7 @@ def test_linux_elf_with_exe_suffix_is_bound_and_started_through_realpath(
         ("--version",), ("--help",),
         (r"^2\.1\.283 \(Claude Code\)$",), ("--json-schema", "--effort"),
     )
-    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str) == "done"
+    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="reviewer_slice_review") == "done"
     assert adapter.provider_identity.real_path == str(target)
     assert adapter.provider_identity.sha256 == hashlib.sha256(content).hexdigest()
     assert adapter.provider_identity.interpreter_real_path is None
@@ -377,7 +381,7 @@ def test_drvfs_first_path_hit_rejects_without_any_probe_or_start(
     monkeypatch.setattr(agent_runtime, "_run_agent_process", lambda *_a, **_k: starts.append([]))
 
     with pytest.raises(AgentCompatibilityError) as failure:
-        run_agent(FakeAdapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str)
+        run_agent(FakeAdapter(), "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation")
     message = str(failure.value)
     assert str(windows) in message
     assert "not permitted (Windows/DrvFS), not inspected" in message
@@ -425,7 +429,7 @@ def test_drvfs_later_path_hit_is_reported_without_probe_and_linux_target_starts(
     )
     caplog.set_level("WARNING")
     adapter = FakeAdapter()
-    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str) == "done"
+    assert run_agent(adapter, "prompt", config=OrchestratorConfig(repo_root=tmp_path), shorten=str, operation="implementer_implementation") == "done"
     assert starts == [[str(node), str(script), "exec", "-"]]
     assert str(windows) in caplog.text
     assert "not permitted (Windows/DrvFS), not inspected" in caplog.text

@@ -1434,3 +1434,23 @@ def test_state_scope_rejects_orchestrator_internal_paths() -> None:
             scope_paths=(".orchestrator/state.json",),
             start_fingerprint="1" * 64,
         )
+
+
+def test_bootstrap_fact_accepts_synthetic_registered_role_occupancy(monkeypatch) -> None:
+    import role_occupancy
+    from agent_roles import AgentRoleName
+
+    monkeypatch.setattr(role_occupancy, "provider_roles", lambda: {
+        "claude": AgentRoleName.IMPLEMENTER,
+        "codex": AgentRoleName.REVIEWER,
+    })
+    fact = BootstrapCheckFact(
+        "provider_input_measurement", "a" * 64, "claude", "implementer",
+        "implementer_plan", 1, "b" * 64, "allowed",
+    )
+    assert BootstrapCheckFact.from_dict(fact.to_dict()) == fact
+    with pytest.raises(WorkflowStateValidationError, match="bootstrap provider and role are invalid"):
+        BootstrapCheckFact(
+            "provider_input_measurement", "a" * 64, "unknown", "implementer",
+            "implementer_plan", 1, "b" * 64, "allowed",
+        )

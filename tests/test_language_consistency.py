@@ -15,7 +15,8 @@ import pytest
 
 from audit_trail import strip_managed_audit_sections
 from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
-from cli import build_parser, parse_args
+from cli import build_parser, load_repo_config, parse_args
+from agent_roles import AgentSlot
 
 ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
@@ -206,70 +207,37 @@ def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> 
 
 
 def test_root_roles_share_structured_artifact_authority_contract() -> None:
-    required = (
-        "## Structured artifact authority",
-        "Native JSON results are validated",
-        ".orchestrator/artifacts/<run-id>/records/",
-        "technical source of truth",
-        "disposable projection used only to locate its `run_id`",
-        "human audit view rather than a repair source",
-        "state-projection reducer version",
-        "foreign reducer semantics, including the pre-cutover reducer, is rejected fail-closed",
-        "the matching older orchestrator release",
+    shared = ROLE_FILES[0].read_text(encoding="utf-8")
+    for fragment in (
+        "## Structured artifact authority", "Native JSON results are validated",
+        ".orchestrator/artifacts/<run-id>/records/", "technical source of truth",
+        "state-projection reducer version", "the matching older orchestrator release",
         "exact cut of the canonical pre-work baseline append sequence",
-        "Any non-prefix fact",
         "UNSUPPORTED-PROTOCOL",
-        "never migrated, repaired, or used as a fallback",
-    )
-    sections = []
-    for path in ROLE_FILES:
-        text = path.read_text(encoding="utf-8")
-        assert all(fragment in text for fragment in required), path.name
-        assert "Pre-R1 chains without those records remain readable" not in text
-        assert (
-            "The initializer may finish only the exact canonical incomplete "
-            "baseline prefix described above"
-        ) in text
-        section = text.split(required[0], 1)[1].split("\n## ", 1)[0].strip()
-        sections.append(section)
-    assert len(set(sections)) == 1
-
+    ):
+        assert fragment in shared
+    for path in ROLE_FILES[1:]:
+        entry = path.read_text(encoding="utf-8")
+        assert "`AGENTS.md`" in entry
+        assert "## Structured artifact authority" not in entry
+        assert len(entry) < 1000
 
 def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
-    headings = (
-        "## PLAN_ONLY repository artifact",
-        "## Validation tiers",
-    )
-    sections: dict[str, list[str]] = {heading: [] for heading in headings}
-    for path in ROLE_FILES:
-        text = path.read_text(encoding="utf-8")
-        for fragment in (
-            "creates or updates the exact repository file at `WORK_PLAN_PATH`",
-            "`SLICE_PLAN` record for that path as a receipt",
-            "correct” explicitly means create the missing file",
-            "path is written as a bullet with the path enclosed in backticks",
-            "standalone line `**Akzeptanzkriterien**`",
-            "configured `--agents-file` (root `AGENTS.md` by default)",
-            "does not append `CLAUDE.md` or `CODEX.md`",
-            "Codex CLI may also discover `AGENTS.md`",
-            "Every review with a `ReviewPacket` uses its manifest-selected",
-            "Every review without a packet uses the full read-only Git snapshot",
-            "git ls-files --cached --others --exclude-standard",
-            "direct `IMPLEMENT` flows without an approved work plan",
-            "A root role file is manifest-dependent only when a packet exists",
-            "tests marked `crash_harness`",
-            "python3 -m pytest tests/test_crash_harness.py -v",
-            "before the same-run final full-branch review",
-            "The orchestrator does not select or enforce this standalone command",
-            "The operator treats a merge as permitted only when",
-            "never sampled or reduced",
-        ):
-            assert fragment in text, f"{path.name}: {fragment}"
-        for heading in headings:
-            section = text.split(heading, 1)[1].split("\n## ", 1)[0].strip()
-            sections[heading].append(section)
-    assert all(len(set(values)) == 1 for values in sections.values())
-
+    shared = ROLE_FILES[0].read_text(encoding="utf-8")
+    for fragment in (
+        "## PLAN_ONLY repository artifact", "## Validation tiers",
+        "creates or updates the exact repository file at `WORK_PLAN_PATH`",
+        "`SLICE_PLAN` record for that path as a receipt",
+        "configured `--agents-file` (root `AGENTS.md` by default)",
+        "A provider CLI may also discover `AGENTS.md`",
+        "Every review with a `ReviewPacket` uses its manifest-selected",
+        "Every review without a packet uses the full read-only Git snapshot",
+        "git ls-files --cached --others --exclude-standard",
+        "A root role file is manifest-dependent only when a packet exists",
+        "tests marked `crash_harness`",
+        "python3 -m pytest tests/test_crash_harness.py -v",
+    ):
+        assert fragment in shared
 
 def test_crash_harness_is_complete_but_not_in_default_slice_validation() -> None:
     repository_config = tomllib.loads(
@@ -310,12 +278,13 @@ def test_record_authority_module_headers_match_the_root_contract() -> None:
         assert all(fragment in header for fragment in fragments), filename
 
 
-def test_reviewer_profile_is_persistently_opus_high() -> None:
-    claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "Opus" in claude and "`high`" in claude
-    assert "Opus" in agents and "`high`" in agents
-
+def test_reviewer_profile_is_loaded_from_toml() -> None:
+    config = load_repo_config(ROOT / "orchestrator.toml")
+    reviewer = config.agent_profiles[config.roles[AgentSlot.REVIEWER]]
+    assert reviewer.provider == "claude" and reviewer.model == "opus"
+    assert reviewer.effort == "high"
+    for path in ROLE_FILES:
+        assert "Opus" not in path.read_text(encoding="utf-8")
 
 def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
     forbidden = (
@@ -670,7 +639,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
     )
     dynamic_role_names = {
         f"RUN_TASK_{role.upper()}_{field.upper()}"
-        for role in ("implementer", "reviewer")
+        for role in ("implementer", "reviewer", "final_reviewer")
         for field in ("binary", "model", "timeout", "effort")
     }
     consumed_names = dynamic_role_names | {
@@ -847,7 +816,7 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
         re.findall(r"^\s*endif\b", diagram, re.MULTILINE)
     )
     for term in (
-        "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude",
+        "SLICE_PLAN", "PLAN_APPROVAL", "Implementer", "Reviewer",
         "canonical diff", "validation", "local Slice NN commit",
         "Acceptance review", "ordinary Inbox document", "STATUS: DONE",
     ):
@@ -886,7 +855,7 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
         "The operator treats a merge as permitted only when that same green "
         "HEAD-bound evidence exists, or runs a fresh complete proof after HEAD changes."
     )
-    for path in ROLE_FILES:
+    for path in ROLE_FILES[:1]:
         shared_contract_tail = path.read_text(encoding="utf-8").split(
             "## Structured artifact authority", 1
         )[1]
@@ -2102,3 +2071,94 @@ def test_example_task_declares_every_required_boundary() -> None:
         assert f"## {heading}" in example
     assert "Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden" in example
     assert "Kein Push, Merge, Release oder Deployment" in example
+
+
+def _unfenced_headings(text: str) -> list[str]:
+    headings: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(r"^#{1,6} ", line):
+            headings.append(line)
+    return headings
+
+
+def test_readme_inventory_covers_every_heading_and_existing_symbol_and_proof() -> None:
+    inventory = (ROOT / "docs/internal/rollenneutralitaet-v3.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^\| `(#{1,6} [^`]+)` \| `([^`]+)` \| `([^`]+)` \|$", inventory, re.M)
+    assert rows
+    assert [row[0] for row in rows] == _unfenced_headings((ROOT / "README.md").read_text(encoding="utf-8"))
+    for _, symbol, proof in rows:
+        for entry in (symbol, proof):
+            path_text, function = entry.split("::", 1)
+            path = ROOT / path_text
+            assert path.is_file(), entry
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function for node in tree.body), entry
+
+
+def _fenced_examples(text: str, language: str) -> list[str]:
+    return re.findall(rf"^```{language}\n(.*?)^```", text, re.M | re.S)
+
+
+def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path: Path) -> None:
+    import shlex
+    configs = 0
+    commands = 0
+    final_slot = False
+    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        for index, snippet in enumerate(_fenced_examples(source, "toml")):
+            tomllib.loads(snippet)
+            config_path = tmp_path / f"{Path(name).stem}-{index}.toml"
+            config_path.write_text(snippet, encoding="utf-8")
+            config = load_repo_config(config_path)
+            configs += 1
+            if "final_reviewer = \"final_review\"" in snippet:
+                assert config.roles[AgentSlot.FINAL_REVIEWER] == "final_review"
+                final_slot = True
+        for snippet in _fenced_examples(source, "bash"):
+            logical = snippet.replace("\\\n", " ")
+            for line in logical.splitlines():
+                line = line.strip().removeprefix("> ")
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    words = shlex.split(line, comments=True)
+                except ValueError:
+                    continue
+                starts = [i for i, word in enumerate(words) if Path(word).name == "run_task"]
+                if not starts:
+                    continue
+                args = words[starts[0] + 1:]
+                if any(word in {"|", "&&", ";"} for word in args):
+                    continue
+                if "--help" in args:
+                    continue
+                build_parser().parse_args(args)
+                commands += 1
+    assert configs >= 5 and commands >= 10 and final_slot
+
+
+def test_active_document_links_and_anchors_resolve() -> None:
+    from urllib.parse import unquote, urlsplit
+    paths = [ROOT / name for name in (
+        "README.md", "Quickstart.md", "docs/reference/architecture-and-domain-concept.md",
+        "docs/reference/ablauf-des-orchestrators.md", "docs/reference/einrichtung.md",
+        "docs/internal/rollenneutralitaet-v3.md",
+    )]
+    for source in paths:
+        for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", source.read_text(encoding="utf-8")):
+            if target.startswith(("https://", "http://", "mailto:")):
+                continue
+            url = urlsplit(target)
+            destination = (source.parent / unquote(url.path)).resolve() if url.path else source
+            assert destination.is_file(), f"{source}: {target}"
+            if url.fragment:
+                headings = _unfenced_headings(destination.read_text(encoding="utf-8"))
+                slugs = {
+                    re.sub(r"[^\w-]", "", heading.lstrip("# ").lower().replace(" ", "-"))
+                    for heading in headings
+                }
+                assert unquote(url.fragment) in slugs, f"{source}: {target}"

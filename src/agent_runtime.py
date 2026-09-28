@@ -1504,6 +1504,8 @@ def run_agent(
 
     invocation_started = time.monotonic()
     try:
+        if not operation:
+            raise ValueError(f"provider input operation is required for {agent_key}")
         if adapter.reviewer:
             if not reviewer_repository_required:
                 workspace = create_empty_reviewer_workspace()
@@ -1515,24 +1517,11 @@ def run_agent(
             execution_root = workspace.root
             adapter.bind_reviewer_workspace(source_root, execution_root)
 
-        prepare_input = getattr(adapter, "prepare_provider_input", None)
         if prepared_provider_input is not None:
             prepared = prepared_provider_input
-        elif callable(prepare_input):
-            prepared = prepare_input(prompt)
         else:
-            legacy_command, legacy_stdin = adapter.build_command(prompt)
-            prepared = PreparedProviderInput(
-                tuple(legacy_command),
-                prompt if legacy_stdin else None,
-                (ProviderInputComponent("stdin_prompt", prompt),),
-            )
-        effective_operation = operation or {
-            "codex": "implementer_implementation",
-            "claude": "reviewer_slice_review",
-        }.get(agent_key)
-        if effective_operation is None:
-            raise ValueError(f"provider input operation is required for {agent_key}")
+            prepared = adapter.prepare_provider_input(prompt)
+        effective_operation = operation
         measurement = measure_provider_input(
             prepared,
             provider=agent_key,

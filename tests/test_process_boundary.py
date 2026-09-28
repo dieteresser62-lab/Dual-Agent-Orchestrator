@@ -813,6 +813,11 @@ def _execute_scenario(
                 shorten=lambda text, limit: (text or "")[:limit],
                 prepared_provider_input=prepared,
                 execution_root_override=execution_root_override,
+                operation=(
+                    None if trigger.get("register_without_operation")
+                    else "reviewer_slice_review" if adapter.reviewer
+                    else "implementer_implementation"
+                ),
             )
         except BaseException as error:
             caught = error
