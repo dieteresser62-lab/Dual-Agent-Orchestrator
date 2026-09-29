@@ -85,6 +85,81 @@ def test_shipped_roles_and_profiles_resolve_with_final_inheritance(tmp_path: Pat
     assert args.slot_settings["final_reviewer"] == args.slot_settings["reviewer"]
 
 
+@pytest.mark.parametrize("timeout", (0, 17))
+def test_experimental_agy_requires_explicit_slot_selection_and_accepts_timeout(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: int) -> None:
+    from role_certification import CertificationTable, load_role_certifications
+    shipped = (Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text()
+    changed = shipped.replace('reviewer = "review"', 'reviewer = "experimental_antigravity"', 1)
+    for operation in ("reviewer_plan_review", "reviewer_slice_review"):
+        changed = changed.replace(
+            f'provider = "claude"\nrole = "reviewer"\noperation = "{operation}"',  # allowlist:provider -- profile configuration: complete budget table
+            f'provider = "antigravity"\nrole = "reviewer"\noperation = "{operation}"')
+    changed += ('\n[agent_profiles.experimental_antigravity]\nprovider = "antigravity"\n'
+                'model = "gemini-4-pro"\neffort = "high"\n'
+                f'timeout_seconds = {timeout}\n')
+    _write_config(tmp_path, changed)
+    table = load_role_certifications()
+    promoted = CertificationTable(tuple(replace(entry, status="experimental")
+        if entry.provider == "antigravity" else entry for entry in table.entries))
+    monkeypatch.setattr(cli, "load_role_certifications", lambda: promoted)
+    selected = parse_args([], cwd=tmp_path, environ={})
+    assert selected.slot_settings["reviewer"].name == "antigravity"
+    assert selected.slot_settings["reviewer"].model == "gemini-4-pro"
+    assert selected.slot_settings["reviewer"].timeout_seconds == (timeout or None)
+    assert selected.slot_settings["implementer"].name == "codex"  # allowlist:provider -- profile configuration: fixed implementer
+    assert selected.slot_settings["final_reviewer"].name == "claude"  # allowlist:provider -- profile configuration: default final reviewer
+
+
+@pytest.mark.parametrize("provider,baseline,older,newer,major", [
+    ("antigravity", "1.2.12", "1.2.11", "1.2.13", "2.0.0"),
+    ("claude", "2.1.283 (Claude Code)", "2.1.282 (Claude Code)",  # allowlist:provider -- transport: CLI version evidence
+     "2.1.284 (Claude Code)", "3.0.0 (Claude Code)"),  # allowlist:provider -- transport: CLI version evidence
+    ("codex", "codex-cli 0.156.1", "codex-cli 0.156.0",  # allowlist:provider -- transport: CLI version evidence
+     "codex-cli 0.156.2", "codex-cli 1.0.0"),  # allowlist:provider -- transport: CLI version evidence
+])
+def test_fake_cli_version_policy_accepts_new_majors_and_rejects_older(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+        baseline: str, older: str, newer: str, major: str) -> None:
+    import agent_runtime
+    from agent_adapters import CapabilitySpec
+    binary = tmp_path / provider
+    binary.write_bytes(b"fake executable")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    version = baseline
+
+    def fake_run(argv, timeout=20):
+        return (0, version + "\n", "") if argv[-1] == "--version" else (0, "--required-flag\n", "")
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run)
+
+    class FakeAdapter:
+        name = provider
+        cli_binary = str(binary)
+        model = "test"
+        effort = "high"
+        timeout = 10
+        reviewer = provider != "codex"  # allowlist:provider -- transport: fake role binding
+        required_hosts = ()
+        capability = CapabilitySpec(("--version",), ("--help",),
+                                    (rf"^{re.escape(baseline)}$",), ("--required-flag",))
+        capability_verified = False
+
+        @staticmethod
+        def validate_process_output(stderr):
+            assert stderr == ""
+
+    for candidate in (baseline, newer, major):
+        version = candidate
+        adapter = FakeAdapter()
+        agent_runtime.verify_agent_capabilities(adapter)
+        assert adapter.capability_verified
+    version = older
+    with pytest.raises(agent_runtime.AgentCompatibilityError, match="Unsupported"):
+        agent_runtime.verify_agent_capabilities(FakeAdapter())
+
+
 def test_toml_final_profile_and_usd_budget_reach_adapters(tmp_path: Path) -> None:
     shipped = (Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text(encoding="utf-8")
     _write_config(tmp_path, shipped.replace('final_reviewer = "review"', 'final_reviewer = "final"') + """

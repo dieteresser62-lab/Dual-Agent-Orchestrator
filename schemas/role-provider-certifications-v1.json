@@ -14,9 +14,9 @@
       "status": "certified",
       "version_scope": {
         "cli_version": "codex-cli 0.156.1",
-        "version_policy": "same-major-forward"
+        "version_policy": "forward"
       },
-      "capability_sha256": "856b86c815aa61f62f8c3729e578b8d7e4dc44acfef95ec9067ab8aec83daf5d",
+      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
       "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
       "evidence": {
@@ -49,9 +49,9 @@
       "status": "candidate",
       "version_scope": {
         "cli_version": "1.2.12",
-        "version_policy": "exact"
+        "version_policy": "forward"
       },
-      "capability_sha256": "406d1d0122726016b50247354b2e63d454cd11a64c40ab921076820943d2ef28",
+      "capability_sha256": "1b4e6079f0caa6b04b5f1a5bbe0ad548fcfbdb1ef750c196cef633a3a1c3744c",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
@@ -78,7 +78,11 @@
         ]
       },
       "model_family_pattern": "^gemini-[a-z0-9.-]+$",
-      "capability_profile": "antigravity"
+      "capability_profile": "antigravity",
+      "canary_evidence": {
+        "path": "docs/evidence/antigravity/canary-v1.json",
+        "sha256": "64ff94b814f1c6beadeef9e53b1e4d570d0e126dee806eadd54f0b7665b37482"
+      }
     },
     {
       "slot": "reviewer",
@@ -88,9 +92,9 @@
       "status": "certified",
       "version_scope": {
         "cli_version": "2.1.283 (Claude Code)",
-        "version_policy": "same-major-forward"
+        "version_policy": "forward"
       },
-      "capability_sha256": "a5871486893f0dc39fcb5ddba9b2ad319304a7e9a89042d944e4fbdec8a1c5fb",
+      "capability_sha256": "1a00e39485bdc480c6ca82359b17fac91770caf84100ddedab2a2fb4bf0ab48f",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
@@ -128,9 +132,9 @@
       "status": "candidate",
       "version_scope": {
         "cli_version": "1.2.12",
-        "version_policy": "exact"
+        "version_policy": "forward"
       },
-      "capability_sha256": "406d1d0122726016b50247354b2e63d454cd11a64c40ab921076820943d2ef28",
+      "capability_sha256": "1b4e6079f0caa6b04b5f1a5bbe0ad548fcfbdb1ef750c196cef633a3a1c3744c",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
@@ -157,7 +161,11 @@
         ]
       },
       "model_family_pattern": "^gemini-[a-z0-9.-]+$",
-      "capability_profile": "antigravity"
+      "capability_profile": "antigravity",
+      "canary_evidence": {
+        "path": "docs/evidence/antigravity/canary-v1.json",
+        "sha256": "64ff94b814f1c6beadeef9e53b1e4d570d0e126dee806eadd54f0b7665b37482"
+      }
     },
     {
       "slot": "final_reviewer",
@@ -167,9 +175,9 @@
       "status": "certified",
       "version_scope": {
         "cli_version": "2.1.283 (Claude Code)",
-        "version_policy": "same-major-forward"
+        "version_policy": "forward"
       },
-      "capability_sha256": "a5871486893f0dc39fcb5ddba9b2ad319304a7e9a89042d944e4fbdec8a1c5fb",
+      "capability_sha256": "1a00e39485bdc480c6ca82359b17fac91770caf84100ddedab2a2fb4bf0ab48f",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {

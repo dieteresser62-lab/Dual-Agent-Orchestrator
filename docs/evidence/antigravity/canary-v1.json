@@ -1,0 +1,14 @@
+{
+  "schema_version": "antigravity-canary-v1",
+  "status": "pending",
+  "shared_evidence": {
+    "phase_0": {"path": "docs/evidence/antigravity/phase-0-v1.json", "sha256": "51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7"},
+    "qualification": {"path": "docs/evidence/antigravity/qualification-series-v1.json", "sha256": "f65db7d185e0f3cb85d7d12590365577ca90ee7f35a9f1d17ec93f1c0e2a6a64"},
+    "quality": {"path": "docs/evidence/antigravity/quality-results-v1.json", "sha256": "dde3795fcb707adb46af71bff45cf179c05e68daf6da153a1a041e9b33699678"},
+    "operator_decisions": {"path": "docs/evidence/antigravity/operator-decisions-v1.json", "sha256": "b31fefd88e1ffe0f40622a94663754374f54b11624a2c132f0c6777b01be3e78"}
+  },
+  "slots": {
+    "reviewer": {"provider": "antigravity", "role": "reviewer", "case": "F4", "transport_series": "agy-transport-s3", "status": "pending", "proof": null},
+    "final_reviewer": {"provider": "antigravity", "role": "reviewer", "case": "F5", "transport_series": "agy-transport-s3", "status": "pending", "proof": null}
+  }
+}

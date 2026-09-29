@@ -1161,7 +1161,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
     # Each provider-specific Slice path is explicitly classified here. The
     # remaining retired protocol and third-role patterns still fail closed.
     relative = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else ""
-    new_provider_paths = relative.startswith("docs/evidence/antigravity/") or relative in {
+    new_provider_paths = relative.startswith("docs/evidence/antigravity/") or path.name == "orchestrator.toml" or relative in {
         "docs/reference/antigravity-reviewer.md",
         "scripts/probe_reviewer.py",
         "tests/test_reviewer_probe.py",
@@ -1171,6 +1171,14 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "schemas/native-provider-schema-capabilities-v2.json",
         "schemas/native-provider-schema-exceptions-v2.json",
         "schemas/role-provider-certifications-v1.json",
+        "orchestrator.toml",
+        "tests/test_reviewer_parity.py",
+        "README.md",
+        "Quickstart.md",
+        "AGENTS.md",
+        "CLAUDE.md",  # allowlist:provider -- documentation guard: active root reviewer entry
+        "CODEX.md",  # allowlist:provider -- documentation guard: active root implementer entry
+        "docs/reference/einrichtung.md",
         "src/native_provider_schema.py",
         "src/role_certification.py",
         "tests/test_native_provider_schema.py",

@@ -29,10 +29,16 @@ TABLE = "schemas/role-provider-certifications-v1.json"
 EVIDENCE = "docs/evidence/role-certification-v1.json"
 REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.json"
 AGY_EVIDENCE = "docs/evidence/antigravity/capability-v1.json"
+CANARY_EVIDENCE = "docs/evidence/antigravity/canary-v1.json"
 
 
 def _copy_sources(root: Path) -> None:
-    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, "schemas/native-provider-schema-capabilities-v2.json"}
+    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, CANARY_EVIDENCE,
+             "schemas/native-provider-schema-capabilities-v2.json",
+             "docs/evidence/antigravity/phase-0-v1.json",
+             "docs/evidence/antigravity/qualification-series-v1.json",
+             "docs/evidence/antigravity/quality-results-v1.json",
+             "docs/evidence/antigravity/operator-decisions-v1.json"}
     for path in paths:
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +167,66 @@ def test_agy_candidate_is_blocked_and_model_family_is_bound() -> None:
     ))
     with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*does not match manufacturer google family"):
         _apply_resumed_agent_profiles(Namespace(slot_settings=slots), persisted)
+
+
+def test_agy_experimental_requires_both_canaries_and_separate_slot_entries(tmp_path: Path) -> None:
+    _copy_sources(tmp_path)
+
+    def publish(slots: tuple[str, ...], *, tamper: bool = False) -> None:
+        path = tmp_path / CANARY_EVIDENCE
+        doc = json.loads(path.read_text())
+        doc["status"] = "passed"
+        for slot, case in (("reviewer", "F4"), ("final_reviewer", "F5")):
+            if slot not in slots:
+                continue
+            request_id = f"native-review-request-{slot}"
+            request = {"request_id": request_id}
+            writer = {"type": "object"}
+            raw = {"request_id": request_id, "status": "success", "evidence": {
+                "request_document": request, "writer_schema": writer,
+                "envelope": {"status": "SUCCESS", "denied_actions": [],
+                             "structured_output": {"result": {"request_id": request_id}}}}}
+            wire = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            proof = {"slot": slot, "case": case, "request_id": raw["request_id"],
+                     "checks": {name: True for name in (
+                         "writer", "domain", "effective_rights", "isolation_postcheck", "no_denials")},
+                     "raw": raw, "raw_sha256": wire(raw),
+                     "request_sha256": wire(request), "writer_sha256": wire(writer),
+                     "commit_sha": "c" * 40, "model": "gemini-3.1-pro-high", "timeout_seconds": 0}
+            proof.update({key: "a" * 64 for key in (
+                "profile_sha256", "source_sha256", "binary_sha256")})
+            if slot == "final_reviewer":
+                proof["claude_slice_review_sha256"] = "e6292aedd72e37187dc91abe675b6cf3b1d5f6b7aecf308b574468d20c16db05"  # allowlist:provider -- certification data: saved Claude review
+            if tamper and slot == "reviewer":
+                proof["checks"]["effective_rights"] = False
+            doc["slots"][slot].update(status="passed", proof=proof)
+        path.write_text(json.dumps(doc))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        def update(table):
+            for row in table["certifications"]:
+                if row["provider"] == "antigravity":
+                    row["canary_evidence"]["sha256"] = digest
+                    row["status"] = "experimental"
+        _mutate(tmp_path, update)
+
+    _mutate(tmp_path, lambda table: table["certifications"][1].update(status="experimental"))
+    with pytest.raises(CertificationError, match="both AGY canaries"):
+        load_role_certifications(root=tmp_path)
+    publish(("reviewer",))
+    with pytest.raises(CertificationError, match="final_reviewer canary binding"):
+        load_role_certifications(root=tmp_path)
+    publish(("reviewer", "final_reviewer"), tamper=True)
+    with pytest.raises(CertificationError, match="reviewer canary checks"):
+        load_role_certifications(root=tmp_path)
+    publish(("reviewer", "final_reviewer"))
+    table = load_role_certifications(root=tmp_path)
+    for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
+        assert table.require("antigravity", AgentRoleName.REVIEWER, slot,
+                             model="gemini-4-pro").status == "experimental"
+    with pytest.raises(CertificationError, match="slot=implementer provider=antigravity"):
+        table.require("antigravity", AgentRoleName.IMPLEMENTER, AgentSlot.IMPLEMENTER,
+                      model="gemini-4-pro")
 
 
 def test_every_evidence_node_id_exists_in_the_test_suite() -> None:

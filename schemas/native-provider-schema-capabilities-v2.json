@@ -6,7 +6,7 @@
       "provider": "antigravity",
       "binary_name": "agy",
       "cli_version": "1.2.12",
-      "version_policy": "exact",
+      "version_policy": "forward",
       "transport_profile": {
         "provider": "antigravity",
         "binary_name": "agy",
@@ -60,7 +60,7 @@
       "provider": "claude",
       "binary_name": "claude",
       "cli_version": "2.1.283 (Claude Code)",
-      "version_policy": "same-major-forward",
+      "version_policy": "forward",
       "transport_profile": {
         "provider": "claude",
         "binary_name": "claude",
@@ -115,7 +115,7 @@
       "provider": "codex",
       "binary_name": "codex",
       "cli_version": "codex-cli 0.156.1",
-      "version_policy": "same-major-forward",
+      "version_policy": "forward",
       "transport_profile": {
         "provider": "codex",
         "binary_name": "codex",

@@ -867,21 +867,24 @@ def create_agent_pair(
             f"slot={slot.value} provider={provider}: missing qualification evidence for role={role.value}",
         )
     table = certifications if certifications is not None else load_role_certifications()
-    table.require(provider, role, slot, model=settings.model)
+    certificate = table.require(provider, role, slot, model=settings.model)
     if settings.name != provider:
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for_role(role)
     if provider == "codex" and role is AgentRoleName.IMPLEMENTER:
-        return NativeCodexAdapter(settings, role_binding=binding)
-    if provider == "claude" and role is AgentRoleName.REVIEWER:
-        return NativeClaudeReviewAdapter(settings, role_binding=binding)
-    if provider == "antigravity" and role is AgentRoleName.REVIEWER:
+        adapter = NativeCodexAdapter(settings, role_binding=binding)
+    elif provider == "claude" and role is AgentRoleName.REVIEWER:
+        adapter = NativeClaudeReviewAdapter(settings, role_binding=binding)
+    elif provider == "antigravity" and role is AgentRoleName.REVIEWER:
         from antigravity_adapter import NativeAntigravityReviewAdapter
 
-        return NativeAntigravityReviewAdapter(settings, role_binding=binding)
-    raise ValueError(
-        f"slot={slot.value} provider={provider}: missing transport/role rights binding"
-    )
+        adapter = NativeAntigravityReviewAdapter(settings, role_binding=binding)
+    else:
+        raise ValueError(
+            f"slot={slot.value} provider={provider}: missing transport/role rights binding"
+        )
+    adapter.certification_status = getattr(certificate, "status", None)
+    return adapter
 
 
 def build_agent_registry(

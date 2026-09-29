@@ -24,6 +24,15 @@ model = "opus"
 effort = "high"
 timeout_seconds = 0
 
+# After both canaries pass and both entries are experimental, copy this profile
+# into the run's TOML and bind the intended review slot explicitly in [roles].
+# [agent_profiles.experimental_antigravity]
+# provider = "antigravity"
+# binary = "agy"
+# model = "gemini-3.1-pro-high"
+# effort = "high"
+# timeout_seconds = 0 # No finite value was measured at 512 findings; any positive value is allowed.
+
 [[provider_input_budget]]
 provider = "codex"
 role = "implementer"

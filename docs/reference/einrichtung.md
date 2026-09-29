@@ -339,6 +339,19 @@ timeout_seconds = 0
 `--final-reviewer-model` und `RUN_TASK_FINAL_REVIEWER_MODEL` überschreiben
 diesen Slot; ohne ihn erbt der Finalreviewer das Reviewerprofil.
 
+Die auskommentierte Vorlage `experimental_antigravity` wird erst aktiv, wenn
+sie in das Lauf-TOML kopiert und ein Reviewslot in `[roles]` ausdrücklich darauf
+gesetzt wird. Beide AGY-Slots sind
+bis zum Abschluss der direkten Live-Canaries `candidate` und können deshalb
+noch keinen Lauf starten. Danach ist die Auswahl nur `experimental` für
+private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Ein AGY-Aufruf sendet den
+vollständigen Snapshot, die Anfrage, das Schema und die Evidenz an Google.
+Codex bleibt Implementer, Claude bleibt Standardreviewer. Für eine Auswahl
+braucht das Ziel-TOML auch eine vollständige `[[provider_input_budget]]`-Tabelle
+für die tatsächlich besetzten Slots; siehe [AGY-Anleitung](antigravity-reviewer.md).
+Nach dem gescheiterten 128-Befunde-Fall gibt es keinen gemessenen endlichen
+Timeoutvorschlag. `timeout_seconds` darf jeden positiven Wert oder `0` haben.
+
 ### 2.4 Den Agenten das Projekt erklären: `AGENTS.md`
 
 Die Datei `AGENTS.md` im Projektordner bekommt der Implementer bei jedem Auftrag mit
@@ -871,9 +884,10 @@ bleiben für `Read` gesperrt. Die Grenze gilt auch bei Planreviews und
 Vertragsreparaturen mit leerem Snapshot. Claude Code 2.1.283 wurde dafür live
 geprüft.
 
-Dasselbe Register legt die geprüften CLI-Versionen fest. Neuere Versionen
-derselben Hauptversion werden akzeptiert, ältere und andere Hauptversionen
-nicht.
+Dasselbe Register legt die geprüften CLI-Mindestversionen fest. Alle
+wohlgeformten neueren Versionen werden akzeptiert, auch neue Hauptversionen;
+ältere Versionen werden abgewiesen. Die effektiven Rechte und die Isolation
+des AGY-Reviewers werden weiterhin je Aufruf geprüft.
 
 ### 4.4 Formale Aufträge statt Ideen
 

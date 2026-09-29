@@ -235,13 +235,22 @@ Der Implementer arbeitet mit Schreibzugriff auf den Workspace. Reviewer und Fina
 Das mitgelieferte TOML-Profil verwendet für den Reviewer Opus mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Auch ein Korrekturreview sieht den vollständigen Slice-Diff seit dem unveränderlichen Slice-Start, nicht nur die letzte Korrektur. Evidenz über 24.000 Zeichen erhält der Reviewer verlustfrei in lesbaren Teilen. Weist der Orchestrator eine Antwort als formal ungültig zurück, folgt eine neue Anfrage mit `retry_feedback`: frühere Aufruf-Kennung, Ablehnungscode und Korrekturhinweis.
 
 Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
-geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
-Claude-Versionen desselben Majors und neuere Codex-Patchversionen derselben
-`0.x`-Minorlinie benötigen keinen Repositoryeintrag. Vor dem ersten echten
-Aufruf prüft der Orchestrator weiterhin Versionsformat, Mindestgrenze,
-Pflichtflags und das exakte Transportprofil; Downgrades, unbekannte Formate und
-Versionssprünge außerhalb der gebundenen Grenze halten fail-closed an. Die
-schema-validierte Provideranfrage bleibt der abschließende Live-Nachweis.
+geprüfte Mindestversion. Alle wohlgeformten neueren Versionen, auch neue
+Hauptversionen, sind für Codex, Claude und Antigravity erlaubt. Vor dem ersten
+echten Aufruf prüft der Orchestrator weiterhin Versionsformat, Mindestgrenze,
+Pflichtflags und das exakte Transportprofil. Effektive Rechte und Isolation
+werden bei jedem AGY-Review nachgeprüft; ältere oder unbekannte Formate halten
+fail-closed an.
+
+Antigravity (AGY) ist derzeit nur **Kandidat** für Reviewer und Finalreviewer:
+die zwei direkten Live-Canaries stehen aus. Nach beiden positiven Nachweisen
+können die Slots getrennt als `experimental` zugelassen und ausdrücklich per
+TOML ausgewählt werden. Die mitgelieferte Besetzung bleibt Codex als Implementer
+und Claude für beide Reviews. Der Umfang ist privat/DIY unter WSL 2, Ubuntu und
+ext4; ein AGY-Review übermittelt den vollständigen Snapshot samt Anfrage,
+Schema und Evidenz an Google. Die Größenmessung mit 128 Befunden scheiterte;
+ein endlicher Timeoutvorschlag ist daher nicht gemessen. Positive Werte und `0`
+sind frei konfigurierbar. Ablauf und Befehle: [Antigravity-Reviewer](docs/reference/antigravity-reviewer.md).
 
 Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 

@@ -22,6 +22,8 @@ claude --version
 
 Der Orchestrator läuft unter Linux oder WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md). Implementer (standardmäßig Codex), Reviewer und Final-Reviewer (standardmäßig Claude) werden über `[roles]` und `[agent_profiles]` in `orchestrator.toml` besetzt.
 
+Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** Reviewer-Option für private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Die beiden Live-Canaries stehen noch aus; bis zu ihrer Freigabe bleiben beide AGY-Slots `candidate` und gesperrt. Bei AGY wird der vollständige Review-Snapshot samt Anfrage und Evidenz an Google gesendet. Die [Antigravity-Anleitung](docs/reference/antigravity-reviewer.md) beschreibt Nachweise und Auswahl. Der Standard bleibt Claude, und Codex bleibt Implementer.
+
 ## 2. Zielrepository prüfen
 
 Wechsle in das Repository, in dem die Änderung entstehen soll:

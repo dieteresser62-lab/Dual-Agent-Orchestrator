@@ -2827,6 +2827,8 @@ def preflight(
     logger.info("Preflight: checking git cleanliness; agent capability checks are lazy.")
     for slot in required_agents:
         adapter = agents.get(slot)
+        if adapter is not None and getattr(adapter, "certification_status", None) == "experimental":
+            logger.warning("Preflight: slot=%s provider=%s status=experimental; check the provider egress disclosure before use.", slot, adapter.name)
         disclosure = getattr(adapter, "egress_disclosure", None)
         if disclosure is not None:
             destination, components = disclosure

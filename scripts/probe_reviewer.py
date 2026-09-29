@@ -26,6 +26,8 @@ import tomllib
 from dataclasses import replace
 
 ROOT = Path(__file__).resolve().parents[1]
+OPERATOR_DECISIONS = ROOT / "docs/evidence/antigravity/operator-decisions-v1.json"
+OPERATOR_DECISIONS_SHA256 = "b31fefd88e1ffe0f40622a94663754374f54b11624a2c132f0c6777b01be3e78"
 sys.path.insert(0, str(ROOT / "src"))
 FORMAT_REPO_FIXTURE = ROOT / "tests/fixtures/reviewer-format-repo-v1.json"
 FORMAT_REPO_SHA256 = "3b6f775aebdc90075524f942c1749233c3c63ddc56d9ed19a58dd1cf82a4fa15"
@@ -1107,6 +1109,63 @@ def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
             "profile_zero_allowed": True}
 
 
+def size_override(decisions: dict | None, verdicts: dict) -> dict | None:
+    """Accept only the recorded operator exception for the measured 128 case."""
+    if decisions is None:
+        return None
+    if decisions.get("schema_version") != "operator-decisions-v1":
+        raise ValueError("operator decisions version differs")
+    matches = [row for row in decisions.get("decisions", []) if row.get("id") == "size-override"]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("duplicate size override")
+    row = matches[0]
+    if (row.get("decision") != "approve_experimental_despite_failed_size_case"
+        or row.get("series") != "agy-large-s1" or row.get("failed_case") != "128"
+        or row.get("not_run") != ["512"]
+        or not isinstance(row.get("documented_weakness"), str)
+        or not row["documented_weakness"].strip()
+        or verdicts.get("agy-large-s1", {}).get("failed_cases") != ["128"]
+        or verdicts["agy-large-s1"].get("kind") != "large_output"
+        or verdicts["agy-large-s1"].get("provider") != "agy"):
+        raise ValueError("size override differs from the recorded failed case")
+    return {"series": row["series"], "failed_case": row["failed_case"],
+            "documented_weakness": row["documented_weakness"]}
+
+
+def qualification_summary(series: dict, envelopes: dict, protocol: dict,
+                          quality_results: dict, decisions: dict | None = None) -> dict:
+    verdicts = validate_qualification_evidence(series, envelopes, protocol)
+    corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
+    if not qualification_ready(protocol, corpus):
+        raise PermissionError("quality corpus awaits operator review and matching frozen digest")
+    quality = grade_quality(quality_results, corpus, protocol)
+    verify_quality_mapping(quality_results, series, envelopes, protocol)
+    latest = {}
+    for name, row in verdicts.items():
+        latest[(row["kind"], row["provider"])] = row
+    required = all(latest.get(key, {}).get("passed") for key in (
+        ("transport", "agy"), ("print_timeout", "agy"),
+        ("quality", "agy"), ("quality", "claude")))  # allowlist:provider -- certification data: reference quality result
+    override = size_override(decisions, verdicts)
+    size_passed = latest.get(("large_output", "agy"), {}).get("passed", False)
+    qualified = bool(required and quality["agy"]["passed"] and
+                     (quality["claude"]["passed"] or  # allowlist:provider -- certification data: reference quality result
+                      quality_results.get("claude_special_decision") == "approve_experimental")  # allowlist:provider -- certification data: reference quality result
+                     and (size_passed or override))
+    summary = {"series": verdicts, "quality": quality,
+               "qualified_for_canary": qualified,
+               "size_qualification": "passed" if size_passed else "operator_override" if override else "failed"}
+    if override:
+        summary["size_override"] = override
+    try:
+        summary["timeout_proposal"] = timeout_proposal(series, verdicts, protocol)
+    except ValueError as exc:
+        summary["timeout_proposal_pending"] = str(exc)
+    return summary
+
+
 def domain_projection(bundle, result) -> dict:
     """Compare reviewed facts while retaining transport identity separately."""
     request = bundle.document
@@ -1981,6 +2040,144 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     return series["attempts"][-1]
 
 
+def _validated_claude_slice_review() -> tuple[dict, str]:  # allowlist:provider -- certification data: saved Claude review
+    """Read the stored, request-bound Claude Q3 slice result without starting Claude."""  # allowlist:provider -- certification data: saved Claude review
+    from native_review_request import build_native_review_request, validate_native_review_provider_response
+    from native_review_contract import parse_bound_native_contract_result
+
+    series = read_evidence(ROOT / "docs/evidence/antigravity/qualification-series-v1.json")
+    envelopes = read_evidence(ROOT / "docs/evidence/antigravity/qualification-envelopes-v1.json.gz")
+    rows = [row for row in series["attempts"] if row["series_id"] == "claude-quality-s3"  # allowlist:provider -- certification data: saved Claude review
+            and row["provider"] == "claude" and row["case_id"] == "Q3"]  # allowlist:provider -- certification data: saved Claude review
+    if len(rows) != 1 or rows[0]["status"] != "success" or not all(rows[0]["checks"].values()):
+        raise ValueError("stored Claude slice review is unavailable or invalid")  # allowlist:provider -- certification data: saved Claude review
+    row = rows[0]
+    raw = next(item["envelope"] for item in envelopes["envelopes"] if item["call_id"] == row["call_id"])
+    result = raw["envelope"]["structured_output"]["result"]
+    spec = build_qualification_spec("quality", "Q3", run_id=f"qualification-{row['series_id']}-{row['call_id']}")
+    bundle = build_native_review_request(spec, profile="claude")  # allowlist:provider -- certification data: saved Claude review
+    validate_native_review_provider_response(result, bundle)
+    parse_bound_native_contract_result(result, bundle.bound_context)
+    return result, sha(canonical(result).encode())
+
+
+def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
+                    live: bool = False, quicktest: bool = False) -> dict:
+    """Run one direct AGY review through the final adapter and bound validators."""
+    if not live:
+        raise PermissionError("canary and quicktest require --live")
+    if slot not in {"reviewer", "final_reviewer"} or quicktest and slot != "reviewer":
+        raise ValueError("unknown direct review slot")
+    profile = _profile_document(profile_file)
+    if profile.get("live") is not True or profile.get("commit_sha") != _current_commit():
+        raise ValueError("live canary profile must bind the committed code HEAD")
+    _assert_committed_qualification_code()
+    binary = Path(profile["binary"])
+    if not binary.is_absolute() or not binary.is_file() or binary.is_symlink():
+        raise ValueError("AGY binary must be an absolute regular file")
+    if not re.fullmatch(r"gemini-[a-z0-9.-]+", profile.get("model", "")) or profile.get("effort") != "high":
+        raise ValueError("canary needs a Gemini model and high effort")
+    options = profile.get("provider_options", {}).get("antigravity", {})
+    if not options.get("home") or not options.get("run_root"):
+        raise ValueError("canary needs isolated Antigravity home and run root")
+    timeout = profile.get("timeout_seconds", 600)
+    if type(timeout) is not int or timeout < 0:
+        raise ValueError("canary timeout must be a non-negative integer")
+    if quicktest:
+        timeout = min(timeout or 240, 240)  # a real F2 review measured 90–250 s
+    case = "F2" if quicktest else "F4" if slot == "reviewer" else "F5"
+    name = "quicktest-agy" if quicktest else f"canary-{slot}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / f"{name}-v1.json"
+    ledger_path = output_dir / f"{name}-ledger.jsonl"
+    if report_path.exists() or ledger_path.exists():
+        raise FileExistsError("direct review already has evidence or an unresolved start intent")
+    from agent_config import AgentSettings
+    from antigravity_adapter import NativeAntigravityReviewAdapter
+    from agent_runtime import OrchestratorConfig, run_native_review_agent
+    from native_review_request import NativeReviewEvidenceInput, build_native_review_request
+    from provider_input_budget import ProviderInputBudgetPolicy, ProviderInputBudgetRule, default_provider_input_budget_policy
+
+    settings = AgentSettings("antigravity", str(binary), profile["model"], timeout or None,
+                             "high", antigravity_home=options["home"],
+                             antigravity_run_root=options["run_root"])
+    defaults = default_provider_input_budget_policy()
+    budget = ProviderInputBudgetPolicy(tuple(ProviderInputBudgetRule(
+        "antigravity" if rule.provider == "claude" else rule.provider,  # allowlist:provider -- transport: AGY review budget
+        rule.role, rule.operation, rule.max_chars, rule.max_bytes) for rule in defaults.rules),
+        (("implementer", "implementer", "codex"), ("reviewer", "reviewer", "antigravity"),  # allowlist:provider -- transport: AGY review budget
+         ("final_reviewer", "reviewer", "antigravity")))
+    with tempfile.TemporaryDirectory(prefix="dao-canary-", dir=output_dir) as temporary:
+        source = Path(temporary) / "repo"
+        materialize_format_repo(case, source)
+        source_sha = _source_digest(source)
+        spec = build_qualification_spec("transport", f"{case}:1", run_id=f"{name}-{_current_commit()[:12]}")
+        claude_digest = None  # allowlist:provider -- certification data: saved Claude review
+        if slot == "final_reviewer":
+            prior, claude_digest = _validated_claude_slice_review()  # allowlist:provider -- certification data: saved Claude review
+            evidence = NativeReviewEvidenceInput("claude_slice_review", "review_evidence",  # allowlist:provider -- certification data: saved Claude review
+                "Previously validated Claude slice review from quality Q3: " + canonical(prior))  # allowlist:provider -- certification data: saved Claude review
+            spec = replace(spec, evidence=tuple(sorted((*spec.evidence, evidence), key=lambda item: item.evidence_id)))
+        bundle = build_native_review_request(spec, profile="antigravity")
+        adapter = NativeAntigravityReviewAdapter(settings)
+        raw = {}
+        extract = adapter.extract_output
+        def capture_output(stdout, stderr, extra_files):
+            raw.update(stdout=stdout, stderr=stderr, exit_code=extra_files.get("exit_code"))
+            return extract(stdout, stderr, extra_files)
+        adapter.extract_output = capture_output
+        ledger = _QualificationLedger(ledger_path, name)
+        started = time.monotonic()
+        error = None
+        try:
+            output = run_native_review_agent(adapter, bundle,
+                config=OrchestratorConfig(repo_root=source, provider_input_budget=budget),
+                shorten=lambda value, maximum: (value or "")[:maximum],
+                operation=spec.context.operation,
+                binding_fingerprint=spec.context.diff_fingerprint,
+                attempt_invocation=ledger)
+            domain = output.result
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            domain = None
+        try:
+            envelope = strict_json(raw.get("stdout", "{}"))
+        except ValueError:
+            envelope = {}
+        if error is None:
+            result = validate_format_response(case, envelope, bundle=bundle,
+                exit_code=int(raw.get("exit_code") or 0), stderr=raw.get("stderr", ""))
+            passed = bool(result["pass"] and domain is not None)
+        else:
+            result, passed = {"checks": {}}, False
+        clean = sanitize_evidence({"envelope": envelope, "stderr": raw.get("stderr", ""),
+            "exit_code": raw.get("exit_code"), "technical_error": error,
+            "request_document": strict_json(bundle.canonical_json),
+            "writer_schema": strict_json(bundle.provider_response_schema_json)})
+        proof_raw = {"request_id": bundle.bound_context.request_id,
+                     "status": "success" if passed else "failed", "evidence": clean}
+        checks = {"writer": result["checks"].get("writer_schema", False),
+                  "domain": result["checks"].get("domain_contract", False) and result["checks"].get("case_semantics", False),
+                  "effective_rights": passed, "isolation_postcheck": passed,
+                  "no_denials": not bool(envelope.get("denied_actions")) and passed}
+        proof = {"slot": slot, "case": case, "request_id": bundle.bound_context.request_id,
+                 "request_sha256": sha(bundle.canonical_json.encode()),
+                 "writer_sha256": sha(bundle.provider_response_schema_json.encode()),
+                 "source_sha256": source_sha, "profile_sha256": sha(profile_file.read_bytes()),
+                 "binary_sha256": sha(binary.read_bytes()), "commit_sha": profile["commit_sha"],
+                 "model": profile["model"], "timeout_seconds": timeout,
+                 "checks": checks, "raw": proof_raw, "raw_sha256": digest(proof_raw)}
+        if claude_digest is not None:  # allowlist:provider -- certification data: saved Claude review
+            proof["claude_slice_review_sha256"] = claude_digest  # allowlist:provider -- certification data: saved Claude review
+        report = {"schema_version": "antigravity-direct-review-v1", "mode": "quicktest" if quicktest else "canary",
+                  "provider": "antigravity", "role": "reviewer", "slot": slot, "case": case,
+                  "status": "passed" if passed else "failed", "duration_seconds": round(time.monotonic()-started, 3),
+                  "proof": proof}
+        _write_evidence_file(report_path, report)
+        ledger._record("result", status=report["status"])
+        return report
+
+
 def execute_probe(argv: list[str], *, cwd: Path, out: Path, profile_file: Path | None = None,
                   live: bool = False, fake_root: Path | None = None, limit: int = 600) -> dict:
     """Only explicit fakes run by default; real executables need two live gates."""
@@ -2140,6 +2337,15 @@ def main() -> int:
     q.add_argument("--tag")
     q.add_argument("--production-retry-of")
     q.add_argument("--live", action="store_true")
+    canary = sub.add_parser("canary-call")
+    canary.add_argument("slot", choices=("reviewer", "final_reviewer"))
+    canary.add_argument("--profile", type=Path, required=True)
+    canary.add_argument("--output-dir", type=Path, required=True)
+    canary.add_argument("--live", action="store_true")
+    quick = sub.add_parser("quicktest")
+    quick.add_argument("provider", choices=("agy",))
+    quick.add_argument("--profile", type=Path, required=True)
+    quick.add_argument("--live", action="store_true")
     m = sub.add_parser("prepare-case")
     m.add_argument("kind", choices=("transport", "large_output", "quality"))
     m.add_argument("case_id")
@@ -2149,6 +2355,7 @@ def main() -> int:
     e.add_argument("series", type=Path)
     e.add_argument("envelopes", type=Path)
     e.add_argument("--quality-results", type=Path)
+    e.add_argument("--operator-decisions", type=Path, default=OPERATOR_DECISIONS)
     args = parser.parse_args()
     if args.command == "validate-format":
         result = validate_format_response(args.case, strict_json(args.envelope.read_bytes()),
@@ -2256,32 +2463,32 @@ def main() -> int:
             production_retry_of=args.production_retry_of)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
+    if args.command == "canary-call":
+        result = run_canary_call(args.slot, profile_file=args.profile,
+            output_dir=args.output_dir, live=args.live)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["status"] == "passed" else 1
+    if args.command == "quicktest":
+        with tempfile.TemporaryDirectory(prefix="dao-agy-quicktest-") as temporary:
+            result = run_canary_call("reviewer", profile_file=args.profile,
+                output_dir=Path(temporary), live=args.live, quicktest=True)
+        print(json.dumps({"schema_version": result["schema_version"], "mode": "quicktest",
+            "status": result["status"], "duration_seconds": result["duration_seconds"],
+            "checks": result["proof"]["checks"]}, sort_keys=True))
+        return 0 if result["status"] == "passed" else 1
     if args.command == "evaluate-qualification":
         protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         series = read_evidence(args.series)
         envelopes = read_evidence(args.envelopes)
-        verdicts = validate_qualification_evidence(series, envelopes, protocol)
-        summary = {"series": verdicts}
-        eligible = False
-        if args.quality_results:
-            corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
-            if not qualification_ready(protocol, corpus):
-                raise PermissionError("quality corpus awaits operator review and matching frozen digest")
-            quality_results = strict_json(args.quality_results.read_bytes())
-            summary["quality"] = grade_quality(quality_results, corpus, protocol)
-            verify_quality_mapping(quality_results, series, envelopes, protocol)
-            eligible = (all(row["passed"] for row in verdicts.values()) and
-                        summary["quality"]["agy"]["passed"] and
-                        (summary["quality"]["claude"]["passed"] or  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-                         quality_results["claude_special_decision"] == "approve_experimental"))  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        try:
-            summary["timeout_proposal"] = timeout_proposal(series, verdicts, protocol)
-        except ValueError as exc:
-            summary["timeout_proposal_pending"] = str(exc)
-            eligible = False
-        summary["qualified_for_canary"] = eligible
+        decisions_bytes = args.operator_decisions.read_bytes()
+        if sha(decisions_bytes) != OPERATOR_DECISIONS_SHA256:
+            raise ValueError("operator decisions digest differs from the accepted decision")
+        if not args.quality_results:
+            raise ValueError("qualification needs bound blind quality results")
+        summary = qualification_summary(series, envelopes, protocol,
+            strict_json(args.quality_results.read_bytes()), strict_json(decisions_bytes))
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
-        return 0 if eligible else 1
+        return 0 if summary["qualified_for_canary"] else 1
     result = execute_probe([str(args.executable)], cwd=args.cwd, out=args.out,
         fake_root=args.fake_root, profile_file=args.profile, live=args.live)
     print(json.dumps(result, sort_keys=True))

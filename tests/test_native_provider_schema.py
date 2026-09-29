@@ -106,7 +106,7 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         "codex",
     ]
     assert {item["profile_id"]: item["version_policy"] for item in capabilities["providers"]} == {
-        "antigravity": "exact", "claude": "same-major-forward", "codex": "same-major-forward",
+        "antigravity": "forward", "claude": "forward", "codex": "forward",
     }
     assert {
         frozenset(item["features"]) for item in capabilities["providers"]
@@ -141,8 +141,10 @@ def test_agy_measured_capability_and_transport() -> None:
         capability_profile_for_digest("claude", digest)
     assert capability["cli_version"] == "1.2.12"
     assert compatible_cli_version(AGY_PROVIDER, "1.2.12")
-    for version in ("1.2.11", "1.2.13", "2.0.0"):
+    for version in ("1.2.11",):
         assert not compatible_cli_version(AGY_PROVIDER, version)
+    for version in ("1.2.13", "2.0.0"):
+        assert compatible_cli_version(AGY_PROVIDER, version)
     with pytest.raises(NativeProviderSchemaError, match="unsupported format"):
         compatible_cli_version(AGY_PROVIDER, "agy 1.2.12")
     assert capability["features"]["unique_items"]
@@ -305,12 +307,12 @@ def test_unprobed_feature_and_out_of_policy_version_fail_closed() -> None:
     assert compatible_cli_version("codex", "codex-cli 0.157.0") is True
     assert compatible_cli_version("codex", "codex-cli 0.160.1") is True
     assert compatible_cli_version("codex", "codex-cli 0.999.0") is True
+    assert compatible_cli_version("claude", "3.0.0 (Claude Code)") is True
+    assert compatible_cli_version("codex", "codex-cli 1.0.0") is True
     for provider, version in (
         ("claude", "2.1.279 (Claude Code)"),
         ("claude", "2.1.282 (Claude Code)"),
-        ("claude", "3.0.0 (Claude Code)"),
         ("codex", "codex-cli 0.156.0"),
-        ("codex", "codex-cli 1.0.0"),
     ):
         with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):
             assert_provider_capabilities(provider, (), cli_version=version)

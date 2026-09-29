@@ -21,6 +21,7 @@ CAPABILITY_PATH = "schemas/native-provider-schema-capabilities-v2.json"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9._-]*\Z", re.ASCII)
 _TEST_FUNCTION = re.compile(r"test_[A-Za-z0-9_]+(?:\[[^\]\r\n]+\])?\Z", re.ASCII)
+_CLAUDE_Q3_SHA256 = "e6292aedd72e37187dc91abe675b6cf3b1d5f6b7aecf308b574468d20c16db05"  # allowlist:provider -- certification data: saved Claude review
 _BASELINE = {
     (AgentSlot.IMPLEMENTER, "codex"),
     (AgentSlot.REVIEWER, "claude"),
@@ -167,6 +168,79 @@ def _validate_evidence_slots(document: dict[str, Any]) -> None:
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "invalid evidence test node ID or description")
 
 
+def _validate_agy_canaries(root: Path, reference: dict[str, Any]) -> None:
+    ref = _require_keys(reference, {"path", "sha256"}, "canary reference")
+    if ref["path"] != "docs/evidence/antigravity/canary-v1.json":
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
+    document = _parse_json(_read_file(root, ref["path"], expected_digest=ref["sha256"]), ref["path"])
+    if document.get("schema_version") != "antigravity-canary-v1":
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary evidence version differs")
+    shared = document.get("shared_evidence")
+    expected = {"phase_0": "phase-0-v1.json", "qualification": "qualification-series-v1.json",
+                "quality": "quality-results-v1.json", "operator_decisions": "operator-decisions-v1.json"}
+    if not isinstance(shared, dict) or set(shared) != set(expected):
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary shared evidence is incomplete")
+    for name, filename in expected.items():
+        item = _require_keys(shared[name], {"path", "sha256"}, "canary shared reference")
+        if item["path"] != f"docs/evidence/antigravity/{filename}":
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary shared evidence path differs")
+        _read_file(root, item["path"], expected_digest=item["sha256"])
+    slots = document.get("slots")
+    if document.get("status") != "passed" or not isinstance(slots, dict) or set(slots) != {
+            "reviewer", "final_reviewer"}:
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "both AGY canaries must pass")
+    request_ids = set()
+    for slot, case in (("reviewer", "F4"), ("final_reviewer", "F5")):
+        item = slots[slot]
+        if (not isinstance(item, dict) or item.get("provider") != "antigravity" or
+            item.get("role") != "reviewer" or item.get("case") != case or
+            item.get("transport_series") != "agy-transport-s3" or item.get("status") != "passed"):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{slot} canary binding differs")
+        proof = item.get("proof")
+        if not isinstance(proof, dict) or proof.get("slot") != slot or proof.get("case") != case:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{slot} canary proof is missing")
+        checks = proof.get("checks")
+        if not isinstance(checks, dict) or set(checks) != {
+                "writer", "domain", "effective_rights", "isolation_postcheck", "no_denials"} or not all(
+                value is True for value in checks.values()):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{slot} canary checks failed")
+        for key in ("profile_sha256", "request_sha256", "writer_sha256", "source_sha256",
+                    "binary_sha256", "raw_sha256"):
+            if not isinstance(proof.get(key), str) or _SHA256.fullmatch(proof[key]) is None:
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{slot} canary digest is invalid")
+        raw = proof.get("raw")
+        def wire_digest(value: object) -> str:
+            return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8")).hexdigest()
+        raw_digest = wire_digest(raw) if isinstance(raw, dict) else None
+        if raw_digest != proof["raw_sha256"]:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{slot} canary raw proof differs")
+        request_id = proof.get("request_id")
+        if not isinstance(request_id, str) or not request_id.startswith("native-review-request-") or request_id in request_ids:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary request identity is invalid or reused")
+        request_ids.add(request_id)
+        if raw.get("request_id") != request_id or raw.get("status") != "success":
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary raw result differs")
+        evidence = raw.get("evidence")
+        if (not isinstance(evidence, dict)
+            or not isinstance(evidence.get("request_document"), dict)
+            or not isinstance(evidence.get("writer_schema"), dict)
+            or wire_digest(evidence["request_document"]) != proof["request_sha256"]
+            or wire_digest(evidence["writer_schema"]) != proof["writer_sha256"]
+            or evidence["request_document"].get("request_id") != request_id
+            or evidence.get("envelope", {}).get("status") != "SUCCESS"
+            or evidence["envelope"].get("denied_actions") not in (None, [])
+            or evidence["envelope"].get("structured_output", {}).get("result", {}).get("request_id") != request_id):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary request or response proof differs")
+        if not isinstance(proof.get("commit_sha"), str) or re.fullmatch(r"[0-9a-f]{40}", proof["commit_sha"]) is None:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary commit is invalid")
+        if (not isinstance(proof.get("model"), str) or re.fullmatch(r"gemini-[a-z0-9.-]+", proof["model"]) is None
+            or type(proof.get("timeout_seconds")) is not int or proof["timeout_seconds"] < 0):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary profile is invalid")
+        if slot == "final_reviewer" and proof.get("claude_slice_review_sha256") != _CLAUDE_Q3_SHA256:  # allowlist:provider -- certification data: saved Claude review
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "final canary lacks Claude slice evidence")  # allowlist:provider -- certification data: saved Claude review
+
+
 @dataclass(frozen=True, slots=True)
 class RoleProviderCertification:
     """The probe_profile is the probed transport profile from the capability register; not a model or effort filter."""
@@ -268,7 +342,7 @@ def _load_role_certifications(
             "rights_sha256", "evidence",
         }
         if isinstance(raw, dict) and raw.get("provider") == "antigravity":
-            expected_keys.add("model_family_pattern")
+            expected_keys.update({"model_family_pattern", "canary_evidence"})
         row = _require_keys(raw, expected_keys, "certification")
         try:
             slot = AgentSlot(row["slot"])
@@ -316,11 +390,13 @@ def _load_role_certifications(
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "rights digest differs")
         evidence = _require_keys(row["evidence"], {"path", "sha256"}, "evidence reference")
         evidence_path, evidence_digest = evidence["path"], evidence["sha256"]
+        if provider == "antigravity":
+            canary_ref = _require_keys(row["canary_evidence"], {"path", "sha256"}, "canary reference")
+            if canary_ref["path"] != "docs/evidence/antigravity/canary-v1.json":
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
+            _read_file(root, canary_ref["path"], expected_digest=canary_ref["sha256"])
         if provider == "antigravity" and row["status"] == "experimental":
-            raise CertificationError(
-                CertificationErrorCode.EVIDENCE_INVALID,
-                "Antigravity experimental slot requires the Slice-6 qualification and canary evidence contract",
-            )
+            _validate_agy_canaries(root, row["canary_evidence"])
         raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
         if evidence_path not in evidence_cache:
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)

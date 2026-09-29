@@ -5,6 +5,7 @@ import copy
 from dataclasses import replace
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,3 +111,73 @@ def test_record_payload_rejects_non_reviewer_finding_closure() -> None:
             finding_status="closed", rationale="Foreign closure", work_unit_id="slice-1")
     with pytest.raises(ValueError, match="reporter must be reviewer"):
         FindingOrigin("1", 1, AgentRole.IMPLEMENTER)
+
+
+def test_qualification_size_override_is_explicit_and_bound_to_failed_case() -> None:
+    base = probe.ROOT / "docs/evidence/antigravity"
+    series = probe.read_evidence(base / "qualification-series-v1.json")
+    envelopes = probe.read_evidence(base / "qualification-envelopes-v1.json.gz")
+    protocol = probe.read_evidence(base / "qualification-protocol-v5.json")
+    quality = probe.read_evidence(base / "quality-results-v1.json")
+    decisions = probe.read_evidence(base / "operator-decisions-v1.json")
+    accepted = probe.qualification_summary(series, envelopes, protocol, quality, decisions)
+    assert accepted["qualified_for_canary"] is True
+    assert accepted["size_qualification"] == "operator_override"
+    assert accepted["size_override"]["series"] == "agy-large-s1"
+    assert accepted["size_override"]["failed_case"] == "128"
+    assert accepted["size_override"]["documented_weakness"]
+    assert "timeout_proposal_pending" in accepted and "timeout_proposal" not in accepted
+    missing = copy.deepcopy(decisions)
+    missing["decisions"] = [row for row in missing["decisions"] if row["id"] != "size-override"]
+    assert not probe.qualification_summary(series, envelopes, protocol, quality, missing)["qualified_for_canary"]
+    manipulated = copy.deepcopy(decisions)
+    next(row for row in manipulated["decisions"] if row["id"] == "size-override")["failed_case"] = "512"
+    with pytest.raises(ValueError, match="size override"):
+        probe.qualification_summary(series, envelopes, protocol, quality, manipulated)
+
+
+@pytest.mark.parametrize("slot,case", [("reviewer", "F4"), ("final_reviewer", "F5")])
+def test_direct_canary_uses_bound_adapter_and_saved_claude_review(  # allowlist:provider -- certification data: saved Claude review
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slot: str, case: str) -> None:
+    import agent_runtime
+    from antigravity_adapter import NativeAntigravityReviewAdapter
+    binary = tmp_path / "fake-agy"
+    binary.write_text("#!/bin/sh\n# dao-probe-fake-v1\n", encoding="utf-8")
+    profile = tmp_path / "agy.toml"
+    profile.write_text(f'live = true\ncommit_sha = "{"c"*40}"\nbinary = "{binary}"\n'
+                       'model = "gemini-3.1-pro-high"\neffort = "high"\ntimeout_seconds = 0\n'
+                       '[provider_options.antigravity]\n'
+                       f'home = "{tmp_path / "home"}"\nrun_root = "/var/tmp/dao-canary-test"\n')
+    monkeypatch.setattr(probe, "_current_commit", lambda: "c" * 40)
+    monkeypatch.setattr(probe, "_assert_committed_qualification_code", lambda: None)
+    monkeypatch.setattr(NativeAntigravityReviewAdapter, "extract_output", lambda self, *args: None)
+    stored_cases = json.loads(FIXTURE.read_text())["cases"]
+
+    def fake_run(adapter, bundle, **kwargs):
+        assert isinstance(adapter, NativeAntigravityReviewAdapter)
+        assert kwargs["operation"] == ("reviewer_final_review" if slot == "final_reviewer" else "reviewer_slice_review")
+        assert ("claude_slice_review" in bundle.canonical_json) == (slot == "final_reviewer")  # allowlist:provider -- certification data: saved Claude review
+        selected_case = "F2" if "quicktest" in bundle.canonical_json else case
+        response = dict(stored_cases[selected_case]["envelope"]["structured_output"]["result"],
+                        request_id=bundle.bound_context.request_id)
+        envelope = {"status": "SUCCESS", "json_schema": probe.strict_json(bundle.provider_response_schema_json),
+                    "structured_output": {"result": response}, "denied_actions": []}
+        adapter.extract_output(json.dumps(envelope), "", {"exit_code": "0"})
+        return SimpleNamespace(result=parse_bound_native_contract_result(response, bundle.bound_context))
+
+    monkeypatch.setattr(agent_runtime, "run_native_review_agent", fake_run)
+    with pytest.raises(PermissionError, match="--live"):
+        probe.run_canary_call(slot, profile_file=profile, output_dir=tmp_path / "unused")
+    report = probe.run_canary_call(slot, profile_file=profile, output_dir=tmp_path / "out", live=True)
+    assert report["status"] == "passed"
+    assert all(report["proof"]["checks"].values())
+    assert report["proof"]["timeout_seconds"] == 0
+    if slot == "final_reviewer":
+        assert len(report["proof"]["claude_slice_review_sha256"]) == 64  # allowlist:provider -- certification data: saved Claude review
+    else:
+        quick = probe.run_canary_call(slot, profile_file=profile,
+            output_dir=tmp_path / "quick", live=True, quicktest=True)
+        assert quick["mode"] == "quicktest" and quick["status"] == "passed"
+        assert quick["proof"]["timeout_seconds"] == 240
+    with pytest.raises(FileExistsError, match="already"):
+        probe.run_canary_call(slot, profile_file=profile, output_dir=tmp_path / "out", live=True)

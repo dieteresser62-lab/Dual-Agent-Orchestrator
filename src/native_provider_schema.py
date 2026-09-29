@@ -21,7 +21,7 @@ EXCEPTION_PATH = (
 )
 CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v2"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v2"
-PROVIDER_VERSION_POLICY = "same-major-forward"
+PROVIDER_VERSION_POLICY = "forward"
 OPENAI_PROVIDER = "co" + "dex"
 ANTHROPIC_PROVIDER = "clau" + "de"
 AGY_PROVIDER = "antigravity"
@@ -180,7 +180,7 @@ def load_capability_table() -> dict[str, Any]:
         _required_text(item, "binary_name")
         cli_version = _required_text(item, "cli_version")
         version_policy = _required_text(item, "version_policy")
-        if version_policy not in {PROVIDER_VERSION_POLICY, "exact"}:
+        if version_policy not in {PROVIDER_VERSION_POLICY, "same-major-forward", "exact"}:
             raise NativeProviderSchemaError(
                 f"provider {name} must use a supported provider-wide version policy"
             )
@@ -282,7 +282,7 @@ def compatible_cli_version(provider: str, cli_version: str) -> bool:
         return actual == baseline
     if actual < baseline:
         return False
-    return actual[0] == baseline[0]
+    return capability["version_policy"] == "forward" or actual[0] == baseline[0]
 
 
 def _parse_cli_version(provider: str, cli_version: str) -> tuple[int, int, int]:
