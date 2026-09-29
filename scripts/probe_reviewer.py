@@ -791,6 +791,21 @@ def _frozen_source_digest(kind: str, case_id: str) -> str:
         return _source_digest(root)
 
 
+_RUNTIME_DEADLINE = re.compile(r"^AgentProcessError: antigravity timed out after [0-9]+s\.$")
+
+
+def _print_timeout_checks(status: str, failure_kind: str | None, technical_error: str | None,
+                          stderr: str, has_result: bool) -> dict:
+    """A timeout is safe when it is a technical rejection from AGY's print timeout or the runtime deadline."""
+    from antigravity_adapter import classify_agy_stderr
+
+    rejected = status == "technical_rejection" and technical_error is not None
+    shape = (classify_agy_stderr(stderr)[1] == "print-timeout"
+             or bool(_RUNTIME_DEADLINE.fullmatch(technical_error or "")))
+    return {"print_timeout": rejected and failure_kind == "timeout" and shape,
+            "no_valid_stop": rejected and not has_result}
+
+
 def _verify_recorded_result(row: dict, raw: dict) -> None:
     """Rebuild the transmitted request and independently parse recorded output."""
     from native_review_contract import parse_bound_native_contract_result
@@ -821,11 +836,12 @@ def _verify_recorded_result(row: dict, raw: dict) -> None:
     structured = envelope.get("structured_output")
     response = structured.get("result") if isinstance(structured, dict) else None
     if row["kind"] == "print_timeout":
-        timeout_kind, timeout_code = classify_agy_stderr(raw.get("stderr", ""))
-        if (row["status"] != "technical_rejection" or timeout_code != "print-timeout"
-            or isinstance(response, dict) or raw.get("technical_error") is None
-            or row["checks"] != {"print_timeout": True, "no_valid_stop": True}):
-            raise ValueError("print timeout did not fail safely as a technical rejection")
+        expected = _print_timeout_checks(row["status"], row.get("failure_kind"),
+                                         raw.get("technical_error"), raw.get("stderr", ""),
+                                         isinstance(response, dict))
+        if set(row["checks"]) != set(expected) or any(
+                row["checks"][name] and not expected[name] for name in expected):
+            raise ValueError("print timeout checks claim more than the recorded failure shows")
         return
     if row["status"] != "success":
         if raw.get("technical_error") is None:
@@ -1774,8 +1790,11 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                                           exit_code=int(raw.get("exit_code") or 0),
                                           stderr=raw.get("stderr", ""))["checks"]
     elif kind == "print_timeout":
-        checks = {"print_timeout": bool(error and "timeout" in error.lower()),
-                  "no_valid_stop": domain is None}
+        partial = envelope.get("structured_output") if isinstance(envelope, dict) else None
+        checks = _print_timeout_checks("technical_rejection" if error else "success",
+                                       failure_kind, error, raw.get("stderr", ""),
+                                       isinstance(partial, dict) and isinstance(partial.get("result"), dict))
+        checks["no_valid_stop"] = checks["no_valid_stop"] and domain is None
     elif kind == "large_output":
         response = envelope.get("structured_output", {}).get("result", {}) if isinstance(envelope, dict) else {}
         findings = response.get("new_findings", []) if isinstance(response, dict) else []

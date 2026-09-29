@@ -807,11 +807,34 @@ def test_print_timeout_is_technical_and_timeout_proposal_uses_512() -> None:
     envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
     row, raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s1", call_id="t1")
     row["checks"] = {"print_timeout": True, "no_valid_stop": True}
+    row["failure_kind"] = "timeout"
     raw["stderr"] = "[agy] print timeout after 1s with turn in progress; returning partial output"
     raw["envelope"] = {"status": "SUCCESS", "structured_output": None}
     probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
     verdicts = probe.validate_qualification_evidence(series, envelopes, protocol)
     assert verdicts["timeout-s1"]["passed"]
+    # Measured live (29 Sep 2026): the runtime deadline fired before AGY's own print timeout.
+    deadline_series = {"schema_version": "qualification-series-v1", "attempts": []}
+    deadline_envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+    first, first_raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s1", call_id="d1")
+    first.update(failure_kind="timeout", checks={"print_timeout": False, "no_valid_stop": True})
+    first_raw.update(technical_error="AgentProcessError: antigravity timed out after 30s.")
+    probe.append_qualification_attempt(deadline_series, deadline_envelopes, attempt=first, envelope=first_raw)
+    verdicts = probe.validate_qualification_evidence(deadline_series, deadline_envelopes, protocol)
+    assert not verdicts["timeout-s1"]["passed"]  # a historical negative stays negative
+    second, second_raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s2", call_id="d2")
+    second.update(failure_kind="timeout", commit_sha="e" * 40,
+                  restart_diagnosis="Check matched only the word timeout.",
+                  restart_change="Runtime deadline counts as a safe timeout.",
+                  checks={"print_timeout": True, "no_valid_stop": True})
+    second_raw.update(technical_error="AgentProcessError: antigravity timed out after 30s.")
+    probe.append_qualification_attempt(deadline_series, deadline_envelopes, attempt=second, envelope=second_raw)
+    verdicts = probe.validate_qualification_evidence(deadline_series, deadline_envelopes, protocol)
+    assert verdicts["timeout-s2"]["passed"]
+    forged = copy.deepcopy(deadline_series)
+    forged["attempts"][1]["failure_kind"] = "process"
+    with pytest.raises(ValueError, match="print timeout"):
+        probe.validate_qualification_evidence(forged, deadline_envelopes, protocol)
     changed = copy.deepcopy(envelopes)
     changed["envelopes"][0]["envelope"]["envelope"]["structured_output"] = {
         "result": {"result_type": "stop_request"}}
