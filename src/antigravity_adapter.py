@@ -39,7 +39,7 @@ from role_binding import RoleBinding, binding_for_role
 from workflow_state import AgentFailureKind
 
 
-STDERR_CLASSIFIER_VERSION = "agy-stderr-v2"
+STDERR_CLASSIFIER_VERSION = "agy-stderr-v3"
 logger = logging.getLogger(__name__)
 AGY_DENY = (
     "command(*)", "write_file(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
@@ -56,6 +56,14 @@ _NETWORK = re.compile(r"(?:network error|connection refused|connection reset|dns
 _SCHEMA = re.compile(r"(?:invalid json schema|schema validation failed|invalid schema)", re.I)
 _MODEL = re.compile(r"(?:unknown model|model not found|invalid model)", re.I)
 _PERMISSION = re.compile(r"(?:permission denied|auto-denied|permission request rejected)", re.I)
+# Measured 29 Sep 2026 (AGY 1.2.12, exit 1, no model turn): a Go dial failure against the
+# Google backend, e.g. "lookup … on 10.255.255.254:53: server misbehaving". Transient network.
+_DIAL_FAILURE = re.compile(
+    r'^error: (?:Eligibility check failed: )?Post "https://[A-Za-z0-9.-]+\.googleapis\.com/[^"\s]*": '
+    r"dial tcp[^\n]*: (?:server misbehaving|no such host|i/o timeout|connection refused|"
+    r"network is unreachable|connection reset by peer|temporary failure in name resolution)$",
+    re.I,
+)
 # Measured 29 Sep 2026 (AGY 1.2.12): an ERROR envelope may carry this transient stream
 # failure even when a result exists. The result is never accepted; the failure is
 # transient transport, so the production retry policy may start a fresh call.
@@ -110,6 +118,8 @@ def classify_agy_stderr(stderr: str) -> tuple[AgentFailureKind | None, str]:
         return AgentFailureKind.TIMEOUT, "print-timeout"
     if _SOFT_DENIAL.fullmatch(stderr.strip()):
         return AgentFailureKind.PERMISSION, "soft-read-denial"
+    if _DIAL_FAILURE.fullmatch(stderr.strip()):
+        return AgentFailureKind.NETWORK, "dial-network"
     for pattern, kind, code in (
         (_AUTH, AgentFailureKind.AUTH, "authentication"),
         (_QUOTA, AgentFailureKind.QUOTA, "quota"),

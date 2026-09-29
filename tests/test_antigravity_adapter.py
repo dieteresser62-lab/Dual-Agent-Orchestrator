@@ -187,7 +187,7 @@ def test_measured_stream_interruption_is_transient_and_never_accepted() -> None:
     with pytest.raises(AgentOutputError) as caught:
         AntigravityTransport.envelope(json.dumps(base), "", 0, '{"flag":true}')
     assert caught.value.kind_hint is AgentFailureKind.NETWORK
-    assert "stream-interrupted (agy-stderr-v2)" in str(caught.value)
+    assert "stream-interrupted (agy-stderr-v3)" in str(caught.value)
     assert interrupted not in str(caught.value)
     for change in ({"error": interrupted + " Retry."}, {"error": "bad"},
                    {"status": "SUCCESS"}, {"status": "FAILED"}):
@@ -203,6 +203,14 @@ def test_measured_stream_interruption_is_transient_and_never_accepted() -> None:
     ("invalid json schema", AgentFailureKind.OUTPUT),
     ("unknown model", AgentFailureKind.PROCESS),
     ("AGY_ERROR: backend failed", AgentFailureKind.PROCESS),
+    ('error: Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": '
+     "dial tcp: lookup daily-cloudcode-pa.googleapis.com on 10.255.255.254:53: server misbehaving",
+     AgentFailureKind.NETWORK),
+    ('error: Post "https://example.invalid/v1": dial tcp: lookup example.invalid: no such host',
+     AgentFailureKind.PROCESS),
+    ('error: Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1": '
+     "dial tcp: lookup daily-cloudcode-pa.googleapis.com: permission denied by policy",
+     AgentFailureKind.PROCESS),
     ("unexpected user@example.com token=secret", AgentFailureKind.PROCESS),
 ])
 def test_versioned_stderr_mapping_is_secret_free(stderr: str, kind: AgentFailureKind) -> None:

@@ -27,7 +27,7 @@
     "success_without_output_is_failure": true
   },
   "production_retry": {
-    "classifier": "agy-stderr-v2: ERROR-Umschlag „The stream was interrupted. Please continue the task you were working on.“ wird als network eingestuft; das Ergebnis wird nie angenommen.",
+    "classifier": "agy-stderr-v3: ERROR-Umschlag „The stream was interrupted. Please continue the task you were working on.“ sowie gemessene Go-Wählfehler gegen *.googleapis.com (z. B. DNS „server misbehaving“) werden als network eingestuft; ein Ergebnis mit Fehlerstatus wird nie angenommen. Historie: Serie agy-transport-s2 lief mit agy-stderr-v2 (nur Stream-Abbruch); ihr DNS-Fehler bei F4:1 wurde dort als process eingestuft und machte die Serie negativ.",
     "failure_kinds": [
       "network",
       "timeout"
