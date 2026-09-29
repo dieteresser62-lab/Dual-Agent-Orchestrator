@@ -616,7 +616,7 @@ def _case_chains(calls: list[dict]) -> list[list[dict]]:
 def validate_qualification(document: dict) -> None:
     if not __debug__:
         raise RuntimeError("optimized mode cannot validate the protocol")
-    assert document["schema_version"] == "qualification-protocol-v4"
+    assert document["schema_version"] == "qualification-protocol-v5"
     assert document["campaign"] == "slim" and document["target_status"] == "experimental"
     assert document["sample_counts"] == {"transport": 12, "large_output": 2,
         "print_timeout": 1, "quality_per_provider": 6, "canaries": 2}
@@ -867,8 +867,12 @@ def _print_timeout_checks(status: str, failure_kind: str | None, technical_error
 
 
 def _verify_recorded_result(row: dict, raw: dict,
-                            previous: tuple[dict, dict] | None = None) -> None:
-    """Rebuild the transmitted request and independently parse recorded output."""
+                            previous: tuple[dict, dict] | None = None) -> bool:
+    """Rebuild the transmitted request and independently parse recorded output.
+
+    Returns False for a quality call recorded against a superseded corpus revision:
+    it stays visible and internally consistent but can never count as a pass.
+    """
     from native_review_contract import parse_bound_native_contract_result
     from native_review_request import (build_native_review_request,
                                        validate_native_review_provider_response)
@@ -892,9 +896,13 @@ def _verify_recorded_result(row: dict, raw: dict,
     if (not isinstance(stored_request, dict) or not isinstance(stored_writer, dict) or
         row["request_id"] != stored_request.get("request_id") or
         row["request_sha256"] != sha(canonical(stored_request).encode()) or
-        row["writer_sha256"] != sha(canonical(stored_writer).encode()) or
-        row["case_sha256"] != _frozen_source_digest(row["kind"], row["case_id"])):
+        row["writer_sha256"] != sha(canonical(stored_writer).encode())):
         raise ValueError("recorded request, writer or case binding is inconsistent")
+    if row["case_sha256"] != _frozen_source_digest(row["kind"], row["case_id"]):
+        if row["kind"] != "quality":
+            raise ValueError("recorded request, writer or case binding is inconsistent")
+        _sha_field(row["case_sha256"], "case_sha256")
+        return False
     if (row["request_id"] != bundle.bound_context.request_id or
         row["request_sha256"] != sha(bundle.canonical_json.encode()) or
         row["writer_sha256"] != sha(bundle.provider_response_schema_json.encode())):
@@ -983,6 +991,7 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
         raise ValueError("qualification attempts and envelopes differ")
     groups: dict[tuple[str, str], list[dict]] = {}
     series_owners: dict[str, tuple[str, str]] = {}
+    superseded: set[str] = set()
     for row in attempts:
         _validate_attempt_bindings(row, protocol)
         owner = (row["kind"], row["provider"])
@@ -993,7 +1002,9 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
         if sanitize_evidence(clean) != clean or sha(canonical(clean).encode()) != row["envelope_sha256"]:
             raise ValueError("qualification envelope is unsanitized or changed")
         prior = next((item for item in attempts if item["call_id"] == row.get("retry_of")), None)
-        _verify_recorded_result(row, clean, None if prior is None else (prior, by_envelope[prior["call_id"]]))
+        if _verify_recorded_result(row, clean, None if prior is None else (
+                prior, by_envelope[prior["call_id"]])) is False:
+            superseded.add(row["call_id"])
         groups.setdefault((row["kind"], row["provider"]), []).append(row)
     verdicts = {}
     for key, rows in groups.items():
@@ -1035,13 +1046,15 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
                     passed = row["status"] == "success" and bool(checks) and all(checks.values())
                 call_pass.append(passed)
             outcome = dict(zip((row["call_id"] for row in calls), call_pass))
+            stale = any(row["call_id"] in superseded for row in calls)
             case_pass = [outcome[chain[-1]["call_id"]] for chain in chains]
             if earlier and len(earlier[-1][1]) == len(expected) and all(earlier[-1][1]):
                 raise ValueError("successful series cannot be restarted")
-            earlier.append((calls, case_pass))
+            earlier.append((calls, [ok and not stale for ok in case_pass]))
             verdicts[series_id] = {"kind": key[0], "provider": key[1],
-                                   "passed": len(chains) == len(expected) and all(case_pass),
+                                   "passed": len(chains) == len(expected) and all(case_pass) and not stale,
                                    "incomplete": len(chains) != len(expected), "calls": len(calls),
+                                   "superseded_corpus": stale,
                                    "production_retries": sum(len(chain) - 1 for chain in chains),
                                    "contract_rejections": [row["call_id"] for row in calls
                                                            if row.get("contract_rejection")],
@@ -1054,7 +1067,7 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
         if (kind, provider) not in groups:
             verdicts[f"pending-{kind}-{provider}"] = {
                 "kind": kind, "provider": provider, "passed": False,
-                "incomplete": True, "calls": 0, "production_retries": 0,
+                "incomplete": True, "calls": 0, "superseded_corpus": False, "production_retries": 0,
                 "contract_rejections": [], "transient_failures": [], "failed_cases": []}
     return verdicts
 
@@ -1115,7 +1128,7 @@ def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
                         protocol: dict, rubric: dict) -> dict:
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus is not approved at its frozen digest")
-    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v4":
+    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v5":
         raise ValueError("quality rubric version differs")
     if assessment.get("schema_version") != "blind-assessment-v1" or mapping.get("schema_version") != "blind-mapping-v1" or mapping.get("seed") != protocol["quality"]["blind_seed"]:
         raise ValueError("blind input version or seed differs")
@@ -1654,7 +1667,9 @@ def _preflight_series_position(attempts: list[dict], *, kind: str, provider: str
     prior_chains = _case_chains(prior)
     if len(prior_chains) == len(expected) and all(
             chain[-1]["status"] == "success" and all(chain[-1]["checks"].values())
-            for chain in prior_chains):
+            for chain in prior_chains) and all(
+            row["case_sha256"] == _frozen_source_digest(row["kind"], row["case_id"])
+            for row in prior):
         raise ValueError("successful series cannot be restarted")
     if not restart_diagnosis or not restart_change:
         raise ValueError("restart requires diagnosis and concrete change")
@@ -1738,7 +1753,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if profile.get("commit_sha") != _current_commit():
         raise ValueError("qualification profile commit differs from current code HEAD")
     _assert_committed_qualification_code()
-    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
     validate_qualification(protocol)
     if case_id not in qualification_cases(kind, provider):
         raise ValueError("call differs from frozen qualification cases")
@@ -2139,7 +2154,7 @@ def main() -> int:
         print(json.dumps(probe_plan(strict_json(args.protocol.read_bytes())), indent=2))
         return 0
     if args.command == "blind":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         validate_qualification(protocol)
         if args.seed != protocol["quality"]["blind_seed"]:
             raise ValueError("blind seed differs from the frozen qualification protocol")
@@ -2157,7 +2172,7 @@ def main() -> int:
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
     if args.command == "prepare-blind-inputs":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -2166,7 +2181,7 @@ def main() -> int:
         _write_evidence_file(args.output, sources)
         return 0
     if args.command == "export-rater-packets":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
         packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
@@ -2179,12 +2194,12 @@ def main() -> int:
                           "ids": [row["id"] for row in packet["responses"]]}))
         return 0
     if args.command == "render-rater-prompt":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         args.output.write_text(render_rater_prompt(packet, protocol))
         return 0
     if args.command == "combine-quality-ratings":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         mapping = strict_json(args.mapping.read_bytes())
@@ -2236,7 +2251,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
     if args.command == "evaluate-qualification":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
         series = strict_json(args.series.read_bytes())
         envelopes = strict_json(args.envelopes.read_bytes())
         verdicts = validate_qualification_evidence(series, envelopes, protocol)

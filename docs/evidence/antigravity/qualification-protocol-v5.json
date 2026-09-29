@@ -45,7 +45,8 @@
     "cases": 6,
     "clean": 2,
     "corpus_operator_review": "approved_blanket",
-    "corpus_sha256": "0a4d52a5dea051985c2408d189582113124d691cb286b2707d3a251e729bd682",
+    "corpus_revision": 2,
+    "corpus_sha256": "a7e0ec3a77bbffd2c7c7cbd1151ee5c03be320e3c9479a0bed3fe9af40b6f071",
     "critical": [
       "Q1",
       "Q2"
@@ -69,7 +70,8 @@
       "steering"
     ],
     "rating_rubric": "quality-rubric-v1.json",
-    "rubric_sha256": "363dc27c30c1b36f66091be1991dad6069c8f749b90cba38ab7a5a44854a5244",
+    "rubric_sha256": "59826133f64cb37269b8f4f8a216c0c8169e7f78c0c3153b1a0bbb9c7379093d",
+    "superseded_corpus_rule": "Eine Qualitätsserie, deren aufgezeichnete Fallquelle nicht mehr dem eingefrorenen Korpus entspricht, bleibt sichtbar, wird als überholter Korpus geführt, zählt nie als bestanden und verhindert keinen Neustart.",
     "unblinding_rule": "Erst nach vollständigem Endurteil und dokumentierten Operatorantworten entblinden. Bei verfehlter Claude-Regel entscheidet der Operator danach über die experimentelle Auswahl."
   },
   "quality_rule": {
@@ -88,7 +90,7 @@
     "quality_per_provider": 6,
     "transport": 12
   },
-  "schema_version": "qualification-protocol-v4",
+  "schema_version": "qualification-protocol-v5",
   "slots": {
     "final_reviewer": {
       "canary": "final_reviewer",
@@ -119,18 +121,21 @@
       "shared_protection_and_quality": true
     }
   },
-  "superseded_by": "v5",
-  "superseded_reason": "Korpus-Revision 2 nach Entblindung von Revision 1",
   "supersedes": {
     "earlier": {
-      "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
-      "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
-      "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
-      "version": "v2"
+      "earlier": {
+        "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
+        "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
+        "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
+        "version": "v2"
+      },
+      "reason": "Produktionsgleiche Vertragsrückmeldung nach der ersten AGY-Qualitätsserie (Operatorentscheidung 29.09.2026)",
+      "v3_evidence": "Serie agy-quality-s1 (Q5: approval-invalid, Planfreigabe mit offenem Befund; Q6 nicht gestartet) bleibt als negative v3-Serie sichtbar.",
+      "version": "v3"
     },
-    "reason": "Produktionsgleiche Vertragsrückmeldung nach der ersten AGY-Qualitätsserie (Operatorentscheidung 29.09.2026)",
-    "v3_evidence": "Serie agy-quality-s1 (Q5: approval-invalid, Planfreigabe mit offenem Befund; Q6 nicht gestartet) bleibt als negative v3-Serie sichtbar.",
-    "version": "v3"
+    "reason": "Korpus-Revision 2 nach Entblindung von Revision 1 (Operatorentscheidung „Testfälle korrigieren, neu“, 29.09.2026)",
+    "v4_evidence": "Qualitätsserien agy-quality-s3 und claude-quality-s2 (Korpus-Revision 1) bleiben sichtbar; offizielles Ergebnis: beide Anbieter 4/4 Defekte, 0 erfundene kritische, je 3 unbegründete Befunde in Q5/Q6, Regel verfehlt. Sie sind für Revision 2 als überholter Korpus markiert und nicht wählbar.",
+    "version": "v4"
   },
   "target_status": "experimental",
   "transport": {
