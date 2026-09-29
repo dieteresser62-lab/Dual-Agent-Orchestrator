@@ -10,7 +10,7 @@ import pytest
 import workflow_run_setup
 from profile_helpers import historical_reviewer_state_profile
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
-from agent_config import AgentSettings
+from agent_config import AgentSettings, isolation_options_digest
 from contracts import PlannedSlice
 from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
@@ -33,6 +33,7 @@ SETUP_PATH = ROOT / "src/workflow_run_setup.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
+    "agent_config",
     "agent_adapters",
     "agent_roles",
     "agent_runtime",
@@ -118,6 +119,39 @@ def test_resume_requires_resolved_slot_settings() -> None:
     )
     with pytest.raises(StateSchemaError, match="slot_settings missing"):
         workflow_run_setup._apply_resumed_agent_profiles(SimpleNamespace(), state)
+
+
+def test_resume_rejects_changed_antigravity_home_before_binary_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
+    old = AgentSettings("antigravity", "agy", "gemini-3.1-pro-high", None, "high", antigravity_home="/home/operator/reviewer-one", antigravity_run_root="/var/tmp/dao-agy-review-1000")
+    new = replace(old, antigravity_home="/home/operator/reviewer-two")
+    profiles["reviewer"] = replace(profiles["reviewer"], provider="antigravity", model=old.model, binary=old.binary, isolation_options_sha256=isolation_options_digest(old))
+    state = init_workflow_state(
+        run_id="changed-agy-home", task_file="/tmp/task.md", branch="feature/qualification",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=profiles["implementer"], reviewer_profile=profiles["reviewer"],
+            final_reviewer_profile=profiles["final_reviewer"],
+        ),
+    )
+    class Certifications:
+        def require_occupancy(self, *_args, **_kwargs):
+            return None
+
+        def require(self, _provider, _role, slot, **_kwargs):
+            recorded = profiles[slot.value]
+            return SimpleNamespace(**{name: getattr(recorded, name) for name in (
+                "manufacturer", "capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256",
+            )}, digest=recorded.certification_sha256)
+
+    monkeypatch.setattr(workflow_run_setup, "load_role_certifications", lambda: Certifications())
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
+    slots = {slot: AgentSettings(profile.provider, profile.binary, profile.model, None, profile.effort) for slot, profile in profiles.items()}
+    slots["reviewer"] = new
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*slot=reviewer isolation paths changed"):
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 
 @pytest.mark.parametrize("slot", ("reviewer", "final_reviewer"))

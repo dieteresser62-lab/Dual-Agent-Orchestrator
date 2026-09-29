@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import threading
 
 import agent_runtime
+import antigravity_adapter
 
 import pytest
 
@@ -15,7 +19,8 @@ from agent_adapters import AgentOutputError, create_agent_pair
 from agent_config import AgentSettings
 from agent_roles import AgentRoleName, AgentSlot
 from antigravity_adapter import (
-    AntigravityTransport, AntigravityWorkspace, NativeAntigravityReviewAdapter,
+    AGY_DENY, AGY_TOOLS, AntigravityTransport, AntigravityWorkspace, NativeAntigravityReviewAdapter,
+    _expected_settings, _agent_markdown,
     classify_agy_stderr, strict_json_object,
 )
 from native_review_contract import NativeReviewContext
@@ -34,9 +39,16 @@ from provider_input_budget import (
     ProviderInputComponent,
     default_provider_input_budget_policy, measure_provider_input,
 )
+from provider_identity import ProviderIdentity
 
 
 FIXTURE = Path(__file__).parent / "fixtures/antigravity-envelopes-v1.json"
+
+
+@pytest.fixture(autouse=True)
+def _writable_test_run_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The agent sandbox need not permit writes to production's /var/tmp.
+    monkeypatch.setattr(antigravity_adapter, "AGY_RUN_PARENT", Path("/tmp"))
 
 
 def _cases() -> dict[str, dict]:
@@ -86,6 +98,22 @@ def _workspace(tmp_path: Path) -> AntigravityWorkspace:
     settings = home / "settings.json"
     settings.write_text("{}", encoding="utf-8")
     return AntigravityWorkspace(container, repo, input_dir, home, agent, settings, container / "agy.log")
+
+
+def _isolated_adapter(tmp_path: Path, run_root: Path) -> NativeAntigravityReviewAdapter:
+    home = tmp_path / "isolated-home"
+    token = home / ".gemini/antigravity-cli/antigravity-oauth-token"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_bytes(b"opaque-test-token")
+    token.chmod(0o600)
+    return NativeAntigravityReviewAdapter(_settings(17), isolated_home=home, run_root=run_root)
+
+
+def _effective_log(base: Path) -> str:
+    return (
+        f"I0000] CLI settings initialized: permissions=&{{Allow:[read_file({base})] "
+        f"Deny:[{' '.join(AGY_DENY)}] Ask:[]}}, toolPermission=request-review\n"
+    )
 
 
 def test_measured_envelopes_have_source_digests_and_distinct_rejections() -> None:
@@ -186,7 +214,7 @@ def test_prepared_command_is_measured_and_timeout_consistent(
 ) -> None:
     bundle = _bundle()
     workspace = _workspace(tmp_path)
-    adapter = NativeAntigravityReviewAdapter(_settings(timeout))
+    adapter = NativeAntigravityReviewAdapter(_settings(timeout), isolated_home=workspace.home)
     with pytest.raises(AgentOutputError, match="isolation workspace"):
         adapter.prepare_native_provider_input(bundle)
     adapter.bind_prepared_workspace(workspace)
@@ -450,8 +478,14 @@ def test_one_fake_agy_review_passes_envelope_writer_and_full_domain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bundle = _bundle()
-    adapter = NativeAntigravityReviewAdapter(_settings(17))
-    adapter.bind_prepared_workspace(_workspace(tmp_path))
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "evidence.txt").write_text("review evidence", encoding="utf-8")
+    records = source / ".orchestrator" / "artifacts" / "run" / "records"
+    records.mkdir(parents=True)
+    (records / "0001.json").write_text("authoritative record", encoding="utf-8")
+    personal = tmp_path / "personal-config.json"
+    personal.write_text("personal configuration", encoding="utf-8")
     defaults = default_provider_input_budget_policy()
     policy = ProviderInputBudgetPolicy(
         tuple(ProviderInputBudgetRule(
@@ -498,21 +532,324 @@ def test_one_fake_agy_review_passes_envelope_writer_and_full_domain(
         assert stdin_text is None and timeout_seconds == 17
         assert execution_root == adapter.prepared_workspace.container
         assert env["HOME"] == str(adapter.prepared_workspace.home)
+        assert env["WSL_INTEROP"] == "/run/WSL/test"
         assert "PWD" not in env
+        assert adapter.prepared_workspace.input_dir.stat().st_mode & 0o222 == 0
+        assert adapter.prepared_workspace.container.stat().st_mode & 0o222 == 0
+        base = adapter.prepared_workspace.container.parent
+        adapter.prepared_workspace.log_file.write_text(_effective_log(base) + "account=user@example.com\n", encoding="utf-8")
         process_started(321)
         return subprocess.CompletedProcess(command, 0, json.dumps(envelope), "")
 
     monkeypatch.setattr(agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: None)
+    monkeypatch.setenv("WSL_INTEROP", "/run/WSL/test")
     monkeypatch.setattr(agent_runtime, "_bound_launch_command", lambda _adapter, command: list(command))
     monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_process)
-    output = agent_runtime.run_native_review_agent(
-        adapter, bundle,
-        config=agent_runtime.OrchestratorConfig(repo_root=tmp_path, provider_input_budget=policy),
-        shorten=lambda value, _maximum: value or "",
-        operation="reviewer_slice_review", binding_fingerprint="c" * 64,
-        attempt_invocation=Ledger(),
-    )
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        output = agent_runtime.run_native_review_agent(
+            adapter, bundle,
+            config=agent_runtime.OrchestratorConfig(repo_root=source, provider_input_budget=policy),
+            shorten=lambda value, _maximum: value or "",
+            operation="reviewer_slice_review", binding_fingerprint="c" * 64,
+            attempt_invocation=Ledger(),
+        )
+        assert not list((Path(location) / "runs").glob("*.log"))
+        assert (source / "evidence.txt").read_text(encoding="utf-8") == "review evidence"
+        assert (records / "0001.json").read_text(encoding="utf-8") == "authoritative record"
+        assert personal.read_text(encoding="utf-8") == "personal configuration"
     assert output.result.approval is True
     assert output.request_id == bundle.bound_context.request_id
     assert agent_runtime.normalize_provider_usage(adapter.metadata).total_tokens == 7
     assert events == ["intent", "started"]
+
+
+def test_native_boundary_exact_files_readability_and_write_detection(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "proof.txt").write_text("visible evidence", encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        with pytest.raises(AgentOutputError, match="postcheck failed"):
+            with adapter.review_execution_boundary(source, None):
+                workspace = adapter.prepared_workspace
+                assert workspace is not None
+                base = workspace.container.parent
+                assert json.loads(workspace.settings_file.read_text()) == _expected_settings(base)
+                assert b"trustedWorkspaces" not in workspace.settings_file.read_bytes()
+                assert workspace.agent_file.read_bytes() == _agent_markdown(adapter.role_binding.policy)
+                assert [f"  - {tool}" for tool in AGY_TOOLS] == [
+                    line for line in workspace.agent_file.read_text().splitlines() if line.startswith("  - ")
+                ]
+                assert (workspace.repo / "proof.txt").read_text() == "visible evidence"
+                (workspace.input_dir / "request.json").write_text("{}")
+                adapter.seal_provider_input()
+                for target in (workspace.repo / "proof.txt", workspace.input_dir / "request.json", workspace.container / "new.txt"):
+                    with pytest.raises(PermissionError):
+                        fd = os.open(target, os.O_WRONLY | os.O_CREAT)
+                        os.close(fd)
+                adapter.before_provider_process()
+                workspace.log_file.write_text(_effective_log(base), encoding="utf-8")
+                (workspace.input_dir / "request.json").chmod(0o600)
+                (workspace.input_dir / "request.json").write_text("tampered")
+        assert not list((Path(location) / "runs").glob("dao-agy-run-*"))
+
+
+@pytest.mark.parametrize("mutation", ["settings", "numeric_boolean", "trust", "agent", "missing_log", "wrong_log"])
+def test_native_boundary_postcheck_is_fail_closed_and_secret_free(tmp_path: Path, mutation: str) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        with pytest.raises(AgentOutputError, match="postcheck failed") as caught:
+            with adapter.review_execution_boundary(source, None):
+                workspace = adapter.prepared_workspace
+                assert workspace is not None
+                base = workspace.container.parent
+                adapter.seal_provider_input()
+                adapter.before_provider_process()
+                if mutation == "settings":
+                    workspace.settings_file.write_text('{"toolPermission":"strict"}')
+                elif mutation == "numeric_boolean":
+                    value = _expected_settings(base)
+                    value["enableTerminalSandbox"] = 1
+                    workspace.settings_file.write_text(json.dumps(value))
+                elif mutation == "trust":
+                    value = _expected_settings(base)
+                    value["trustedWorkspaces"] = [str(base)]
+                    workspace.settings_file.write_text(json.dumps(value))
+                elif mutation == "agent":
+                    workspace.agent_file.write_text("replacement")
+                elif mutation == "wrong_log":
+                    workspace.log_file.write_text("account=user@example.com\nCLI settings initialized: wrong\n")
+        assert "user@example.com" not in str(caught.value)
+        assert not list((Path(location) / "runs").glob("*.log"))
+
+
+def test_native_boundary_preflight_and_resume_rebuild(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = NativeAntigravityReviewAdapter(
+            _settings(), isolated_home=tmp_path / "missing", run_root=Path(location) / "runs",
+        )
+        with pytest.raises(AgentOutputError, match="env -i HOME=") as caught:
+            with adapter.review_execution_boundary(source, None):
+                pass
+        assert caught.value.kind_hint is AgentFailureKind.AUTH
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        token = adapter.isolated_home / ".gemini/antigravity-cli/antigravity-oauth-token"
+        token.chmod(0o644)
+        with pytest.raises(AgentOutputError, match="0600"):
+            with adapter.review_execution_boundary(source, None):
+                pass
+        token.chmod(0o600)
+        token.unlink()
+        token.symlink_to(tmp_path / "decoy-token")
+        with pytest.raises(AgentOutputError, match="0600"):
+            with adapter.review_execution_boundary(source, None):
+                pass
+        token.unlink()
+        token.write_bytes(b"opaque-test-token")
+        token.chmod(0o600)
+        seen = []
+        for index in range(2):
+            with adapter.review_execution_boundary(source, None):
+                workspace = adapter.prepared_workspace
+                assert workspace is not None
+                seen.append(workspace.container.parent)
+                assert json.loads(workspace.settings_file.read_text()) == _expected_settings(seen[-1])
+                assert workspace.agent_file.read_bytes() == _agent_markdown(adapter.role_binding.policy)
+                if index == 0:
+                    workspace.settings_file.write_text("stale")
+                    workspace.agent_file.write_text("stale")
+        assert seen[0] != seen[1]
+        personal = NativeAntigravityReviewAdapter(
+            _settings(), isolated_home=Path.home(), run_root=Path(location) / "runs",
+        )
+        with pytest.raises(AgentOutputError, match="HOME must be isolated"):
+            with personal.review_execution_boundary(source, None):
+                pass
+
+
+def test_native_boundary_serializes_one_home(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        first = _isolated_adapter(tmp_path, Path(location) / "runs")
+        second = NativeAntigravityReviewAdapter(
+            _settings(), isolated_home=first.isolated_home, run_root=first.run_root,
+        )
+        entered = threading.Event()
+        exited = threading.Event()
+        second_entered = threading.Event()
+
+        def concurrent() -> None:
+            entered.set()
+            with second.review_execution_boundary(source, None):
+                second_entered.set()
+            exited.set()
+
+        with first.review_execution_boundary(source, None):
+            worker = threading.Thread(target=concurrent)
+            worker.start()
+            assert entered.wait(2)
+            assert not second_entered.wait(0.25)
+        assert exited.wait(3)
+        worker.join(timeout=3)
+
+
+def test_native_boundary_accepts_measured_default_normalization(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        with adapter.review_execution_boundary(source, None):
+            workspace = adapter.prepared_workspace
+            assert workspace is not None
+            base = workspace.container.parent
+            adapter.seal_provider_input()
+            adapter.before_provider_process()
+            normalized = _expected_settings(base)
+            normalized.pop("toolPermission")
+            workspace.settings_file.write_text(json.dumps(normalized), encoding="utf-8")
+            workspace.log_file.write_text(_effective_log(base), encoding="utf-8")
+
+
+def test_native_boundary_cleanup_does_not_follow_snapshot_symlink(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("untouched", encoding="utf-8")
+    (source / "link.txt").symlink_to(outside)
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        with pytest.raises(AgentOutputError, match="postcheck failed"):
+            with adapter.review_execution_boundary(source, None):
+                workspace = adapter.prepared_workspace
+                assert workspace is not None
+                assert (workspace.repo / "link.txt").is_symlink()
+                adapter.seal_provider_input()
+                adapter.before_provider_process()
+                workspace.log_file.write_text(_effective_log(workspace.container.parent), encoding="utf-8")
+                workspace.repo.chmod(0o700)
+                (workspace.repo / "link.txt").unlink()
+        assert outside.read_text(encoding="utf-8") == "untouched"
+
+
+def test_native_boundary_detects_write_into_run_base(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        with pytest.raises(AgentOutputError, match="postcheck failed"):
+            with adapter.review_execution_boundary(source, None):
+                workspace = adapter.prepared_workspace
+                assert workspace is not None
+                base = workspace.container.parent
+                adapter.seal_provider_input()
+                adapter.before_provider_process()
+                workspace.log_file.write_text(_effective_log(base), encoding="utf-8")
+                (base / "forbidden-write.txt").write_text("tampered", encoding="utf-8")
+        assert not list((Path(location) / "runs").glob("dao-agy-run-*"))
+
+
+def test_fresh_config_replaces_existing_hardlinks_without_touching_targets(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with tempfile.TemporaryDirectory(prefix="dao-agy-test-", dir="/tmp") as location:
+        adapter = _isolated_adapter(tmp_path, Path(location) / "runs")
+        original_settings = tmp_path / "personal-settings.json"
+        original_settings.write_text("personal settings", encoding="utf-8")
+        settings = adapter.isolated_home / ".gemini/antigravity-cli/settings.json"
+        os.link(original_settings, settings)
+        original_agent = tmp_path / "personal-agent.md"
+        original_agent.write_text("personal agent", encoding="utf-8")
+        agent = adapter.isolated_home / ".gemini/config/agents/dao-reviewer/agent.md"
+        agent.parent.mkdir(parents=True)
+        os.link(original_agent, agent)
+        with adapter.review_execution_boundary(source, None):
+            assert settings.stat().st_ino != original_settings.stat().st_ino
+            assert agent.stat().st_ino != original_agent.stat().st_ino
+        assert original_settings.read_text(encoding="utf-8") == "personal settings"
+        assert original_agent.read_text(encoding="utf-8") == "personal agent"
+
+
+def test_native_profile_matches_all_phase0_protection_classes() -> None:
+    base = Path("/var/tmp/dao-agy-run-example")
+    settings = _expected_settings(base)
+    assert settings["permissions"] == {
+        "allow": [f"read_file({base})"],
+        "deny": [
+            "command(*)", "write_file(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
+            "read_file(/tmp)", "read_file(/home)", "read_file(/root)",
+            "read_file(/mnt)", "read_file(/proc)", "read_file(/run)",
+        ],
+    }
+    assert settings["toolPermission"] == "request-review"
+    assert "trustedWorkspaces" not in settings
+    agent = _agent_markdown(binding_for_role(AgentRoleName.REVIEWER).policy).decode()
+    for rule in (
+        "inheritCustomizations: false", "inheritMcp: false", "subagent: false",
+        'commandExecutionPolicy: "off"',
+    ):
+        assert rule in agent
+    assert "run_command" not in agent and "mcp" not in AGY_TOOLS
+    # P1 customization, P2 file writes, P3 shell/WSL/links, P4 MCP/web/delegation,
+    # P5 explicit external reads and P6 unlisted sibling reads each depend on this
+    # exact measured surface; the live assertions remain in phase-0-v1.json.
+
+
+def test_capability_probe_uses_isolated_home_and_neutral_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = NativeAntigravityReviewAdapter(_settings(), isolated_home=tmp_path / "isolated")
+    monkeypatch.setenv("AGY_HOST_SECRET", "do-not-inherit")
+    monkeypatch.setenv("WSL_INTEROP", "/run/WSL/test")
+    observed = []
+
+    def fake_run(command, **kwargs):
+        observed.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "1.2.12\n", "")
+
+    monkeypatch.setattr(antigravity_adapter.subprocess, "run", fake_run)
+    assert agent_runtime._capability_runner(adapter)(["agy", "--version"]) == (0, "1.2.12\n", "")
+    command, options = observed[0]
+    assert command == ["agy", "--version"] and options["cwd"] == "/"
+    assert options["env"]["HOME"] == str(adapter.isolated_home)
+    assert options["env"]["WSL_INTEROP"] == "/run/WSL/test"
+    assert "AGY_HOST_SECRET" not in options["env"]
+
+
+def test_resume_identity_recheck_uses_isolated_capability_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "agy"
+    binary.write_bytes(b"fake binary")
+    binary.chmod(0o755)
+    adapter = NativeAntigravityReviewAdapter(
+        AgentSettings("antigravity", str(binary), "gemini-3.1-pro-high", 17, "high"),
+        isolated_home=tmp_path / "isolated",
+    )
+    identity = ProviderIdentity(
+        str(binary), str(binary), "1.2.12", "a" * 64,
+        None, None, None,
+    )
+    adapter.provider_identity = identity
+    adapter.capability_verified = True
+    seen = []
+
+    def capture(entry, args, runner, *, path, expected):
+        assert entry == str(binary) and expected is identity
+        seen.append(runner([entry, *args]))
+        return identity
+
+    def fake_run(command, **kwargs):
+        assert kwargs["env"]["HOME"] == str(adapter.isolated_home)
+        assert kwargs["cwd"] == "/"
+        return subprocess.CompletedProcess(command, 0, "1.2.12", "")
+
+    monkeypatch.setattr(agent_runtime, "capture_provider_identity", capture)
+    monkeypatch.setattr(antigravity_adapter.subprocess, "run", fake_run)
+    agent_runtime.verify_agent_capabilities(adapter)
+    assert seen == [(0, "1.2.12", "")]

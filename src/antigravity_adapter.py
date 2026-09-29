@@ -1,21 +1,31 @@
 """Measured AGY print transport composed with the native reviewer role binding.
 
-The isolation owner supplies the workspace. This module never creates a HOME,
-settings, agent definition, or repository snapshot on the provider's behalf.
+The adapter owns the measured native isolation boundary around each review.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import shlex
+import fcntl
+import hashlib
+import logging
+import stat
+import subprocess
+import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from agent_adapters import (
     AgentOutputError, CapabilitySpec, _BaseAdapter,
 )
-from agent_config import AgentSettings
+from agent_config import AgentSettings, default_antigravity_home, default_antigravity_run_root
 from agent_roles import AgentRoleName
 from native_provider_schema import (
     NativeProviderSchemaError, assert_provider_capabilities,
@@ -30,6 +40,14 @@ from workflow_state import AgentFailureKind
 
 
 STDERR_CLASSIFIER_VERSION = "agy-stderr-v1"
+logger = logging.getLogger(__name__)
+AGY_DENY = (
+    "command(*)", "write_file(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
+    "read_file(/tmp)", "read_file(/home)", "read_file(/root)",
+    "read_file(/mnt)", "read_file(/proc)", "read_file(/run)",
+)
+AGY_TOOLS = ("view_file", "grep_search", "list_dir", "find_by_name", "finish")
+AGY_RUN_PARENT = Path("/var/tmp")
 _TIMEOUT = re.compile(r"^\[agy\] print timeout after [0-9]+[smh](?:[0-9]+[smh])* with turn in progress; returning partial output$", re.I)
 _SOFT_DENIAL = re.compile(r'^jetski: no output produced — a tool required the "read_file" permission that headless mode cannot prompt for, so it was auto-denied\..*$', re.I | re.S)
 _AUTH = re.compile(r"(?:authentication required|not authenticated|login required)", re.I)
@@ -128,6 +146,128 @@ class AntigravityWorkspace:
             raise ValueError("antigravity log path is invalid")
 
 
+def _regular_private_token(home: Path) -> bool:
+    token = home / ".gemini/antigravity-cli/antigravity-oauth-token"
+    cursor = home
+    for part in (".gemini", "antigravity-cli"):
+        cursor = cursor / part
+        if cursor.is_symlink() or not cursor.is_dir():
+            return False
+    try:
+        token_stat = token.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(token_stat.st_mode)
+        and stat.S_IMODE(token_stat.st_mode) == 0o600
+        and token_stat.st_uid == os.getuid()
+    )
+
+
+def _check_no_symlink_ancestors(path: Path) -> None:
+    cursor = path
+    while cursor != cursor.parent:
+        if cursor.is_symlink():
+            raise AgentOutputError("antigravity isolation path traverses a symlink", kind_hint=AgentFailureKind.PERMISSION)
+        cursor = cursor.parent
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    _check_no_symlink_ancestors(path)
+    descriptor, temporary = tempfile.mkstemp(prefix=".dao-reviewer-", dir=path.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        os.close(descriptor)
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _tree_fingerprint(root: Path) -> tuple[tuple[object, ...], ...]:
+    records = []
+    for path in (root, *sorted(root.rglob("*"))):
+        metadata = path.lstat()
+        mode = metadata.st_mode
+        kind = "link" if stat.S_ISLNK(mode) else "dir" if stat.S_ISDIR(mode) else "file" if stat.S_ISREG(mode) else "other"
+        if kind == "file":
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif kind == "link":
+            digest = os.readlink(path)
+        else:
+            digest = ""
+        records.append((
+            path.relative_to(root).as_posix(), kind, stat.S_IMODE(mode),
+            metadata.st_dev, metadata.st_ino, metadata.st_nlink, digest,
+        ))
+    return tuple(records)
+
+
+def _same_semantic_json(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_semantic_json(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_semantic_json(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return left == right
+
+
+def _agent_markdown(policy: str) -> bytes:
+    tools = "".join(f"  - {tool}\n" for tool in AGY_TOOLS)
+    return (
+        "---\nname: dao-reviewer\n"
+        "description: Read-only reviewer for Dual-Agent-Orchestrator reviews. Reads the provided files and returns "
+        "the schema-bound result.\n"
+        f"tools:\n{tools}mainAgent: true\nsubagent: false\ninheritCustomizations: false\ninheritMcp: false\n"
+        f'commandExecutionPolicy: "off"\n---\n# System Prompt\n{policy}\n'
+    ).encode("utf-8")
+
+
+def _expected_settings(base: Path) -> dict[str, object]:
+    return {
+        "enableTerminalSandbox": True,
+        "permissions": {"allow": [f"read_file({base})"], "deny": list(AGY_DENY)},
+        "showFeedbackSurvey": False, "showTips": False,
+        "toolPermission": "request-review",
+    }
+
+
+def _check_post_run(workspace: AntigravityWorkspace, base: Path, sealed: tuple, agent_bytes: bytes) -> None:
+    try:
+        if _tree_fingerprint(workspace.container) != sealed or set(base.iterdir()) != {workspace.container}:
+            raise ValueError("review evidence or container changed")
+        if workspace.settings_file.is_symlink() or not workspace.settings_file.is_file():
+            raise ValueError("settings file changed type")
+        settings = json.loads(workspace.settings_file.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate)
+        expected = _expected_settings(base)
+        # AGY removes this documented default when it rewrites settings.json.
+        if isinstance(settings, dict) and "toolPermission" not in settings:
+            settings["toolPermission"] = "request-review"
+        if not _same_semantic_json(settings, expected) or "trustedWorkspaces" in settings:
+            raise ValueError("settings changed")
+        if workspace.agent_file.is_symlink() or workspace.agent_file.read_bytes() != agent_bytes:
+            raise ValueError("agent changed")
+        expected_line = (
+            f"CLI settings initialized: permissions=&{{Allow:[read_file({base})] "
+            f"Deny:[{' '.join(AGY_DENY)}] Ask:[]}}, toolPermission=request-review"
+        )
+        if workspace.log_file.is_symlink() or not workspace.log_file.is_file():
+            raise ValueError("runtime log missing")
+        with workspace.log_file.open(encoding="utf-8", errors="replace") as stream:
+            lines = [line.rstrip("\r\n") for line in stream if "CLI settings initialized:" in line]
+        if len(lines) != 1 or lines[0].split("CLI settings initialized: ", 1)[-1] != expected_line.removeprefix("CLI settings initialized: "):
+            raise ValueError("effective settings log differs")
+    except (OSError, ValueError, TypeError) as exc:
+        # The log may contain the account email; never include its text or JSON values.
+        raise AgentOutputError("antigravity isolation postcheck failed", kind_hint=AgentFailureKind.PERMISSION) from None
+
+
 class AntigravityTransport:
     """Provider-only transport facts; no role policy or contract is embedded here."""
 
@@ -213,7 +353,10 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         ),
     )
 
-    def __init__(self, settings: AgentSettings, *, role_binding: RoleBinding | None = None) -> None:
+    def __init__(
+        self, settings: AgentSettings, *, role_binding: RoleBinding | None = None,
+        isolated_home: Path | None = None, run_root: Path | None = None,
+    ) -> None:
         if settings.name != "antigravity" or settings.effort not in {"low", "medium", "high", "max"}:
             raise ValueError("antigravity requires an explicit measured model and effort")
         super().__init__(settings)
@@ -223,10 +366,165 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         self.prepared_workspace: AntigravityWorkspace | None = None
         self._writer_json: str | None = None
         self._request_id: str | None = None
+        self.isolated_home = Path(isolated_home or settings.antigravity_home or default_antigravity_home()).expanduser().absolute()
+        self.run_root = Path(run_root or settings.antigravity_run_root or default_antigravity_run_root()).expanduser().absolute()
+        self._sealed: tuple | None = None
+        self._process_started = False
+        self._base: Path | None = None
+
+    def _isolated_environment(self, *, include_wsl: bool = False) -> dict[str, str]:
+        env = {
+            "HOME": str(self.isolated_home), "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "LANG": "C.UTF-8", "TERM": "dumb", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+        }
+        if include_wsl:
+            for key in self.environment_passthrough:
+                if key in os.environ:
+                    env[key] = os.environ[key]
+        return env
+
+    def run_capability_command(self, command: list[str]) -> tuple[int, str, str]:
+        """Inspect the binary without loading personal or repository configuration."""
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=20, check=False,
+                env=self._isolated_environment(include_wsl=True), cwd="/",
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, "", "isolated capability probe failed"
+        if result.returncode:
+            return result.returncode, "", "isolated capability probe failed"
+        return result.returncode, result.stdout or "", result.stderr or ""
+
+    @contextmanager
+    def review_execution_boundary(
+        self, repo_root: Path, manifest_paths: tuple[str, ...] | None,
+    ) -> Iterator[None]:
+        """Hold the home lock from fresh configuration through post-run verification."""
+        from agent_runtime import ReviewerWorkspace, create_read_only_reviewer_workspace
+
+        home = self.isolated_home
+        root = self.run_root
+        _check_no_symlink_ancestors(home)
+        _check_no_symlink_ancestors(root)
+        home = home.resolve(strict=False)
+        root = root.resolve(strict=False)
+        source = repo_root.resolve()
+        if (home == Path.home().resolve() or home.is_relative_to(Path.home().resolve() / ".gemini")
+            or home.is_relative_to(source) or source.is_relative_to(home)):
+            raise AgentOutputError("antigravity HOME must be isolated outside the reviewed repository", kind_hint=AgentFailureKind.PERMISSION)
+        if not root.is_relative_to(AGY_RUN_PARENT) or root == AGY_RUN_PARENT:
+            raise AgentOutputError("antigravity run root must be below /var/tmp", kind_hint=AgentFailureKind.PERMISSION)
+        if (root.is_relative_to(source) or source.is_relative_to(root)
+            or root.is_relative_to(home) or home.is_relative_to(root)):
+            raise AgentOutputError("antigravity run root overlaps HOME or the reviewed repository", kind_hint=AgentFailureKind.PERMISSION)
+        if not home.is_dir() or not _regular_private_token(home):
+            login = (
+                f"env -i HOME={shlex.quote(str(home))} PATH=/usr/local/bin:/usr/bin:/bin "
+                f"LANG=C.UTF-8 TERM=xterm-256color AGY_CLI_DISABLE_AUTO_UPDATE=true {shlex.quote(self.settings.binary)}"
+            )
+            raise AgentOutputError(
+                f"antigravity isolated login missing or token is not a regular 0600 file; run once interactively: {login}",
+                kind_hint=AgentFailureKind.AUTH,
+            )
+        lock_path = home / ".dao-reviewer.lock"
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        acquired = False
+        deadline = time.monotonic() + 15
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    time.sleep(0.1)
+            if not acquired:
+                raise AgentOutputError("antigravity isolated HOME is busy", kind_hint=AgentFailureKind.PERMISSION)
+            if not _regular_private_token(home):
+                raise AgentOutputError("antigravity isolated login changed before start", kind_hint=AgentFailureKind.AUTH)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if root.is_symlink() or not root.is_dir() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+                raise AgentOutputError("antigravity run root is not private", kind_hint=AgentFailureKind.PERMISSION)
+            base = Path(tempfile.mkdtemp(prefix="dao-agy-run-", dir=root))
+            self._base = base
+            snapshot = None
+            log_file = root / f"{base.name}.log"
+            try:
+                snapshot = create_read_only_reviewer_workspace(source, manifest_paths, base_dir=base)
+                container = snapshot.container
+                container.chmod(0o700)
+                input_dir = container / "input"
+                input_dir.mkdir(mode=0o700)
+                settings_dir = home / ".gemini" / "antigravity-cli"
+                agent_dir = home / ".gemini" / "config" / "agents" / "dao-reviewer"
+                _check_no_symlink_ancestors(settings_dir)
+                _check_no_symlink_ancestors(agent_dir)
+                settings_dir.mkdir(parents=True, exist_ok=True)
+                agent_dir.mkdir(parents=True, exist_ok=True)
+                settings_file = settings_dir / "settings.json"
+                agent_file = agent_dir / "agent.md"
+                agent_bytes = _agent_markdown(self.role_binding.policy)
+                settings_bytes = (json.dumps(_expected_settings(base), indent=2, sort_keys=True) + "\n").encode()
+                _write_private(settings_file, settings_bytes)
+                _write_private(agent_file, agent_bytes)
+                _write_private(log_file, b"")
+                workspace = AntigravityWorkspace(container, snapshot.root, input_dir, home, agent_file, settings_file, log_file)
+                self.bind_prepared_workspace(workspace)
+                self._sealed = None
+                self._process_started = False
+                try:
+                    yield
+                finally:
+                    if self._process_started:
+                        if self._sealed is None:
+                            raise AgentOutputError("antigravity input was not sealed", kind_hint=AgentFailureKind.PERMISSION)
+                        _check_post_run(workspace, base, self._sealed, agent_bytes)
+            finally:
+                self.prepared_workspace = None
+                self._sealed = None
+                self._base = None
+                cleanup_started = time.monotonic()
+                if snapshot is not None:
+                    snapshot.cleanup()
+                ReviewerWorkspace(root=base, container=base).cleanup()
+                log_file.unlink(missing_ok=True)
+                elapsed = time.monotonic() - cleanup_started
+                logger.info("Antigravity reviewer workspace cleanup elapsed=%.2fs", elapsed)
+                if elapsed > 15:
+                    logger.warning("Antigravity reviewer workspace cleanup exceeded 15 seconds")
+                    raise AgentOutputError("antigravity isolation cleanup exceeded 15 seconds", kind_hint=AgentFailureKind.PERMISSION)
+                if base.exists() or log_file.exists():
+                    raise AgentOutputError("antigravity isolation cleanup incomplete", kind_hint=AgentFailureKind.PERMISSION)
+        finally:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def seal_provider_input(self) -> None:
+        workspace = self.prepared_workspace
+        if workspace is None or self._base is None:
+            raise AgentOutputError("antigravity isolation workspace is not prepared", kind_hint=AgentFailureKind.PERMISSION)
+        for path in sorted(workspace.input_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                raise AgentOutputError("antigravity input contains an unsafe path", kind_hint=AgentFailureKind.PERMISSION)
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        workspace.input_dir.chmod(0o555)
+        workspace.container.chmod(0o555)
+        self._sealed = _tree_fingerprint(workspace.container)
+
+    def before_provider_process(self) -> None:
+        if self._sealed is None or self.prepared_workspace is None:
+            raise AgentOutputError("antigravity isolation was not sealed", kind_hint=AgentFailureKind.PERMISSION)
+        if _tree_fingerprint(self.prepared_workspace.container) != self._sealed:
+            raise AgentOutputError("antigravity isolation changed before start", kind_hint=AgentFailureKind.PERMISSION)
+        self._process_started = True
 
     def bind_prepared_workspace(self, workspace: AntigravityWorkspace) -> None:
         if not isinstance(workspace, AntigravityWorkspace):
             raise TypeError("antigravity requires a prepared isolation workspace")
+        if workspace.home.resolve() != self.isolated_home.resolve():
+            raise ValueError("antigravity workspace HOME differs from the isolated profile")
         self.prepared_workspace = workspace
 
     def prepared_execution_root(self) -> Path:
@@ -271,10 +569,7 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
                 ProviderInputComponent("response_schema", schema_path.read_text(encoding="utf-8")),
                 ProviderInputComponent("start_directive", directive),
             ]
-            self.env = {
-                "HOME": str(workspace.home), "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "LANG": "C.UTF-8", "TERM": "dumb", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
-            }
+            self.env = self._isolated_environment()
             self._writer_json = schema_json
             self._request_id = bundle.bound_context.request_id
             return PreparedProviderInput(tuple(command), None, tuple(components), allow_duplicate_indexed_content=True)
@@ -323,4 +618,4 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         super().cleanup()
         self._writer_json = None
         self._request_id = None
-        self.prepared_workspace = None
+        # The outer review_execution_boundary owns the workspace and postcheck.

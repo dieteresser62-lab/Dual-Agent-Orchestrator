@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import errno
 import hashlib
 import logging
@@ -848,10 +849,14 @@ def _copy_review_snapshot(
 def create_read_only_reviewer_workspace(
     repo_root: Path,
     manifest_paths: tuple[str, ...] | None = None,
+    *,
+    base_dir: Path | None = None,
 ) -> ReviewerWorkspace:
     """Copy canonical repository files and remove write bits without following links."""
     source = repo_root.resolve()
-    container = Path(tempfile.mkdtemp(prefix="dao-review-workspace-"))
+    container = Path(tempfile.mkdtemp(
+        prefix="dao-review-workspace-", dir=str(base_dir) if base_dir is not None else None,
+    ))
     destination = container / "repo"
     started = time.monotonic()
     logger.info("Preparing selective read-only reviewer snapshot.")
@@ -932,6 +937,11 @@ def _binary_remedy(adapter: AgentAdapter) -> str:
     )
 
 
+def _capability_runner(adapter: AgentAdapter) -> Callable[[list[str]], tuple[int, str, str]]:
+    isolated = getattr(adapter, "run_capability_command", None)
+    return isolated if callable(isolated) else run_local_command
+
+
 def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = None) -> ProviderIdentity:
     bound = getattr(adapter, "provider_identity", None)
     slot = getattr(adapter, "bound_slot", adapter.name)
@@ -945,7 +955,7 @@ def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = 
         raise AgentCompatibilityError(f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}")
     try:
         current = capture_provider_identity(
-            entry, adapter.capability.version_args, run_local_command,
+            entry, adapter.capability.version_args, _capability_runner(adapter),
             path=search_path, expected=bound,
         )
     except ValueError as exc:
@@ -992,7 +1002,7 @@ def verify_agent_capabilities(
         ) from exc
 
     identities, failures = inspect_provider_installations(
-        adapter.cli_binary, adapter.capability.version_args, run_local_command,
+        adapter.cli_binary, adapter.capability.version_args, _capability_runner(adapter),
         path=search_path,
     )
     if len(identities) + len(failures) > 1:
@@ -1027,7 +1037,7 @@ def verify_agent_capabilities(
                 f"Unsupported {adapter.name} CLI version {version_text!r}: {exc}"
             ) from exc
 
-    help_rc, help_out, help_err = run_local_command(
+    help_rc, help_out, help_err = _capability_runner(adapter)(
         [*identity.launch_prefix, *adapter.capability.help_args]
     )
     help_text = "\n".join(part for part in (help_out, help_err) if part)
@@ -1594,7 +1604,6 @@ def run_agent(
         raise ValueError("agent execution root must be an existing directory")
     timeout_seconds = adapter.timeout
     extra_files: dict[str, str] = {}
-
     invocation_started = time.monotonic()
     try:
         if not operation:
@@ -1675,6 +1684,7 @@ def run_agent(
         if attempt_invocation is not None:
             attempt_invocation.begin(measurement, bootstrap_context)
 
+        getattr(adapter, "before_provider_process", lambda: None)()
         result = _run_agent_process(
             adapter,
             command_parts,
@@ -1794,20 +1804,26 @@ def run_native_review_agent(
     response_callback: Callable[[str], None] | None = None,
 ) -> NativeAgentReviewOutput:
     """Run one native Claude review without legacy marker or repair parsing."""
-    prepared = adapter.prepare_native_provider_input(bundle)
-    canonical = run_agent(
-        adapter,
-        bundle.canonical_json,
-        config=config,
-        shorten=shorten,
-        reviewer_repository_required=True,
-        reviewer_manifest_paths=reviewer_manifest_paths,
-        operation=operation,
-        binding_fingerprint=binding_fingerprint,
-        pre_start_callback=pre_start_callback,
-        attempt_invocation=attempt_invocation,
-        prepared_provider_input=prepared,
-    )
+    boundary = getattr(adapter, "review_execution_boundary", None)
+    scope = boundary(config.repo_root, reviewer_manifest_paths) if callable(boundary) else nullcontext()
+    with scope:
+        prepared = adapter.prepare_native_provider_input(bundle)
+        seal = getattr(adapter, "seal_provider_input", None)
+        if callable(seal):
+            seal()
+        canonical = run_agent(
+            adapter,
+            bundle.canonical_json,
+            config=config,
+            shorten=shorten,
+            reviewer_repository_required=True,
+            reviewer_manifest_paths=reviewer_manifest_paths,
+            operation=operation,
+            binding_fingerprint=binding_fingerprint,
+            pre_start_callback=pre_start_callback,
+            attempt_invocation=attempt_invocation,
+            prepared_provider_input=prepared,
+        )
     if response_callback is not None:
         response_callback(canonical)
     try:

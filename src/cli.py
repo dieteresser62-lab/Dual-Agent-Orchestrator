@@ -445,7 +445,7 @@ def load_repo_config(path: Path) -> RepoConfig:
         "root",
     )
     try:
-        roles, profiles = parse_profile_tables(raw.get("roles"), raw.get("agent_profiles"))
+        roles, profiles = parse_profile_tables(raw.get("roles"), raw.get("agent_profiles"), repository_root=resolved.parent)
     except AgentConfigError as exc:
         raise ConfigError(str(exc)) from exc
     occupancy = tuple((slot.value, role_for_slot(slot).value, profiles[roles[slot]].provider) for slot in AgentSlot)

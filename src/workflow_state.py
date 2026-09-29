@@ -224,6 +224,7 @@ class AgentProfileBinding:
     binary_identity_sha256: str
     max_budget_usd: float | None = None
     profile_name: str = field(kw_only=True)
+    isolation_options_sha256: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str) or not self.model.strip():
@@ -256,16 +257,24 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile binary identity SHA-256 is invalid")
         if self.binary_identity_sha256 != self.binary_identity.digest:
             raise WorkflowStateValidationError("agent profile binary identity digest differs")
+        if self.isolation_options_sha256 is not None and (
+            not isinstance(self.isolation_options_sha256, str)
+            or SHA256_PATTERN.fullmatch(self.isolation_options_sha256) is None
+        ):
+            raise WorkflowStateValidationError("agent profile isolation options SHA-256 is invalid")
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result = {
             **{name: getattr(self, name) for name in self.__dataclass_fields__ if name != "binary_identity"},
             "binary_identity": self.binary_identity.to_dict(),
         }
+        if self.isolation_options_sha256 is None:
+            result.pop("isolation_options_sha256")
+        return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
-        if not (set(cls.__dataclass_fields__) - {"max_budget_usd"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
+        if not (set(cls.__dataclass_fields__) - {"max_budget_usd", "isolation_options_sha256"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
             raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
         try:
             return cls(**{**raw, "binary_identity": ProviderIdentity.from_dict(raw["binary_identity"])})

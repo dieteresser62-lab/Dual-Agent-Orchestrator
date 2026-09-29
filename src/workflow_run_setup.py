@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from artifact_models import PlanPayload
+from agent_config import isolation_options_digest
 from agent_roles import AgentSlot, role_for_slot
 from role_certification import load_role_certifications, CertificationError
 from git_service import (
@@ -399,6 +400,8 @@ def _apply_resumed_agent_profiles(
             or profile.policy_sha256 != certificate.policy_sha256
             or profile.certification_sha256 != certificate.digest):
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
+        if profile.isolation_options_sha256 != isolation_options_digest(current):
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} isolation paths changed")
         for field, profile_field in (("binary", "binary"), ("model", "model"), ("timeout", "timeout_seconds"), ("effort", "effort")):
             selected = getattr(current, "timeout_seconds" if field == "timeout" else field)
             recorded_value = getattr(profile, profile_field)

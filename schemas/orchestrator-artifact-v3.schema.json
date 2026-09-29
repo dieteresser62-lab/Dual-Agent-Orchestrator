@@ -1198,6 +1198,7 @@
         "policy_sha256": {"$ref": "#/$defs/sha256"},
         "certification_sha256": {"$ref": "#/$defs/sha256"},
         "binary_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "isolation_options_sha256": {"$ref": "#/$defs/sha256"},
         "binary_identity": {"$ref": "#/$defs/provider_identity"}
       }
     },

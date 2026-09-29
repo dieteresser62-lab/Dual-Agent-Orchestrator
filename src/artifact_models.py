@@ -253,6 +253,7 @@ class RoleProfilePayload:
     binary_identity_sha256: str
     max_budget_usd: float | None = None
     profile_name: str = dataclass_field(kw_only=True)
+    isolation_options_sha256: str | None = dataclass_field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_text(self.model, "model")
@@ -276,6 +277,8 @@ class RoleProfilePayload:
             raise ArtifactValidationError("profile binary identity digest differs")
         if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
             raise ArtifactValidationError("profile USD budget is invalid")
+        if self.isolation_options_sha256 is not None:
+            _require_sha256(self.isolation_options_sha256, "isolation_options_sha256")
 
 
 
@@ -2396,6 +2399,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     if isinstance(payload, RunProfilePayload):
         for slot in ("implementer", "reviewer", "final_reviewer"):
             raw[slot]["binary_identity"]["interpreter_args"] = list(raw[slot]["binary_identity"]["interpreter_args"])
+            if raw[slot]["isolation_options_sha256"] is None:
+                raw[slot].pop("isolation_options_sha256")
     if (isinstance(payload, RunProfilePayload)
         and payload.reducer_version != STATE_PROJECTION_REDUCER_VERSION):
         raw.pop("merge_completed_branch", None)

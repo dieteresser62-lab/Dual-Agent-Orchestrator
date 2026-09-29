@@ -1184,6 +1184,9 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "src/agent_runtime.py",
         "tests/test_antigravity_adapter.py",
         "tests/test_cli.py",
+        "tests/test_agent_config.py",
+        "tests/test_workflow_run_setup.py",
+        "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
         "tests/fixtures/antigravity-envelopes-v1.json",
     }
     retired = (
@@ -2245,7 +2248,7 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
     configs = 0
     commands = 0
     final_slot = False
-    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md"):
+    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md", "docs/reference/antigravity-reviewer.md"):
         source = (ROOT / name).read_text(encoding="utf-8")
         for index, snippet in enumerate(_fenced_examples(source, "toml")):
             tomllib.loads(snippet)

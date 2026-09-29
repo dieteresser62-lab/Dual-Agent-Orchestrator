@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from agent_adapters import build_slot_agent_registry
+from agent_config import isolation_options_digest
 from agent_roles import AgentSlot, role_for_slot
 from role_certification import load_role_certifications
 from agent_runtime import OrchestratorConfig
@@ -345,6 +346,7 @@ def _create_production_state(
             certification_sha256=certificate.digest,
             binary_identity=slot_identities[slot.value],
             binary_identity_sha256=slot_identities[slot.value].digest,
+            isolation_options_sha256=isolation_options_digest(settings),
         )
     return fresh_state(
         task_file=task_file,
