@@ -314,6 +314,19 @@ def _native_implementer_retry_feedback(
     )
 
 
+def final_review_discovery_capacity_criterion(max_new_findings: int | None) -> str:
+    """Return the production final-review criterion for the bound discovery capacity."""
+    return (
+        "This final review request binds max_new_findings="
+        f"{max_new_findings}. Return "
+        "FINAL_REVIEW_COMPLETED only after a complete scan and set "
+        "scan_complete=true. If the scan reaches that capacity, return a stop_request "
+        f"with rule_id={DISCOVERY_OUTPUT_LIMIT_RULE_ID}; the partial finding set is "
+        "not authoritative, must not be truncated, and must not be continued through "
+        "pages, cursors, or another automatic provider call."
+    )
+
+
 def _native_review_acceptance_criteria(
     *,
     state: WorkflowState,
@@ -354,13 +367,7 @@ def _native_review_acceptance_criteria(
         else None
     )
     discovery_capacity_criterion = (
-        "This final review request binds max_new_findings="
-        f"{max_new_findings}. Return "
-        "FINAL_REVIEW_COMPLETED only after a complete scan and set "
-        "scan_complete=true. If the scan reaches that capacity, return a stop_request "
-        f"with rule_id={DISCOVERY_OUTPUT_LIMIT_RULE_ID}; the partial finding set is "
-        "not authoritative, must not be truncated, and must not be continued through "
-        "pages, cursors, or another automatic provider call."
+        final_review_discovery_capacity_criterion(max_new_findings)
         if review_kind is NativeReviewKind.FINAL_REVIEW
         else None
     )

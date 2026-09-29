@@ -418,6 +418,27 @@ def test_quality_requests_use_frozen_context_without_hidden_proof(tmp_path: Path
             assert bundle.document["review_kind"] == "final_review"
 
 
+def test_final_review_qualification_requests_carry_production_capacity_criterion() -> None:
+    from native_review_request import build_native_review_request
+    from workflow_requests import final_review_discovery_capacity_criterion
+
+    for kind, case_id, capacity in (("transport", "F5:1", 2), ("transport", "F6:2", 2),
+                                    ("quality", "Q4", 512), ("quality", "Q6", 512)):
+        spec = probe.build_qualification_spec(kind, case_id, run_id=f"capacity-{case_id}")
+        criterion = final_review_discovery_capacity_criterion(capacity)
+        assert spec.acceptance_criteria[-1] == criterion
+        assert spec.acceptance_criteria.count(criterion) == 1
+        assert "rule_id=DISCOVERY_OUTPUT_LIMIT" in criterion
+        bundle = build_native_review_request(spec, profile="antigravity")
+        assert criterion in bundle.document["acceptance_criteria"]
+    for kind, case_id in (("transport", "F1:1"), ("transport", "F4:1"), ("quality", "Q1"),
+                          ("quality", "Q3"), ("large_output", "512")):
+        spec = probe.build_qualification_spec(kind, case_id, run_id=f"capacity-{case_id}")
+        assert not any("binds max_new_findings" in item for item in spec.acceptance_criteria)
+    assert probe.spec_for("F6").acceptance_criteria == (
+        "Find every reproducible defect; the request-bound discovery capacity is 2.",)
+
+
 def _failed_attempt(kind: str, case_id: str, provider: str, *, series_id: str,
                     call_id: str) -> tuple[dict, dict]:
     from native_review_request import build_native_review_request

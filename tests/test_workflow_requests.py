@@ -239,6 +239,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
         "_review_request_finding_inputs",
+        "final_review_discovery_capacity_criterion",
         "native_implementer_request",
         "native_review_request",
     }

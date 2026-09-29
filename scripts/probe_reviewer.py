@@ -1343,8 +1343,24 @@ def large_hidden_proof(count: int) -> str:
     )
 
 
+def _with_production_capacity_criterion(spec):
+    """Add the capacity criterion that production appends to every final review."""
+    from native_review_request import NativeReviewKind
+    from workflow_requests import final_review_discovery_capacity_criterion
+
+    if spec.review_kind is not NativeReviewKind.FINAL_REVIEW:
+        return spec
+    criterion = final_review_discovery_capacity_criterion(spec.context.max_new_findings)
+    return replace(spec, acceptance_criteria=tuple(
+        dict.fromkeys((*spec.acceptance_criteria, criterion))))
+
+
 def build_qualification_spec(kind: str, case_id: str, *, run_id: str):
-    """Build the same NativeReviewRequestSpec used by production adapters."""
+    """Build the same NativeReviewRequestSpec used by production adapters.
+
+    Transport and quality final reviews carry the production capacity criterion.
+    The large-output stress case keeps its protocol-defined full-parsing request.
+    """
     from contracts import (AgentRole, ApprovalMarker, FindingClass, FindingOrigin,
                            FindingRecord, FindingStatus, ValidationAttestation,
                            ValidationCommandSpec, ValidationRecord, ValidationStatus)
@@ -1354,7 +1370,7 @@ def build_qualification_spec(kind: str, case_id: str, *, run_id: str):
         case = case_id.split(":", 1)[0]
         spec = spec_for(case)
         context = replace(spec.context, run_id=run_id)
-        return replace(spec, context=context)
+        return _with_production_capacity_criterion(replace(spec, context=context))
     if kind == "large_output":
         count = int(case_id)
         template = spec_for("F5")
@@ -1419,11 +1435,11 @@ def build_qualification_spec(kind: str, case_id: str, *, run_id: str):
         if details["evidence"]["plan_text"] is not None:
             evidence.append(NativeReviewEvidenceInput("plan", "plan_artifact", details["evidence"]["plan_text"],
                                                       source_path="docs/plan.md"))
-        return NativeReviewRequestSpec(
+        return _with_production_capacity_criterion(NativeReviewRequestSpec(
             context, NativeReviewKind(details["native_review_kind"]),
             "qualification/quality", binding["branch_base"],
             tuple(details["authorized_paths"]), tuple(details["acceptance_criteria"]),
-            tuple(sorted(evidence, key=lambda item: item.evidence_id)))
+            tuple(sorted(evidence, key=lambda item: item.evidence_id))))
     if kind == "print_timeout":
         spec = spec_for("F2")
         return replace(spec, context=replace(spec.context, run_id=run_id))
