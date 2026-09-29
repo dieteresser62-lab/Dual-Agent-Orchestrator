@@ -27,7 +27,7 @@
       "unfounded_findings": 0
     }
   },
-  "protocol_version": "qualification-protocol-v3",
+  "protocol_version": "qualification-protocol-v4",
   "rater_file_format": {
     "judgments": "Genau eine Bewertung je neutraler Antwort-ID, im Paket sortiert.",
     "packet_sha256": "64 Kleinbuchstaben-Hexzeichen",

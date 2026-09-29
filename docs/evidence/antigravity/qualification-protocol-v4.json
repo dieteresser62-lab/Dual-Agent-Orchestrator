@@ -28,6 +28,9 @@
   },
   "production_retry": {
     "classifier": "agy-stderr-v3: ERROR-Umschlag „The stream was interrupted. Please continue the task you were working on.“ sowie gemessene Go-Wählfehler gegen *.googleapis.com (z. B. DNS „server misbehaving“) werden als network eingestuft; ein Ergebnis mit Fehlerstatus wird nie angenommen. Historie: Serie agy-transport-s2 lief mit agy-stderr-v2 (nur Stream-Abbruch); ihr DNS-Fehler bei F4:1 wurde dort als process eingestuft und machte die Serie negativ.",
+    "contract_max_retries_per_case": 2,
+    "contract_rule": "Eine Antwort, die der Domainvertrag mit einem wiederholbaren Code ablehnt (is_retryable_native_review_response_error), wird wie im Produktivpfad mit NativeReviewRetryFeedback (native_review_retry_guidance aus Code, Diagnose und Form der abgelehnten Antwort) direkt mit einem frischen Aufruf desselben Falls neu gefragt, höchstens zweimal je Fall; das gilt für AGY und Claude gleich. Jede Ablehnung und jede Nachfrage wird gezählt und berichtet; bewertet wird die letzte Antwort. Die Rückmeldung wird bei der Auswertung aus der aufgezeichneten abgelehnten Antwort neu berechnet und muss übereinstimmen.",
+    "contract_source": "workflow max_contract_rejections = 3 (drei Antworten je Fall); NATIVE_REVIEW_RESPONSE_RETRY_CODES mit Quelle model-response",
     "failure_kinds": [
       "network",
       "timeout"
@@ -66,7 +69,7 @@
       "steering"
     ],
     "rating_rubric": "quality-rubric-v1.json",
-    "rubric_sha256": "125ac1269e26477c1e26904e7dec1803c9a8c2429808759ffcb367399a77f7fb",
+    "rubric_sha256": "363dc27c30c1b36f66091be1991dad6069c8f749b90cba38ab7a5a44854a5244",
     "unblinding_rule": "Erst nach vollständigem Endurteil und dokumentierten Operatorantworten entblinden. Bei verfehlter Claude-Regel entscheidet der Operator danach über die experimentelle Auswahl."
   },
   "quality_rule": {
@@ -85,7 +88,7 @@
     "quality_per_provider": 6,
     "transport": 12
   },
-  "schema_version": "qualification-protocol-v3",
+  "schema_version": "qualification-protocol-v4",
   "slots": {
     "final_reviewer": {
       "canary": "final_reviewer",
@@ -116,13 +119,16 @@
       "shared_protection_and_quality": true
     }
   },
-  "superseded_by": "v4",
-  "superseded_reason": "Produktionsgleiche Vertragsrückmeldung nach der ersten AGY-Qualitätsserie",
   "supersedes": {
-    "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
-    "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
-    "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
-    "version": "v2"
+    "earlier": {
+      "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
+      "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
+      "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
+      "version": "v2"
+    },
+    "reason": "Produktionsgleiche Vertragsrückmeldung nach der ersten AGY-Qualitätsserie (Operatorentscheidung 29.09.2026)",
+    "v3_evidence": "Serie agy-quality-s1 (Q5: approval-invalid, Planfreigabe mit offenem Befund; Q6 nicht gestartet) bleibt als negative v3-Serie sichtbar.",
+    "version": "v3"
   },
   "target_status": "experimental",
   "transport": {

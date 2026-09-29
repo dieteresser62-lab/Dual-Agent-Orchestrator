@@ -579,6 +579,18 @@ def validate_phase0(document: dict) -> None:
 
 PRODUCTION_RETRY_KINDS = frozenset({"network", "timeout"})
 MAX_PRODUCTION_RETRIES = 2  # agent_runtime.TransientRetryPolicy.maximum_auto_resumes
+MAX_CONTRACT_RETRIES = 2  # workflow max_contract_rejections = 3 responses per case
+
+
+def _retry_reason(previous: dict) -> str | None:
+    """Which production retry path a failed call opens: transient or contract feedback."""
+    if previous["status"] != "technical_rejection":
+        return None
+    if previous.get("failure_kind") in PRODUCTION_RETRY_KINDS:
+        return "transient"
+    if previous.get("contract_retryable") is True and previous.get("contract_rejection"):
+        return "contract"
+    return None
 
 
 def _case_chains(calls: list[dict]) -> list[list[dict]]:
@@ -590,11 +602,12 @@ def _case_chains(calls: list[dict]) -> list[list[dict]]:
             chains.append([row])
             continue
         previous = chains[-1][-1] if chains else None
-        if (previous is None or row["kind"] == "print_timeout"
+        reason = _retry_reason(previous) if previous is not None else None
+        used = [_retry_reason(chains[-1][index - 1]) for index in range(1, len(chains[-1]))] if chains else []
+        limit = MAX_PRODUCTION_RETRIES if reason == "transient" else MAX_CONTRACT_RETRIES
+        if (previous is None or reason is None or row["kind"] == "print_timeout"
                 or previous["call_id"] != retry_of or previous["case_id"] != row["case_id"]
-                or previous["status"] != "technical_rejection"
-                or previous.get("failure_kind") not in PRODUCTION_RETRY_KINDS
-                or len(chains[-1]) > MAX_PRODUCTION_RETRIES):
+                or used.count(reason) >= limit):
             raise ValueError(f"{row['series_id']}: invalid production retry {row['call_id']}")
         chains[-1].append(row)
     return chains
@@ -603,7 +616,7 @@ def _case_chains(calls: list[dict]) -> list[list[dict]]:
 def validate_qualification(document: dict) -> None:
     if not __debug__:
         raise RuntimeError("optimized mode cannot validate the protocol")
-    assert document["schema_version"] == "qualification-protocol-v3"
+    assert document["schema_version"] == "qualification-protocol-v4"
     assert document["campaign"] == "slim" and document["target_status"] == "experimental"
     assert document["sample_counts"] == {"transport": 12, "large_output": 2,
         "print_timeout": 1, "quality_per_provider": 6, "canaries": 2}
@@ -623,6 +636,7 @@ def validate_qualification(document: dict) -> None:
         (ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
     assert document["production_retry"]["failure_kinds"] == sorted(PRODUCTION_RETRY_KINDS)
     assert document["production_retry"]["max_retries_per_case"] == MAX_PRODUCTION_RETRIES
+    assert document["production_retry"]["contract_max_retries_per_case"] == MAX_CONTRACT_RETRIES
     assert document["format_regression_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-format-s6-v1.json").read_bytes())
 
@@ -769,6 +783,13 @@ def _validate_attempt_bindings(row: dict, protocol: dict) -> None:
         raise ValueError("successful qualification call cannot carry a failure kind")
     if row.get("retry_of") is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", row["retry_of"]):
         raise ValueError("qualification retry reference is invalid")
+    if row.get("contract_rejection") is not None and (
+            row["status"] != "technical_rejection" or type(row.get("contract_retryable")) is not bool):
+        raise ValueError("qualification contract rejection is invalid")
+    feedback = row.get("retry_feedback")
+    if feedback is not None and (not isinstance(feedback, dict) or set(feedback) != {
+            "prior_invocation_id", "rejection_code", "correction_instruction"}):
+        raise ValueError("qualification retry feedback is invalid")
     if not isinstance(row["tag"], str) or not row["tag"].strip() or len(row["tag"]) > 100:
         raise ValueError("qualification tag is invalid")
     started = datetime.fromisoformat(row["started_at"].replace("Z", "+00:00"))
@@ -791,6 +812,45 @@ def _frozen_source_digest(kind: str, case_id: str) -> str:
         return _source_digest(root)
 
 
+def _contract_retry_feedback(spec, previous_row: dict, previous_raw: dict):
+    """Rebuild production's corrective feedback from the recorded rejected response."""
+    from native_review_contract import NativeReviewErrorCode, native_review_retry_guidance
+    from orchestrator_diagnostics import OrchestratorDiagnostic
+    from native_review_request import NativeReviewRetryFeedback
+    from rejected_response_shape import extract_rejected_native_response_shape
+
+    envelope = previous_raw.get("envelope")
+    structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
+    document = structured.get("result") if isinstance(structured, dict) else None
+    code = NativeReviewErrorCode(previous_row["contract_rejection"])
+    diagnostic = previous_row.get("orchestrator_diagnostic")
+    guidance = native_review_retry_guidance(
+        code, OrchestratorDiagnostic(diagnostic) if diagnostic else None, spec.context,
+        extract_rejected_native_response_shape(document))
+    return NativeReviewRetryFeedback(prior_invocation_id=previous_row["call_id"],
+                                     rejection_code=code, correction_instruction=guidance)
+
+
+def _reproduce_contract_rejection(document, bundle) -> str | None:
+    """Replay the runtime's response checks; return the rejection code, if any."""
+    from native_review_contract import (NativeReviewContractError,
+                                        parse_bound_native_contract_result,
+                                        validate_native_review_disposition_budget,
+                                        validate_native_review_document)
+    from native_review_request import (NativeReviewRequestError, NativeReviewRequestErrorCode,
+                                       validate_native_review_provider_response)
+    try:
+        validate_native_review_disposition_budget(document, bundle.bound_context.context)
+        validate_native_review_document(document)
+        validate_native_review_provider_response(document, bundle)
+        parse_bound_native_contract_result(document, bundle.bound_context)
+    except NativeReviewContractError as exc:
+        return exc.code.value
+    except NativeReviewRequestError as exc:
+        return "schema-invalid" if exc.code is NativeReviewRequestErrorCode.SCHEMA_INVALID else exc.code.value
+    return None
+
+
 _RUNTIME_DEADLINE = re.compile(r"^AgentProcessError: antigravity timed out after [0-9]+s\.$")
 
 
@@ -806,7 +866,8 @@ def _print_timeout_checks(status: str, failure_kind: str | None, technical_error
             "no_valid_stop": rejected and not has_result}
 
 
-def _verify_recorded_result(row: dict, raw: dict) -> None:
+def _verify_recorded_result(row: dict, raw: dict,
+                            previous: tuple[dict, dict] | None = None) -> None:
     """Rebuild the transmitted request and independently parse recorded output."""
     from native_review_contract import parse_bound_native_contract_result
     from native_review_request import (build_native_review_request,
@@ -815,6 +876,16 @@ def _verify_recorded_result(row: dict, raw: dict) -> None:
 
     spec = build_qualification_spec(row["kind"], row["case_id"],
                                     run_id=f"qualification-{row['series_id']}-{row['call_id']}")
+    contract_retry = previous is not None and _retry_reason(previous[0]) == "contract"
+    if contract_retry:
+        feedback = _contract_retry_feedback(spec, *previous)
+        if row.get("retry_feedback") != {"prior_invocation_id": feedback.prior_invocation_id,
+                                         "rejection_code": feedback.rejection_code.value,
+                                         "correction_instruction": feedback.correction_instruction}:
+            raise ValueError("recorded contract retry feedback differs from production guidance")
+        spec = replace(spec, retry_feedback=feedback)
+    elif row.get("retry_feedback") is not None:
+        raise ValueError("retry feedback belongs only to a contract retry")
     bundle = build_native_review_request(spec, profile="antigravity" if row["provider"] == "agy" else "claude")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
     stored_request = raw.get("request_document")
     stored_writer = raw.get("writer_schema")
@@ -846,6 +917,10 @@ def _verify_recorded_result(row: dict, raw: dict) -> None:
     if row["status"] != "success":
         if raw.get("technical_error") is None:
             raise ValueError("failed attempt lacks its technical diagnosis")
+        if row.get("contract_rejection") is not None:
+            if _reproduce_contract_rejection(response, bundle) != row["contract_rejection"]:
+                raise ValueError("recorded contract rejection is not reproducible")
+            return
         if row.get("failure_kind") == "network" and row["provider"] == "agy":
             from agent_adapters import AgentOutputError
             from antigravity_adapter import AntigravityTransport
@@ -917,7 +992,8 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
         clean = by_envelope[row["call_id"]]
         if sanitize_evidence(clean) != clean or sha(canonical(clean).encode()) != row["envelope_sha256"]:
             raise ValueError("qualification envelope is unsanitized or changed")
-        _verify_recorded_result(row, clean)
+        prior = next((item for item in attempts if item["call_id"] == row.get("retry_of")), None)
+        _verify_recorded_result(row, clean, None if prior is None else (prior, by_envelope[prior["call_id"]]))
         groups.setdefault((row["kind"], row["provider"]), []).append(row)
     verdicts = {}
     for key, rows in groups.items():
@@ -967,6 +1043,8 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
                                    "passed": len(chains) == len(expected) and all(case_pass),
                                    "incomplete": len(chains) != len(expected), "calls": len(calls),
                                    "production_retries": sum(len(chain) - 1 for chain in chains),
+                                   "contract_rejections": [row["call_id"] for row in calls
+                                                           if row.get("contract_rejection")],
                                    "transient_failures": [row["call_id"] for row in calls
                                                           if row["status"] == "technical_rejection"
                                                           and row.get("failure_kind") in PRODUCTION_RETRY_KINDS],
@@ -977,7 +1055,7 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
             verdicts[f"pending-{kind}-{provider}"] = {
                 "kind": kind, "provider": provider, "passed": False,
                 "incomplete": True, "calls": 0, "production_retries": 0,
-                "transient_failures": [], "failed_cases": []}
+                "contract_rejections": [], "transient_failures": [], "failed_cases": []}
     return verdicts
 
 
@@ -1037,7 +1115,7 @@ def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
                         protocol: dict, rubric: dict) -> dict:
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus is not approved at its frozen digest")
-    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v3":
+    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v4":
         raise ValueError("quality rubric version differs")
     if assessment.get("schema_version") != "blind-assessment-v1" or mapping.get("schema_version") != "blind-mapping-v1" or mapping.get("seed") != protocol["quality"]["blind_seed"]:
         raise ValueError("blind input version or seed differs")
@@ -1660,7 +1738,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if profile.get("commit_sha") != _current_commit():
         raise ValueError("qualification profile commit differs from current code HEAD")
     _assert_committed_qualification_code()
-    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
     validate_qualification(protocol)
     if case_id not in qualification_cases(kind, provider):
         raise ValueError("call differs from frozen qualification cases")
@@ -1731,6 +1809,16 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         adapter = NativeClaudeReviewAdapter(settings)  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
         capability = "claude"  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
     spec = build_qualification_spec(kind, case_id, run_id=f"qualification-{series_id}-{call_id}")
+    retry_feedback = None
+    if production_retry_of is not None:
+        recorded = strict_json((output_dir / "qualification-series-v1.json").read_bytes())["attempts"]
+        previous_row = next((row for row in recorded if row["call_id"] == production_retry_of), None)
+        if previous_row is not None and _retry_reason(previous_row) == "contract":
+            previous_raw = next(row["envelope"] for row in strict_json(
+                (output_dir / "qualification-envelopes-v1.json").read_bytes())["envelopes"]
+                if row["call_id"] == production_retry_of)
+            retry_feedback = _contract_retry_feedback(spec, previous_row, previous_raw)
+            spec = replace(spec, retry_feedback=retry_feedback)
     bundle = build_native_review_request(spec, profile=capability)
     _preflight_series_position(
         strict_json((output_dir / "qualification-series-v1.json").read_bytes())["attempts"]
@@ -1762,6 +1850,9 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     started_at = datetime.now(timezone.utc).isoformat()
     error = None
     failure_kind = None
+    contract_rejection = None
+    contract_retryable = None
+    orchestrator_diagnostic = None
     domain = None
     try:
         output = run_native_review_agent(
@@ -1776,6 +1867,16 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         error = f"{type(exc).__name__}: {exc}"
         classified = getattr(exc, "kind", None) or getattr(exc, "kind_hint", None)
         failure_kind = getattr(classified, "value", None) or "unclassified"
+        from error_classification import orchestrator_diagnostic_for_exception
+        from native_review_contract import (find_native_review_contract_error,
+                                            is_retryable_native_review_response_error)
+        contract_error = find_native_review_contract_error(exc)
+        if contract_error is not None:
+            failure_kind = "output"  # the runtime's typed classification of a form failure
+            contract_rejection = contract_error.code.value
+            contract_retryable = is_retryable_native_review_response_error(contract_error)
+            diagnostic = orchestrator_diagnostic_for_exception(exc)
+            orchestrator_diagnostic = diagnostic.value if diagnostic is not None else None
     elapsed = time.monotonic() - start
     try:
         envelope = strict_json(raw.get("stdout", "{}"))
@@ -1832,7 +1933,14 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                       if isinstance(envelope, dict) else None,
         "output_bytes": len(raw.get("stdout", "").encode()), "checks": checks,
         "failure_kind": failure_kind, "retry_of": production_retry_of,
+        "contract_rejection": contract_rejection, "contract_retryable": contract_retryable,
+        "orchestrator_diagnostic": orchestrator_diagnostic,
+        "retry_feedback": None if retry_feedback is None else {
+            "prior_invocation_id": retry_feedback.prior_invocation_id,
+            "rejection_code": retry_feedback.rejection_code.value,
+            "correction_instruction": retry_feedback.correction_instruction},
     }
+    row["production_retryable"] = row["status"] == "technical_rejection" and _retry_reason(row) is not None
     if public_validation_sha is not None:
         row["public_validation_sha256"] = public_validation_sha
     if restart_diagnosis is not None:
@@ -2031,7 +2139,7 @@ def main() -> int:
         print(json.dumps(probe_plan(strict_json(args.protocol.read_bytes())), indent=2))
         return 0
     if args.command == "blind":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         validate_qualification(protocol)
         if args.seed != protocol["quality"]["blind_seed"]:
             raise ValueError("blind seed differs from the frozen qualification protocol")
@@ -2049,7 +2157,7 @@ def main() -> int:
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
     if args.command == "prepare-blind-inputs":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -2058,7 +2166,7 @@ def main() -> int:
         _write_evidence_file(args.output, sources)
         return 0
     if args.command == "export-rater-packets":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
         packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
@@ -2071,12 +2179,12 @@ def main() -> int:
                           "ids": [row["id"] for row in packet["responses"]]}))
         return 0
     if args.command == "render-rater-prompt":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         args.output.write_text(render_rater_prompt(packet, protocol))
         return 0
     if args.command == "combine-quality-ratings":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         mapping = strict_json(args.mapping.read_bytes())
@@ -2128,7 +2236,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
     if args.command == "evaluate-qualification":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v4.json").read_bytes())
         series = strict_json(args.series.read_bytes())
         envelopes = strict_json(args.envelopes.read_bytes())
         verdicts = validate_qualification_evidence(series, envelopes, protocol)
