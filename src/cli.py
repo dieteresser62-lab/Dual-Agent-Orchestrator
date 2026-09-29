@@ -445,7 +445,7 @@ def load_repo_config(path: Path) -> RepoConfig:
         "root",
     )
     try:
-        roles, profiles = parse_profile_tables(raw.get("roles"), raw.get("agent_profiles"))
+        roles, profiles = parse_profile_tables(raw.get("roles"), raw.get("agent_profiles"), repository_root=resolved.parent)
     except AgentConfigError as exc:
         raise ConfigError(str(exc)) from exc
     occupancy = tuple((slot.value, role_for_slot(slot).value, profiles[roles[slot]].provider) for slot in AgentSlot)
@@ -1025,7 +1025,7 @@ def parse_args(
         try:
             load_role_certifications().require_occupancy({
                 slot: args.slot_settings[slot.value].name for slot in AgentSlot
-            })
+            }, models={slot: args.slot_settings[slot.value].model for slot in AgentSlot})
         except CertificationError as exc:
             raise ConfigError(str(exc)) from exc
     args.agents_file_explicit = any(

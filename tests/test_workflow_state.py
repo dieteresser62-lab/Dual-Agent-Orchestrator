@@ -242,6 +242,7 @@ def test_native_implementer_request_projects_fingerprint_bound_paths_and_explana
         task_digest="b" * 64,
         task_scope_patterns=("docs/internal/plan.md",),
         target_branch="feature/native-scope",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-08-23T13:00:00+00:00",
     )
     context = WorkflowContext(
@@ -521,6 +522,15 @@ def test_protocol_binding_roundtrips_full_final_slot_profile() -> None:
     binding = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3", final_reviewer_profile=profile)
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
     assert binding.to_dict()["final_reviewer_profile"]["certification_sha256"] == "a" * 64
+
+
+def test_protocol_binding_roundtrips_isolation_path_digest() -> None:
+    profile = replace(bound_state_profile("sonnet", "high"), isolation_options_sha256="b" * 64)
+    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3", reviewer_profile=profile)
+    document = binding.to_dict()
+    assert document["reviewer_profile"]["isolation_options_sha256"] == "b" * 64
+    assert "isolation_options_sha256" not in document["implementer_profile"]
+    assert ProtocolBinding.from_dict(document) == binding
 
 
 def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:

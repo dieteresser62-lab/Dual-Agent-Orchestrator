@@ -313,6 +313,16 @@ def test_full_slot_profiles_roundtrip_with_certificate_and_final_override() -> N
     assert record.to_dict()["payload"]["final_reviewer"]["max_budget_usd"] == 10.0
 
 
+def test_run_profile_persists_isolation_path_digest_without_changing_other_slots() -> None:
+    reviewer = replace(bound_role_profile("reviewer-model", "high"), isolation_options_sha256="a" * 64)
+    payload = bound_run_profile(bound_role_profile("implementer-model", "high"), reviewer)
+    record = _record(payload)
+    document = record.to_dict()
+    assert document["payload"]["reviewer"]["isolation_options_sha256"] == "a" * 64
+    assert "isolation_options_sha256" not in document["payload"]["implementer"]
+    assert ArtifactRecord.from_dict(document).payload == payload
+
+
 @pytest.mark.parametrize("slot", ("implementer", "reviewer", "final_reviewer"))
 @pytest.mark.parametrize("field", (
     "provider", "binary", "timeout_seconds", "manufacturer",

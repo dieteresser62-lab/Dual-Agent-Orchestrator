@@ -154,8 +154,9 @@ def test_registry_uses_each_synthetically_admitted_slot_provider(monkeypatch: py
     observed = []
 
     class Admitted:
-        def require_occupancy(self, occupancy):
+        def require_occupancy(self, occupancy, *, models):
             assert occupancy == {slot: slots[slot.value].name for slot in AgentSlot}
+            assert models == {slot: slots[slot.value].model for slot in AgentSlot}
 
     def pair(provider, role, *, slot, settings, certifications):
         observed.append((slot.value, role.value, provider, settings.profile_name))
@@ -280,6 +281,15 @@ def test_transport_command_environment_and_components_match_start_head(
 def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
     codex = NativeCodexAdapter(_settings("codex"))
     claude = NativeClaudeReviewAdapter(_settings("claude"))
+    for adapter in (codex, claude):  # allowlist:provider -- transport: regression assertion for existing defaults
+        assert adapter.inherit_process_environment is True
+        assert adapter.environment_passthrough == ()
+        assert adapter.stdin_closed_when_unused is False
+        assert adapter.suppress_live_stream is False
+        assert adapter.requires_attempt_ledger is False
+        assert adapter.sanitize_reviewer_environment is True
+        assert adapter.set_pwd is True
+        assert adapter.prepared_execution_root() is None
     assert NativeCodexAdapter.reviewer is False
     assert NativeClaudeReviewAdapter.reviewer is True
     assert not hasattr(NativeCodexAdapter, "build_capability_smoke_command")

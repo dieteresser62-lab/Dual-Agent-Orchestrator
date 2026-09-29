@@ -14,21 +14,21 @@
     "schemas/native-agent-review-request-v3.schema.json": {
       "claude": 1
     },
-    "schemas/native-provider-schema-capabilities-v1.json": {
-      "codex": 8,
-      "claude": 7
+    "schemas/native-provider-schema-capabilities-v2.json": {
+      "codex": 9,
+      "claude": 9
     },
-    "schemas/native-provider-schema-exceptions-v1.json": {
-      "codex": 17,
-      "claude": 12
+    "schemas/native-provider-schema-exceptions-v2.json": {
+      "codex": 23,
+      "claude": 18
     },
     "schemas/orchestrator-artifact-v3.schema.json": {
       "codex": 5,
       "claude": 5
     },
     "schemas/role-provider-certifications-v1.json": {
-      "codex": 5,
-      "claude": 9
+      "codex": 6,
+      "claude": 11
     },
     "scripts/crash_harness.py": {
       "codex": 3,
@@ -219,8 +219,8 @@
       "codex": 10
     },
     "tests/test_native_provider_schema.py": {
-      "codex": 50,
-      "claude": 42
+      "codex": 51,
+      "claude": 49
     },
     "tests/test_native_review_contract.py": {
       "claude": 3
@@ -303,8 +303,8 @@
       "claude": 8
     },
     "tests/test_role_certification.py": {
-      "codex": 18,
-      "claude": 15
+      "codex": 23,
+      "claude": 23
     },
     "tests/test_semantic_markdown.py": {
       "codex": 2,
@@ -353,8 +353,8 @@
       "codex": 1
     },
     "tests/test_workflow_recovery_corpus.py": {
-      "codex": 7,
-      "claude": 10
+      "codex": 9,
+      "claude": 18
     },
     "tests/test_workflow_requests.py": {
       "codex": 11,

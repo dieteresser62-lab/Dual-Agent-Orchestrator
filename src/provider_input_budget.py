@@ -208,6 +208,10 @@ class ProviderInputBudgetPolicy:
                 return rule
         raise ProviderInputBudgetError(f"no provider input budget rule for {key}")
 
+    def registered_operations(self, provider: str) -> frozenset[str]:
+        """Operations admitted by this run's complete slot-bound budget table."""
+        return frozenset(rule.operation for rule in self.rules if rule.provider == provider)
+
     @property
     def digest(self) -> str:
         encoded = json.dumps(

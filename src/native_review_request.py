@@ -32,7 +32,7 @@ from schema_validation import (
     validate_schema_document,
 )
 from review_packets import ReviewPacket, ReviewPacketError
-from native_provider_schema import ANTHROPIC_PROVIDER
+from native_provider_schema import ANTHROPIC_PROVIDER, OPENAI_PROVIDER
 from path_policy import is_canonical_repository_relative_path
 from schema_patterns import has_visible_text
 
@@ -227,6 +227,15 @@ class NativeReviewRequestBundle:
 
     def __post_init__(self) -> None:
         document = self.document
+        if document.get("capability_profile") != (
+            self.capability_profile
+            if self.capability_profile not in {ANTHROPIC_PROVIDER, OPENAI_PROVIDER}
+            else None
+        ):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "request capability profile differs from selected writer profile",
+            )
         validate_native_review_request_document(document)
         canonical = canonical_native_review_request_json(document)
         if self.canonical_json != canonical:
@@ -558,6 +567,8 @@ def build_native_review_request(
             "schema_sha256": response_schema_digest,
         },
     }
+    if profile not in {ANTHROPIC_PROVIDER, OPENAI_PROVIDER}:
+        binding["capability_profile"] = profile
     if spec.retry_feedback is not None:
         binding["retry_feedback"] = {
             "prior_invocation_id": spec.retry_feedback.prior_invocation_id,

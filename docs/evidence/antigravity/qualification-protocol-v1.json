@@ -1,0 +1,107 @@
+{
+  "campaign": "slim",
+  "fixed_before_qualification": true,
+  "format_regression_sha256": "621cb84817b932016a63c7ba031f1c4bd61234bc111abbc7f1f574ce947cff6e",
+  "large_output": {
+    "both_required": true,
+    "findings": [
+      128,
+      512
+    ],
+    "measure": [
+      "unique finding count",
+      "UTF-8 output bytes",
+      "duration",
+      "complete parsing",
+      "scope and IDs"
+    ]
+  },
+  "limits": {
+    "cleanup_seconds_max": 15,
+    "probe_seconds": 600
+  },
+  "phase0_counts_as_sample": false,
+  "phase0_sha256": "51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7",
+  "print_timeout": {
+    "safe_technical_rejection_required": true,
+    "success_without_output_is_failure": true
+  },
+  "quality": {
+    "blind_seed": 20260929,
+    "cases": 6,
+    "clean": 2,
+    "corpus_operator_review": "pending",
+    "corpus_sha256": "a3f4140e40dd9a1f20fc52b5896cf9749134d354fb19e26176e2d1cce94a0d47",
+    "critical": [
+      "Q1",
+      "Q2"
+    ],
+    "defects": 4,
+    "providers": [
+      "agy",
+      "claude"
+    ]
+  },
+  "quality_rule": {
+    "clean_false_positives_max": 1,
+    "critical_required": 2,
+    "defects_required": 3,
+    "invented_critical_max": 0,
+    "verbatim_from_plan": "beide kritischen Defekte erkannt, mindestens 3 von 4 Defekten erkannt, höchstens 1 unbegründeter Befund über die 2 sauberen Ausgaben, kein erfundener kritischer Befund. Gleiche neutrale Evidenz für beide Provider; blinde Zuordnung durch den Operator. Verfehlt Claude die Regel, bleibt seine Serie negativ dokumentiert, ohne Korpus oder Kandidatenregel zu lockern. Bei bestandenem AGY entscheidet der Operator nach Entblindung ausdrücklich über die experimentelle Auswahl trotz schwächerer Referenz. Verfehlt AGY die Regel, keine Auswahlfreigabe. Keine statistische Überlegenheitsbehauptung."
+  },
+  "restart_rule": "Unerwarteter Fehler macht die jeweilige Provider-Serie negativ; erwartete sichere Timeoutablehnung gilt als bestandener Fehlerfall. Claude-Qualitätsfehler invalidiert keine positive AGY-Serie. Ursachenanalyse und konkrete Änderung an Adapter, Schema, Profil, Konfiguration oder Schutzmechanismus mit Versions-/Commitwechsel vor Neustart. Ganze betroffene Serie wiederholen, bei gemeinsamer Ursache alle abhängigen Serien. Negative, abgebrochene und unvollständige Serien append-orientiert sichtbar halten; keine Einzelretakes oder Filter. Geänderte Bestehensregel erfordert neue Protokollversion und vollständige neue Qualifikation.",
+  "sample_counts": {
+    "canaries": 2,
+    "large_output": 2,
+    "print_timeout": 1,
+    "quality_per_provider": 6,
+    "transport": 12
+  },
+  "schema_version": "qualification-protocol-v1",
+  "slots": {
+    "final_reviewer": {
+      "canary": "final_reviewer",
+      "contexts": [
+        "F5",
+        "F6"
+      ],
+      "quality_cases": [
+        "Q4",
+        "Q6"
+      ],
+      "shared_protection_and_quality": true
+    },
+    "reviewer": {
+      "canary": "reviewer",
+      "contexts": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "quality_cases": [
+        "Q1",
+        "Q2",
+        "Q3",
+        "Q5"
+      ],
+      "shared_protection_and_quality": true
+    }
+  },
+  "superseded_by": "v2",
+  "superseded_reason": "Bewerterverfahren geändert vor der ersten Messung",
+  "target_status": "experimental",
+  "transport": {
+    "cases": [
+      "F1",
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "F6"
+    ],
+    "fresh_context_required": true,
+    "independent_sessions_per_case": 2,
+    "pass": "All 12 responses meet current writer, full domain contract and predeclared case semantics."
+  }
+}

@@ -79,3 +79,9 @@
 - The implementer never creates or switches branches and never stages or commits. Those Git transactions belong to the user and orchestrator.
 - Agents do not emit validation attestations. The orchestrator creates and binds deterministic validation evidence.
 - Plain-text result markers, Markdown fences, parser normalization, and LLM contract repair are unsupported. Missing or invalid native JSON is a fail-closed provider output error.
+
+## Experimental Antigravity reviewer
+
+- The shipped reviewer and final reviewer remain Claude; Codex is the sole implementer. Antigravity is selectable per run only by explicit TOML slot binding after both direct canaries have passed and both slot certifications are `experimental`.
+- Both Antigravity slots are `experimental` since the two live canaries passed on 29 September 2026; a missing or tampered canary proof fails closed at start and resume. No automatic provider switch occurs.
+- This option is for private DIY use on WSL 2 / Ubuntu / ext4. Every Antigravity review sends the full snapshot, request, schema and evidence to Google. Positive timeout values and `0` require no separate approval.

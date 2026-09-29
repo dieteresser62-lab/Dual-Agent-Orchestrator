@@ -20,7 +20,7 @@ from agent_runtime import NativeAgentImplementerOutput
 from contracts import AgentRole, ImplementerContractResult, PlannedSlice, StopRequest
 from test_workflow import FakeDriver, TEST_FILE, _changes, _context, _slice_state
 from workflow import ImplementerInvocation, ReviewerInvocation, WorkflowHistory
-from workflow_state import WorkflowStep, init_workflow_state
+from workflow_state import WorkflowStep, ProtocolBinding, ProtocolMode, init_workflow_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -576,6 +576,7 @@ def _plan_state(scope: tuple[str, ...] = ("docs/internal/plan.md",)) -> object:
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_digest="d" * 64,
         task_scope_patterns=scope,
         target_branch="feature/workflow",

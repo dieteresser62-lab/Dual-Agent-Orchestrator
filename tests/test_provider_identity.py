@@ -13,6 +13,7 @@ import provider_identity
 import workflow_run_setup
 from agent_adapters import CapabilitySpec
 from agent_config import AgentSettings
+from agent_roles import AgentSlot
 from agent_runtime import AgentCompatibilityError, OrchestratorConfig, run_agent
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from provider_identity import capture_provider_identity, executable_candidates
@@ -393,6 +394,7 @@ def test_linux_elf_with_exe_suffix_is_bound_and_started_through_realpath(
     )
     adapter = FakeAdapter()
     adapter.name = "claude"
+    adapter.bound_slot = AgentSlot.REVIEWER
     adapter.cli_binary = "claude"
     adapter.model = "opus"
     adapter.capability = CapabilitySpec(

@@ -4,8 +4,14 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import copy
 
 import pytest
+
+from scripts import probe_reviewer as probe
+from native_review_request import build_native_review_request, validate_native_review_provider_response
+from native_review_contract import parse_bound_native_contract_result
+from native_provider_schema import AGY_PROVIDER
 
 import agent_runtime
 from agent_runtime import classify_agent_failure
@@ -34,6 +40,39 @@ MANIFEST_PATH = (
 )
 FINGERPRINT = "a" * 64
 WRITER_FORMS = ("plan", "initial_slice", "convergence", "final_review")
+
+
+@pytest.mark.parametrize("count,stopped", [(128, False), (512, True)])
+def test_qualification_large_writer_parses_all_distinct_findings(count: int, stopped: bool) -> None:
+    fixture = json.loads((ROOT / "tests/fixtures/reviewer-format-s6-v1.json").read_text())
+    source = fixture["cases"]["F5"]["envelope"]["structured_output"]["result"]
+    bundle = build_native_review_request(
+        probe.build_qualification_spec("large_output", str(count), run_id=f"pressure-{count}"),
+        profile=AGY_PROVIDER)
+    response = copy.deepcopy(source)
+    response["request_id"] = bundle.bound_context.request_id
+    response["new_findings"] = []
+    for number in range(1, count + 1):
+        finding = copy.deepcopy(source["new_findings"][0])
+        finding["finding_id"] = f"R-{number:02d}"
+        finding["affected_paths"] = [f"src/boundary_{number:04d}.py"]
+        finding["summary"] = f"Module {number} excludes the inclusive boundary."
+        finding["acceptance_test"]["text"] = f"Module {number} must accept LIMIT."
+        response["new_findings"].append(finding)
+    validate_native_review_provider_response(response, bundle)
+    domain = parse_bound_native_contract_result(response, bundle.bound_context)
+    assert len(response["new_findings"]) == count
+    assert len({item["finding_id"] for item in response["new_findings"]}) == count
+    assert len({item["affected_paths"][0] for item in response["new_findings"]}) == count
+    assert len(json.dumps(response, ensure_ascii=False).encode("utf-8")) > count * 200
+    assert domain.stopped is stopped
+    assert (domain.stop_request.rule_id if domain.stop_request else None) == (
+        "DISCOVERY_OUTPUT_LIMIT" if stopped else None)
+    if not stopped:
+        assert len(domain.findings) == count
+    # Omitting even one module is a failure for the qualification evaluator.
+    assert set(item["affected_paths"][0] for item in response["new_findings"]) == set(
+        bundle.document["authorized_paths"])
 
 
 def _manifest() -> dict[str, object]:

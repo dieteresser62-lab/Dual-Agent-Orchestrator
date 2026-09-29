@@ -1,0 +1,854 @@
+{
+  "schema_version": "quality-results-v1",
+  "status": "complete",
+  "blind_seed": 20260929,
+  "corpus_sha256": "a7e0ec3a77bbffd2c7c7cbd1151ee5c03be320e3c9479a0bed3fe9af40b6f071",
+  "packet_sha256": "ed58ceed4af5e18e44aa4d6bb4d1047d2ef186f68018788e5d07399465ea1251",
+  "input_digests": {
+    "ratings": {
+      "codex": "f43bcd5e75893b8397ba674bb13130e21657c68f6077524037706a6c594b0089",
+      "steering": "0dba52da64b85a557032cf654555a785971580144dec1dd491301a851e7592bc"
+    },
+    "mapping": "0610baf23fa116e1ce6a36e651493dcf9af7915cefaab3707eeeccd94ee10a74"
+  },
+  "ratings": {
+    "codex": {
+      "schema_version": "quality-rating-v1",
+      "rater": "codex",
+      "packet_sha256": "ed58ceed4af5e18e44aa4d6bb4d1047d2ef186f68018788e5d07399465ea1251",
+      "judgments": [
+        {
+          "id": "B001",
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Der einzige Befund ist in Q6 unbegründet; die Pflichtfelder können nicht None sein.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B002",
+          "defect_found": true,
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "R-01 nennt mini/service.py und die Selbstfreigabe durch implementer in draft.",
+            "unfounded_findings": "R-02 behauptet ohne Beleg, dass entsprechende Tests fehlen.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B003",
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Keine Befunde.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B004",
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Der einzige Befund ist im sauberen Fall Q5 unbegründet.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B005",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/render.py und den fehlenden Digest bei finalen Datensätzen.",
+            "unfounded_findings": "Der einzige Befund trifft den Defekt.",
+            "invented_critical": "Der BLOCKER trifft den tatsächlichen Defekt."
+          }
+        },
+        {
+          "id": "B006",
+          "defect_found": true,
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "R-01 nennt mini/service.py und den erneuten Start trotz gespeichertem Ergebnis.",
+            "unfounded_findings": "R-02 behauptet ohne Beleg, dass keinerlei resume-Tests existieren.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B007",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/render.py und den Ausschluss des Digests bei kind='final'.",
+            "unfounded_findings": "Der einzige Befund trifft den Defekt.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B008",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/pathing.py und die fälschliche Zulassung eines Geschwisterverzeichnisses.",
+            "unfounded_findings": "Der einzige neue Befund trifft den Defekt.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B009",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/service.py und den erneuten externen Start bei abgeschlossenem Lauf.",
+            "unfounded_findings": "Der einzige Befund trifft den Defekt.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B010",
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Keine Befunde.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B011",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/pathing.py und die Zulassung von Geschwisterpfaden durch startswith ohne Trennzeichen.",
+            "unfounded_findings": "Der einzige neue Befund trifft den Defekt.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B012",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund nennt mini/service.py und die unerlaubte Freigabe durch implementer in draft.",
+            "unfounded_findings": "Der einzige Befund trifft den Defekt.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        }
+      ]
+    },
+    "steering": {
+      "schema_version": "quality-rating-v1",
+      "rater": "steering",
+      "packet_sha256": "ed58ceed4af5e18e44aa4d6bb4d1047d2ef186f68018788e5d07399465ea1251",
+      "judgments": [
+        {
+          "id": "B001",
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Sauberer Fall Q6 mit einem Befund; dieser behauptet eine zu breite None-Filterung und den Verlust von validation_digest, was laut Q6-Regel unbegründet ist, da der Digest nie None sein kann.",
+            "invented_critical": "Der einzige Befund ist als FINDING eingestuft, nicht als BLOCKER."
+          }
+        },
+        {
+          "id": "B002",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "R-01 benennt, dass implementer in der draft-Stage approve darf, und nennt mini/service.py; das trifft den Selbstfreigabe-Defekt.",
+            "unfounded_findings": "R-02 beschreibt die fehlende negative Testabdeckung; das ist durch die trotz Defekt grüne Suite gestützt und nicht unbegründet.",
+            "invented_critical": "Beide Befunde sind FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B003",
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Keine Befunde in new_findings.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B004",
+          "unfounded_findings": 1,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Sauberer Fall Q5 mit einem Befund zu ausgearteten Wurzeln im Segmentvergleich; nach der Regel für saubere Fälle zählt er als unbegründet.",
+            "invented_critical": "Der Befund ist als FINDING eingestuft, nicht als BLOCKER."
+          }
+        },
+        {
+          "id": "B005",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund stellt fest, dass validation_digest bei kind == \"final\" durch die neue Bedingung fehlt, und nennt mini/render.py; das trifft den Defekt.",
+            "unfounded_findings": "Nur ein Befund, und dieser ist begründet.",
+            "invented_critical": "Der BLOCKER trifft den tatsächlichen Defekt des Falls und ist daher nicht erfunden."
+          }
+        },
+        {
+          "id": "B006",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "R-01 beschreibt, dass der frühere requested-Zweig die Prüfung auf ein vorhandenes completed-Ergebnis umgeht und abgeschlossene Läufe neu startet, und nennt mini/service.py.",
+            "unfounded_findings": "R-02 zur fehlenden Testabdeckung der Resume-Kriterien ist durch die trotz Defekt grüne Suite gestützt; die Formulierung ist überspitzt, der Kern aber begründet.",
+            "invented_critical": "Beide Befunde sind FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B007",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund benennt, dass validation_digest bei final durch if kind != \"final\" ausgeschlossen wird, und nennt mini/render.py.",
+            "unfounded_findings": "Nur ein Befund, und dieser ist begründet.",
+            "invented_critical": "Der Befund ist FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B008",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund sagt, dass Geschwisterverzeichnisse als innerhalb der Wurzel erkannt werden, was der erlaubten Alternative entspricht, und nennt mini/pathing.py; der Mechanismus bleibt knapp.",
+            "unfounded_findings": "Nur ein neuer Befund, und dieser ist begründet; das Schließen von R-17 ist eine Statusänderung.",
+            "invented_critical": "Der Befund ist FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B009",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund zeigt, dass resume nach vorhandenem requested gateway.start erneut aufruft, auch bei bereits gespeichertem completed-Ergebnis, und nennt mini/service.py.",
+            "unfounded_findings": "Nur ein Befund, und dieser ist begründet.",
+            "invented_critical": "Der Befund ist FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B010",
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "unfounded_findings": "Keine Befunde in new_findings.",
+            "invented_critical": "Kein BLOCKER."
+          }
+        },
+        {
+          "id": "B011",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund benennt startswith(anchor) ohne Trenner, wodurch Geschwisterpräfixe wie minix als innerhalb gelten, und nennt mini/pathing.py.",
+            "unfounded_findings": "Nur ein neuer Befund, und dieser ist begründet.",
+            "invented_critical": "Der Befund ist FINDING, kein BLOCKER."
+          }
+        },
+        {
+          "id": "B012",
+          "defect_found": true,
+          "unfounded_findings": 0,
+          "invented_critical": false,
+          "reasons": {
+            "defect_found": "Der Befund zeigt, dass die draft-Zeile implementer approve erlaubt und damit Selbstfreigabe ermöglicht, und nennt mini/service.py.",
+            "unfounded_findings": "Nur ein Befund, und dieser ist begründet.",
+            "invented_critical": "Der Befund ist FINDING, kein BLOCKER."
+          }
+        }
+      ]
+    }
+  },
+  "agreement": [
+    {
+      "id": "B001",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": 1,
+      "steering": 1
+    },
+    {
+      "id": "B001",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B002",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B002",
+      "criterion": "unfounded_findings",
+      "agreed": false,
+      "rule_relevant": false,
+      "codex": 1,
+      "steering": 0
+    },
+    {
+      "id": "B002",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B003",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B003",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B004",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": 1,
+      "steering": 1
+    },
+    {
+      "id": "B004",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B005",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B005",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B005",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B006",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B006",
+      "criterion": "unfounded_findings",
+      "agreed": false,
+      "rule_relevant": false,
+      "codex": 1,
+      "steering": 0
+    },
+    {
+      "id": "B006",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B007",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B007",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B007",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B008",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B008",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B008",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B009",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B009",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B009",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B010",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B010",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B011",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B011",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B011",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    },
+    {
+      "id": "B012",
+      "criterion": "defect_found",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": true,
+      "steering": true
+    },
+    {
+      "id": "B012",
+      "criterion": "unfounded_findings",
+      "agreed": true,
+      "rule_relevant": false,
+      "codex": 0,
+      "steering": 0
+    },
+    {
+      "id": "B012",
+      "criterion": "invented_critical",
+      "agreed": true,
+      "rule_relevant": true,
+      "codex": false,
+      "steering": false
+    }
+  ],
+  "operator_questions": [],
+  "operator_decisions": [],
+  "judgments": [
+    {
+      "id": "B001",
+      "unfounded_findings": 1,
+      "invented_critical": false,
+      "reasons": {
+        "unfounded_findings": {
+          "codex": "Der einzige Befund ist in Q6 unbegründet; die Pflichtfelder können nicht None sein.",
+          "steering": "Sauberer Fall Q6 mit einem Befund; dieser behauptet eine zu breite None-Filterung und den Verlust von validation_digest, was laut Q6-Regel unbegründet ist, da der Digest nie None sein kann."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der einzige Befund ist als FINDING eingestuft, nicht als BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B002",
+      "defect_found": true,
+      "unfounded_findings": 1,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "R-01 nennt mini/service.py und die Selbstfreigabe durch implementer in draft.",
+          "steering": "R-01 benennt, dass implementer in der draft-Stage approve darf, und nennt mini/service.py; das trifft den Selbstfreigabe-Defekt."
+        },
+        "unfounded_findings": {
+          "codex": "R-02 behauptet ohne Beleg, dass entsprechende Tests fehlen.",
+          "steering": "R-02 beschreibt die fehlende negative Testabdeckung; das ist durch die trotz Defekt grüne Suite gestützt und nicht unbegründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Beide Befunde sind FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B003",
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "unfounded_findings": {
+          "codex": "Keine Befunde.",
+          "steering": "Keine Befunde in new_findings."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B004",
+      "unfounded_findings": 1,
+      "invented_critical": false,
+      "reasons": {
+        "unfounded_findings": {
+          "codex": "Der einzige Befund ist im sauberen Fall Q5 unbegründet.",
+          "steering": "Sauberer Fall Q5 mit einem Befund zu ausgearteten Wurzeln im Segmentvergleich; nach der Regel für saubere Fälle zählt er als unbegründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist als FINDING eingestuft, nicht als BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B005",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/render.py und den fehlenden Digest bei finalen Datensätzen.",
+          "steering": "Der Befund stellt fest, dass validation_digest bei kind == \"final\" durch die neue Bedingung fehlt, und nennt mini/render.py; das trifft den Defekt."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige Befund trifft den Defekt.",
+          "steering": "Nur ein Befund, und dieser ist begründet."
+        },
+        "invented_critical": {
+          "codex": "Der BLOCKER trifft den tatsächlichen Defekt.",
+          "steering": "Der BLOCKER trifft den tatsächlichen Defekt des Falls und ist daher nicht erfunden."
+        }
+      }
+    },
+    {
+      "id": "B006",
+      "defect_found": true,
+      "unfounded_findings": 1,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "R-01 nennt mini/service.py und den erneuten Start trotz gespeichertem Ergebnis.",
+          "steering": "R-01 beschreibt, dass der frühere requested-Zweig die Prüfung auf ein vorhandenes completed-Ergebnis umgeht und abgeschlossene Läufe neu startet, und nennt mini/service.py."
+        },
+        "unfounded_findings": {
+          "codex": "R-02 behauptet ohne Beleg, dass keinerlei resume-Tests existieren.",
+          "steering": "R-02 zur fehlenden Testabdeckung der Resume-Kriterien ist durch die trotz Defekt grüne Suite gestützt; die Formulierung ist überspitzt, der Kern aber begründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Beide Befunde sind FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B007",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/render.py und den Ausschluss des Digests bei kind='final'.",
+          "steering": "Der Befund benennt, dass validation_digest bei final durch if kind != \"final\" ausgeschlossen wird, und nennt mini/render.py."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige Befund trifft den Defekt.",
+          "steering": "Nur ein Befund, und dieser ist begründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B008",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/pathing.py und die fälschliche Zulassung eines Geschwisterverzeichnisses.",
+          "steering": "Der Befund sagt, dass Geschwisterverzeichnisse als innerhalb der Wurzel erkannt werden, was der erlaubten Alternative entspricht, und nennt mini/pathing.py; der Mechanismus bleibt knapp."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige neue Befund trifft den Defekt.",
+          "steering": "Nur ein neuer Befund, und dieser ist begründet; das Schließen von R-17 ist eine Statusänderung."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B009",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/service.py und den erneuten externen Start bei abgeschlossenem Lauf.",
+          "steering": "Der Befund zeigt, dass resume nach vorhandenem requested gateway.start erneut aufruft, auch bei bereits gespeichertem completed-Ergebnis, und nennt mini/service.py."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige Befund trifft den Defekt.",
+          "steering": "Nur ein Befund, und dieser ist begründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B010",
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "unfounded_findings": {
+          "codex": "Keine Befunde.",
+          "steering": "Keine Befunde in new_findings."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B011",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/pathing.py und die Zulassung von Geschwisterpfaden durch startswith ohne Trennzeichen.",
+          "steering": "Der Befund benennt startswith(anchor) ohne Trenner, wodurch Geschwisterpräfixe wie minix als innerhalb gelten, und nennt mini/pathing.py."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige neue Befund trifft den Defekt.",
+          "steering": "Nur ein neuer Befund, und dieser ist begründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist FINDING, kein BLOCKER."
+        }
+      }
+    },
+    {
+      "id": "B012",
+      "defect_found": true,
+      "unfounded_findings": 0,
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": {
+          "codex": "Der Befund nennt mini/service.py und die unerlaubte Freigabe durch implementer in draft.",
+          "steering": "Der Befund zeigt, dass die draft-Zeile implementer approve erlaubt und damit Selbstfreigabe ermöglicht, und nennt mini/service.py."
+        },
+        "unfounded_findings": {
+          "codex": "Der einzige Befund trifft den Defekt.",
+          "steering": "Nur ein Befund, und dieser ist begründet."
+        },
+        "invented_critical": {
+          "codex": "Kein BLOCKER.",
+          "steering": "Der Befund ist FINDING, kein BLOCKER."
+        }
+      }
+    }
+  ],
+  "judgments_frozen_sha256": "29035f3944db8786eaebd0e0d0a1141bbcbff523119b5810c23c0e634084fe52",
+  "judgments_frozen_at": "2026-09-29T12:28:02.530054+00:00",
+  "unblinded_at": "2026-09-29T12:28:02.530319+00:00",
+  "mapping": {
+    "B001": {
+      "provider": "claude",
+      "case": "Q6",
+      "content_sha256": "d3633a287e905aeab9b6130c4321ab6ac6dc3af557ec8222ca18b054e96b4a2f",
+      "input_sha256": "497d5b0897d523b35941ddc4350d1f8404422c716b940f82c7c162077b414c04"
+    },
+    "B002": {
+      "provider": "agy",
+      "case": "Q1",
+      "content_sha256": "184a3db9616b92983a1e2679b92c5c625329966fba6ce83e9f25ea688663373f",
+      "input_sha256": "b3465ed54aa7f17911ad5076c5adfc13f6fbc7b67419b6072c501e04e5cdae12"
+    },
+    "B003": {
+      "provider": "agy",
+      "case": "Q6",
+      "content_sha256": "92ac59e5ab38afdaa9abba6b4e360fafbe9a2d44d60a51e16f9183f964eb9591",
+      "input_sha256": "3424dd2341a54699adc123cdf63b087e776a35ee00b5ee2c2d40df09ffd4287b"
+    },
+    "B004": {
+      "provider": "claude",
+      "case": "Q5",
+      "content_sha256": "65e76dd7e039365d34bf1e6912f62749836fc544308c44d7504cf6f191ba6f96",
+      "input_sha256": "3752bad5eacc37079859f2cb943bb09eb329c850f7bb223db5544c7b94731440"
+    },
+    "B005": {
+      "provider": "claude",
+      "case": "Q4",
+      "content_sha256": "1754442d9021a53f6621b8493f56e81becf220253fda8d798ad51d9738dc179c",
+      "input_sha256": "d5cdd4b5c018165cfd58c0553df7fcf97a9fa5e066393b32d6382a3bcae45f4a"
+    },
+    "B006": {
+      "provider": "agy",
+      "case": "Q2",
+      "content_sha256": "29a274f382817fd461dcd3131aab0805425de29ed615dccbf80d5ba786cb56c8",
+      "input_sha256": "8f52f9a240b1d485bd461095a31a1923da8ee782165253980ece7aca1bc5b717"
+    },
+    "B007": {
+      "provider": "agy",
+      "case": "Q4",
+      "content_sha256": "3cf2336dc42f1493b3fa066e172cd20bb300905f1f11da5d55cf4396866292bc",
+      "input_sha256": "30a30d262681199e09b990daa66012379cf4c5a0891066ca0af6b2d4c61abe13"
+    },
+    "B008": {
+      "provider": "agy",
+      "case": "Q3",
+      "content_sha256": "72e0907ebb9b881e8711bf126a87334129cb6ca036ae053de5ca3f3c6ffa5117",
+      "input_sha256": "be05bcbec7ff71263cba3a9b1b013ac8f17c61bfba4d7158b9fdace1dec2877a"
+    },
+    "B009": {
+      "provider": "claude",
+      "case": "Q2",
+      "content_sha256": "e1502f51a8aeac0608b7390bf3365500e5473076c8bc85eec8f6cf3b1d1a8801",
+      "input_sha256": "54a29628d3588933d4a23ff5bd53f73af22b1367b72914a55b50efa9de28575b"
+    },
+    "B010": {
+      "provider": "agy",
+      "case": "Q5",
+      "content_sha256": "49032d1bfb83a82e8d266f058aeb3eeae69e3048751b03d3dd364ef9af10f63c",
+      "input_sha256": "ee85c57fa32c6ef42057541f2526eb491857efff6e608cd9f719371e2de20ba0"
+    },
+    "B011": {
+      "provider": "claude",
+      "case": "Q3",
+      "content_sha256": "8ba2e333780dbee0eba445d5b049628f0fb9d689c26df19d954f76f3b2dac97f",
+      "input_sha256": "36792609fbb1a7fd2ac6b3ed82945a85423df5365f072679cbac90e203935f5c"
+    },
+    "B012": {
+      "provider": "claude",
+      "case": "Q1",
+      "content_sha256": "65385ef088ee21f37eab4333f306714acc3c347d0ab0faa1f13d6ba1f374c9bb",
+      "input_sha256": "43b8c20631209692517f2209f3e4536dfd42b69980fed7a73f49489c0c7685f6"
+    }
+  },
+  "claude_special_decision": "approve_experimental",
+  "scores": {
+    "agy": {
+      "passed": true,
+      "critical": 2,
+      "defects": 4,
+      "clean_false_positives": 0,
+      "invented_critical": 0
+    },
+    "claude": {
+      "passed": false,
+      "critical": 2,
+      "defects": 4,
+      "clean_false_positives": 2,
+      "invented_critical": 0
+    }
+  }
+}

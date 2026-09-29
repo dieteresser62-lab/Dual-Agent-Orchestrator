@@ -73,6 +73,7 @@ class AgentOutputError(RuntimeError):
         technical_text: str | None = None,
         exit_code: int | None = None,
         orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+        kind_hint: object | None = None,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
@@ -83,6 +84,7 @@ class AgentOutputError(RuntimeError):
         self.technical_text = technical_text or self.provider_text
         self.exit_code = exit_code
         self.orchestrator_diagnostic = orchestrator_diagnostic
+        self.kind_hint = kind_hint
         super().__init__(message)
 
 
@@ -220,12 +222,21 @@ class AgentAdapter(Protocol):
     capability_verified: bool
     provider_identity: ProviderIdentity | None
     metadata: dict[str, object]
+    inherit_process_environment: bool
+    environment_passthrough: tuple[str, ...]
+    stdin_closed_when_unused: bool
+    suppress_live_stream: bool
+    requires_attempt_ledger: bool
+    sanitize_reviewer_environment: bool
+    set_pwd: bool
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
 
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput: ...
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None: ...
+
+    def prepared_execution_root(self) -> Path | None: ...
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str: ...
 
@@ -252,6 +263,13 @@ class NativeImplementerAdapter(AgentAdapter, Protocol):
 class _BaseAdapter:
     reviewer = False
     required_hosts: tuple[str, ...] = ()
+    inherit_process_environment = True
+    environment_passthrough: tuple[str, ...] = ()
+    stdin_closed_when_unused = False
+    suppress_live_stream = False
+    requires_attempt_ledger = False
+    sanitize_reviewer_environment = True
+    set_pwd = True
 
     def __init__(self, settings: AgentSettings) -> None:
         self.settings = settings
@@ -284,6 +302,9 @@ class _BaseAdapter:
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         _ = source_root
         _ = snapshot_root
+
+    def prepared_execution_root(self) -> Path | None:
+        return None
 
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         command, use_stdin = self.build_command(prompt)
@@ -833,6 +854,30 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
+def is_native_review_adapter(adapter: object) -> bool:
+    """Whether a slot adapter is one of the registered native review transports."""
+    if isinstance(adapter, NativeClaudeReviewAdapter):  # allowlist:provider -- transport: registered native review adapter
+        return True
+    from antigravity_adapter import NativeAntigravityReviewAdapter
+
+    return isinstance(adapter, NativeAntigravityReviewAdapter)
+
+
+def create_reviewer_qualification_adapter(settings: AgentSettings) -> AgentAdapter:
+    """Build the production reviewer transport without a certification gate.
+
+    Qualification and direct canaries establish that gate; they still use the
+    same role binding and adapter class as a normal reviewer slot.
+    """
+    if settings.name == "claude":
+        return NativeClaudeReviewAdapter(settings, role_binding=binding_for_role(AgentRoleName.REVIEWER))
+    if settings.name == "antigravity":
+        from antigravity_adapter import NativeAntigravityReviewAdapter
+
+        return NativeAntigravityReviewAdapter(settings, role_binding=binding_for_role(AgentRoleName.REVIEWER))
+    raise ValueError(f"provider={settings.name}: missing reviewer transport registration")
+
+
 def create_agent_pair(
     provider: str, role: AgentRoleName, *, slot: AgentSlot,
     settings: AgentSettings, certifications: CertificationTable | None = None,
@@ -846,17 +891,20 @@ def create_agent_pair(
             f"slot={slot.value} provider={provider}: missing qualification evidence for role={role.value}",
         )
     table = certifications if certifications is not None else load_role_certifications()
-    table.require(provider, role, slot)
+    certificate = table.require(provider, role, slot, model=settings.model)
     if settings.name != provider:
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for_role(role)
     if provider == "codex" and role is AgentRoleName.IMPLEMENTER:
-        return NativeCodexAdapter(settings, role_binding=binding)
-    if provider == "claude" and role is AgentRoleName.REVIEWER:
-        return NativeClaudeReviewAdapter(settings, role_binding=binding)
-    raise ValueError(
-        f"slot={slot.value} provider={provider}: missing transport/role rights binding"
-    )
+        adapter = NativeCodexAdapter(settings, role_binding=binding)
+    elif role is AgentRoleName.REVIEWER:
+        adapter = create_reviewer_qualification_adapter(settings)
+    else:
+        raise ValueError(
+            f"slot={slot.value} provider={provider}: missing transport/role rights binding"
+        )
+    adapter.certification_status = getattr(certificate, "status", None)
+    return adapter
 
 
 def build_agent_registry(
@@ -874,7 +922,10 @@ def build_slot_agent_registry(
     if set(slots) != {slot.value for slot in AgentSlot}:
         raise ValueError("slot_settings must contain implementer, reviewer and final_reviewer")
     table = certifications or load_role_certifications()
-    table.require_occupancy({slot: slots[slot.value].name for slot in AgentSlot})
+    table.require_occupancy(
+        {slot: slots[slot.value].name for slot in AgentSlot},
+        models={slot: slots[slot.value].model for slot in AgentSlot},
+    )
     registry = {
         slot.value: create_agent_pair(
             slots[slot.value].name, role_for_slot(slot), slot=slot,

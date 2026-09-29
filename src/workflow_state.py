@@ -224,6 +224,7 @@ class AgentProfileBinding:
     binary_identity_sha256: str
     max_budget_usd: float | None = None
     profile_name: str = field(kw_only=True)
+    isolation_options_sha256: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str) or not self.model.strip():
@@ -256,16 +257,24 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile binary identity SHA-256 is invalid")
         if self.binary_identity_sha256 != self.binary_identity.digest:
             raise WorkflowStateValidationError("agent profile binary identity digest differs")
+        if self.isolation_options_sha256 is not None and (
+            not isinstance(self.isolation_options_sha256, str)
+            or SHA256_PATTERN.fullmatch(self.isolation_options_sha256) is None
+        ):
+            raise WorkflowStateValidationError("agent profile isolation options SHA-256 is invalid")
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result = {
             **{name: getattr(self, name) for name in self.__dataclass_fields__ if name != "binary_identity"},
             "binary_identity": self.binary_identity.to_dict(),
         }
+        if self.isolation_options_sha256 is None:
+            result.pop("isolation_options_sha256")
+        return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
-        if not (set(cls.__dataclass_fields__) - {"max_budget_usd"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
+        if not (set(cls.__dataclass_fields__) - {"max_budget_usd", "isolation_options_sha256"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
             raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
         try:
             return cls(**{**raw, "binary_identity": ProviderIdentity.from_dict(raw["binary_identity"])})
@@ -287,7 +296,7 @@ def scripted_profile_binding(slot: str) -> AgentProfileBinding:
         for field in ("binary", "model", "timeout", "effort")
     })
     config = resolve_agent_settings(namespace, {})[slot]
-    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected)
+    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected, model=config.model)
     identity = ProviderIdentity.dry_run(slot)
     return AgentProfileBinding(
         config.model, config.effort, config.name, config.binary,
@@ -1397,9 +1406,11 @@ class BootstrapCheckFact:
         for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
             if not SHA256_PATTERN.fullmatch(value):
                 raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
-        from role_occupancy import provider_roles
+        from role_occupancy import provider_roles, registered_providers
 
-        if self.provider not in provider_roles() or self.role not in {role.value for role in AgentRole}:
+        # Bootstrap facts name the slot's provider; a certified non-default reviewer
+        # (an experimental reviewer) is valid although the shipped TOML omits it.
+        if (self.provider not in provider_roles() and self.provider not in registered_providers()) or self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError("bootstrap provider and role are invalid")
         _require_non_empty(self.operation, "bootstrap operation")
         _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")

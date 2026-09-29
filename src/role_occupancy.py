@@ -27,5 +27,12 @@ def provider_roles() -> dict[str, AgentRoleName]:
     return roles
 
 
+def registered_providers() -> frozenset[str]:
+    """Providers of the capability register; slot certification binds each role pair."""
+    from native_provider_schema import load_capability_table
+
+    return frozenset(item["provider"] for item in load_capability_table()["providers"])
+
+
 def role_for_provider(provider: str) -> AgentRoleName | None:
     return provider_roles().get(provider)

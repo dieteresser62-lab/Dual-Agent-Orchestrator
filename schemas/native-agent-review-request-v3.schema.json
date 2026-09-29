@@ -646,6 +646,10 @@
         },
         "response_contract": {
           "$ref": "#/$defs/response_contract"
+        },
+        "capability_profile": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]*$"
         }
       },
       "required": [

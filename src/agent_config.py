@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
+import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +32,8 @@ class AgentSettings:
     effort: str
     max_budget_usd: float | None = None
     profile_name: str = "scripted"
+    antigravity_home: str | None = None
+    antigravity_run_root: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,56 @@ class AgentProfileConfig:
     effort: str
     timeout_seconds: int | None
     max_budget_usd: float | None = None
+    antigravity_home: str | None = None
+    antigravity_run_root: str | None = None
+
+
+def default_antigravity_home() -> str:
+    return str(Path.home().resolve() / ".dao-antigravity-reviewer")
+
+
+def default_antigravity_run_root() -> str:
+    return f"/var/tmp/dao-agy-review-{os.getuid()}"
+
+
+def _absolute_isolation_path(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value or value != value.strip() or not Path(value).is_absolute():
+        raise AgentConfigError(f"{label} must be an absolute path")
+    raw = Path(value)
+    cursor = raw
+    while cursor != cursor.parent:
+        if cursor.is_symlink():
+            raise AgentConfigError(f"{label} must not traverse a symlink")
+        cursor = cursor.parent
+    return raw.resolve(strict=False)
+
+
+def _antigravity_paths(
+    home: object, run_root: object, *, repository_root: Path, label: str,
+) -> tuple[str, str]:
+    selected_home = _absolute_isolation_path(home, f"{label}.home")
+    selected_root = _absolute_isolation_path(run_root, f"{label}.run_root")
+    personal = Path.home().resolve()
+    repository = repository_root.resolve()
+    if (selected_home == personal or selected_home.is_relative_to(personal / ".gemini")
+        or selected_home.is_relative_to(repository) or repository.is_relative_to(selected_home)):
+        raise AgentConfigError(f"{label}.home must be isolated from the personal HOME and repository")
+    if not selected_root.is_relative_to(Path("/var/tmp")) or selected_root == Path("/var/tmp"):
+        raise AgentConfigError(f"{label}.run_root must be below /var/tmp, outside /tmp and /home")
+    if (selected_root.is_relative_to(repository) or repository.is_relative_to(selected_root)
+        or selected_root.is_relative_to(selected_home) or selected_home.is_relative_to(selected_root)):
+        raise AgentConfigError(f"{label}.run_root must not overlap HOME or repository")
+    return str(selected_home), str(selected_root)
+
+
+def isolation_options_digest(settings: AgentSettings) -> str | None:
+    """Bind only the selected paths, never OAuth or settings contents."""
+    if settings.name != "antigravity":
+        return None
+    home = settings.antigravity_home or default_antigravity_home()
+    root = settings.antigravity_run_root or default_antigravity_run_root()
+    payload = json.dumps({"home": home, "run_root": root}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 _SHIPPED_TOML = tomllib.loads((Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text(encoding="utf-8"))
@@ -45,18 +101,29 @@ DEFAULT_ROLE_PROFILES = {AgentSlot(name): profile for name, profile in _SHIPPED_
 
 
 def default_profiles() -> dict[str, AgentProfileConfig]:
-    return {
-        name: AgentProfileConfig(
+    profiles = {}
+    for name, raw in _SHIPPED_TOML["agent_profiles"].items():
+        agy = raw.get("provider_options", {}).get("antigravity", {})
+        home, root = (None, None)
+        if raw["provider"] == "antigravity":
+            home, root = _antigravity_paths(
+                agy.get("home", default_antigravity_home()),
+                agy.get("run_root", default_antigravity_run_root()),
+                repository_root=Path(__file__).resolve().parents[1],
+                label=f"shipped agent_profiles.{name}.provider_options.antigravity",
+            )
+        profiles[name] = AgentProfileConfig(
             raw["provider"], raw.get("binary", raw["provider"]), raw["model"],
             raw["effort"], _process_timeout(raw.get("timeout_seconds"), f"shipped agent_profiles.{name}.timeout_seconds"),
             raw.get("provider_options", {}).get("claude", {}).get("max_budget_usd"),  # allowlist:provider -- profile configuration: shipped USD option
+            home, root,
         )
-        for name, raw in _SHIPPED_TOML["agent_profiles"].items()
-    }
+    return profiles
 
 
 def parse_profile_tables(
     roles_raw: object | None, profiles_raw: object | None,
+    *, repository_root: Path | None = None,
 ) -> tuple[dict[AgentSlot, str], dict[str, AgentProfileConfig]]:
     """Validate every named profile, including profiles unused by the three slots."""
     if roles_raw is not None and not isinstance(roles_raw, dict):
@@ -71,6 +138,7 @@ def parse_profile_tables(
             raise AgentConfigError(f"unknown role slot: {name}") from exc
         roles[slot] = _non_empty(value, f"roles.{name}")
     profiles = default_profiles()
+    repository = repository_root or Path.cwd()
     for name, raw in (profiles_raw or {}).items():
         if not isinstance(name, str) or not name.strip() or not isinstance(raw, dict):
             raise AgentConfigError(f"agent_profiles.{name} must be a TOML table")
@@ -88,12 +156,14 @@ def parse_profile_tables(
         effort = _non_empty(raw.get("effort", base.effort if base else None), f"agent_profiles.{name}.effort").lower()
         if effort not in VALID_EFFORTS:
             raise AgentConfigError(f"agent_profiles.{name}.effort is unsupported: {effort}")
+        if provider == "antigravity" and effort == "xhigh":
+            raise AgentConfigError(f"agent_profiles.{name}.effort is unsupported for antigravity: {effort}")
         timeout_raw = raw.get("timeout_seconds", base.timeout_seconds if base else None)
         if timeout_raw is not None and (isinstance(timeout_raw, bool) or not isinstance(timeout_raw, int) or timeout_raw < 0):
             raise AgentConfigError(f"agent_profiles.{name}.timeout_seconds must be a non-negative integer")
         timeout = _process_timeout(timeout_raw, f"agent_profiles.{name}.timeout_seconds")
         options = raw.get("provider_options", {})
-        if not isinstance(options, dict) or set(options) - {"claude"}:  # allowlist:provider -- profile configuration: provider option table
+        if not isinstance(options, dict) or set(options) - {"claude", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
         claude_options = options.get("claude", {})  # allowlist:provider -- profile configuration: provider option table
         if not isinstance(claude_options, dict) or set(claude_options) - {"max_budget_usd"}:  # allowlist:provider -- profile configuration: provider option table
@@ -103,7 +173,20 @@ def parse_profile_tables(
         if "max_budget_usd" in claude_options and (isinstance(claude_options["max_budget_usd"], bool) or not isinstance(claude_options["max_budget_usd"], (int, float))):  # allowlist:provider -- profile configuration: USD option
             raise AgentConfigError(f"agent_profiles.{name}.provider_options.claude.max_budget_usd must be numeric")  # allowlist:provider -- profile configuration: USD option
         budget = _positive_float(claude_options["max_budget_usd"], f"agent_profiles.{name}.provider_options.claude.max_budget_usd") if "max_budget_usd" in claude_options else (base.max_budget_usd if base and provider == base.provider else None)  # allowlist:provider -- profile configuration: USD option
-        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget)
+        agy_options = options.get("antigravity", {})
+        if not isinstance(agy_options, dict) or set(agy_options) - {"home", "run_root"}:
+            raise AgentConfigError(f"agent_profiles.{name}.provider_options.antigravity has unknown keys or is invalid")
+        if "antigravity" in options and provider != "antigravity":
+            raise AgentConfigError(f"agent_profiles.{name}: Antigravity options require provider antigravity")
+        home, root = (None, None)
+        if provider == "antigravity":
+            home, root = _antigravity_paths(
+                agy_options.get("home", (base.antigravity_home if base and base.provider == provider else None) or default_antigravity_home()),
+                agy_options.get("run_root", (base.antigravity_run_root if base and base.provider == provider else None) or default_antigravity_run_root()),
+                repository_root=repository,
+                label=f"agent_profiles.{name}.provider_options.antigravity",
+            )
+        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root)
     for slot, name in roles.items():
         if name not in profiles:
             raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
@@ -131,6 +214,7 @@ MODEL_FAMILIES = {
         "astra": "gpt-6-astra",
     },
     "claude": {"opus": "opus", "sonnet": "sonnet", "fable": "fable"},
+    "antigravity": {"gemini-3.1-pro-high": "gemini-3.1-pro-high"},
 }
 _DEFAULT_MODELS = {
     role: next(iter(families.values())) for role, families in MODEL_FAMILIES.items()
@@ -222,6 +306,8 @@ def _resolve(
 
 
 def _selectable_model(role: str, value: str) -> str:
+    if role == "antigravity" and re.fullmatch(r"gemini-[a-z0-9.-]+", value):
+        return value
     families = MODEL_FAMILIES[role]
     model = families.get(value.lower(), value)
     if model not in families.values():
@@ -270,6 +356,8 @@ def resolve_agent_settings(
             raise AgentConfigError(
                 f"{role} effort must be one of {', '.join(VALID_EFFORTS)}; got {effort!r}"
             )
+        if provider == "antigravity" and effort == "xhigh":
+            raise AgentConfigError(f"{role} effort is unsupported for antigravity: {effort}")
         settings[role] = AgentSettings(
             name=provider,
             binary=binary,
@@ -278,6 +366,8 @@ def resolve_agent_settings(
             effort=effort,
             max_budget_usd=profile.max_budget_usd,
             profile_name=roles[slot],
+            antigravity_home=profile.antigravity_home,
+            antigravity_run_root=profile.antigravity_run_root,
         )
     if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
         inherited = settings["reviewer"]
@@ -290,6 +380,8 @@ def resolve_agent_settings(
             effort=_non_empty(_resolve(args, environ, "final_reviewer", "effort", inherited.effort), "final_reviewer effort").lower(),
             max_budget_usd=inherited.max_budget_usd,
             profile_name=current.profile_name,
+            antigravity_home=inherited.antigravity_home,
+            antigravity_run_root=inherited.antigravity_run_root,
         )
     return settings
 

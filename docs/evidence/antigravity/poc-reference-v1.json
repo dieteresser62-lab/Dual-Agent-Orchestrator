@@ -1,0 +1,31 @@
+{
+  "binary": {
+    "path": "/home/dieter/.local/bin/agy",
+    "sha256": "ce6fdd9e7621ee9ac6eedaa337731ca1f235e412ff57cf9eabcd2aa23b3576ca",
+    "version": "1.2.12"
+  },
+  "date": "2026-09-27",
+  "historical_only": true,
+  "limitations": [
+    "Original plan schema and prompt were modified despite original digest in request.",
+    "The requested model slug did not prove the actual served model.",
+    "No isolation, quality or reliability conclusion follows from the PoC.",
+    "Gemini 4 was not tested."
+  ],
+  "observations": {
+    "calls": 22,
+    "compensating_controls": 3,
+    "flash_timeout_seconds": 126.8,
+    "flash_total_tokens": 205448,
+    "offline_tests": 11,
+    "one_plan_case_seconds": 47.7,
+    "one_plan_case_total_tokens": 31271,
+    "projection": 2,
+    "regular": 20,
+    "simple_feature_checks_passed": 5,
+    "simple_feature_checks_total": 6,
+    "timeout_envelope": "Exit 0 and SUCCESS without structured_output; stderr timeout diagnosis"
+  },
+  "qualification_sample": false,
+  "schema_version": "poc-reference-v1"
+}

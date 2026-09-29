@@ -1,0 +1,154 @@
+{
+  "campaign": "slim",
+  "fixed_before_qualification": true,
+  "format_regression_sha256": "621cb84817b932016a63c7ba031f1c4bd61234bc111abbc7f1f574ce947cff6e",
+  "large_output": {
+    "both_required": true,
+    "findings": [
+      128,
+      512
+    ],
+    "measure": [
+      "unique finding count",
+      "UTF-8 output bytes",
+      "duration",
+      "complete parsing",
+      "scope and IDs"
+    ]
+  },
+  "limits": {
+    "cleanup_seconds_max": 15,
+    "probe_seconds": 600
+  },
+  "phase0_counts_as_sample": false,
+  "phase0_sha256": "51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7",
+  "print_timeout": {
+    "safe_technical_rejection_required": true,
+    "success_without_output_is_failure": true
+  },
+  "production_retry": {
+    "classifier": "agy-stderr-v4: ERROR-Umschlag „The stream was interrupted. Please continue the task you were working on.“, ERROR-Umschlag „Your previous response contained an improperly formatted function call … Retries remaining: N“ (Operatorentscheidung 29.09.2026) sowie gemessene Go-Wählfehler gegen *.googleapis.com werden als network (transiente Klasse der Laufzeit) eingestuft; ein Ergebnis mit Fehlerstatus wird nie angenommen. Historie: agy-transport-s2 lief mit agy-stderr-v2 (DNS-Fehler als process); agy-quality-s2 lief mit agy-stderr-v3 (fehlerhafter Werkzeugaufruf als output).",
+    "contract_max_retries_per_case": 2,
+    "contract_rule": "Eine Antwort, die der Domainvertrag mit einem wiederholbaren Code ablehnt (is_retryable_native_review_response_error), wird wie im Produktivpfad mit NativeReviewRetryFeedback (native_review_retry_guidance aus Code, Diagnose und Form der abgelehnten Antwort) direkt mit einem frischen Aufruf desselben Falls neu gefragt, höchstens zweimal je Fall; das gilt für AGY und Claude gleich. Jede Ablehnung und jede Nachfrage wird gezählt und berichtet; bewertet wird die letzte Antwort. Die Rückmeldung wird bei der Auswertung aus der aufgezeichneten abgelehnten Antwort neu berechnet und muss übereinstimmen.",
+    "contract_source": "workflow max_contract_rejections = 3 (drei Antworten je Fall); NATIVE_REVIEW_RESPONSE_RETRY_CODES mit Quelle model-response",
+    "failure_kinds": [
+      "network",
+      "timeout"
+    ],
+    "max_retries_per_case": 2,
+    "rule": "Ein Aufruf, der technisch mit einem transienten Fehler (network, timeout) scheitert, darf wie im Produktivpfad direkt mit einem frischen Aufruf desselben Falls wiederholt werden, höchstens zweimal je Fall. Der Fall zählt nach seinem letzten Aufruf. Jede Wiederholung und jeder transiente Fehler wird im Urteil gezählt und berichtet. Nicht-transiente Fehler, Vertrags- und Semantikfehler werden nie wiederholt. Der Print-Timeout-Fall T1 wird nie wiederholt. Das ist weder ein Neustart noch ein Einzelretake im Sinne der Neustartregel.",
+    "source": "agent_runtime.TransientRetryPolicy (NETWORK/TIMEOUT, maximum_auto_resumes=2)"
+  },
+  "quality": {
+    "agreement_rule": "Beide unabhängigen Blind-Bewerter bewerten jede Antwort je Kriterium. Übereinstimmung gilt; bei Uneinigkeit entscheidet der Operator nur diesen Punkt mit einer protokollierten Ja/Nein-Frage in Alltagssprache. Ausnahme: Die Zahl unbegründeter Befunde in Defektfällen geht nicht in die Qualitätsregel ein; bei Uneinigkeit gilt dort ohne Operatorfrage die höhere Zahl.",
+    "blind_seed": 20260929,
+    "cases": 6,
+    "clean": 2,
+    "corpus_operator_review": "approved_blanket",
+    "corpus_revision": 2,
+    "corpus_sha256": "a7e0ec3a77bbffd2c7c7cbd1151ee5c03be320e3c9479a0bed3fe9af40b6f071",
+    "critical": [
+      "Q1",
+      "Q2"
+    ],
+    "defects": 4,
+    "preregistered_classification": {
+      "clean_case_rule": "Jeder Befund in Q5 oder Q6 zählt als unbegründet. Es gibt dort nachweislich keinen Defekt; der verborgene Beweistest besteht.",
+      "clean_cases": [
+        "Q5",
+        "Q6"
+      ],
+      "invented_critical_rule": "Ein erfundener kritischer Befund ist ein BLOCKER in einem sauberen Fall oder ein BLOCKER, der nicht den tatsächlichen Defekt des Falls trifft.",
+      "q6_rule": "Ein Hinweis, die None-Filterung in render_review sei breiter als nötig oder könne Pflichtfelder verlieren, ist unbegründet. Pflichtfelder können dort nie None sein: Der Digest wird auf 64 Zeichen geprüft, kind ist eine feste Auswahl, decision und complete sind immer gesetzt."
+    },
+    "providers": [
+      "agy",
+      "claude"
+    ],
+    "raters": [
+      "codex",
+      "steering"
+    ],
+    "rating_rubric": "quality-rubric-v1.json",
+    "rubric_sha256": "59826133f64cb37269b8f4f8a216c0c8169e7f78c0c3153b1a0bbb9c7379093d",
+    "superseded_corpus_rule": "Eine Qualitätsserie, deren aufgezeichnete Fallquelle nicht mehr dem eingefrorenen Korpus entspricht, bleibt sichtbar, wird als überholter Korpus geführt, zählt nie als bestanden und verhindert keinen Neustart.",
+    "unblinding_rule": "Erst nach vollständigem Endurteil und dokumentierten Operatorantworten entblinden. Bei verfehlter Claude-Regel entscheidet der Operator danach über die experimentelle Auswahl."
+  },
+  "quality_rule": {
+    "clean_false_positives_max": 1,
+    "critical_required": 2,
+    "defects_required": 3,
+    "invented_critical_max": 0,
+    "verbatim_from_plan": "beide kritischen Defekte erkannt, mindestens 3 von 4 Defekten erkannt, höchstens 1 unbegründeter Befund über die 2 sauberen Ausgaben, kein erfundener kritischer Befund. Gleiche neutrale Evidenz für beide Provider; blinde Zuordnung durch den Operator. Verfehlt Claude die Regel, bleibt seine Serie negativ dokumentiert, ohne Korpus oder Kandidatenregel zu lockern. Bei bestandenem AGY entscheidet der Operator nach Entblindung ausdrücklich über die experimentelle Auswahl trotz schwächerer Referenz. Verfehlt AGY die Regel, keine Auswahlfreigabe. Keine statistische Überlegenheitsbehauptung."
+  },
+  "request_fidelity": "Transport- und Qualitäts-Finalreviews (F5, F6, Q4, Q6) tragen dasselbe Kapazitätskriterium, das der Produktivpfad jedem Finalreview anhängt (workflow_requests.final_review_discovery_capacity_criterion: bei erreichter Kapazität stop_request mit DISCOVERY_OUTPUT_LIMIT). Die Phase-0-Anfrage F6 enthielt es nicht; AGY begründete CONTRACT-UNCLEAR mit genau diesem Widerspruch. Die Korrektur erfolgt vor der ersten Messung; Fallsemantik und Bestehensregel bleiben unverändert. Der Größenfall 128/512 behält seine protokolldefinierte Vollparsing-Anfrage ohne dieses Kriterium.",
+  "restart_rule": "Unerwarteter Fehler macht die jeweilige Provider-Serie negativ; erwartete sichere Timeoutablehnung gilt als bestandener Fehlerfall. Claude-Qualitätsfehler invalidiert keine positive AGY-Serie. Ursachenanalyse und konkrete Änderung an Adapter, Schema, Profil, Konfiguration oder Schutzmechanismus mit Versions-/Commitwechsel vor Neustart. Ganze betroffene Serie wiederholen, bei gemeinsamer Ursache alle abhängigen Serien. Negative, abgebrochene und unvollständige Serien append-orientiert sichtbar halten; keine Einzelretakes oder Filter. Geänderte Bestehensregel erfordert neue Protokollversion und vollständige neue Qualifikation.",
+  "sample_counts": {
+    "canaries": 2,
+    "large_output": 2,
+    "print_timeout": 1,
+    "quality_per_provider": 6,
+    "transport": 12
+  },
+  "schema_version": "qualification-protocol-v5",
+  "slots": {
+    "final_reviewer": {
+      "canary": "final_reviewer",
+      "contexts": [
+        "F5",
+        "F6"
+      ],
+      "quality_cases": [
+        "Q4",
+        "Q6"
+      ],
+      "shared_protection_and_quality": true
+    },
+    "reviewer": {
+      "canary": "reviewer",
+      "contexts": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "quality_cases": [
+        "Q1",
+        "Q2",
+        "Q3",
+        "Q5"
+      ],
+      "shared_protection_and_quality": true
+    }
+  },
+  "supersedes": {
+    "earlier": {
+      "earlier": {
+        "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
+        "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
+        "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
+        "version": "v2"
+      },
+      "reason": "Produktionsgleiche Vertragsrückmeldung nach der ersten AGY-Qualitätsserie (Operatorentscheidung 29.09.2026)",
+      "v3_evidence": "Serie agy-quality-s1 (Q5: approval-invalid, Planfreigabe mit offenem Befund; Q6 nicht gestartet) bleibt als negative v3-Serie sichtbar.",
+      "version": "v3"
+    },
+    "reason": "Korpus-Revision 2 nach Entblindung von Revision 1 (Operatorentscheidung „Testfälle korrigieren, neu“, 29.09.2026)",
+    "v4_evidence": "Qualitätsserien agy-quality-s3 und claude-quality-s2 (Korpus-Revision 1) bleiben sichtbar; offizielles Ergebnis: beide Anbieter 4/4 Defekte, 0 erfundene kritische, je 3 unbegründete Befunde in Q5/Q6, Regel verfehlt. Sie sind für Revision 2 als überholter Korpus markiert und nicht wählbar.",
+    "version": "v4"
+  },
+  "target_status": "experimental",
+  "transport": {
+    "cases": [
+      "F1",
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "F6"
+    ],
+    "fresh_context_required": true,
+    "independent_sessions_per_case": 2,
+    "pass": "All 12 responses meet current writer, full domain contract and predeclared case semantics."
+  }
+}

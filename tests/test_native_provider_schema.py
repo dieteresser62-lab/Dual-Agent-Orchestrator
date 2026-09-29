@@ -5,6 +5,8 @@ import copy
 import dataclasses
 import inspect
 import json
+import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -12,11 +14,13 @@ import native_provider_schema
 from agent_config import MODEL_FAMILIES, add_agent_arguments, resolve_agent_settings
 from contracts import AgentRole
 from native_provider_schema import (
+    AGY_PROVIDER,
     NativeProviderSchemaError,
     OPENAI_PROVIDER,
     OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS,
     assert_projected_provider_schema,
     assert_provider_capabilities,
+    capability_profile_for_digest,
     bind_required_empty_array,
     compatible_cli_version,
     defensive_provider_projection,
@@ -95,14 +99,15 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
     capabilities = load_capability_table()
     exceptions = load_exception_table()
 
-    assert capabilities["schema_version"] == "native-provider-schema-capabilities-v1"
-    assert [item["provider"] for item in capabilities["providers"]] == [
+    assert capabilities["schema_version"] == "native-provider-schema-capabilities-v2"
+    assert [item["profile_id"] for item in capabilities["providers"]] == [
+        "antigravity",
         "claude",
         "codex",
     ]
-    assert {
-        item["version_policy"] for item in capabilities["providers"]
-    } == {"same-major-forward"}
+    assert {item["profile_id"]: item["version_policy"] for item in capabilities["providers"]} == {
+        "antigravity": "forward", "claude": "forward", "codex": "forward",
+    }
     assert {
         frozenset(item["features"]) for item in capabilities["providers"]
     } == {
@@ -114,12 +119,114 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
                 "nested_any_of",
                 "nested_one_of",
                 "positional_tuple",
+                "unique_items", "max_length", "min_length", "portable_pattern",
+                "optional_properties", "const_value", "enum_values", "null_type",
+                "refs", "defs", "all_of", "not_schema", "strict_writer",
+                "numeric_constraints", "format_keyword",
             }
         )
     }
-    assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
+    assert exceptions["schema_version"] == "native-provider-schema-exceptions-v2"
     assert len(registered_exceptions("codex")) == 6
     assert len(registered_exceptions("claude")) == 6
+    assert len(registered_exceptions("antigravity")) == 6
+
+
+def test_agy_measured_capability_and_transport() -> None:
+    capability = provider_capability(AGY_PROVIDER)
+    assert capability["profile_id"] == "antigravity"
+    digest = hashlib.sha256(json.dumps(capability, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert capability_profile_for_digest("antigravity", digest) == "antigravity"
+    with pytest.raises(NativeProviderSchemaError, match="no unique bound capability profile"):
+        capability_profile_for_digest("claude", digest)
+    assert capability["cli_version"] == "1.2.12"
+    assert compatible_cli_version(AGY_PROVIDER, "1.2.12")
+    for version in ("1.2.11",):
+        assert not compatible_cli_version(AGY_PROVIDER, version)
+    for version in ("1.2.13", "2.0.0"):
+        assert compatible_cli_version(AGY_PROVIDER, version)
+    with pytest.raises(NativeProviderSchemaError, match="unsupported format"):
+        compatible_cli_version(AGY_PROVIDER, "agy 1.2.12")
+    assert capability["features"]["unique_items"]
+    assert capability["features"]["nested_one_of"]
+    assert not capability["features"]["positional_tuple"]
+    command = [
+        "/opt/bin/agy", "-p", "prompt", "--output-format", "json",
+        "--json-schema", "{}", "--print-timeout", "590s",
+        "--disable-slash-commands", "--sandbox", "--model", "gemini-3.1-pro-high",
+        "--effort", "high", "--log-file", "/tmp/run/agy.log",
+        "--agent", "dao-reviewer",
+    ]
+    profile = normalize_transport_profile(AGY_PROVIDER, command)
+    assert_provider_capabilities(AGY_PROVIDER, (), profile=profile)
+    other_model = command.copy()
+    other_model[other_model.index("--model") + 1] = "gpt-oss-120b-medium"
+    assert_provider_capabilities(AGY_PROVIDER, (), profile=normalize_transport_profile(AGY_PROVIDER, other_model))
+    with pytest.raises(NativeProviderSchemaError, match="unclassified"):
+        normalize_transport_profile(AGY_PROVIDER, [*command, "--future"])
+    nul_command = command.copy()
+    nul_command[nul_command.index("--model") + 1] = "gemini-\x00bad"
+    with pytest.raises(NativeProviderSchemaError, match="invalid text"):
+        normalize_transport_profile(AGY_PROVIDER, nul_command)
+    with pytest.raises(NativeProviderSchemaError, match="not positively probed"):
+        assert_provider_capabilities(AGY_PROVIDER, ("positional_tuple",))
+    schema = {
+        "type": "object", "properties": {
+            "value": {"oneOf": [{"type": "string", "const": "x"}, {"type": "null"}]},
+            "payload": {"type": "array", "enum": [["uniqueItems", "oneOf"]],
+                        "uniqueItems": True, "items": {"type": "string"}},
+        }, "required": ["value"], "additionalProperties": False,
+    }
+    projected = defensive_provider_projection(schema, provider=AGY_PROVIDER, required_features=())
+    assert projected == schema  # const/enum payload data and supported keywords survive.
+    assert_projected_provider_schema(projected, provider=AGY_PROVIDER)
+    rejected = copy.deepcopy(schema)
+    rejected["properties"]["payload"]["prefixItems"] = [{"type": "string"}]
+    with pytest.raises(NativeProviderSchemaError, match="positional_tuple"):
+        assert_projected_provider_schema(rejected, provider=AGY_PROVIDER)
+    rejected = copy.deepcopy(schema)
+    rejected["properties"]["value"]["not"] = {"type": "integer"}
+    with pytest.raises(NativeProviderSchemaError, match="not_schema"):
+        assert_projected_provider_schema(rejected, provider=AGY_PROVIDER)
+    rejected = copy.deepcopy(schema)
+    rejected["properties"]["value"]["minimum"] = 1
+    with pytest.raises(NativeProviderSchemaError, match="numeric_constraints"):
+        assert_projected_provider_schema(rejected, provider=AGY_PROVIDER)
+
+
+def test_capability_profiles_are_identified_independently_of_provider(monkeypatch, tmp_path) -> None:
+    table = load_capability_table()
+    duplicate = copy.deepcopy(provider_capability("claude"))
+    duplicate["profile_id"] = "claude-later"
+    table["providers"].insert(2, duplicate)
+    path = tmp_path / "capabilities.json"
+    path.write_text(json.dumps(table), encoding="utf-8")
+    monkeypatch.setattr(native_provider_schema, "CAPABILITY_PATH", path)
+    loaded = load_capability_table()
+    assert [row["provider"] for row in loaded["providers"]].count("claude") == 2
+    digest = hashlib.sha256(json.dumps(duplicate, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert capability_profile_for_digest("claude", digest) == "claude-later"
+
+
+def test_agy_capability_evidence_matches_frozen_s6_bytes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    evidence = json.loads((root / "docs/evidence/antigravity/capability-v1.json").read_text())
+    measured = evidence["measurements"]
+    assert measured["version_stdout"] == "1.2.12\n"
+    phase_path = root / measured["phase_0_path"]
+    fixture_path = root / measured["format_fixture_path"]
+    assert hashlib.sha256(phase_path.read_bytes()).hexdigest() == measured["phase_0_sha256"]
+    assert hashlib.sha256(fixture_path.read_bytes()).hexdigest() == measured["format_fixture_sha256"]
+    phase = json.loads(phase_path.read_text())
+    fixture = json.loads(fixture_path.read_text())
+    s6 = {item["call"][-2:]: item for item in phase["calls"] if item["series"] == "s6"}
+    assert set(s6) == set(measured["writer_sha256"]) == set(fixture["cases"])
+    for case, item in s6.items():
+        checks = {check["name"]: check["status"] for check in item["checks"]}
+        assert checks["writer_schema"] == checks["schema_echo"] == "pass"
+        writer = fixture["cases"][case]["envelope"]["json_schema"]
+        digest = hashlib.sha256(json.dumps(writer, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert measured["writer_sha256"][case] == digest
 
 
 def test_every_provider_must_use_the_shared_forward_version_policy(
@@ -200,12 +307,12 @@ def test_unprobed_feature_and_out_of_policy_version_fail_closed() -> None:
     assert compatible_cli_version("codex", "codex-cli 0.157.0") is True
     assert compatible_cli_version("codex", "codex-cli 0.160.1") is True
     assert compatible_cli_version("codex", "codex-cli 0.999.0") is True
+    assert compatible_cli_version("claude", "3.0.0 (Claude Code)") is True
+    assert compatible_cli_version("codex", "codex-cli 1.0.0") is True
     for provider, version in (
         ("claude", "2.1.279 (Claude Code)"),
         ("claude", "2.1.282 (Claude Code)"),
-        ("claude", "3.0.0 (Claude Code)"),
         ("codex", "codex-cli 0.156.0"),
-        ("codex", "codex-cli 1.0.0"),
     ):
         with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):
             assert_provider_capabilities(provider, (), cli_version=version)

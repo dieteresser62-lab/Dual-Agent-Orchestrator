@@ -1,0 +1,44 @@
+{
+  "cases": {
+    "F1": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n < 10\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_small_value_is_eligible():\n    assert eligible(5) is True\n"
+    },
+    "F2": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n <= 10\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_upper_bound_inclusive():\n    assert eligible(10) is True\n    assert eligible(11) is False\n"
+    },
+    "F3": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n < 10\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_upper_bound_inclusive():\n    assert eligible(10) is True\n    assert eligible(11) is False\n"
+    },
+    "F4": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n <= 10\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_upper_bound_inclusive():\n    assert eligible(10) is True\n    assert eligible(11) is False\n"
+    },
+    "F5": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n < 10\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_upper_bound_inclusive():\n    assert eligible(10) is True\n    assert eligible(11) is False\n",
+      "tests/test_smoke.py": "def test_module_imports():\n    import src.limit  # noqa: F401\n"
+    },
+    "F6": {
+      "docs/plan.md": "# Plan: inclusive upper bound for eligibility\n\nGoal: `eligible(n)` in `src/limit.py` returns True exactly for `n <= 10` (inclusive upper bound 10).\n\n## Slice 1 (single implementable slice)\n\n- Change the comparison in `src/limit.py` from `n < 10` to `n <= 10`.\n- Add the boundary test `tests/test_limit.py::test_upper_bound_inclusive`, asserting\n  `eligible(10) is True` and `eligible(11) is False`.\n\n## Acceptance criteria and verification\n\n1. `eligible(10)` is True; verified by `python3 -m pytest tests/test_limit.py -q`.\n2. `eligible(11)` is False; verified by the same boundary test.\n3. Changes stay within `src/limit.py` and `tests/test_limit.py`; verified by the reviewed diff.\n\n## Additional rules covered by the final review\n\n4. `src/zero.py::is_valid_count(n)` returns True only for `n > 0` (zero is not a valid count).\n5. `src/negative.py::normalize_input(n)` raises `ValueError` for `n < 0`.\n",
+      "src/__init__.py": "",
+      "src/limit.py": "def eligible(n: int) -> bool:\n    return n < 10\n",
+      "src/negative.py": "def normalize_input(n: int) -> int:\n    return n\n",
+      "src/zero.py": "def is_valid_count(n: int) -> bool:\n    return n >= 0\n",
+      "tests/test_limit.py": "from src.limit import eligible\n\n\ndef test_upper_bound_inclusive():\n    assert eligible(10) is True\n    assert eligible(11) is False\n"
+    }
+  },
+  "format_fixtures_version": "phase0-format-fixtures-v1"
+}

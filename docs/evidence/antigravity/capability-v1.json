@@ -1,0 +1,44 @@
+{
+  "schema_version": "antigravity-capability-v1",
+  "slots": {
+    "reviewer": [
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_agy_measured_capability_and_transport",
+        "proves": "Measured review writer surface and fail-closed transport profile"
+      },
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_agy_capability_evidence_matches_frozen_s6_bytes",
+        "proves": "Phase-0 and s6 fixture digests match recorded capability measurements"
+      }
+    ],
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_agy_measured_capability_and_transport",
+        "proves": "Measured review writer surface and fail-closed transport profile"
+      },
+      {
+        "node_id": "tests/test_native_provider_schema.py::test_agy_capability_evidence_matches_frozen_s6_bytes",
+        "proves": "Phase-0 and s6 fixture digests match recorded capability measurements"
+      }
+    ]
+  },
+  "measurements": {
+    "phase_0_path": "docs/evidence/antigravity/phase-0-v1.json",
+    "phase_0_sha256": "51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7",
+    "series": "s6",
+    "format_fixture_path": "tests/fixtures/reviewer-format-s6-v1.json",
+    "format_fixture_sha256": "621cb84817b932016a63c7ba031f1c4bd61234bc111abbc7f1f574ce947cff6e",
+    "writer_sha256": {
+      "F1": "5789a2487b31ace1ba83ab02e9de06201d96987a3f3d62073b97038079e339ef",
+      "F2": "3f812a2686cf2ffc9df212eba3f6d8f5a4f1edd449b342632502fbb5cc26ac2f",
+      "F3": "4d8415fdf81d0babc7cdbe1285ff598c47c7b3a1389b05a17c38cac43e5eaa31",
+      "F4": "885bb25b91ba86e4b133306f8fd041d9efa9adf74525fbb1a2f46fc79f8e7ca9",
+      "F5": "b49ebf0b226e64d61a097e75cc9779119e65bf5bc238ed022e77d8e7cf15e891",
+      "F6": "a6412e38082872dc5e742663984e706df2fefd13e8dc8a9adc550d4071daabbb"
+    },
+    "accepted_schema_echo": "All six s6 envelopes passed writer_schema and schema_echo checks; F6 failed case_semantics only.",
+    "positional_tuple": "PoC prefixItems/items:false rejected with INVALID_ARGUMENT.",
+    "version_stdout": "1.2.12\n",
+    "model": "gemini-3.1-pro-high"
+  }
+}

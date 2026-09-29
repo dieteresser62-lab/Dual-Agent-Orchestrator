@@ -1158,10 +1158,52 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         if "# retirement-negative-control" not in line
         and not _allowed_retirement_reference_line(path, line)
     )
+    # Each provider-specific Slice path is explicitly classified here. The
+    # remaining retired protocol and third-role patterns still fail closed.
+    relative = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else ""
+    new_provider_paths = relative.startswith("docs/evidence/antigravity/") or path.name == "orchestrator.toml" or relative in {
+        "docs/reference/antigravity-reviewer.md",
+        "docs/reference/reviewer-certification.md",
+        "scripts/probe_reviewer.py",
+        "scripts/qualification/profiles.py",
+        "scripts/qualification/run_probe.py",
+        "tests/test_reviewer_probe.py",
+        "tests/test_reviewer_qualification_tools.py",
+        "tests/fixtures/reviewer-quality-corpus-v1.json",
+        "tests/fixtures/reviewer-format-s6-v1.json",
+        "tests/fixtures/reviewer-format-repo-v1.json",
+        "schemas/native-provider-schema-capabilities-v2.json",
+        "schemas/native-provider-schema-exceptions-v2.json",
+        "schemas/role-provider-certifications-v1.json",
+        "orchestrator.toml",
+        "tests/test_reviewer_parity.py",
+        "README.md",
+        "Quickstart.md",
+        "AGENTS.md",
+        "CLAUDE.md",  # allowlist:provider -- documentation guard: active root reviewer entry
+        "CODEX.md",  # allowlist:provider -- documentation guard: active root implementer entry
+        "docs/reference/einrichtung.md",
+        "src/native_provider_schema.py",
+        "src/role_certification.py",
+        "tests/test_native_provider_schema.py",
+        "tests/test_native_contract_differential.py",
+        "tests/test_native_review_request.py",
+        "tests/test_role_certification.py",
+        "tests/fixtures/native-provider-projection-baseline-v1.json",
+        "src/antigravity_adapter.py",
+        "src/agent_adapters.py",
+        "src/agent_config.py",
+        "src/agent_runtime.py",
+        "tests/test_antigravity_adapter.py",
+        "tests/test_cli.py",
+        "tests/test_agent_config.py",
+        "tests/test_workflow_run_setup.py",
+        "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
+        "tests/fixtures/antigravity-envelopes-v1.json",
+        "schemas/orchestrator-artifact-v3.schema.json",
+    }
     retired = (
-        "anti" + "gravity",
         "agy" + ".exe",
-        "ANTI" + "GRAVITY_",
         "orchestrator-artifact-" + "v1",
         "native-agent-codex-request-" + "v1",
         "native-agent-codex-result-" + "v1",
@@ -1170,10 +1212,17 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "native-codex-" + "v1",
         "native-claude-review-" + "v1",
     )
+    if not new_provider_paths:
+        retired = ("anti" + "gravity", "ANTI" + "GRAVITY_", *retired)
     lowered = text.casefold()
     hits = [token for token in retired if token.casefold() in lowered]
-    if re.search(r"(?<![A-Za-z0-9_])" + "agy" + r"(?![A-Za-z0-9_])", text, re.I):
+    if not new_provider_paths and re.search(r"(?<![A-Za-z0-9_])" + "agy" + r"(?![A-Za-z0-9_])", text, re.I):
         hits.append("standalone retired binary")
+    if new_provider_paths and re.search(
+        r"(?:dritte\s+(?:Prozess)?rolle|third\s+(?:process\s+)?role|"
+        r"RUN_TASK_(?:ANTIGRAVITY|AGY)_|legacy[-_ ](?:reviewer|transport))", text, re.I,
+    ):
+        hits.append("retired third-role architecture")
     if re.search(
         r"(?:"
         r"(?<![A-Za-z0-9_])A-(?:[0-9]+|\*)(?![A-Za-z0-9_])"
@@ -1374,6 +1423,37 @@ def test_retirement_guard_rejects_every_active_retired_reference() -> None:
         for hit in _retirement_hits(path, path.read_text(encoding="utf-8"))
     ]
     assert not hits, "Retired active references found:\n" + "\n".join(hits)
+
+
+def test_retirement_guard_requires_joint_evidence_and_narrow_classification(
+    tmp_path: Path,
+) -> None:
+    required = (
+        "docs/evidence/antigravity/phase-0-v1.json",
+        "docs/evidence/antigravity/capability-v1.json",
+        "docs/evidence/antigravity/qualification-protocol-v1.json",
+        "docs/evidence/antigravity/poc-reference-v1.json",
+        "docs/reference/antigravity-reviewer.md",
+        "scripts/probe_reviewer.py",
+        "tests/test_reviewer_probe.py",
+        "tests/fixtures/reviewer-quality-corpus-v1.json",
+        "tests/fixtures/reviewer-format-s6-v1.json",
+        "tests/fixtures/reviewer-format-repo-v1.json",
+    )
+    assert all((ROOT / name).is_file() for name in required)
+    assert not any((tmp_path / name).is_file() for name in required)
+    allowed = ROOT / required[0]
+    assert not _retirement_hits(allowed, "Antigravity is a candidate reviewer.")
+    assert _retirement_hits(allowed, "Antigravity ist die dritte Prozessrolle.")
+    assert _retirement_hits(allowed, 'prefix = "A-01"')
+    assert _retirement_hits(allowed, "RUN_TASK_ANTIGRAVITY_BINARY=agy.exe")
+    assert _retirement_hits(allowed, "RUN_TASK_AGY_BINARY=/tmp/agy")
+    unclassified = tmp_path / "docs/reference/unclassified.md"
+    unclassified.parent.mkdir(parents=True)
+    (tmp_path / "orchestrator.toml").write_bytes((ROOT / "orchestrator.toml").read_bytes())
+    unclassified.write_text("Antigravity is a candidate reviewer.\n", encoding="utf-8")
+    assert unclassified in _retirement_active_files(tmp_path)
+    assert _retirement_hits(unclassified, "Antigravity is a candidate reviewer.")
 
 
 def test_retirement_guard_skips_binary_document(tmp_path: Path) -> None:
@@ -2181,7 +2261,7 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
     configs = 0
     commands = 0
     final_slot = False
-    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md"):
+    for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md", "docs/reference/antigravity-reviewer.md"):
         source = (ROOT / name).read_text(encoding="utf-8")
         for index, snippet in enumerate(_fenced_examples(source, "toml")):
             tomllib.loads(snippet)

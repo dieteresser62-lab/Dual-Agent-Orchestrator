@@ -194,7 +194,9 @@
           "model": "sol",
           "effort": "high",
           "timeout_seconds": null,
-          "max_budget_usd": null
+          "max_budget_usd": null,
+          "antigravity_home": null,
+          "antigravity_run_root": null
         },
         "review": {
           "__type__": "AgentProfileConfig",
@@ -203,7 +205,9 @@
           "model": "opus",
           "effort": "high",
           "timeout_seconds": null,
-          "max_budget_usd": null
+          "max_budget_usd": null,
+          "antigravity_home": null,
+          "antigravity_run_root": null
         }
       }
     },
@@ -226,7 +230,9 @@
         "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null,
-        "profile_name": "review"
+        "profile_name": "review",
+        "antigravity_home": null,
+        "antigravity_run_root": null
       },
       "implementer": {
         "__type__": "AgentSettings",
@@ -236,7 +242,9 @@
         "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null,
-        "profile_name": "implementation"
+        "profile_name": "implementation",
+        "antigravity_home": null,
+        "antigravity_run_root": null
       },
       "reviewer": {
         "__type__": "AgentSettings",
@@ -246,7 +254,9 @@
         "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null,
-        "profile_name": "review"
+        "profile_name": "review",
+        "antigravity_home": null,
+        "antigravity_run_root": null
       }
     },
     "state_was_frozen": false,
@@ -698,7 +708,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "6fde130106705d7b2117bea6a20a1aca500f14d7235366c529448eaea0ae4534",
+        "namespace_sha256": "8b86b2828107846a11bb214e4eea785b3cb04147d4b6972beb2a6ea73d93b61d",
         "return_trace": [
           {
             "function": "quota_int",
@@ -781,7 +791,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "dbd463c4604e952e05b0aa6dc793c737732b9f5b453ce38a28c16ae871f5a124",
+        "namespace_sha256": "77f635108ab2ec077d5fc1e80e642d1acb7d15447af0b7fff878234b1a870b3f",
         "return_trace": [
           {
             "function": "quota_int",
@@ -855,7 +865,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "d40bef960cb04b99245fcba7fcb427056b397d51a1947d3e5af5c8cedb97df5c",
+        "namespace_sha256": "a31fed1f1351e36fcf14155e16ffda27640fb1699ba9612e2c3b27ec28a87ed2",
         "return_trace": [
           {
             "function": "quota_int",
@@ -936,7 +946,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "4982c53bc81ee07ac4bdc9d02826f111bec7ad86e7f9881d4bf348d81e6ddf30",
+        "namespace_sha256": "15a1cac27a57e99b0fa32f1980cc617bd3430225c2bb94f5c493f070f5bd7e55",
         "return_trace": [
           {
             "function": "quota_int",

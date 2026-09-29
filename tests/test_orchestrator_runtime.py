@@ -2524,6 +2524,7 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
         task_digest="a" * 64,
         task_scope_patterns=("docs/internal/work-plan.md",),
         target_branch="feature/transport-boundary",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         execution_mode="PLAN_ONLY",
         work_plan_path="docs/internal/work-plan.md",
     )
