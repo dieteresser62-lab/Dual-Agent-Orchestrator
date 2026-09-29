@@ -308,7 +308,7 @@ def test_prepared_command_is_measured_and_timeout_consistent(
     adapter.cleanup()
 
 
-def test_factory_uses_reviewer_role_and_candidate_stays_closed() -> None:
+def test_factory_uses_reviewer_role_and_promoted_slots() -> None:
     class FakeAdmitted:
         def require(self, provider, role, slot, *, model):
             assert (provider, role, slot, model) == (
@@ -321,11 +321,12 @@ def test_factory_uses_reviewer_role_and_candidate_stays_closed() -> None:
         settings=_settings(), certifications=FakeAdmitted(),
     )
     assert isinstance(adapter, NativeAntigravityReviewAdapter)
-    with pytest.raises(Exception, match="missing qualification evidence"):
-        create_agent_pair(
-            "antigravity", AgentRoleName.REVIEWER, slot=AgentSlot.REVIEWER,
+    for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
+        admitted = create_agent_pair(
+            "antigravity", AgentRoleName.REVIEWER, slot=slot,
             settings=_settings(),
         )
+        assert isinstance(admitted, NativeAntigravityReviewAdapter)
     with pytest.raises(Exception):
         create_agent_pair(
             "antigravity", AgentRoleName.IMPLEMENTER, slot=AgentSlot.IMPLEMENTER,

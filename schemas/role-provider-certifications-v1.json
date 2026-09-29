@@ -46,7 +46,7 @@
       "role": "reviewer",
       "provider": "antigravity",
       "manufacturer": "google",
-      "status": "candidate",
+      "status": "experimental",
       "version_scope": {
         "cli_version": "1.2.12",
         "version_policy": "forward"
@@ -81,7 +81,7 @@
       "capability_profile": "antigravity",
       "canary_evidence": {
         "path": "docs/evidence/antigravity/canary-v1.json",
-        "sha256": "64ff94b814f1c6beadeef9e53b1e4d570d0e126dee806eadd54f0b7665b37482"
+        "sha256": "6d1e20e8b11d52e3d3f8d8e26e64b06b5d3dd7c18d90645b01c14bffb8c912d2"
       }
     },
     {
@@ -129,7 +129,7 @@
       "role": "reviewer",
       "provider": "antigravity",
       "manufacturer": "google",
-      "status": "candidate",
+      "status": "experimental",
       "version_scope": {
         "cli_version": "1.2.12",
         "version_policy": "forward"
@@ -164,7 +164,7 @@
       "capability_profile": "antigravity",
       "canary_evidence": {
         "path": "docs/evidence/antigravity/canary-v1.json",
-        "sha256": "64ff94b814f1c6beadeef9e53b1e4d570d0e126dee806eadd54f0b7665b37482"
+        "sha256": "6d1e20e8b11d52e3d3f8d8e26e64b06b5d3dd7c18d90645b01c14bffb8c912d2"
       }
     },
     {

@@ -5,6 +5,7 @@ import itertools
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -47,7 +48,8 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
 
 
 @pytest.mark.parametrize("timeout", (0, 17))
-def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(tmp_path: Path, timeout: int) -> None:
+def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: int) -> None:
     operations = (
         ("codex", "implementer", "implementer_plan"),  # allowlist:provider -- profile configuration: complete budget table
         ("codex", "implementer", "implementer_plan_revision"),  # allowlist:provider -- profile configuration: complete budget table
@@ -73,6 +75,32 @@ def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(tmp_path: Path,
     assert config.provider_input_budget.select(
         "antigravity", "reviewer", "reviewer_final_review"
     ).max_bytes == 16_000_000
+    selected = parse_args([], cwd=tmp_path, environ={})
+    assert selected.slot_settings["reviewer"].name == "antigravity"
+    assert selected.slot_settings["final_reviewer"].name == "antigravity"
+    assert selected.slot_settings["reviewer"].timeout_seconds == (timeout or None)
+
+    from role_certification import load_role_certifications
+    root = Path(__file__).resolve().parents[1]
+    candidate_root = tmp_path / "candidate_registry"
+    for relative in (
+        "schemas/role-provider-certifications-v1.json",
+        "schemas/native-provider-schema-capabilities-v2.json",
+        "docs/evidence/role-certification-v1.json",
+        "docs/evidence/role-certification-reviewer-restricted-v1.json",
+        "docs/evidence/antigravity/capability-v1.json",
+        "docs/evidence/antigravity/canary-v1.json",
+    ):
+        target = candidate_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / relative, target)
+    table_path = candidate_root / "schemas/role-provider-certifications-v1.json"
+    document = json.loads(table_path.read_text())
+    for row in document["certifications"]:
+        if row["provider"] == "antigravity":
+            row["status"] = "candidate"
+    table_path.write_text(json.dumps(document))
+    monkeypatch.setattr(cli, "load_role_certifications", lambda: load_role_certifications(root=candidate_root))
     with pytest.raises(ConfigError, match="not-certified"):
         parse_args([], cwd=tmp_path, environ={})
 
@@ -87,8 +115,7 @@ def test_shipped_roles_and_profiles_resolve_with_final_inheritance(tmp_path: Pat
 
 @pytest.mark.parametrize("timeout", (0, 17))
 def test_experimental_agy_requires_explicit_slot_selection_and_accepts_timeout(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: int) -> None:
-    from role_certification import CertificationTable, load_role_certifications
+        tmp_path: Path, timeout: int) -> None:
     shipped = (Path(__file__).resolve().parents[1] / "orchestrator.toml").read_text()
     changed = shipped.replace('reviewer = "review"', 'reviewer = "experimental_antigravity"', 1)
     for operation in ("reviewer_plan_review", "reviewer_slice_review"):
@@ -99,10 +126,6 @@ def test_experimental_agy_requires_explicit_slot_selection_and_accepts_timeout(
                 'model = "gemini-4-pro"\neffort = "high"\n'
                 f'timeout_seconds = {timeout}\n')
     _write_config(tmp_path, changed)
-    table = load_role_certifications()
-    promoted = CertificationTable(tuple(replace(entry, status="experimental")
-        if entry.provider == "antigravity" else entry for entry in table.entries))
-    monkeypatch.setattr(cli, "load_role_certifications", lambda: promoted)
     selected = parse_args([], cwd=tmp_path, environ={})
     assert selected.slot_settings["reviewer"].name == "antigravity"
     assert selected.slot_settings["reviewer"].model == "gemini-4-pro"

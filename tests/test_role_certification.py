@@ -87,9 +87,9 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     table = load_role_certifications()
     assert [(entry.slot, entry.role, entry.provider, entry.manufacturer, entry.status) for entry in table.entries] == [
         (AgentSlot.IMPLEMENTER, AgentRoleName.IMPLEMENTER, "codex", "openai", "certified"),
-        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "candidate"),
+        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "experimental"),
         (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
-        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "candidate"),
+        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "experimental"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
     ]
     assert table.entries[2].evidence_sha256 == table.entries[4].evidence_sha256
@@ -132,8 +132,11 @@ def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> Non
         aliases.require_occupancy(missing)
 
 
-def test_agy_candidate_is_blocked_and_model_family_is_bound() -> None:
-    table = load_role_certifications()
+def test_agy_candidate_is_blocked_and_model_family_is_bound(tmp_path: Path) -> None:
+    _copy_sources(tmp_path)
+    _mutate(tmp_path, lambda doc: [row.update(status="candidate") for row in doc["certifications"]
+                                   if row["provider"] == "antigravity"])
+    table = load_role_certifications(root=tmp_path)
     with pytest.raises(CertificationError, match="slot=implementer provider=antigravity"):
         table.require("antigravity", AgentRoleName.IMPLEMENTER, AgentSlot.IMPLEMENTER, model="gemini-3.1-pro-high")
     settings = AgentSettings("antigravity", "agy", "gemini-3.1-pro-high", 600, "high")
@@ -145,12 +148,16 @@ def test_agy_candidate_is_blocked_and_model_family_is_bound() -> None:
         for model in ("claude-sonnet-4-6", "gpt-oss-120b-medium"):
             with pytest.raises(CertificationError, match="does not match manufacturer google family"):
                 table.require("antigravity", AgentRoleName.REVIEWER, slot, model=model)
-    promoted = CertificationTable(tuple(
-        replace(entry, status="experimental") if entry.provider == "antigravity" else entry
-        for entry in table.entries
-    ))
+    promoted = load_role_certifications()
     for model in ("gemini-3.1-pro-high", "gemini-other"):
-        assert promoted.require("antigravity", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model=model).manufacturer == "google"
+        for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
+            assert promoted.require("antigravity", AgentRoleName.REVIEWER, slot, model=model).manufacturer == "google"
+    assert set(promoted.require_occupancy(
+        {AgentSlot.IMPLEMENTER: "codex", AgentSlot.REVIEWER: "antigravity",  # allowlist:provider -- certification data: promoted slot occupancy
+         AgentSlot.FINAL_REVIEWER: "antigravity"},
+        models={AgentSlot.IMPLEMENTER: "gpt-6-sol", AgentSlot.REVIEWER: "gemini-4-pro",
+                AgentSlot.FINAL_REVIEWER: "gemini-4-pro"},
+    )) == set(AgentSlot)
     selected = {AgentSlot.IMPLEMENTER: "codex", AgentSlot.REVIEWER: "antigravity", AgentSlot.FINAL_REVIEWER: "claude"}
     models = {AgentSlot.IMPLEMENTER: "gpt-6-sol", AgentSlot.REVIEWER: "gpt-oss-120b-medium", AgentSlot.FINAL_REVIEWER: "opus"}
     with pytest.raises(CertificationError, match="does not match manufacturer google family"):
@@ -171,55 +178,55 @@ def test_agy_candidate_is_blocked_and_model_family_is_bound() -> None:
 
 def test_agy_experimental_requires_both_canaries_and_separate_slot_entries(tmp_path: Path) -> None:
     _copy_sources(tmp_path)
+    source = json.loads((tmp_path / CANARY_EVIDENCE).read_text())
 
-    def publish(slots: tuple[str, ...], *, tamper: bool = False) -> None:
+    def publish(change: Callable[[dict[str, object]], object] | None = None,
+                experimental_slots: tuple[str, ...] = ("reviewer", "final_reviewer")) -> None:
+        doc = json.loads(json.dumps(source))
+        if change is not None:
+            change(doc)
         path = tmp_path / CANARY_EVIDENCE
-        doc = json.loads(path.read_text())
-        doc["status"] = "passed"
-        for slot, case in (("reviewer", "F4"), ("final_reviewer", "F5")):
-            if slot not in slots:
-                continue
-            request_id = f"native-review-request-{slot}"
-            request = {"request_id": request_id}
-            writer = {"type": "object"}
-            raw = {"request_id": request_id, "status": "success", "evidence": {
-                "request_document": request, "writer_schema": writer,
-                "envelope": {"status": "SUCCESS", "denied_actions": [],
-                             "structured_output": {"result": {"request_id": request_id}}}}}
-            wire = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            proof = {"slot": slot, "case": case, "request_id": raw["request_id"],
-                     "checks": {name: True for name in (
-                         "writer", "domain", "effective_rights", "isolation_postcheck", "no_denials")},
-                     "raw": raw, "raw_sha256": wire(raw),
-                     "request_sha256": wire(request), "writer_sha256": wire(writer),
-                     "commit_sha": "c" * 40, "model": "gemini-3.1-pro-high", "timeout_seconds": 0}
-            proof.update({key: "a" * 64 for key in (
-                "profile_sha256", "source_sha256", "binary_sha256")})
-            if slot == "final_reviewer":
-                proof["claude_slice_review_sha256"] = "e6292aedd72e37187dc91abe675b6cf3b1d5f6b7aecf308b574468d20c16db05"  # allowlist:provider -- certification data: saved Claude review
-            if tamper and slot == "reviewer":
-                proof["checks"]["effective_rights"] = False
-            doc["slots"][slot].update(status="passed", proof=proof)
         path.write_text(json.dumps(doc))
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        def update(table):
+
+        def update(table: dict[str, object]) -> None:
             for row in table["certifications"]:
                 if row["provider"] == "antigravity":
                     row["canary_evidence"]["sha256"] = digest
-                    row["status"] = "experimental"
+                    row["status"] = "experimental" if row["slot"] in experimental_slots else "candidate"
+
         _mutate(tmp_path, update)
 
-    _mutate(tmp_path, lambda table: table["certifications"][1].update(status="experimental"))
+    publish(lambda doc: doc.update(status="pending"))
     with pytest.raises(CertificationError, match="both AGY canaries"):
         load_role_certifications(root=tmp_path)
-    publish(("reviewer",))
+    publish(lambda doc: doc["slots"].pop("reviewer"))
+    with pytest.raises(CertificationError, match="both AGY canaries"):
+        load_role_certifications(root=tmp_path)
+    publish(lambda doc: doc["slots"]["final_reviewer"].update(status="pending", proof=None))
     with pytest.raises(CertificationError, match="final_reviewer canary binding"):
         load_role_certifications(root=tmp_path)
-    publish(("reviewer", "final_reviewer"), tamper=True)
+    publish(lambda doc: doc["slots"]["reviewer"]["proof"]["checks"].update(effective_rights=False))
     with pytest.raises(CertificationError, match="reviewer canary checks"):
         load_role_certifications(root=tmp_path)
-    publish(("reviewer", "final_reviewer"))
+    publish(lambda doc: doc["slots"]["reviewer"]["proof"]["raw"].update(status="error"))
+    with pytest.raises(CertificationError, match="reviewer canary raw proof differs"):
+        load_role_certifications(root=tmp_path)
+    publish(lambda doc: doc["slots"]["final_reviewer"]["proof"].update(
+        request_id=doc["slots"]["reviewer"]["proof"]["request_id"]))
+    with pytest.raises(CertificationError, match="reused"):
+        load_role_certifications(root=tmp_path)
+    publish(lambda doc: doc["slots"]["final_reviewer"]["proof"].pop("claude_slice_review_sha256"))  # allowlist:provider -- certification data: saved Claude review
+    with pytest.raises(CertificationError, match="final canary lacks Claude slice evidence"):  # allowlist:provider -- certification data: saved Claude review
+        load_role_certifications(root=tmp_path)
+    publish(experimental_slots=("reviewer",))
+    one_slot = load_role_certifications(root=tmp_path)
+    assert one_slot.require("antigravity", AgentRoleName.REVIEWER, AgentSlot.REVIEWER,
+                            model="gemini-4-pro").status == "experimental"
+    with pytest.raises(CertificationError, match="missing qualification evidence"):
+        one_slot.require("antigravity", AgentRoleName.REVIEWER, AgentSlot.FINAL_REVIEWER,
+                         model="gemini-4-pro")
+    publish()
     table = load_role_certifications(root=tmp_path)
     for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
         assert table.require("antigravity", AgentRoleName.REVIEWER, slot,
@@ -246,7 +253,7 @@ def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -
     (lambda doc: doc["certifications"].append(doc["certifications"][0]), CertificationErrorCode.DUPLICATE_ENTRY),
     (lambda doc: doc["certifications"][0].update(status="unknown"), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0].update(status="experimental"), CertificationErrorCode.SOURCE_MISMATCH),
-    (lambda doc: doc["certifications"][1].update(status="experimental"), CertificationErrorCode.EVIDENCE_INVALID),
+    (lambda doc: doc["certifications"][1]["canary_evidence"].update(sha256="0" * 64), CertificationErrorCode.EVIDENCE_INVALID),
     (lambda doc: doc["certifications"][0].update(extra=True), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0].update(policy_sha256="0" * 64), CertificationErrorCode.SOURCE_MISMATCH),
     (lambda doc: doc["certifications"][0].update(rights_sha256="0" * 64), CertificationErrorCode.SOURCE_MISMATCH),
