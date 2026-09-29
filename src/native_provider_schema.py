@@ -14,16 +14,17 @@ from schema_patterns import schema_pattern_violations
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY_PATH = (
-    PROJECT_ROOT / "schemas" / "native-provider-schema-capabilities-v1.json"
+    PROJECT_ROOT / "schemas" / "native-provider-schema-capabilities-v2.json"
 )
 EXCEPTION_PATH = (
-    PROJECT_ROOT / "schemas" / "native-provider-schema-exceptions-v1.json"
+    PROJECT_ROOT / "schemas" / "native-provider-schema-exceptions-v2.json"
 )
-CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
-EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
+CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v2"
+EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v2"
 PROVIDER_VERSION_POLICY = "same-major-forward"
 OPENAI_PROVIDER = "co" + "dex"
 ANTHROPIC_PROVIDER = "clau" + "de"
+AGY_PROVIDER = "antigravity"
 PROVIDER_SCHEMA_FEATURES = frozenset(
     {
         "closed_object",
@@ -32,6 +33,21 @@ PROVIDER_SCHEMA_FEATURES = frozenset(
         "nested_any_of",
         "nested_one_of",
         "positional_tuple",
+        "unique_items",
+        "max_length",
+        "min_length",
+        "portable_pattern",
+        "optional_properties",
+        "const_value",
+        "enum_values",
+        "null_type",
+        "refs",
+        "defs",
+        "all_of",
+        "not_schema",
+        "strict_writer",
+        "numeric_constraints",
+        "format_keyword",
     }
 )
 SCHEMA_FEATURE_KEYWORDS = {
@@ -41,6 +57,22 @@ SCHEMA_FEATURE_KEYWORDS = {
     "minItems": "min_max_items",
     "oneOf": "nested_one_of",
     "prefixItems": "positional_tuple",
+    "uniqueItems": "unique_items",
+    "maxLength": "max_length",
+    "minLength": "min_length",
+    "pattern": "portable_pattern",
+    "const": "const_value",
+    "enum": "enum_values",
+    "$ref": "refs",
+    "$defs": "defs",
+    "allOf": "all_of",
+    "not": "not_schema",
+    "minimum": "numeric_constraints",
+    "maximum": "numeric_constraints",
+    "exclusiveMinimum": "numeric_constraints",
+    "exclusiveMaximum": "numeric_constraints",
+    "multipleOf": "numeric_constraints",
+    "format": "format_keyword",
 }
 OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS = frozenset(
     {
@@ -80,9 +112,19 @@ OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "then",
     }
 )
+AGY_SEMANTIC_FLAGS = (
+    "-p", "--output-format=json", "--json-schema=<schema>",
+    "--print-timeout=<seconds>", "--disable-slash-commands", "--sandbox",
+    "--model=<model>", "--effort=<effort>", "--log-file=<runtime-file>",
+    "--agent=dao-reviewer",
+)
+KNOWN_SCHEMA_KEYWORDS = OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS | frozenset(
+    SCHEMA_FEATURE_KEYWORDS
+) | frozenset({"$id", "$schema"})
 CLI_VERSION_PATTERNS = {
     "claude": re.compile(r"^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$"),
     "codex": re.compile(r"^codex-cli (\d+)\.(\d+)\.(\d+)$"),
+    "antigravity": re.compile(r"^(\d+)\.(\d+)\.(\d+)$"),
 }
 
 
@@ -132,18 +174,20 @@ def load_capability_table() -> dict[str, Any]:
     for item in providers:
         if not isinstance(item, dict):
             raise NativeProviderSchemaError("provider capability entry must be an object")
-        name = _required_text(item, "provider")
+        name = _required_text(item, "profile_id")
         names.append(name)
+        provider = _required_text(item, "provider")
         _required_text(item, "binary_name")
         cli_version = _required_text(item, "cli_version")
         version_policy = _required_text(item, "version_policy")
-        if version_policy != PROVIDER_VERSION_POLICY:
+        if version_policy not in {PROVIDER_VERSION_POLICY, "exact"}:
             raise NativeProviderSchemaError(
-                f"provider {name} must use the provider-wide version policy "
-                f"{PROVIDER_VERSION_POLICY}"
+                f"provider {name} must use a supported provider-wide version policy"
             )
-        _parse_cli_version(name, cli_version)
-        _profile_from_document(item.get("transport_profile"))
+        _parse_cli_version(provider, cli_version)
+        transport = _profile_from_document(item.get("transport_profile"))
+        if transport.provider != provider or transport.binary_name != item["binary_name"]:
+            raise NativeProviderSchemaError(f"profile {name} transport identity differs")
         features = item.get("features")
         if not isinstance(features, dict) or not features or any(
             not isinstance(key, str) or not isinstance(value, bool)
@@ -169,6 +213,7 @@ def load_exception_table() -> dict[str, Any]:
     entries = document.get("exceptions")
     if not isinstance(entries, list):
         raise NativeProviderSchemaError("provider exception table requires exceptions")
+    profiles = {row["profile_id"]: row["provider"] for row in load_capability_table()["providers"]}
     identifiers: list[str] = []
     for item in entries:
         if not isinstance(item, dict):
@@ -176,6 +221,7 @@ def load_exception_table() -> dict[str, Any]:
         identifiers.append(_required_text(item, "exception_id"))
         for key in (
             "provider",
+            "profile_id",
             "error_code",
             "local_invariant",
             "missing_schema_feature",
@@ -183,6 +229,10 @@ def load_exception_table() -> dict[str, Any]:
             "regression_test",
         ):
             _required_text(item, key)
+        if profiles.get(item["profile_id"]) != item["provider"]:
+            raise NativeProviderSchemaError(
+                f"exception {identifiers[-1]} capability profile differs from provider"
+            )
         operations = item.get("operations")
         if not isinstance(operations, list) or not operations or operations != sorted(set(operations)):
             raise NativeProviderSchemaError(
@@ -194,23 +244,42 @@ def load_exception_table() -> dict[str, Any]:
 
 
 def provider_capability(provider: str) -> Mapping[str, Any]:
+    """Resolve a named capability profile, independently of slot qualification."""
     for item in load_capability_table()["providers"]:
-        if item["provider"] == provider:
+        if item["profile_id"] == provider:
             return item
-    raise NativeProviderSchemaError(f"no capability entry for provider {provider}")
+    raise NativeProviderSchemaError(f"no capability entry for profile {provider}")
+
+
+def capability_profile_for_digest(provider: str, digest: str) -> str:
+    """Resolve the immutable bound capability fingerprint to one profile ID."""
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise NativeProviderSchemaError("bound capability digest is invalid")
+    matches = [
+        row["profile_id"]
+        for row in load_capability_table()["providers"]
+        if row["provider"] == provider
+        and hashlib.sha256(json.dumps(row, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == digest
+    ]
+    if len(matches) != 1:
+        raise NativeProviderSchemaError(f"no unique bound capability profile for provider {provider}")
+    return matches[0]
 
 
 def exact_cli_version_pattern(provider: str) -> str:
     """Return the sole accepted runtime-version regex from probed evidence."""
-    version = _required_text(provider_capability(provider), "cli_version")
+    capability = provider_capability(provider)
+    version = _required_text(capability, "cli_version")
     return rf"^{re.escape(version)}$"
 
 
 def compatible_cli_version(provider: str, cli_version: str) -> bool:
     """Return whether a runtime is forward-compatible with the probe baseline."""
     capability = provider_capability(provider)
-    baseline = _parse_cli_version(provider, capability["cli_version"])
-    actual = _parse_cli_version(provider, cli_version)
+    baseline = _parse_cli_version(capability["provider"], capability["cli_version"])
+    actual = _parse_cli_version(capability["provider"], cli_version)
+    if capability["version_policy"] == "exact":
+        return actual == baseline
     if actual < baseline:
         return False
     return actual[0] == baseline[0]
@@ -286,10 +355,11 @@ def assert_provider_capabilities(
 
 
 def registered_exceptions(provider: str) -> tuple[Mapping[str, Any], ...]:
+    provider_capability(provider)
     return tuple(
         item
         for item in load_exception_table()["exceptions"]
-        if item["provider"] == provider
+        if item["profile_id"] == provider
     )
 
 
@@ -311,7 +381,7 @@ def defensive_provider_projection(
     projected = copy.deepcopy(dict(base_schema))
     compensated = frozenset(compensated_features)
     unique_item_paths = frozenset(compensated_unique_item_paths)
-    if provider == OPENAI_PROVIDER:
+    if not provider_capability(provider)["features"]["unique_items"]:
         pending: list[tuple[str, object]] = [("", projected)]
         while pending:
             pointer, node = pending.pop()
@@ -335,13 +405,14 @@ def defensive_provider_projection(
     return projected
 
 
-def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any]:
-    """Lower only locally checked reviewer constraints for the OpenAI writer subset.
+def lower_reviewer_writer_for_profile(schema: Mapping[str, Any], *, profile: str) -> dict[str, Any]:
+    """Lower only locally checked constraints missing from the selected profile.
 
     Unreachable reader definitions are removed first.  A new unsupported
     feature therefore fails the provider guard instead of being silently lost.
     """
     projected = copy.deepcopy(dict(schema))
+    features = provider_capability(profile)["features"]
     definitions = projected.get("$defs", {})
     if not isinstance(definitions, dict):
         raise NativeProviderSchemaError("reviewer writer definitions must be an object")
@@ -376,18 +447,18 @@ def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any
 
     def lower(node: Any) -> None:
         if isinstance(node, dict):
-            if "uniqueItems" in node:
+            if "uniqueItems" in node and not features["unique_items"]:
                 raise NativeProviderSchemaError(
                     "generated reviewer uniqueItems has no local compensation"
                 )
-            if node.get("const") == [] and "const" in node:
+            if not features["const_list"] and node.get("const") == [] and "const" in node:
                 node.pop("const")
                 node["minItems"] = node["maxItems"] = 0
-            if "oneOf" in node:
+            if not features["nested_one_of"] and "oneOf" in node:
                 # Native review parsing still checks the exclusive union.
                 node["anyOf"] = node.pop("oneOf")
             properties = node.get("properties")
-            if node.get("type") == "object" and isinstance(properties, dict):
+            if not features["optional_properties"] and node.get("type") == "object" and isinstance(properties, dict):
                 optional = set(properties) - set(node.get("required", []))
                 if optional and not all(nullable(properties[key]) for key in optional):
                     raise NativeProviderSchemaError(
@@ -404,8 +475,13 @@ def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any
                 lower(child)
 
     lower(projected)
-    assert_projected_provider_schema(projected, provider=OPENAI_PROVIDER)
+    assert_projected_provider_schema(projected, provider=profile)
     return projected
+
+
+def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Compatibility API for existing callers; behavior is profile driven."""
+    return lower_reviewer_writer_for_profile(schema, profile=OPENAI_PROVIDER)
 
 
 def bind_required_empty_array(
@@ -438,19 +514,15 @@ def assert_projected_provider_schema(
         raise NativeProviderSchemaError(
             f"non-portable writer pattern at {first.path}: {first.rule}"
         )
-    if provider not in {ANTHROPIC_PROVIDER, OPENAI_PROVIDER}:
-        raise NativeProviderSchemaError(
-            "no projected-schema acceptance guard for the requested provider"
-        )
-
     features = provider_capability(provider)["features"]
+    strict = features["strict_writer"]
     openai_keywords = OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS | frozenset(
         keyword
         for keyword, feature in SCHEMA_FEATURE_KEYWORDS.items()
         if features[feature]
     )
     violations: list[str] = []
-    if provider == OPENAI_PROVIDER:
+    if strict:
         if projected_schema.get("type") != "object":
             violations.append("/type: root must have type object")
         if "anyOf" in projected_schema:
@@ -492,13 +564,18 @@ def assert_projected_provider_schema(
                 "require the positively probed positional_tuple feature"
             )
 
-        if provider == ANTHROPIC_PROVIDER:
-            for keyword, feature in SCHEMA_FEATURE_KEYWORDS.items():
-                if keyword in node and not features[feature]:
-                    violations.append(
-                        f"{_schema_pointer(pointer, keyword)}: keyword {keyword!r} "
-                        f"requires the positively probed {feature} feature"
-                    )
+        for keyword, feature in SCHEMA_FEATURE_KEYWORDS.items():
+            if keyword in node and not features[feature]:
+                if strict and keyword == "oneOf":
+                    continue  # Preserve the historical strict-writer diagnostic below.
+                violations.append(
+                    f"{_schema_pointer(pointer, keyword)}: keyword {keyword!r} "
+                    f"requires the positively probed {feature} feature"
+                )
+        if not features["null_type"] and (
+            declared_types == "null" or isinstance(declared_types, list) and "null" in declared_types
+        ):
+            violations.append(f"{_schema_pointer(pointer, 'type')}: null requires the positively probed null_type feature")
 
         properties = node.get("properties")
         required = node.get("required")
@@ -516,7 +593,12 @@ def assert_projected_provider_schema(
                         "required array property must not force an empty collection"
                     )
 
-        if provider == OPENAI_PROVIDER:
+        if not strict:
+            for keyword in sorted(set(node) - KNOWN_SCHEMA_KEYWORDS):
+                violations.append(
+                    f"{_schema_pointer(pointer, keyword)}: keyword {keyword!r} is not a supported schema keyword"
+                )
+        if strict:
             unsupported = sorted(set(node) - openai_keywords)
             for keyword in unsupported:
                 keyword_path = _schema_pointer(pointer, keyword)
@@ -592,7 +674,7 @@ def assert_projected_provider_schema(
                                 child,
                             )
                         )
-        for keyword in ("if", "then", "else"):
+        for keyword in ("if", "then", "else", "not"):
             child = node.get(keyword)
             if isinstance(child, Mapping):
                 pending.append((_schema_pointer(pointer, keyword), child))
@@ -616,6 +698,8 @@ def normalize_transport_profile(
         return _normalize_codex(command)
     if provider == "claude":
         return _normalize_claude(command)
+    if provider == AGY_PROVIDER:
+        return _normalize_antigravity(command)
     raise NativeProviderSchemaError(f"unsupported transport profile provider {provider}")
 
 
@@ -714,6 +798,36 @@ def _normalize_claude(command: Sequence[str]) -> ProviderTransportProfile:
             "--no-session-persistence",
             "--disable-slash-commands",
         ),
+    )
+
+
+def _normalize_antigravity(command: Sequence[str]) -> ProviderTransportProfile:
+    """Classify only arguments used in the measured Phase-0 configuration."""
+    if not command:
+        raise NativeProviderSchemaError("empty Antigravity command")
+    if any(not isinstance(item, str) or "\x00" in item for item in command):
+        raise NativeProviderSchemaError("Antigravity command contains invalid text")
+    values = list(command[1:])
+    prompt = _take_pair(values, "-p")
+    schema = _take_pair(values, "--json-schema")
+    timeout = _take_pair(values, "--print-timeout")
+    log_path = _take_pair(values, "--log-file")
+    model = _take_pair(values, "--model")
+    effort = _take_pair(values, "--effort")
+    output_format = _take_pair(values, "--output-format")
+    agent = _take_pair(values, "--agent")
+    if (not prompt or not schema or not log_path or not model or not effort
+        or re.fullmatch(r"[1-9][0-9]*s", timeout) is None
+        or output_format != "json" or agent != "dao-reviewer"
+        or sorted(values) != sorted(("--disable-slash-commands", "--sandbox"))):
+        raise NativeProviderSchemaError("unclassified Antigravity command arguments")
+    return ProviderTransportProfile(
+        provider=AGY_PROVIDER,
+        binary_name=Path(command[0]).name,
+        model=model,
+        reasoning_or_effort=effort,
+        schema_transport="json-schema-argument",
+        semantic_flags=AGY_SEMANTIC_FLAGS,
     )
 
 

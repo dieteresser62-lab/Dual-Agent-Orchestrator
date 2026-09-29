@@ -83,6 +83,7 @@ def _codex_bundle(
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_digest="b" * 64,
         task_scope_patterns=("docs/internal/b31-plan.md", "src/workflow_requests.py"),
         target_branch="feature/backlog-followups",
@@ -109,10 +110,12 @@ def _codex_bundle(
 def test_request_builders_pass_bound_slot_capability_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from role_certification import load_role_certifications
+    digests = {entry.provider: entry.capability_sha256 for entry in load_role_certifications().entries}
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2, "3",
-        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude"),  # allowlist:provider -- transport: swapped occupancy fixture
-        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex"),  # allowlist:provider -- transport: swapped occupancy fixture
+        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude", capability_sha256=digests["claude"]),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex", capability_sha256=digests["codex"]),  # allowlist:provider -- transport: swapped occupancy fixture
         final_reviewer_profile=scripted_profile_binding("final_reviewer"),
     )
     state = init_workflow_state(
@@ -165,6 +168,7 @@ def _review_bundle(
         branch_base="a" * 40,
         first_slice_start_commit="a" * 40,
         slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-09-02T10:00:00+00:00",
     ).with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW)
     if bound_open_finding_ids:
@@ -230,6 +234,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert declarations == {
+        "_bound_provider",
         "_native_implementer_retry_feedback",
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
@@ -515,6 +520,7 @@ Bring the six explicitly scoped documents to one consistent end state.
         change_paths = tuple(sorted(scope_paths))
         state = init_workflow_state(
             run_id=f"b72-{execution_mode.value.lower()}",
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
             task_file="/repo/inbox/b72.md",
             branch="feature/backlog-followups",
             branch_base="a" * 40,

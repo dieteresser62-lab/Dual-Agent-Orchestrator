@@ -55,7 +55,7 @@ from provider_input_efficiency import (
     build_correction_execution_package,
     build_slice_execution_package,
 )
-from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
+from native_provider_schema import capability_profile_for_digest, NativeProviderSchemaError
 from review_packets import (
     ReviewPacket,
     ReviewPacketError,
@@ -76,6 +76,17 @@ _NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER = {
     ApprovalMarker.SLICE: NativeReviewKind.SLICE,
     ApprovalMarker.FINAL_REVIEW: NativeReviewKind.FINAL_REVIEW,
 }
+
+
+def _bound_provider(state: WorkflowState, slot: str, execution_error: type[RuntimeError]) -> str:
+    profile = getattr(state.protocol_binding, f"{slot}_profile", None)
+    provider = getattr(profile, "provider", None)
+    if not isinstance(provider, str) or not provider:
+        raise execution_error(f"native provider profile binding missing for slot={slot}")
+    try:
+        return capability_profile_for_digest(provider, profile.capability_sha256)
+    except (AttributeError, NativeProviderSchemaError) as exc:
+        raise execution_error(f"native capability profile binding invalid for slot={slot}: {exc}") from exc
 FINDING_SIGNATURE_REVIEW_CRITERION = (
     "review_contract.known_open_finding_signatures binds every known open "
     "finding identifier to SHA-256 over canonical JSON containing its "
@@ -271,8 +282,7 @@ def native_implementer_request(
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
         ),
-        profile=(state.protocol_binding.implementer_profile.provider
-                 if state.protocol_binding is not None else OPENAI_PROVIDER),
+        profile=_bound_provider(state, "implementer", execution_error),
     )
 
 
@@ -617,8 +627,9 @@ def native_review_request(
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             retry_feedback=retry_feedback,
         ),
-        profile=(state.protocol_binding.final_reviewer_profile.provider
-                 if state.protocol_binding is not None and state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW
-                 else state.protocol_binding.reviewer_profile.provider
-                 if state.protocol_binding is not None else ANTHROPIC_PROVIDER),
+        profile=_bound_provider(
+            state,
+            "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer",
+            execution_error,
+        ),
     )

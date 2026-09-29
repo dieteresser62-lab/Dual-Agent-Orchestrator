@@ -4,8 +4,10 @@ import ast
 import hashlib
 import json
 import shutil
+from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
 import pytest
@@ -18,16 +20,19 @@ from role_binding import binding_for_role
 from role_certification import (
     CertificationError, CertificationErrorCode, CertificationTable, load_role_certifications,
 )
+from workflow_run_setup import _apply_resumed_agent_profiles
+from state_io import StateSchemaError
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = "schemas/role-provider-certifications-v1.json"
 EVIDENCE = "docs/evidence/role-certification-v1.json"
 REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.json"
+AGY_EVIDENCE = "docs/evidence/antigravity/capability-v1.json"
 
 
 def _copy_sources(root: Path) -> None:
-    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, "schemas/native-provider-schema-capabilities-v1.json"}
+    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, "schemas/native-provider-schema-capabilities-v2.json"}
     for path in paths:
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -76,19 +81,24 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     table = load_role_certifications()
     assert [(entry.slot, entry.role, entry.provider, entry.manufacturer, entry.status) for entry in table.entries] == [
         (AgentSlot.IMPLEMENTER, AgentRoleName.IMPLEMENTER, "codex", "openai", "certified"),
+        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "candidate"),
         (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
+        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "candidate"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
     ]
-    assert table.entries[1].evidence_sha256 == table.entries[2].evidence_sha256
+    assert table.entries[2].evidence_sha256 == table.entries[4].evidence_sha256
     assert table.entries[0].probe_profile["model"] == "gpt-6-sol"
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
+    assert [entry.capability_profile for entry in table.entries] == [
+        "codex", "antigravity", "claude", "antigravity", "claude",
+    ]
     assert not hasattr(table.entries[0], "profile")
 
 
 def test_reviewer_qualification_binds_restricted_transport_without_changing_codex() -> None:
     table = load_role_certifications()
-    implementer, reviewer, final = table.entries
-    assert implementer.capability_sha256 == "d57db52e04c2492e642512a6927ed4bac1e60a5b62bace486876c18ad21356fc"
+    implementer, reviewer, final = (table.entries[i] for i in (0, 2, 4))
+    assert len(implementer.capability_sha256) == 64
     assert implementer.rights_sha256 == "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8"
     for entry in (reviewer, final):
         assert entry.probe_profile["semantic_flags"].count("--restricted") == 1
@@ -100,7 +110,7 @@ def test_reviewer_qualification_binds_restricted_transport_without_changing_code
 
 
 def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> None:
-    baseline = load_role_certifications().entries
+    baseline = tuple(entry for entry in load_role_certifications().entries if entry.status == "certified")
     aliases = CertificationTable((
         replace(baseline[0], provider="one", manufacturer="vendor-a"),
         replace(baseline[1], provider="two", manufacturer="vendor-b"),
@@ -116,15 +126,53 @@ def test_manufacturer_separation_uses_registry_identity_not_alias_names() -> Non
         aliases.require_occupancy(missing)
 
 
+def test_agy_candidate_is_blocked_and_model_family_is_bound() -> None:
+    table = load_role_certifications()
+    with pytest.raises(CertificationError, match="slot=implementer provider=antigravity"):
+        table.require("antigravity", AgentRoleName.IMPLEMENTER, AgentSlot.IMPLEMENTER, model="gemini-3.1-pro-high")
+    settings = AgentSettings("antigravity", "agy", "gemini-3.1-pro-high", 600, "high")
+    with pytest.raises(CertificationError, match="missing qualification evidence"):
+        create_agent_pair("antigravity", AgentRoleName.REVIEWER, slot=AgentSlot.REVIEWER, settings=settings, certifications=table)
+    for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):
+        with pytest.raises(CertificationError, match="missing qualification evidence"):
+            table.require("antigravity", AgentRoleName.REVIEWER, slot, model="gemini-3.1-pro-high")
+        for model in ("claude-sonnet-4-6", "gpt-oss-120b-medium"):
+            with pytest.raises(CertificationError, match="does not match manufacturer google family"):
+                table.require("antigravity", AgentRoleName.REVIEWER, slot, model=model)
+    promoted = CertificationTable(tuple(
+        replace(entry, status="experimental") if entry.provider == "antigravity" else entry
+        for entry in table.entries
+    ))
+    for model in ("gemini-3.1-pro-high", "gemini-other"):
+        assert promoted.require("antigravity", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model=model).manufacturer == "google"
+    selected = {AgentSlot.IMPLEMENTER: "codex", AgentSlot.REVIEWER: "antigravity", AgentSlot.FINAL_REVIEWER: "claude"}
+    models = {AgentSlot.IMPLEMENTER: "gpt-6-sol", AgentSlot.REVIEWER: "gpt-oss-120b-medium", AgentSlot.FINAL_REVIEWER: "opus"}
+    with pytest.raises(CertificationError, match="does not match manufacturer google family"):
+        promoted.require_occupancy(selected, models=models)
+    slots = {
+        "implementer": AgentSettings("codex", "codex", "gpt-6-sol", 600, "high"),
+        "reviewer": AgentSettings("antigravity", "agy", "gpt-oss-120b-medium", 600, "high"),
+        "final_reviewer": AgentSettings("claude", "claude", "opus", 600, "high"),
+    }
+    persisted = SimpleNamespace(protocol_binding=SimpleNamespace(
+        implementer_profile=SimpleNamespace(provider="codex", model="gpt-6-sol"),
+        reviewer_profile=SimpleNamespace(provider="antigravity", model="gpt-oss-120b-medium"),
+        final_reviewer_profile=SimpleNamespace(provider="claude", model="opus"),
+    ))
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*does not match manufacturer google family"):
+        _apply_resumed_agent_profiles(Namespace(slot_settings=slots), persisted)
+
+
 def test_every_evidence_node_id_exists_in_the_test_suite() -> None:
     _assert_node_ids_exist(json.loads((ROOT / EVIDENCE).read_text()))
     _assert_node_ids_exist(json.loads((ROOT / REVIEWER_EVIDENCE).read_text()))
+    _assert_node_ids_exist(json.loads((ROOT / AGY_EVIDENCE).read_text()))
 
 
 def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -> None:
     _copy_sources(tmp_path)
     assert not (tmp_path / "tests").exists()
-    assert len(load_role_certifications(root=tmp_path).entries) == 3
+    assert len(load_role_certifications(root=tmp_path).entries) == 5
 
 
 @pytest.mark.parametrize("change,code", [
@@ -132,10 +180,12 @@ def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -
     (lambda doc: doc["certifications"].append(doc["certifications"][0]), CertificationErrorCode.DUPLICATE_ENTRY),
     (lambda doc: doc["certifications"][0].update(status="unknown"), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0].update(status="experimental"), CertificationErrorCode.SOURCE_MISMATCH),
+    (lambda doc: doc["certifications"][1].update(status="experimental"), CertificationErrorCode.EVIDENCE_INVALID),
     (lambda doc: doc["certifications"][0].update(extra=True), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0].update(policy_sha256="0" * 64), CertificationErrorCode.SOURCE_MISMATCH),
     (lambda doc: doc["certifications"][0].update(rights_sha256="0" * 64), CertificationErrorCode.SOURCE_MISMATCH),
     (lambda doc: doc["certifications"][0].update(capability_sha256="0" * 64), CertificationErrorCode.SOURCE_MISMATCH),
+    (lambda doc: doc["certifications"][0].update(capability_profile="claude"), CertificationErrorCode.SOURCE_MISMATCH),
     (lambda doc: doc["certifications"][0]["probe_profile"].update(model="other"), CertificationErrorCode.SOURCE_MISMATCH),
     (lambda doc: doc["certifications"][0].update(profile=doc["certifications"][0].pop("probe_profile")), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0]["evidence"].update(sha256="0" * 64), CertificationErrorCode.EVIDENCE_INVALID),
@@ -200,7 +250,7 @@ def test_unknown_evidence_node_is_a_test_failure_only(tmp_path: Path) -> None:
             node_id="tests/test_agent_adapters.py::test_missing_evidence_node"
         ),
     )
-    assert len(load_role_certifications(root=tmp_path).entries) == 3
+    assert len(load_role_certifications(root=tmp_path).entries) == 5
     with pytest.raises(AssertionError, match="test_missing_evidence_node"):
         _assert_node_ids_exist(json.loads((tmp_path / EVIDENCE).read_text()))
 

@@ -197,9 +197,13 @@ def test_capability_profile_selects_reviewer_writer_and_binds_request_id() -> No
 
     first = build_native_review_request(_spec(), profile=ANTHROPIC_PROVIDER)
     second = build_native_review_request(_spec(), profile=OPENAI_PROVIDER)
+    antigravity = build_native_review_request(_spec(), profile="antigravity")
     assert first.provider_response_schema != second.provider_response_schema
+    assert antigravity.provider_response_schema_json == first.provider_response_schema_json
+    assert antigravity.capability_profile == "antigravity"
+    assert antigravity.bound_context.request_id != first.bound_context.request_id
     assert first.bound_context.request_id != second.bound_context.request_id
-    for bundle in (first, second):
+    for bundle in (first, second, antigravity):
         assert bundle.document["response_contract"]["schema_sha256"] == hashlib.sha256(
             bundle.provider_response_schema_json.encode()
         ).hexdigest()

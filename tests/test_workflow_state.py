@@ -242,6 +242,7 @@ def test_native_implementer_request_projects_fingerprint_bound_paths_and_explana
         task_digest="b" * 64,
         task_scope_patterns=("docs/internal/plan.md",),
         target_branch="feature/native-scope",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-08-23T13:00:00+00:00",
     )
     context = WorkflowContext(

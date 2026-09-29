@@ -15,6 +15,7 @@ import pytest
 
 import agent_runtime
 import workflow_recovery as recovery_module
+from role_certification import load_role_certifications
 from artifact_bridge import (
     agent_result_payload,
     logical_provider_operation_id,
@@ -567,7 +568,8 @@ def _implementer_base() -> dict[str, object]:
         current_step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
         current_work_unit=SimpleNamespace(open_findings=()),
         protocol_binding=SimpleNamespace(
-            codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT
+            codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT,
+            implementer_profile=SimpleNamespace(provider="codex"),
         ),
     )
     return {
@@ -1109,7 +1111,8 @@ def test_implementer_recovery_uses_request_ledger_after_finding_is_closed(
             open_findings=(),
         ),
         protocol_binding=SimpleNamespace(
-            codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT
+            codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT,
+            implementer_profile=SimpleNamespace(provider="codex"),
         ),
     )
     capture: dict[str, object] = {}
@@ -1391,7 +1394,9 @@ def _reviewer_base() -> dict[str, object]:
         current_work_unit_id=1,
         current_step=WorkflowStep.REVIEWER_SLICE_REVIEW,
         protocol_binding=SimpleNamespace(
-            claude_review_transport=recovery_module.NATIVE_REVIEW_TRANSPORT
+            claude_review_transport=recovery_module.NATIVE_REVIEW_TRANSPORT,
+            reviewer_profile=SimpleNamespace(provider="claude", capability_sha256=next(e.capability_sha256 for e in load_role_certifications().entries if e.provider == "claude")),
+            final_reviewer_profile=SimpleNamespace(provider="claude", capability_sha256=next(e.capability_sha256 for e in load_role_certifications().entries if e.provider == "claude")),
         ),
     )
     return {
@@ -1574,7 +1579,7 @@ def test_reviewer_recovery_uses_recorded_stop_rules_after_config_change(
     result = recovery._parse_request_bound_reviewer_result(
         stop, rebound,
         SimpleNamespace(request_id=recorded_bundle.bound_context.request_id),
-        recorded_bundle.bound_context.request_digest, snapshot,
+        recorded_bundle.bound_context.request_digest, snapshot, "claude",
     )
     assert result.stop_request.rule_id == "PROJECT-RULE"
     stop["rule_id"] = "NEVER-RECORDED"
@@ -1582,7 +1587,7 @@ def test_reviewer_recovery_uses_recorded_stop_rules_after_config_change(
         recovery._parse_request_bound_reviewer_result(
             stop, rebound,
             SimpleNamespace(request_id=recorded_bundle.bound_context.request_id),
-            recorded_bundle.bound_context.request_digest, snapshot,
+            recorded_bundle.bound_context.request_digest, snapshot, "claude",
         )
 
     old_document = json.loads(recorded_bundle.canonical_json)
@@ -1708,6 +1713,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
         payload,
         bundle.bound_context.request_digest,
         snapshot,
+        "claude",
     )
 
     assert result.findings[0].status is FindingStatus.CLOSED
@@ -1876,6 +1882,7 @@ def test_reviewer_response_uses_request_ledger_after_finding_is_closed() -> None
             payload,
             bundle.bound_context.request_digest,
             closed_snapshot,
+            "claude",
         )
 
 

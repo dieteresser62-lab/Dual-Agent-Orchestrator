@@ -375,7 +375,10 @@ def _apply_resumed_agent_profiles(
     certifications = load_role_certifications()
     recorded = {slot: getattr(binding, f"{slot.value}_profile") for slot in AgentSlot}
     try:
-        certifications.require_occupancy({slot: recorded[slot].provider for slot in AgentSlot})
+        certifications.require_occupancy(
+            {slot: recorded[slot].provider for slot in AgentSlot},
+            models={slot: recorded[slot].model for slot in AgentSlot},
+        )
     except CertificationError as exc:
         raise StateSchemaError(f"AGENT-PROFILE-DIFF | {exc}") from exc
     for role, profile in (
@@ -386,7 +389,7 @@ def _apply_resumed_agent_profiles(
         current = slots[role]
         slot = AgentSlot(role)
         try:
-            certificate = certifications.require(profile.provider, role_for_slot(slot), slot)
+            certificate = certifications.require(profile.provider, role_for_slot(slot), slot, model=profile.model)
         except CertificationError as exc:
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification changed") from exc
         if (profile.manufacturer != certificate.manufacturer

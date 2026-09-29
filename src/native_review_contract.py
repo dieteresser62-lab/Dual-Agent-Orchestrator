@@ -61,11 +61,10 @@ from finding_signature import (
 )
 from native_provider_schema import (
     ANTHROPIC_PROVIDER,
-    OPENAI_PROVIDER,
     assert_projected_provider_schema,
-    bind_required_empty_array as bind_provider_required_empty_array,
     defensive_provider_projection,
-    lower_reviewer_writer_for_openai,
+    lower_reviewer_writer_for_profile,
+    provider_capability,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic, closed_retry_guidance
 from rejected_response_shape import RejectedNativeResponseShape
@@ -1096,8 +1095,9 @@ def native_review_provider_response_schema(
         projected_schema = _final_review_provider_response_schema(
             context, definitions
         )
-        if profile == OPENAI_PROVIDER:
-            projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+        features = provider_capability(profile)["features"]
+        if not all(features[key] for key in ("nested_one_of", "optional_properties", "const_list")):
+            projected_schema = lower_reviewer_writer_for_profile(projected_schema, profile=profile)
         assert_projected_provider_schema(projected_schema, provider=profile)
         return projected_schema
     own_findings = tuple(
@@ -1314,8 +1314,9 @@ def native_review_provider_response_schema(
         "additionalProperties": False,
         "$defs": definitions,
     }
-    if profile == OPENAI_PROVIDER:
-        projected_schema = lower_reviewer_writer_for_openai(projected_schema)
+    features = provider_capability(profile)["features"]
+    if not all(features[key] for key in ("nested_one_of", "optional_properties", "const_list")):
+        projected_schema = lower_reviewer_writer_for_profile(projected_schema, profile=profile)
     assert_projected_provider_schema(projected_schema, provider=profile)
     return projected_schema
 
@@ -1456,7 +1457,11 @@ def _bound_review_result_definition(
 
 
 def _bind_required_empty_array(schema: dict[str, Any]) -> None:
-    bind_provider_required_empty_array(schema, provider=ANTHROPIC_PROVIDER)
+    # The review contract uses an exact empty array; profile lowering chooses
+    # another expression only when its measured writer lacks array const.
+    schema.pop("minItems", None)
+    schema.pop("maxItems", None)
+    schema["const"] = []
 
 
 def _bound_stop_result_definition(

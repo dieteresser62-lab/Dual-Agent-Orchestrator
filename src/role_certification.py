@@ -17,7 +17,7 @@ from role_binding import binding_for_role
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE_PATH = "schemas/role-provider-certifications-v1.json"
-CAPABILITY_PATH = "schemas/native-provider-schema-capabilities-v1.json"
+CAPABILITY_PATH = "schemas/native-provider-schema-capabilities-v2.json"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9._-]*\Z", re.ASCII)
 _TEST_FUNCTION = re.compile(r"test_[A-Za-z0-9_]+(?:\[[^\]\r\n]+\])?\Z", re.ASCII)
@@ -130,17 +130,22 @@ def _registered_manufacturers(
             or _IDENTIFIER.fullmatch(manufacturer) is None
         ):
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "invalid provider or manufacturer identifier")
-        if provider not in provider_rows:
+        if provider not in {row["provider"] for row in provider_rows.values()}:
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, f"unregistered capability provider: {provider}")
     return registered
 
 
 def _validate_evidence_slots(document: dict[str, Any]) -> None:
-    _require_keys(document, {"schema_version", "slots"}, "evidence document")
-    if document["schema_version"] != "role-certification-evidence-v1":
+    required = {"schema_version", "slots"}
+    if document.get("schema_version") == "antigravity-capability-v1":
+        required.add("measurements")
+    _require_keys(document, required, "evidence document")
+    if document["schema_version"] not in {"role-certification-evidence-v1", "antigravity-capability-v1"}:
         raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unknown evidence version")
     slots = document["slots"]
-    if not isinstance(slots, dict) or set(slots) != {slot.value for slot in AgentSlot}:
+    expected_slots = {slot.value for slot in AgentSlot}
+    if (not isinstance(slots, dict) or not slots or not set(slots) <= expected_slots
+        or document["schema_version"] == "role-certification-evidence-v1" and set(slots) != expected_slots):
         raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "evidence slot coverage differs")
     for slot, refs in slots.items():
         if not isinstance(refs, list) or not refs:
@@ -169,6 +174,7 @@ class RoleProviderCertification:
     slot: AgentSlot
     role: AgentRoleName
     provider: str
+    capability_profile: str
     manufacturer: str
     status: str
     probe_profile: dict[str, Any]
@@ -178,6 +184,7 @@ class RoleProviderCertification:
     rights_sha256: str
     evidence_path: str
     evidence_sha256: str
+    model_family_pattern: str | None = None
 
     @property
     def digest(self) -> str:
@@ -192,9 +199,16 @@ class RoleProviderCertification:
 class CertificationTable:
     entries: tuple[RoleProviderCertification, ...]
 
-    def require(self, provider: str, role: AgentRoleName, slot: AgentSlot) -> RoleProviderCertification:
+    def require(self, provider: str, role: AgentRoleName, slot: AgentSlot, *, model: str | None = None) -> RoleProviderCertification:
         for entry in self.entries:
             if entry.provider == provider and entry.role == role and entry.slot == slot:
+                if entry.model_family_pattern is not None and (
+                    not isinstance(model, str) or re.fullmatch(entry.model_family_pattern, model) is None
+                ):
+                    raise CertificationError(
+                        CertificationErrorCode.NOT_CERTIFIED,
+                        f"slot={slot.value} provider={provider}: model {model!r} does not match manufacturer {entry.manufacturer} family",
+                    )
                 if entry.status in {"certified", "experimental"}:
                     return entry
                 break
@@ -203,11 +217,11 @@ class CertificationTable:
             f"slot={slot.value} provider={provider} role={role.value}: missing qualification evidence",
         )
 
-    def require_occupancy(self, providers: dict[AgentSlot, str]) -> dict[AgentSlot, RoleProviderCertification]:
+    def require_occupancy(self, providers: dict[AgentSlot, str], *, models: dict[AgentSlot, str] | None = None) -> dict[AgentSlot, RoleProviderCertification]:
         if set(providers) != set(AgentSlot):
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "slot occupancy is incomplete")
         selected = {
-            slot: self.require(providers[slot], role_for_slot(slot), slot)
+            slot: self.require(providers[slot], role_for_slot(slot), slot, model=models[slot] if models is not None else None)
             for slot in AgentSlot
         }
         implementer = selected[AgentSlot.IMPLEMENTER].manufacturer
@@ -235,20 +249,27 @@ def _load_role_certifications(
     if not isinstance(rows, list):
         raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "certifications must be an array")
     capabilities = _json_file(root, CAPABILITY_PATH)
+    if capabilities.get("schema_version") != "native-provider-schema-capabilities-v2":
+        raise CertificationError(CertificationErrorCode.SOURCE_INVALID, "unknown capability register version")
     providers = capabilities.get("providers")
     if not isinstance(providers, list):
         raise CertificationError(CertificationErrorCode.SOURCE_INVALID, "capability register has no providers")
-    provider_rows = {row.get("provider"): row for row in providers if isinstance(row, dict)}
+    provider_rows = {row.get("profile_id"): row for row in providers if isinstance(row, dict)}
+    if len(provider_rows) != len(providers) or None in provider_rows:
+        raise CertificationError(CertificationErrorCode.SOURCE_INVALID, "duplicate or invalid capability profile")
     manufacturers = _registered_manufacturers(table, provider_rows)
     entries: list[RoleProviderCertification] = []
     seen: set[tuple[AgentSlot, str]] = set()
     evidence_cache: dict[str, dict[str, Any]] = {}
     for raw in rows:
-        row = _require_keys(raw, {
-            "slot", "role", "provider", "manufacturer", "status", "probe_profile",
+        expected_keys = {
+            "slot", "role", "provider", "capability_profile", "manufacturer", "status", "probe_profile",
             "version_scope", "capability_sha256", "policy_sha256",
             "rights_sha256", "evidence",
-        }, "certification")
+        }
+        if isinstance(raw, dict) and raw.get("provider") == "antigravity":
+            expected_keys.add("model_family_pattern")
+        row = _require_keys(raw, expected_keys, "certification")
         try:
             slot = AgentSlot(row["slot"])
             role = AgentRoleName(row["role"])
@@ -263,14 +284,22 @@ def _load_role_certifications(
         if key in seen:
             raise CertificationError(CertificationErrorCode.DUPLICATE_ENTRY, f"duplicate slot/provider: {slot}/{provider}")
         seen.add(key)
-        if row["status"] not in {"certified", "experimental"}:
+        if row["status"] not in {"certified", "experimental", "candidate"}:
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "unknown certification status")
+        if row["status"] == "candidate" and provider != "antigravity":
+            raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "candidate provider is not measured")
         if key in _BASELINE and row["status"] != "certified":
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "baseline qualification is not certified")
         manufacturer = row["manufacturer"]
         if manufacturer != manufacturers[provider]:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "provider manufacturer differs")
-        provider_row = provider_rows[provider]
+        model_family_pattern = row.get("model_family_pattern")
+        if provider == "antigravity" and (manufacturer != "google" or model_family_pattern != r"^gemini-[a-z0-9.-]+$"):
+            raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "Antigravity manufacturer/model family differs from measured Gemini family")
+        profile_id = row["capability_profile"]
+        provider_row = provider_rows.get(profile_id)
+        if provider_row is None or provider_row["provider"] != provider:
+            raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "selected capability profile differs from provider")
         expected_probe_profile = provider_row["transport_profile"]
         expected_version = {
             "cli_version": provider_row["cli_version"],
@@ -287,6 +316,11 @@ def _load_role_certifications(
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "rights digest differs")
         evidence = _require_keys(row["evidence"], {"path", "sha256"}, "evidence reference")
         evidence_path, evidence_digest = evidence["path"], evidence["sha256"]
+        if provider == "antigravity" and row["status"] == "experimental":
+            raise CertificationError(
+                CertificationErrorCode.EVIDENCE_INVALID,
+                "Antigravity experimental slot requires the Slice-6 qualification and canary evidence contract",
+            )
         raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
         if evidence_path not in evidence_cache:
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)
@@ -296,10 +330,10 @@ def _load_role_certifications(
         if slot.value not in slot_refs:
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"missing evidence for {slot.value}")
         entries.append(RoleProviderCertification(
-            slot, role, provider, manufacturer, row["status"],
+            slot, role, provider, profile_id, manufacturer, row["status"],
             expected_probe_profile, expected_version, row["capability_sha256"],
             row["policy_sha256"], row["rights_sha256"],
-            evidence_path, evidence_digest,
+            evidence_path, evidence_digest, model_family_pattern,
         ))
     missing = _BASELINE - seen
     if missing:

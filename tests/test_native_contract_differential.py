@@ -55,7 +55,7 @@ from schema_validation import SchemaMismatch, validate_schema_document
 ROOT = Path(__file__).resolve().parents[1]
 FINGERPRINT = "a" * 64
 PROJECTION_BASELINE = ROOT / "tests/fixtures/native-provider-projection-baseline-v1.json"
-EXCEPTION_TABLE = ROOT / "schemas/native-provider-schema-exceptions-v1.json"
+EXCEPTION_TABLE = ROOT / "schemas/native-provider-schema-exceptions-v2.json"
 
 _PROVIDER_FEATURES = {
     "codex": ("closed_object", "min_max_items", "nested_any_of"),
@@ -446,19 +446,20 @@ def test_all_writer_forms_accept_their_local_domain_result() -> None:
                 "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
             }
         )
-    for form in ("plan", "initial_slice", "convergence", "final_review"):
-        bound = _review_bound(form)
-        response = _review_response(bound)
-        writer = native_review_provider_response_schema(bound.context)
-        validate_schema_document({"result": response}, writer)
-        parse_bound_native_contract_result(response, bound)
-        actual.append(
-            {
-                "provider": "claude",
-                "form": form,
-                "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
-            }
-        )
+    for provider in ("antigravity", "claude"):
+        for form in ("plan", "initial_slice", "convergence", "final_review"):
+            bound = _review_bound(form)
+            response = _review_response(bound)
+            writer = native_review_provider_response_schema(bound.context, provider)
+            validate_schema_document({"result": response}, writer)
+            parse_bound_native_contract_result(response, bound)
+            actual.append(
+                {
+                    "provider": provider,
+                    "form": form,
+                    "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
+                }
+            )
     baseline = json.loads(PROJECTION_BASELINE.read_text(encoding="utf-8"))
     assert baseline["schema_version"] == "native-provider-projection-baseline-v1"
     expected = baseline["writers"]
@@ -514,7 +515,7 @@ def test_seventh_projection_loss_is_rejected_without_compensation(
 
 
 def test_exception_table_is_closed_and_every_entry_names_a_real_regression() -> None:
-    all_entries = (*registered_exceptions("codex"), *registered_exceptions("claude"))
+    all_entries = (*registered_exceptions("codex"), *registered_exceptions("claude"), *registered_exceptions("antigravity"))
     assert len({item["exception_id"] for item in all_entries}) == len(all_entries)
     for item in all_entries:
         path_text, test_name = str(item["regression_test"]).split("::", 1)

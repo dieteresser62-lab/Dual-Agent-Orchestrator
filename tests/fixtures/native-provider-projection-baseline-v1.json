@@ -2,6 +2,26 @@
   "schema_version": "native-provider-projection-baseline-v1",
   "writers": [
     {
+      "provider": "antigravity",
+      "form": "convergence",
+      "sha256": "94a528466d246df972959ca485d1617c29c68aac3e421ec0e09f2a440638a059"
+    },
+    {
+      "provider": "antigravity",
+      "form": "final_review",
+      "sha256": "4505215faa0af3d37b18ef5757910d5d1fce6b38d39705106a27618d8bcff6e8"
+    },
+    {
+      "provider": "antigravity",
+      "form": "initial_slice",
+      "sha256": "1a8d1c50e39ee7f7c49c623cc56fd79d0927d8dcfafe15e27c4308f6886f0b61"
+    },
+    {
+      "provider": "antigravity",
+      "form": "plan",
+      "sha256": "d4afb44bbd6ce68edc6021b66147c64c530d9b7a6f055b7eb7c1d9dd11590427"
+    },
+    {
       "provider": "claude",
       "form": "convergence",
       "sha256": "94a528466d246df972959ca485d1617c29c68aac3e421ec0e09f2a440638a059"

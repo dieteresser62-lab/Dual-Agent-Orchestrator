@@ -845,6 +845,7 @@ def _slice_state(
         branch_base=START_COMMIT,
         first_slice_start_commit=START_COMMIT,
         slice_count=2,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-08-12T10:00:00+00:00",
     ).complete_current_work_unit()
     state = state.start_work_unit(
@@ -868,6 +869,7 @@ def _completed_single_slice_state():
         branch_base=START_COMMIT,
         first_slice_start_commit=START_COMMIT,
         slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         timestamp="2026-08-12T10:00:00+00:00",
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -4002,6 +4004,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
 def test_managed_audit_paths_are_added_after_implementer_plan_only() -> None:
     state = init_workflow_state(
         run_id="run-managed-audit",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/inbox/Bug.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -4135,6 +4138,7 @@ def test_policy_gate_rejects_approval_without_writing_and_resumes() -> None:
 def test_plan_only_rejects_future_product_slices_as_executable_records() -> None:
     state = init_workflow_state(
         run_id="run-plan-only",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -5078,6 +5082,7 @@ def test_slice_plan_rejection_retries_codex_with_closed_precise_guidance(
     changes = _changes("1", "docs/internal/plan.md")
     state = init_workflow_state(
         run_id="run-codex-form-retry",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -6065,6 +6070,7 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
     current_scope = ("src/current.py", "tests/current.py")
     state = init_workflow_state(
         run_id="run-auto-remediation",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -6148,6 +6154,7 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
 def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> None:
     state = init_workflow_state(
         run_id="run-existing-remediation",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -6221,6 +6228,7 @@ def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> N
 def test_codex_repeated_already_authorized_remediation_still_halts() -> None:
     state = init_workflow_state(
         run_id="run-repeated-remediation",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -6312,6 +6320,7 @@ def _scope_extension_state(
     work_plan_path = "docs/internal/plan.md"
     state = init_workflow_state(
         run_id=f"scope-{ownership}-{path.replace('/', '-')}",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,
@@ -7235,6 +7244,7 @@ def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
 def test_plan_not_ready_persists_gate_and_resumes_plan_step() -> None:
     state = init_workflow_state(
         run_id="run-plan-not-ready",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base=START_COMMIT,

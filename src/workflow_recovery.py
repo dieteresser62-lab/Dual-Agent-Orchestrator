@@ -82,7 +82,7 @@ from native_review_request import (
     validate_native_review_provider_response,
     validate_native_review_provider_response_for_context,
 )
-from native_provider_schema import OPENAI_PROVIDER, ANTHROPIC_PROVIDER
+from native_provider_schema import capability_profile_for_digest, NativeProviderSchemaError
 from gates import StopRule
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
@@ -124,14 +124,27 @@ logger = logging.getLogger(__name__)
 def _bound_provider(state: WorkflowState, slot: str) -> str:
     binding = getattr(state, "protocol_binding", None)
     profile = getattr(binding, f"{slot}_profile", None)
-    return getattr(profile, "provider", None) or (
-        OPENAI_PROVIDER if slot == "implementer" else ANTHROPIC_PROVIDER
-    )
+    provider = getattr(profile, "provider", None)
+    if not isinstance(provider, str) or not provider:
+        raise WorkflowExecutionError(
+            f"native provider profile binding missing for slot={slot}"
+        )
+    return provider
 
 
 def _review_provider(state: WorkflowState) -> str:
     slot = "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer"
     return _bound_provider(state, slot)
+
+
+def _review_capability_profile(state: WorkflowState) -> str:
+    slot = "final_reviewer" if state.current_step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer"
+    provider = _bound_provider(state, slot)
+    profile = getattr(state.protocol_binding, f"{slot}_profile", None)
+    try:
+        return capability_profile_for_digest(provider, profile.capability_sha256)
+    except (AttributeError, NativeProviderSchemaError) as exc:
+        raise WorkflowExecutionError(f"native capability profile binding invalid for slot={slot}: {exc}") from exc
 
 
 ReviewerDecisionPayload = ReviewPayload | FinalReviewCompletedPayload
@@ -616,7 +629,7 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
-        profile: str = ANTHROPIC_PROVIDER,
+        profile: str,
     ) -> ContractResult:
         try:
             validate_native_review_provider_response_for_context(
@@ -811,7 +824,7 @@ class WorkflowRecovery:
             else:
                 validate_native_review_provider_response_for_context(
                     document, native_context,
-                    profile=_review_provider(state),
+                    profile=_review_capability_profile(state),
                 )
             result = parse_bound_native_contract_result(
                 document,
@@ -1877,7 +1890,7 @@ class WorkflowRecovery:
         payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
-        profile: str = ANTHROPIC_PROVIDER,
+        profile: str,
     ) -> ContractResult:
         document = json.loads(canonical)
         if not isinstance(document, dict):
@@ -2032,7 +2045,7 @@ class WorkflowRecovery:
             request_replay,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
-        profile = _review_provider(state)
+        profile = _review_capability_profile(state)
         try:
             result = self._parse_pending_native_reviewer_response(
                 canonical,

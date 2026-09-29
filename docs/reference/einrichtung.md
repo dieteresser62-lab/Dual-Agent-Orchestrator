@@ -857,7 +857,7 @@ fortgesetzt, hält er mit `AGENT-PROFILE-DIFF` an – starten Sie die Wache zum
 Fortsetzen also ohne oder mit denselben Angaben.
 
 Das Fähigkeitsregister
-[`schemas/native-provider-schema-capabilities-v1.json`](../../schemas/native-provider-schema-capabilities-v1.json)
+[`schemas/native-provider-schema-capabilities-v2.json`](../../schemas/native-provider-schema-capabilities-v2.json)
 bindet die Aufrufform der beiden Kommandozeilen, nicht Modell und Effort. Die
 Schemamerkmale wurden am 23.9.2026 für alle wählbaren Modelle und Effort-Stufen
 gemessen und waren überall gleich.

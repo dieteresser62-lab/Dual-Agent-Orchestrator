@@ -1168,6 +1168,16 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "tests/fixtures/reviewer-quality-corpus-v1.json",
         "tests/fixtures/reviewer-format-s6-v1.json",
         "tests/fixtures/reviewer-format-repo-v1.json",
+        "schemas/native-provider-schema-capabilities-v2.json",
+        "schemas/native-provider-schema-exceptions-v2.json",
+        "schemas/role-provider-certifications-v1.json",
+        "src/native_provider_schema.py",
+        "src/role_certification.py",
+        "tests/test_native_provider_schema.py",
+        "tests/test_native_contract_differential.py",
+        "tests/test_native_review_request.py",
+        "tests/test_role_certification.py",
+        "tests/fixtures/native-provider-projection-baseline-v1.json",
     }
     retired = (
         "agy" + ".exe",
@@ -1398,6 +1408,7 @@ def test_retirement_guard_requires_joint_evidence_and_narrow_classification(
 ) -> None:
     required = (
         "docs/evidence/antigravity/phase-0-v1.json",
+        "docs/evidence/antigravity/capability-v1.json",
         "docs/evidence/antigravity/qualification-protocol-v1.json",
         "docs/evidence/antigravity/poc-reference-v1.json",
         "docs/reference/antigravity-reviewer.md",

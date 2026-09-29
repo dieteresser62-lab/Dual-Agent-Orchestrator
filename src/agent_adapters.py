@@ -846,7 +846,7 @@ def create_agent_pair(
             f"slot={slot.value} provider={provider}: missing qualification evidence for role={role.value}",
         )
     table = certifications if certifications is not None else load_role_certifications()
-    table.require(provider, role, slot)
+    table.require(provider, role, slot, model=settings.model)
     if settings.name != provider:
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for_role(role)
@@ -874,7 +874,10 @@ def build_slot_agent_registry(
     if set(slots) != {slot.value for slot in AgentSlot}:
         raise ValueError("slot_settings must contain implementer, reviewer and final_reviewer")
     table = certifications or load_role_certifications()
-    table.require_occupancy({slot: slots[slot.value].name for slot in AgentSlot})
+    table.require_occupancy(
+        {slot: slots[slot.value].name for slot in AgentSlot},
+        models={slot: slots[slot.value].model for slot in AgentSlot},
+    )
     registry = {
         slot.value: create_agent_pair(
             slots[slot.value].name, role_for_slot(slot), slot=slot,
