@@ -1,11 +1,28 @@
 {
   "schema_version": "quality-results-v1",
-  "status": "pending_blind_operator_judgment",
+  "status": "incomplete",
   "blind_seed": 20260929,
+  "corpus_sha256": "0a4d52a5dea051985c2408d189582113124d691cb286b2707d3a251e729bd682",
+  "packet_sha256": null,
+  "input_digests": {},
+  "ratings": {},
+  "agreement": [],
+  "operator_questions": [],
+  "operator_decisions": [],
   "judgments": [],
   "judgments_frozen_sha256": null,
   "judgments_frozen_at": null,
   "unblinded_at": null,
   "mapping": {},
-  "claude_special_decision": null
+  "claude_special_decision": null,
+  "scores": {
+    "agy": {
+      "passed": false,
+      "incomplete": true
+    },
+    "claude": {
+      "passed": false,
+      "incomplete": true
+    }
+  }
 }

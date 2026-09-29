@@ -94,7 +94,7 @@ def test_protection_plan_and_fake_evaluation(tmp_path: Path) -> None:
 
 
 def test_qualification_protocol_counts_rules_slots_and_evidence_digests() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
     probe.validate_qualification(protocol)
     assert protocol["quality"]["corpus_sha256"] == sha(FIXTURES / "reviewer-quality-corpus-v1.json")
     assert protocol["phase0_sha256"] == sha(EVIDENCE / "phase-0-v1.json")
@@ -172,12 +172,12 @@ def test_stored_negative_envelope_shapes_fail_closed(mutation: str, failed_check
     assert result["checks"][failed_check] is False
 
 
-def test_quality_corpus_is_pending_and_independently_reproducible(tmp_path: Path) -> None:
+def test_quality_corpus_is_approved_and_independently_reproducible(tmp_path: Path) -> None:
     assert (FIXTURES / "reviewer-quality-corpus-v1.json").stat().st_size < 1_048_576
     corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
-    assert corpus["operator_review"] == "pending"
-    assert not probe.qualification_ready(
-        load(EVIDENCE / "qualification-protocol-v1.json"), corpus)
+    assert corpus["operator_review"]["status"] == "approved_blanket"
+    assert probe.qualification_ready(
+        load(EVIDENCE / "qualification-protocol-v2.json"), corpus)
     assert len(corpus["cases"]) == 6
     assert sum(c["defect"] for c in corpus["cases"]) == 4
     assert {c["id"] for c in corpus["cases"] if c["critical"]} == {"Q1", "Q2"}
@@ -305,6 +305,7 @@ def test_blind_cli_holds_pending_operator_gate(tmp_path: Path, monkeypatch: pyte
     inputs.write_text('[]', encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["probe_reviewer.py", "blind", str(inputs),
         str(assessment), str(mapping), "--seed", "20260929"])
+    monkeypatch.setattr(probe, "qualification_ready", lambda protocol, corpus: False)
     with pytest.raises(PermissionError, match="operator review"):
         probe.main()
     assert not assessment.exists() and not mapping.exists()
@@ -444,7 +445,7 @@ def _failed_attempt(kind: str, case_id: str, provider: str, *, series_id: str,
 
 
 def test_series_count_restart_and_failure_visibility() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
     series = {"schema_version": "qualification-series-v1", "attempts": []}
     envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
     expected = probe.qualification_cases("transport", "agy")
@@ -499,65 +500,220 @@ def test_series_preflight_prevents_skips_retake_and_undocumented_restart() -> No
         probe._preflight_series_position([first, second], series_id="s1", case_id="F1:2", **common)
 
 
-def _blind_quality_result(corpus: dict) -> dict:
-    mapping = {}
-    judgments = []
-    for provider in ("agy", "claude"):  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-        for case in corpus["cases"]:
-            identifier = f"B{len(judgments) + 1:03d}"
-            mapping[identifier] = {"provider": provider, "case": case["id"],
-                "content_sha256": "a" * 64, "input_sha256": "b" * 64}
-            judgments.append({"id": identifier, "defect_found": bool(case["defect"]),
-                              "false_positive_count": 0, "invented_critical": False,
-                              "reason": "Independently checked against hidden proof."})
-    return {"schema_version": "quality-results-v1", "blind_seed": 20260929,
-            "judgments": judgments, "mapping": mapping,
-            "judgments_frozen_sha256": probe.digest(judgments),
-            "judgments_frozen_at": "2026-09-29T08:00:00Z",
-            "unblinded_at": "2026-09-29T09:00:00Z",
-            "claude_special_decision": None}  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-
-
-def test_quality_rule_is_absolute_and_claude_is_separate() -> None:  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+def _rating_fixture(q6_findings: list[dict] | None = None) -> tuple[dict, dict, dict, dict, dict]:
     corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
-    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
-    original = _blind_quality_result(corpus)
-    assert all(result["passed"] for result in probe.grade_quality(original, corpus, protocol).values())
-    for provider, case_id, field in (("agy", "Q1", "defect_found"),
-                                     ("agy", "Q2", "defect_found"),
-                                     ("agy", "Q5", "invented_critical")):
-        changed = copy.deepcopy(original)
-        row = next(row for row in changed["judgments"] if changed["mapping"][row["id"]]["provider"] == provider
-                   and changed["mapping"][row["id"]]["case"] == case_id)
-        row[field] = not row[field]
-        changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
-        assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
-    changed = copy.deepcopy(original)
-    for row in changed["judgments"]:
-        if changed["mapping"][row["id"]]["provider"] == "agy" and changed["mapping"][row["id"]]["case"] in {"Q5", "Q6"}:
-            row["false_positive_count"] = 1
-    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
-    assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
-    changed = copy.deepcopy(original)
-    for row in changed["judgments"]:
-        if changed["mapping"][row["id"]]["provider"] == "agy" and changed["mapping"][row["id"]]["case"] in {"Q3", "Q4"}:
-            row["defect_found"] = False
-    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
-    assert probe.grade_quality(changed, corpus, protocol)["agy"]["defects"] == 2
-    assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
-    changed = copy.deepcopy(original)
-    row = next(row for row in changed["judgments"] if changed["mapping"][row["id"]]["provider"] == "claude"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-               and changed["mapping"][row["id"]]["case"] == "Q1")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    rubric = load(EVIDENCE / "quality-rubric-v1.json")
+    sources = [{"provider": provider, "case": case["id"],
+                "content": {"new_findings": copy.deepcopy(q6_findings) if case["id"] == "Q6" and q6_findings is not None else []}}
+               for provider in ("agy", "claude") for case in corpus["cases"]]  # allowlist:provider -- certification data: independent blind quality rating
+    assessment, mapping = probe.blind_package(sources, seed=protocol["quality"]["blind_seed"])
+    packet = probe.export_rater_packet(assessment, mapping, corpus, protocol, rubric)
+    def rating(name: str) -> dict:
+        judgments = []
+        for entry in packet["responses"]:
+            row = {"id": entry["id"],
+                   "unfounded_findings": len(entry["response"]["new_findings"]) if not entry["ground_truth"]["defect"] else 0,
+                   "invented_critical": any(item.get("finding_class") == "BLOCKER" for item in entry["response"]["new_findings"]) if not entry["ground_truth"]["defect"] else False,
+                   "reasons": {"unfounded_findings": "No unsupported findings.",
+                               "invented_critical": "No invented blocker."}}
+            if entry["ground_truth"]["defect"]:
+                row["defect_found"] = True
+                row["reasons"]["defect_found"] = "Mechanism and path identified."
+            judgments.append(row)
+        return {"schema_version": "quality-rating-v1", "rater": name,
+                "packet_sha256": packet["packet_sha256"], "judgments": judgments}
+    return packet, mapping, {name: rating(name) for name in ("codex", "steering")}, corpus, protocol  # allowlist:provider -- certification data: independent blind quality rating
+
+
+def test_v1_rejected_and_blanket_approval_is_digest_bound() -> None:
+    v1 = load(EVIDENCE / "qualification-protocol-v1.json")
+    assert v1["superseded_by"] == "v2"
+    assert v1["superseded_reason"] == "Bewerterverfahren geändert vor der ersten Messung"
+    with pytest.raises(AssertionError):
+        probe.validate_qualification(v1)
+    corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    assert probe.qualification_ready(protocol, corpus)
+    changed = copy.deepcopy(corpus)
+    changed["operator_review"]["operator_note"] = "Altered"
+    assert not probe.qualification_ready(protocol, changed)
+
+
+def test_rater_packets_and_strict_rating_schema() -> None:
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    assert len(packet["responses"]) == 12
+    assert set(mapping["mapping"]) == {entry["id"] for entry in packet["responses"]}
+    assert all("provider" not in entry and "provider" not in entry["response"]
+               for entry in packet["responses"])
+    for name, rating in ratings.items():
+        probe.validate_rating(rating, packet, name)
+    changed = copy.deepcopy(ratings["codex"])  # allowlist:provider -- certification data: independent blind quality rating
+    changed["judgments"].pop()
+    probe.validate_rating(changed, packet, "codex")  # allowlist:provider -- certification data: independent blind quality rating
+    incomplete = probe.combine_quality_ratings(packet, mapping,
+        {**ratings, "codex": changed}, corpus, protocol)  # allowlist:provider -- certification data: independent blind quality rating
+    assert incomplete["status"] == "incomplete" and incomplete["mapping"] == {}
+    assert not any(row["passed"] for row in probe.grade_quality(incomplete, corpus, protocol).values())
+    changed["judgments"][0]["id"] = "unknown"
+    with pytest.raises(ValueError, match="rating IDs"):
+        probe.validate_rating(changed, packet, "codex")  # allowlist:provider -- certification data: independent blind quality rating
+    forged = copy.deepcopy(packet)
+    forged["responses"][0]["ground_truth"]["affected_path"] = "mini/forged.py"
+    forged["packet_sha256"] = probe.digest({k: v for k, v in forged.items()
+                                             if k != "packet_sha256"})
+    forged_ratings = copy.deepcopy(ratings)
+    for rating in forged_ratings.values():
+        rating["packet_sha256"] = forged["packet_sha256"]
+    with pytest.raises(ValueError, match="frozen ground truth"):
+        probe.combine_quality_ratings(forged, mapping, forged_ratings, corpus, protocol)
+
+
+def test_two_raters_agreement_disagreement_and_operator_answer() -> None:
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert result["status"] == "complete" and result["operator_questions"] == []
+    assert all(row["agreed"] for row in result["agreement"])
+    assert all(row["passed"] for row in probe.grade_quality(result, corpus, protocol).values())
+    changed = copy.deepcopy(ratings)
+    row = next(row for row in changed["steering"]["judgments"] if
+               next(entry for entry in packet["responses"] if entry["id"] == row["id"])["case"] == "Q1")
     row["defect_found"] = False
-    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
-    with pytest.raises(ValueError, match="operator decision"):
-        probe.grade_quality(changed, corpus, protocol)
-    changed["claude_special_decision"] = "deny_experimental"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-    result = probe.grade_quality(changed, corpus, protocol)
-    assert result["agy"]["passed"] and not result["claude"]["passed"]  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-    changed["judgments_frozen_sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="digest-frozen"):
-        probe.grade_quality(changed, corpus, protocol)
+    pending = probe.combine_quality_ratings(packet, mapping, changed, corpus, protocol)
+    assert pending["status"] == "incomplete" and pending["mapping"] == {}
+    assert len(pending["operator_questions"]) == 1
+    assert not any(row["passed"] for row in probe.grade_quality(pending, corpus, protocol).values())
+    question = pending["operator_questions"][0]
+    answers = {"schema_version": "quality-operator-answers-v1", "answers": [
+        {"id": question["id"], "criterion": question["criterion"], "answer": True}]}
+    complete = probe.combine_quality_ratings(packet, mapping, changed, corpus, protocol, answers)
+    assert complete["status"] == "complete"
+    assert all(row["passed"] for row in probe.grade_quality(complete, corpus, protocol).values())
+
+
+def test_defect_case_unfounded_dispute_needs_no_operator_question() -> None:
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    q1_ids = {entry["id"] for entry in packet["responses"] if entry["case"] == "Q1"}
+    for entry in packet["responses"]:
+        if entry["id"] in q1_ids:
+            entry["response"]["new_findings"] = [{"summary": "a"}, {"summary": "b"}]
+    assessment = {"schema_version": "blind-assessment-v1", "responses": [
+        {"id": row["id"], "content": row["response"]} for row in packet["responses"]]}
+    for row in mapping["mapping"].values():
+        if row["case"] == "Q1":
+            row["content_sha256"] = probe.sha(json.dumps(
+                {"new_findings": [{"summary": "a"}, {"summary": "b"}]},
+                ensure_ascii=False, sort_keys=True).encode())
+    packet = probe.export_rater_packet(assessment, mapping, corpus, protocol,
+                                       load(EVIDENCE / "quality-rubric-v1.json"))
+    for name, rating in ratings.items():
+        rating["packet_sha256"] = packet["packet_sha256"]
+        for row in rating["judgments"]:
+            if row["id"] in q1_ids:
+                row["unfounded_findings"] = 1 if name == "codex" else 0  # allowlist:provider -- certification data: independent blind quality rating
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert result["status"] == "complete" and result["operator_questions"] == []
+    disputed = [row for row in result["agreement"] if not row["agreed"]]
+    assert {row["id"] for row in disputed} == q1_ids
+    assert all(not row["rule_relevant"] for row in disputed)
+    assert all(row["unfounded_findings"] == 1 for row in result["judgments"] if row["id"] in q1_ids)
+    assert all(row["passed"] for row in probe.grade_quality(result, corpus, protocol).values())
+    forged = copy.deepcopy(result)
+    forged["operator_questions"] = [{"id": sorted(q1_ids)[0], "criterion": "unfounded_findings",
+        "question": "?", "yes_value": 1, "no_value": 0}]
+    forged["operator_decisions"] = [{"id": sorted(q1_ids)[0], "criterion": "unfounded_findings",
+        "answer": False}]
+    with pytest.raises(ValueError, match="rule-irrelevant"):
+        probe.grade_quality(forged, corpus, protocol)
+    too_many = copy.deepcopy(ratings["steering"])
+    next(row for row in too_many["judgments"] if row["id"] in q1_ids)["unfounded_findings"] = 3
+    with pytest.raises(ValueError, match="more unfounded findings than findings"):
+        probe.validate_rating(too_many, packet, "steering")
+
+
+def test_q6_filter_finding_is_unfounded_and_final_rule_is_separate() -> None:
+    finding = {"summary": "Die None-Filterung in render_review ist zu breit und verliert Pflichtfelder.",
+               "finding_class": "FINDING"}
+    packet, mapping, ratings, corpus, protocol = _rating_fixture([finding])
+    assert "None-Filterung" in packet["preregistered_classification"]["q6_rule"]
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    scores = probe.grade_quality(result, corpus, protocol)
+    assert scores["agy"]["clean_false_positives"] == 1
+    assert scores["agy"]["passed"]
+    wrong = copy.deepcopy(ratings)
+    q6 = {entry["id"] for entry in packet["responses"] if entry["case"] == "Q6"}
+    for rating in wrong.values():
+        for row in rating["judgments"]:
+            if row["id"] in q6:
+                row["unfounded_findings"] = 0
+    with pytest.raises(ValueError, match="every clean-case finding is unfounded"):
+        probe.combine_quality_ratings(packet, mapping, wrong, corpus, protocol)
+    packet, mapping, ratings, corpus, protocol = _rating_fixture([finding, finding])
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert not probe.grade_quality(result, corpus, protocol)["agy"]["passed"]
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    noncritical_ids = {entry["id"] for entry in packet["responses"]
+                       if entry["case"] in {"Q3", "Q4"}}
+    for rating in ratings.values():
+        for row in rating["judgments"]:
+            if row["id"] in noncritical_ids:
+                row["defect_found"] = False
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert probe.grade_quality(result, corpus, protocol)["agy"]["defects"] == 2
+    assert not probe.grade_quality(result, corpus, protocol)["agy"]["passed"]
+    blocker = {"summary": "Filter zu breit", "finding_class": "BLOCKER"}
+    packet, mapping, ratings, corpus, protocol = _rating_fixture([blocker])
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert not probe.grade_quality(result, corpus, protocol)["agy"]["passed"]
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    critical_ids = {entry["id"] for entry in packet["responses"] if entry["case"] in {"Q1", "Q2"}}
+    for rating in ratings.values():
+        for row in rating["judgments"]:
+            if row["id"] in critical_ids:
+                row["defect_found"] = False
+    result = probe.combine_quality_ratings(packet, mapping, ratings, corpus, protocol)
+    assert not probe.grade_quality(result, corpus, protocol)["agy"]["passed"]
+
+
+def test_rating_cli_exports_identical_packets_and_records_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packet, mapping, ratings, corpus, protocol = _rating_fixture()
+    assessment = {"schema_version": "blind-assessment-v1", "responses": [
+        {"id": row["id"], "content": row["response"]} for row in packet["responses"]]}
+    for name, value in (("assessment", assessment), ("mapping", mapping)):
+        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["probe_reviewer.py", "export-rater-packets",
+        str(tmp_path / "assessment.json"), str(tmp_path / "mapping.json"), str(tmp_path / "packets")])
+    assert probe.main() == 0
+    assert (tmp_path / "packets/codex-packet.json").read_bytes() == (  # allowlist:provider -- certification data: independent blind quality rating
+        tmp_path / "packets/steering-packet.json").read_bytes()
+    monkeypatch.setattr(sys, "argv", ["probe_reviewer.py", "render-rater-prompt",
+        str(tmp_path / "packets/codex-packet.json"), str(tmp_path / "prompt.txt")])  # allowlist:provider -- certification data: independent blind quality rating
+    assert probe.main() == 0
+    assert "Blindpaket:" in (tmp_path / "prompt.txt").read_text()
+    changed = copy.deepcopy(ratings)
+    q1_id = next(row["id"] for row in packet["responses"] if row["case"] == "Q1")
+    next(row for row in changed["steering"]["judgments"]
+         if row["id"] == q1_id)["defect_found"] = False
+    for name, value in changed.items():
+        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+    command = ["probe_reviewer.py", "combine-quality-ratings",
+        str(tmp_path / "packets/codex-packet.json"),  # allowlist:provider -- certification data: independent blind quality rating
+        str(tmp_path / "mapping.json"), str(tmp_path / "codex.json"),  # allowlist:provider -- certification data: independent blind quality rating
+        str(tmp_path / "steering.json"), str(tmp_path / "results.json"),
+        "--questions-out", str(tmp_path / "questions.json")]
+    monkeypatch.setattr(sys, "argv", command)
+    assert probe.main() == 1
+    questions = load(tmp_path / "questions.json")["questions"]
+    assert len(questions) == 1
+    answer = {"schema_version": "quality-operator-answers-v1", "answers": [
+        {"id": questions[0]["id"], "criterion": questions[0]["criterion"], "answer": True}]}
+    (tmp_path / "answers.json").write_text(json.dumps(answer), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", command + ["--operator-answers", str(tmp_path / "answers.json")])
+    assert probe.main() == 0
+    assert load(tmp_path / "results.json")["status"] == "complete"
+    assert load(tmp_path / "questions.json")["questions"] == []
 
 
 def test_qualification_live_gate_and_evidence_sanitization(tmp_path: Path) -> None:
@@ -621,11 +777,11 @@ def test_qualification_call_routes_one_fake_response_through_native_agy_adapter(
     assert probe.validate_qualification_evidence(
         probe.strict_json((out / "qualification-series-v1.json").read_bytes()),
         probe.strict_json((out / "qualification-envelopes-v1.json").read_bytes()),
-        load(EVIDENCE / "qualification-protocol-v1.json"))["s1"]["incomplete"]
+        load(EVIDENCE / "qualification-protocol-v2.json"))["s1"]["incomplete"]
 
 
 def test_print_timeout_is_technical_and_timeout_proposal_uses_512() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
     series = {"schema_version": "qualification-series-v1", "attempts": []}
     envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
     row, raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s1", call_id="t1")
@@ -708,7 +864,7 @@ def test_qualification_claude_call_builds_restricted_productive_input(  # allowl
 def test_blind_sources_require_all_twelve_bound_outputs_without_selection() -> None:
     from native_review_request import build_native_review_request
 
-    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
     stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]
     templates = {"Q1": "F1", "Q2": "F2", "Q3": "F4", "Q4": "F5", "Q5": "F1", "Q6": "F5"}
     series = {"schema_version": "qualification-series-v1", "attempts": []}

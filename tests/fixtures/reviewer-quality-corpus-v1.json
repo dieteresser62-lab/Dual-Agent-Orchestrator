@@ -725,6 +725,23 @@
     }
   ],
   "ground_truth_source": "separate executable proof tests and predeclared invariants; never reviewer text",
-  "operator_review": "pending",
+  "operator_review": {
+    "basis": [
+      "Maschinelle Beweistests: der verborgene Test scheitert genau bei Q1–Q4 und besteht auf den Kontrollen sowie Q5/Q6.",
+      "Steuermann-Plausibilitätsprüfung: alle Diffs gegen den Code gelesen; zwei Beschreibungen korrigiert."
+    ],
+    "date": "2026-09-29",
+    "operator_note": "Pauschale Freigabe. Eine fachliche Einzelprüfung der Fälle war dem Operator nicht möglich.",
+    "status": "approved_blanket"
+  },
+  "preregistered_classification": {
+    "clean_case_rule": "Jeder Befund in Q5 oder Q6 zählt als unbegründet. Es gibt dort nachweislich keinen Defekt; der verborgene Beweistest besteht.",
+    "clean_cases": [
+      "Q5",
+      "Q6"
+    ],
+    "invented_critical_rule": "Ein erfundener kritischer Befund ist ein BLOCKER in einem sauberen Fall oder ein BLOCKER, der nicht den tatsächlichen Defekt des Falls trifft.",
+    "q6_rule": "Ein Hinweis, die None-Filterung in render_review sei breiter als nötig oder könne Pflichtfelder verlieren, ist unbegründet. Pflichtfelder können dort nie None sein: Der Digest wird auf 64 Zeichen geprüft, kind ist eine feste Auswahl, decision und complete sind immer gesetzt."
+  },
   "schema_version": "reviewer-quality-corpus-v1"
 }

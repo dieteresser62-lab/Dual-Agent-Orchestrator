@@ -580,7 +580,7 @@ def validate_phase0(document: dict) -> None:
 def validate_qualification(document: dict) -> None:
     if not __debug__:
         raise RuntimeError("optimized mode cannot validate the protocol")
-    assert document["schema_version"] == "qualification-protocol-v1"
+    assert document["schema_version"] == "qualification-protocol-v2"
     assert document["campaign"] == "slim" and document["target_status"] == "experimental"
     assert document["sample_counts"] == {"transport": 12, "large_output": 2,
         "print_timeout": 1, "quality_per_provider": 6, "canaries": 2}
@@ -596,6 +596,8 @@ def validate_qualification(document: dict) -> None:
         (ROOT / "docs/evidence/antigravity/phase-0-v1.json").read_bytes())
     assert document["quality"]["corpus_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
+    assert document["quality"]["rubric_sha256"] == sha(
+        (ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
     assert document["format_regression_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-format-s6-v1.json").read_bytes())
 
@@ -603,8 +605,12 @@ def validate_qualification(document: dict) -> None:
 def qualification_ready(protocol: dict, corpus: dict) -> bool:
     """The quality corpus cannot be frozen or measured before operator review."""
     validate_qualification(protocol)
-    return (protocol["quality"].get("corpus_operator_review") == "approved"
-            and corpus.get("operator_review") == "approved"
+    review = corpus.get("operator_review")
+    return (protocol["quality"].get("corpus_operator_review") == "approved_blanket"
+            and isinstance(review, dict) and review.get("status") == "approved_blanket"
+            and review.get("date") == "2026-09-29"
+            and bool(review.get("basis")) and bool(review.get("operator_note"))
+            and corpus.get("preregistered_classification") == protocol["quality"].get("preregistered_classification")
             and sha(json.dumps(corpus, ensure_ascii=False, indent=2,
                                sort_keys=True).encode() + b"\n")
             == protocol["quality"]["corpus_sha256"])
@@ -953,12 +959,212 @@ def domain_projection(bundle, result) -> dict:
     }
 
 
+def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
+                        protocol: dict, rubric: dict) -> dict:
+    if not qualification_ready(protocol, corpus):
+        raise PermissionError("quality corpus is not approved at its frozen digest")
+    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v2":
+        raise ValueError("quality rubric version differs")
+    if assessment.get("schema_version") != "blind-assessment-v1" or mapping.get("schema_version") != "blind-mapping-v1" or mapping.get("seed") != protocol["quality"]["blind_seed"]:
+        raise ValueError("blind input version or seed differs")
+    responses, secret = assessment.get("responses", []), mapping.get("mapping", {})
+    ids = [row.get("id") for row in responses]
+    if len(ids) != 12 or len(set(ids)) != 12 or set(ids) != set(secret):
+        raise ValueError("twelve matched blind responses required")
+    cases = {row["id"]: row for row in corpus["cases"]}
+    if sorted(secret[row]["case"] for row in ids) != sorted(list(cases) * 2):
+        raise ValueError("two responses per quality case required")
+    if {(row["provider"], row["case"]) for row in secret.values()} != {
+            (provider, case) for provider in ("agy", "claude") for case in cases}:  # allowlist:provider -- certification data: independent blind quality rating
+        raise ValueError("each provider must have every quality case once")
+    entries = []
+    for row in responses:
+        identifier, bound = row["id"], secret[row["id"]]
+        if bound["provider"] not in {"agy", "claude"}:  # allowlist:provider -- certification data: independent blind quality rating
+            raise ValueError("unknown provider in secret mapping")
+        encoded = json.dumps(row["content"], ensure_ascii=False, sort_keys=True).encode()
+        if sha(encoded) != bound["content_sha256"]:
+            raise ValueError("blind content digest differs")
+        case = cases[bound["case"]]
+        changed = [name for name in case["seed_files"]
+                   if case["seed_files"][name] != case["candidate_files"][name]]
+        if len(changed) != 1:
+            raise ValueError("quality case lacks a unique affected path")
+        entries.append({"id": identifier, "case": case["id"], "response": row["content"],
+                        "ground_truth": {"defect": case["defect"], "critical": case["critical"],
+                            "factual_finding": case["factual_finding"],
+                            "allowed_alternatives": case["allowed_alternatives"],
+                            "affected_path": changed[0], "diff": case["patch"]}})
+    base = {"schema_version": "quality-rater-packet-v1", "blind_seed": mapping["seed"],
+            "corpus_sha256": protocol["quality"]["corpus_sha256"],
+            "rubric": rubric, "responses": entries,
+            "preregistered_classification": corpus["preregistered_classification"]}
+    return {**base, "packet_sha256": digest(base)}
+
+
+def validate_rating(rating: dict, packet: dict, rater: str) -> None:
+    if set(rating) != {"schema_version", "rater", "packet_sha256", "judgments"} or rating["schema_version"] != "quality-rating-v1" or rating["rater"] != rater or rating["packet_sha256"] != packet["packet_sha256"]:
+        raise ValueError("rating header differs from the blind packet")
+    responses, rows = packet["responses"], rating["judgments"]
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("rating judgments must be objects")
+    ids = [entry["id"] for entry in responses]
+    rated_ids = [row.get("id") for row in rows]
+    if len(set(rated_ids)) != len(rated_ids) or rated_ids != [identifier for identifier in ids if identifier in rated_ids]:
+        raise ValueError("rating IDs must be unique and in packet order")
+    entries = {entry["id"]: entry for entry in responses}
+    for row in rows:
+        entry = entries[row["id"]]
+        criteria = {"unfounded_findings", "invented_critical"}
+        if entry["ground_truth"]["defect"]:
+            criteria.add("defect_found")
+        if (set(row) != {"id", "reasons"} | criteria
+                or type(row["unfounded_findings"]) is not int or row["unfounded_findings"] < 0
+                or type(row["invented_critical"]) is not bool
+                or ("defect_found" in criteria and type(row["defect_found"]) is not bool)
+                or not isinstance(row["reasons"], dict) or set(row["reasons"]) != criteria
+                or any(not isinstance(value, str) or not value.strip()
+                       for value in row["reasons"].values())):
+            raise ValueError(f"invalid criterion or reason for {entry['id']}")
+        findings = entry["response"].get("new_findings", [])
+        if not isinstance(findings, list) or row["unfounded_findings"] > len(findings):
+            raise ValueError(f"more unfounded findings than findings for {entry['id']}")
+        if not entry["ground_truth"]["defect"]:
+            if row["unfounded_findings"] != len(findings):
+                raise ValueError(f"every clean-case finding is unfounded for {entry['id']}")
+            if row["invented_critical"] != any(item.get("finding_class") == "BLOCKER" for item in findings):
+                raise ValueError(f"clean-case invented critical classification differs for {entry['id']}")
+
+
+def render_rater_prompt(packet: dict, protocol: dict) -> str:
+    if packet.get("packet_sha256") != digest({k: v for k, v in packet.items() if k != "packet_sha256"}):
+        raise ValueError("rater packet digest differs")
+    rubric = packet.get("rubric", {})
+    if sha((json.dumps(rubric, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()) != protocol["quality"]["rubric_sha256"]:
+        raise ValueError("quality rubric digest differs")
+    return rubric["codex_prompt"] + "\n\nBlindpaket:\n" + json.dumps(packet, ensure_ascii=False, indent=2) + "\n"  # allowlist:provider -- certification data: independent blind quality rating
+
+
+def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
+                            corpus: dict, protocol: dict,
+                            operator_answers: dict | None = None) -> dict:
+    if not qualification_ready(protocol, corpus):
+        raise PermissionError("quality corpus is not approved at its frozen digest")
+    if set(ratings) != {"codex", "steering"}:  # allowlist:provider -- certification data: independent blind quality rating
+        raise ValueError("two independent raters required")
+    if packet.get("packet_sha256") != digest({k: v for k, v in packet.items() if k != "packet_sha256"}):
+        raise ValueError("rater packet digest differs")
+    if packet.get("rubric") is None or sha((json.dumps(packet["rubric"], ensure_ascii=False,
+            indent=2, sort_keys=True) + "\n").encode()) != protocol["quality"]["rubric_sha256"]:
+        raise ValueError("quality rubric digest differs")
+    assessment = {"schema_version": "blind-assessment-v1", "responses": [
+        {"id": row["id"], "content": row["response"]} for row in packet["responses"]]}
+    if export_rater_packet(assessment, mapping, corpus, protocol, packet["rubric"]) != packet:
+        raise ValueError("rater packet differs from frozen ground truth")
+    for name, rating in ratings.items():
+        validate_rating(rating, packet, name)
+    if any(len(rating["judgments"]) != len(packet["responses"]) for rating in ratings.values()):
+        if operator_answers is not None:
+            raise ValueError("operator answers require two complete ratings")
+        return {"schema_version": "quality-results-v1", "status": "incomplete",
+                "blind_seed": packet["blind_seed"], "corpus_sha256": packet["corpus_sha256"],
+                "packet_sha256": packet["packet_sha256"], "input_digests": {
+                    "ratings": {name: digest(value) for name, value in ratings.items()},
+                    "mapping": digest(mapping)}, "ratings": ratings, "agreement": [],
+                "operator_questions": [], "operator_decisions": [], "judgments": [],
+                "judgments_frozen_sha256": None, "judgments_frozen_at": None,
+                "unblinded_at": None, "mapping": {}, "claude_special_decision": None}  # allowlist:provider -- certification data: independent blind quality rating
+    if set(mapping.get("mapping", {})) != {row["id"] for row in packet["responses"]}:
+        raise ValueError("blind mapping differs")
+    by_rater = {name: {row["id"]: row for row in rating["judgments"]}
+                for name, rating in ratings.items()}
+    questions, agreement, final = [], [], []
+    for entry in packet["responses"]:
+        identifier = entry["id"]
+        values, reasons = {}, {}
+        criteria = (["defect_found"] if entry["ground_truth"]["defect"] else []) + ["unfounded_findings", "invented_critical"]
+        for criterion in criteria:
+            left = by_rater["codex"][identifier][criterion]  # allowlist:provider -- certification data: independent blind quality rating
+            right = by_rater["steering"][identifier][criterion]
+            same = left == right
+            # The rule counts unfounded findings only in clean cases; a defect-case count
+            # dispute keeps the higher count instead of asking the operator.
+            relevant = criterion != "unfounded_findings" or not entry["ground_truth"]["defect"]
+            agreement.append({"id": identifier, "criterion": criterion, "agreed": same,
+                              "rule_relevant": relevant,
+                              "codex": left, "steering": right})  # allowlist:provider -- certification data: independent blind quality rating
+            if same:
+                values[criterion] = left
+            elif not relevant:
+                values[criterion] = max(left, right)
+            else:
+                if criterion == "defect_found":
+                    wording = f"Hat Antwort {identifier} den Fehler ‚{entry['ground_truth']['factual_finding']}‘ im betroffenen Pfad gefunden? Ja/Nein"
+                    yes_value, no_value = True, False
+                elif criterion == "invented_critical":
+                    wording = f"Enthält Antwort {identifier} einen erfundenen kritischen Befund? Ja/Nein"
+                    yes_value, no_value = True, False
+                else:
+                    wording = f"Enthält Antwort {identifier} genau {left} unbegründete Befunde? Ja/Nein"
+                    yes_value, no_value = left, right
+                questions.append({"id": identifier, "criterion": criterion,
+                                  "question": wording, "yes_value": yes_value,
+                                  "no_value": no_value})
+            reasons[criterion] = {name: by_rater[name][identifier]["reasons"][criterion]
+                                  for name in ("codex", "steering")}  # allowlist:provider -- certification data: independent blind quality rating
+        final.append({"id": identifier, **values, "reasons": reasons})
+    answers = operator_answers or {"schema_version": "quality-operator-answers-v1", "answers": []}
+    if set(answers) != {"schema_version", "answers"} or answers["schema_version"] != "quality-operator-answers-v1" or not isinstance(answers["answers"], list):
+        raise ValueError("invalid operator answers")
+    answer_rows = answers["answers"]
+    if len(answer_rows) > len(questions) or any(set(row) != {"id", "criterion", "answer"} or type(row["answer"]) is not bool for row in answer_rows):
+        raise ValueError("invalid operator answer shape")
+    answer_keys = [(row["id"], row["criterion"]) for row in answer_rows]
+    question_keys = [(row["id"], row["criterion"]) for row in questions]
+    if len(set(answer_keys)) != len(answer_keys) or not set(answer_keys) <= set(question_keys):
+        raise ValueError("operator answer does not match a disputed criterion")
+    decided = {(row["id"], row["criterion"]): row["answer"] for row in answer_rows}
+    for row in final:
+        for question in questions:
+            key = question["id"], question["criterion"]
+            if row["id"] == question["id"] and key in decided:
+                row[question["criterion"]] = question["yes_value"] if decided[key] else question["no_value"]
+    complete = len(decided) == len(questions)
+    now = datetime.now(timezone.utc).isoformat()
+    return {"schema_version": "quality-results-v1", "status": "complete" if complete else "incomplete",
+            "blind_seed": packet["blind_seed"], "corpus_sha256": packet["corpus_sha256"],
+            "packet_sha256": packet["packet_sha256"], "input_digests": {
+                "ratings": {name: digest(value) for name, value in ratings.items()},
+                "mapping": digest(mapping)},
+            "ratings": ratings, "agreement": agreement, "operator_questions": questions,
+            "operator_decisions": answer_rows, "judgments": final if complete else [],
+            "judgments_frozen_sha256": digest(final) if complete else None,
+            "judgments_frozen_at": now if complete else None,
+            "unblinded_at": datetime.now(timezone.utc).isoformat() if complete else None,
+            "mapping": mapping["mapping"] if complete else {},
+            "claude_special_decision": None}  # allowlist:provider -- certification data: independent blind quality rating
+
+
 def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
     """Apply the frozen absolute rule separately after blind judgments are fixed."""
     if results.get("schema_version") != "quality-results-v1":
         raise ValueError("quality result version differs")
     if results.get("blind_seed") != protocol["quality"]["blind_seed"]:
         raise ValueError("blind seed differs")
+    if results.get("corpus_sha256") != protocol["quality"]["corpus_sha256"]:
+        raise ValueError("quality corpus digest differs")
+    if results.get("status") != "complete":
+        return {provider: {"passed": False, "incomplete": True}
+                for provider in ("agy", "claude")}  # allowlist:provider -- certification data: independent blind quality rating
+    if set(results.get("ratings", {})) != {"codex", "steering"}:  # allowlist:provider -- certification data: independent blind quality rating
+        raise ValueError("both independent ratings required")
+    if results.get("packet_sha256") != results["ratings"]["codex"].get("packet_sha256") or results.get("packet_sha256") != results["ratings"]["steering"].get("packet_sha256"):  # allowlist:provider -- certification data: independent blind quality rating
+        raise ValueError("rating packet digests differ")
+    if not results.get("agreement") or results.get("operator_decisions") is None:
+        raise ValueError("agreement and operator decisions required")
+    if results.get("input_digests", {}).get("ratings") != {
+            name: digest(rating) for name, rating in results["ratings"].items()}:
+        raise ValueError("rating input digests differ")
     judgments, mapping = results["judgments"], results["mapping"]
     if results.get("judgments_frozen_sha256") != digest(judgments):
         raise ValueError("blind judgments are not digest-frozen")
@@ -967,14 +1173,43 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
     if frozen.tzinfo is None or unblinded.tzinfo is None or not frozen < unblinded:
         raise ValueError("judgments must be frozen before unblinding")
     if len(judgments) != 12 or len(mapping) != 12 or set(mapping) != {
-            row["id"] for row in judgments}:
+            row["id"] for row in judgments} or len({row["id"] for row in judgments}) != 12:
         raise ValueError("twelve blind judgments and exact mapping required")
+    rated = {name: {row["id"]: row for row in rating["judgments"]}
+             for name, rating in results["ratings"].items()}
+    decisions = {(row["id"], row["criterion"]): row["answer"]
+                 for row in results["operator_decisions"]}
+    questions = {(row["id"], row["criterion"]): row
+                 for row in results.get("operator_questions", [])}
+    if len(decisions) != len(results["operator_decisions"]) or len(questions) != len(results.get("operator_questions", [])) or set(decisions) != set(questions):
+        raise ValueError("operator decisions are incomplete or duplicated")
     cases = {case["id"]: case for case in corpus["cases"]}
     for item in mapping.values():
-        if set(item) != {"provider", "case", "content_sha256", "input_sha256"}:
+        if not isinstance(item, dict) or set(item) != {"provider", "case", "content_sha256", "input_sha256"} or item["case"] not in cases:
             raise ValueError("blind mapping is incomplete")
         _sha_field(item["content_sha256"], "content_sha256")
         _sha_field(item["input_sha256"], "input_sha256")
+    for row in judgments:
+        for criterion in ("defect_found", "unfounded_findings", "invented_critical"):
+            if criterion not in row:
+                continue
+            left = rated["codex"][row["id"]][criterion]  # allowlist:provider -- certification data: independent blind quality rating
+            right = rated["steering"][row["id"]][criterion]
+            key = row["id"], criterion
+            relevant = criterion != "unfounded_findings" or not cases[mapping[row["id"]]["case"]]["defect"]
+            if left == right or not relevant:
+                expected = left if left == right else max(left, right)
+                if key in questions:
+                    raise ValueError("question exists for an agreed or rule-irrelevant criterion")
+            else:
+                question = questions.get(key)
+                if question is None:
+                    raise ValueError("disagreement lacks operator question")
+                expected = question["yes_value"] if decisions[key] else question["no_value"]
+                if {question["yes_value"], question["no_value"]} != {left, right}:
+                    raise ValueError("operator alternatives differ from ratings")
+            if row[criterion] != expected:
+                raise ValueError("final judgment differs from raters or operator")
     scores = {}
     for provider in ("agy", "claude"):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
         selected = [(row, cases[mapping[row["id"]]["case"]]) for row in judgments
@@ -982,16 +1217,20 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
         if {case["id"] for _, case in selected} != set(cases):
             raise ValueError("each provider must have exactly Q1–Q6")
         for row, case in selected:
-            if (type(row.get("defect_found")) is not bool or
+            if ((case["defect"] and type(row.get("defect_found")) is not bool) or
+                (not case["defect"] and "defect_found" in row) or
                 type(row.get("invented_critical")) is not bool or
-                type(row.get("false_positive_count")) is not int or
-                row["false_positive_count"] < 0 or
-                (not case["defect"] and row["defect_found"]) or
-                not isinstance(row.get("reason"), str) or not row["reason"].strip()):
+                type(row.get("unfounded_findings")) is not int or
+                row["unfounded_findings"] < 0 or
+                not isinstance(row.get("reasons"), dict) or
+                not all(isinstance(value, dict) and set(value) == {"codex", "steering"}  # allowlist:provider -- certification data: independent blind quality rating
+                        and all(isinstance(reason, str) and reason.strip()
+                                for reason in value.values())
+                        for value in row["reasons"].values())):
                 raise ValueError("blind judgment lacks a reasoned classification")
         critical = sum(row["defect_found"] for row, case in selected if case["critical"])
         defects = sum(row["defect_found"] for row, case in selected if case["defect"])
-        false_positives = sum(row["false_positive_count"] for row, case in selected if not case["defect"])
+        false_positives = sum(row["unfounded_findings"] for row, case in selected if not case["defect"])
         invented = sum(row["invented_critical"] for row, _ in selected)
         passed = (critical == protocol["quality_rule"]["critical_required"] and
                   defects >= protocol["quality_rule"]["defects_required"] and
@@ -1002,8 +1241,8 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
                             "invented_critical": invented}
     special = results.get("claude_special_decision")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
     if scores["agy"]["passed"] and not scores["claude"]["passed"]:  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        if special not in {"approve_experimental", "deny_experimental"}:
-            raise ValueError("operator decision required when reference quality fails")
+        if special not in {None, "approve_experimental", "deny_experimental"}:
+            raise ValueError("invalid operator decision for weaker reference")
     elif special is not None:
         raise ValueError("Claude special decision is permitted only for a weaker reference")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
     return scores
@@ -1321,7 +1560,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if profile.get("commit_sha") != _current_commit():
         raise ValueError("qualification profile commit differs from current code HEAD")
     _assert_committed_qualification_code()
-    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v1.json").read_bytes())
+    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
     validate_qualification(protocol)
     if case_id not in qualification_cases(kind, provider):
         raise ValueError("call differs from frozen qualification cases")
@@ -1590,9 +1829,21 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
 def verify_quality_mapping(results: dict, series: dict, envelopes: dict, protocol: dict) -> None:
     """After unblinding, prove each neutral ID maps to recorded content bytes."""
     sources = quality_blind_sources(series, envelopes, protocol)
-    _, expected = blind_package(sources, seed=protocol["quality"]["blind_seed"])
+    assessment, expected = blind_package(sources, seed=protocol["quality"]["blind_seed"])
     if results.get("mapping") != expected["mapping"]:
         raise ValueError("quality mapping differs from the frozen blind package")
+    if results.get("status") == "complete":
+        corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
+        rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+        packet = export_rater_packet(assessment, expected, corpus, protocol, rubric)
+        answers = {"schema_version": "quality-operator-answers-v1",
+                   "answers": results["operator_decisions"]}
+        reproduced = combine_quality_ratings(packet, expected, results["ratings"],
+                                              corpus, protocol, answers)
+        for key in ("packet_sha256", "input_digests", "agreement", "operator_questions",
+                    "operator_decisions", "judgments", "judgments_frozen_sha256", "mapping"):
+            if results.get(key) != reproduced[key]:
+                raise ValueError(f"quality result {key} differs from bound inputs")
 
 
 def main() -> int:
@@ -1610,6 +1861,22 @@ def main() -> int:
     b.add_argument("assessment", type=Path)
     b.add_argument("mapping", type=Path)
     b.add_argument("--seed", type=int, required=True)
+    rp = sub.add_parser("export-rater-packets")
+    rp.add_argument("assessment", type=Path)
+    rp.add_argument("mapping", type=Path)
+    rp.add_argument("output_dir", type=Path)
+    pr = sub.add_parser("render-rater-prompt")
+    pr.add_argument("packet", type=Path)
+    pr.add_argument("output", type=Path)
+    cr = sub.add_parser("combine-quality-ratings")
+    cr.add_argument("packet", type=Path)
+    cr.add_argument("mapping", type=Path)
+    cr.add_argument("codex_rating", type=Path)  # allowlist:provider -- certification data: independent blind quality rating
+    cr.add_argument("steering_rating", type=Path)
+    cr.add_argument("output", type=Path)
+    cr.add_argument("--operator-answers", type=Path)
+    cr.add_argument("--questions-out", type=Path)
+    cr.add_argument("--claude-special-decision", choices=("approve_experimental", "deny_experimental"))  # allowlist:provider -- certification data: independent blind quality rating
     f = sub.add_parser("prepare-blind-inputs")
     f.add_argument("series", type=Path)
     f.add_argument("envelopes", type=Path)
@@ -1655,7 +1922,7 @@ def main() -> int:
         print(json.dumps(probe_plan(strict_json(args.protocol.read_bytes())), indent=2))
         return 0
     if args.command == "blind":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v1.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
         validate_qualification(protocol)
         if args.seed != protocol["quality"]["blind_seed"]:
             raise ValueError("blind seed differs from the frozen qualification protocol")
@@ -1673,7 +1940,7 @@ def main() -> int:
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
     if args.command == "prepare-blind-inputs":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v1.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -1681,6 +1948,45 @@ def main() -> int:
                                         strict_json(args.envelopes.read_bytes()), protocol)
         _write_evidence_file(args.output, sources)
         return 0
+    if args.command == "export-rater-packets":
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
+        rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+        packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
+            strict_json(args.mapping.read_bytes()), corpus, protocol, rubric)
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("codex", "steering"):  # allowlist:provider -- certification data: independent blind quality rating
+            (args.output_dir / f"{name}-packet.json").write_text(
+                json.dumps(packet, ensure_ascii=False, indent=2) + "\n")
+        print(json.dumps({"packet_sha256": packet["packet_sha256"],
+                          "ids": [row["id"] for row in packet["responses"]]}))
+        return 0
+    if args.command == "render-rater-prompt":
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        packet = strict_json(args.packet.read_bytes())
+        args.output.write_text(render_rater_prompt(packet, protocol))
+        return 0
+    if args.command == "combine-quality-ratings":
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
+        packet = strict_json(args.packet.read_bytes())
+        mapping = strict_json(args.mapping.read_bytes())
+        ratings = {"codex": strict_json(args.codex_rating.read_bytes()),  # allowlist:provider -- certification data: independent blind quality rating
+                   "steering": strict_json(args.steering_rating.read_bytes())}
+        answers = strict_json(args.operator_answers.read_bytes()) if args.operator_answers else None
+        result = combine_quality_ratings(packet, mapping, ratings, corpus, protocol, answers)
+        result["claude_special_decision"] = args.claude_special_decision  # allowlist:provider -- certification data: independent blind quality rating
+        result["scores"] = grade_quality(result, corpus, protocol)
+        args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        if args.questions_out:
+            decided = {(row["id"], row["criterion"]) for row in result["operator_decisions"]}
+            pending = [row for row in result["operator_questions"]
+                       if (row["id"], row["criterion"]) not in decided]
+            args.questions_out.write_text(json.dumps({"schema_version": "quality-operator-questions-v1",
+                "questions": pending}, ensure_ascii=False, indent=2) + "\n")
+        print(json.dumps({"status": result["status"], "scores": result["scores"],
+                          "questions": result["operator_questions"]}, ensure_ascii=False))
+        return 0 if result["status"] == "complete" else 1
     if args.command == "prepare-case":
         if args.proof_out and args.kind != "large_output":
             raise ValueError("hidden proof output is only available for large cases")
@@ -1712,7 +2018,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
     if args.command == "evaluate-qualification":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v1.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
         series = strict_json(args.series.read_bytes())
         envelopes = strict_json(args.envelopes.read_bytes())
         verdicts = validate_qualification_evidence(series, envelopes, protocol)
