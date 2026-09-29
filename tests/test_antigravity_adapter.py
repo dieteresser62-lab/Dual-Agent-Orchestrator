@@ -939,7 +939,7 @@ def test_every_certification_lookup_binds_the_slot_model() -> None:
 
 def test_run_records_accept_registered_reviewer_providers() -> None:
     # Found by the second real AGY run (29 Sep 2026): the provider-input measurement
-    # record accepted only Codex and Claude, so the first AGY review halted.
+    # record accepted only the two baseline providers, so the first AGY review halted.
     from artifact_models import Role, _agent_provider_role_matches
 
     assert _agent_provider_role_matches("antigravity", Role.REVIEWER)

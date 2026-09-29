@@ -1200,6 +1200,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "tests/test_workflow_run_setup.py",
         "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
         "tests/fixtures/antigravity-envelopes-v1.json",
+        "schemas/orchestrator-artifact-v3.schema.json",
     }
     retired = (
         "agy" + ".exe",
