@@ -149,10 +149,18 @@ class Role(StrEnum):
     USER = "user"
 
 
+@lru_cache(maxsize=1)
+def _registered_agent_providers() -> frozenset[str]:
+    """Providers of the capability register; slot certification binds the role pair."""
+    from native_provider_schema import load_capability_table
+
+    return frozenset(item["provider"] for item in load_capability_table()["providers"])
+
+
 def _agent_provider_role_matches(provider: str, role: Role) -> bool:
     return (
         isinstance(provider, str)
-        and provider in {OPENAI_PROVIDER, ANTHROPIC_PROVIDER}
+        and (provider in {OPENAI_PROVIDER, ANTHROPIC_PROVIDER} or provider in _registered_agent_providers())
         and isinstance(role, Role)
         and role in {Role.IMPLEMENTER, Role.REVIEWER}
     )
