@@ -32,6 +32,7 @@ from agent_adapters import (
     PROVIDER_FAILURE_METRIC_KEYS,
     NativeCodexExecutionBoundary,
 )
+from agent_roles import AgentRoleName, AgentSlot, role_for_slot
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
 from contracts import (
@@ -89,7 +90,6 @@ from provider_identity import (
 from role_occupancy import role_for_provider
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
-    PROVIDER_ROLES,
     PreparedProviderInput,
     ProviderInputComponent,
     ProviderInputBudgetError,
@@ -665,7 +665,7 @@ def normalize_provider_usage(metadata: Mapping[str, object] | None) -> ProviderU
     normalized = ProviderUsagePayload(
         input_tokens=integer("input_tokens", "inputTokens", "promptTokenCount"),
         tool_input_tokens=integer("tool_input_tokens", "toolInputTokens", "toolUseInputTokens"),
-        cache_read_input_tokens=integer("cache_read_input_tokens", "cacheReadInputTokens"),
+        cache_read_input_tokens=integer("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens"),
         cache_creation_input_tokens=integer(
             "cache_creation_input_tokens", "cache_write_input_tokens",
             "cacheCreationInputTokens", "cacheWriteInputTokens",
@@ -1349,7 +1349,8 @@ def _run_agent_process(
     """Own a provider session until its pipes and process group are settled."""
     process = subprocess.Popen(
         command_parts,
-        stdin=subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None,
+        stdin=(subprocess.DEVNULL if getattr(adapter, "stdin_closed_when_unused", False) and stdin_text is None
+               else subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env=env, cwd=execution_root, bufsize=1, start_new_session=True,
     )
@@ -1446,6 +1447,8 @@ def _run_agent_process(
                     stderr_chunks.append(line)
                 if config.agent_live_stream_channels not in {"both", channel}:
                     continue
+                if getattr(adapter, "suppress_live_stream", False):
+                    continue
                 if config.agent_live_stream_mode == "full":
                     logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
                 else:
@@ -1529,6 +1532,29 @@ def _run_agent_process(
             _stop_provider_group(process, identity, drained=True)
 
 
+def _provider_environment(adapter: AgentAdapter) -> dict[str, str]:
+    if getattr(adapter, "inherit_process_environment", True):
+        return {**os.environ, **adapter.env}
+    env = dict(adapter.env)
+    for variable in getattr(adapter, "environment_passthrough", ()):
+        if variable in os.environ:
+            env[variable] = os.environ[variable]
+    return env
+
+
+def _adapter_role(adapter: AgentAdapter) -> str:
+    binding = getattr(adapter, "role_binding", None)
+    if binding is not None:
+        role = getattr(binding, "role", None)
+        if not isinstance(role, AgentRoleName):
+            raise ValueError("adapter has an invalid role binding")
+        return role.value
+    slot = getattr(adapter, "bound_slot", None)
+    if slot is not None:
+        return role_for_slot(AgentSlot(slot)).value
+    return AgentRoleName.REVIEWER.value if adapter.reviewer else AgentRoleName.IMPLEMENTER.value
+
+
 def run_agent(
     adapter: AgentAdapter,
     prompt: str,
@@ -1548,7 +1574,10 @@ def run_agent(
     agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
-    if agent_key not in PROVIDER_OPERATIONS:
+    if getattr(adapter, "requires_attempt_ledger", False) and attempt_invocation is None:
+        raise ValueError("adapter start requires a provider attempt ledger")
+    if (agent_key not in PROVIDER_OPERATIONS
+        and not config.provider_input_budget.registered_operations(agent_key)):
         raise ProviderInputBudgetError(
             f"adapter {agent_key!r} has no provider input budget registration"
         )
@@ -1570,7 +1599,13 @@ def run_agent(
     try:
         if not operation:
             raise ValueError(f"provider input operation is required for {agent_key}")
-        if adapter.reviewer:
+        root_hook = getattr(adapter, "prepared_execution_root", None)
+        prepared_root = root_hook() if callable(root_hook) else None
+        if prepared_root is not None:
+            execution_root = Path(prepared_root).resolve()
+            if not execution_root.is_dir():
+                raise ValueError("adapter prepared execution root must be a directory")
+        elif adapter.reviewer:
             if not reviewer_repository_required:
                 workspace = create_empty_reviewer_workspace()
             else:
@@ -1589,7 +1624,7 @@ def run_agent(
         measurement = measure_provider_input(
             prepared,
             provider=agent_key,
-            role=PROVIDER_ROLES[agent_key],
+            role=_adapter_role(adapter),
             operation=effective_operation,
             binding_fingerprint=binding_fingerprint,
             policy=config.provider_input_budget,
@@ -1619,15 +1654,14 @@ def run_agent(
         if not measurement.allowed:
             raise ProviderInputBudgetExceeded(measurement)
 
-        env = os.environ.copy()
-        env.update(adapter.env)
+        env = _provider_environment(adapter)
         verify_agent_capabilities(
             adapter, strict_dns=config.strict_preflight,
             path=env.get("PATH", os.defpath),
         )
         command_parts = _bound_launch_command(adapter, prepared.command)
         stdin_text = prepared.stdin_text
-        if adapter.reviewer:
+        if adapter.reviewer and getattr(adapter, "sanitize_reviewer_environment", True):
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             for variable in (
                 "RUN_TASK_REVIEW_TEST_COMMAND",
@@ -1635,7 +1669,8 @@ def run_agent(
                 "RUN_TASK_REVIEW_TIMEOUT",
             ):
                 env.pop(variable, None)
-        env["PWD"] = str(execution_root)
+        if getattr(adapter, "set_pwd", True):
+            env["PWD"] = str(execution_root)
 
         if attempt_invocation is not None:
             attempt_invocation.begin(measurement, bootstrap_context)
@@ -1659,6 +1694,7 @@ def run_agent(
         stderr = (result.stderr or "").strip()
         try:
             adapter.validate_process_output(stderr)
+            extra_files["exit_code"] = str(result.returncode)
             output = adapter.extract_output(stdout, stderr, extra_files)
         except AgentOutputError as exc:
             if exc.exit_code is None:
@@ -2633,6 +2669,17 @@ def classify_agent_failure(
     elif structured_output_retry_exhaustion:
         # A completed provider result with this subtype identifies output exhaustion.
         kind = AgentFailureKind.OUTPUT
+    elif isinstance(exc, AgentOutputError) and isinstance(kind_hint, AgentFailureKind):
+        # An adapter's typed output diagnosis takes precedence over textual
+        # provider heuristics, including quota reset parsing.
+        if kind_hint is AgentFailureKind.QUOTA:
+            return QuotaReachedError(
+                agent_key, provider_text, invocation_id=invocation_id,
+                received_at=stamp, exit_code=process_exit_code,
+                provider_data=provider_data, technical_text=technical_text,
+                orchestrator_diagnostic=orchestrator_diagnostic,
+            )
+        kind = kind_hint
     elif (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -2760,9 +2807,17 @@ def preflight(
     skip_git_check: bool = False,
 ) -> bool:
     _ = strict
-    _ = agents
     ok = True
     logger.info("Preflight: checking git cleanliness; agent capability checks are lazy.")
+    for slot in required_agents:
+        adapter = agents.get(slot)
+        disclosure = getattr(adapter, "egress_disclosure", None)
+        if disclosure is not None:
+            destination, components = disclosure
+            logger.info(
+                "Preflight provider egress: slot=%s provider=%s destination=%s data=%s",
+                slot, adapter.name, destination, ", ".join(components),
+            )
     if required_agents:
         logger.info(
             "Deferred agent checks until first role use: %s.",

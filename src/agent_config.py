@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,8 @@ def parse_profile_tables(
         effort = _non_empty(raw.get("effort", base.effort if base else None), f"agent_profiles.{name}.effort").lower()
         if effort not in VALID_EFFORTS:
             raise AgentConfigError(f"agent_profiles.{name}.effort is unsupported: {effort}")
+        if provider == "antigravity" and effort == "xhigh":
+            raise AgentConfigError(f"agent_profiles.{name}.effort is unsupported for antigravity: {effort}")
         timeout_raw = raw.get("timeout_seconds", base.timeout_seconds if base else None)
         if timeout_raw is not None and (isinstance(timeout_raw, bool) or not isinstance(timeout_raw, int) or timeout_raw < 0):
             raise AgentConfigError(f"agent_profiles.{name}.timeout_seconds must be a non-negative integer")
@@ -131,6 +134,7 @@ MODEL_FAMILIES = {
         "astra": "gpt-6-astra",
     },
     "claude": {"opus": "opus", "sonnet": "sonnet", "fable": "fable"},
+    "antigravity": {"gemini-3.1-pro-high": "gemini-3.1-pro-high"},
 }
 _DEFAULT_MODELS = {
     role: next(iter(families.values())) for role, families in MODEL_FAMILIES.items()
@@ -222,6 +226,8 @@ def _resolve(
 
 
 def _selectable_model(role: str, value: str) -> str:
+    if role == "antigravity" and re.fullmatch(r"gemini-[a-z0-9.-]+", value):
+        return value
     families = MODEL_FAMILIES[role]
     model = families.get(value.lower(), value)
     if model not in families.values():
@@ -270,6 +276,8 @@ def resolve_agent_settings(
             raise AgentConfigError(
                 f"{role} effort must be one of {', '.join(VALID_EFFORTS)}; got {effort!r}"
             )
+        if provider == "antigravity" and effort == "xhigh":
+            raise AgentConfigError(f"{role} effort is unsupported for antigravity: {effort}")
         settings[role] = AgentSettings(
             name=provider,
             binary=binary,

@@ -73,6 +73,7 @@ class AgentOutputError(RuntimeError):
         technical_text: str | None = None,
         exit_code: int | None = None,
         orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+        kind_hint: object | None = None,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
@@ -83,6 +84,7 @@ class AgentOutputError(RuntimeError):
         self.technical_text = technical_text or self.provider_text
         self.exit_code = exit_code
         self.orchestrator_diagnostic = orchestrator_diagnostic
+        self.kind_hint = kind_hint
         super().__init__(message)
 
 
@@ -220,12 +222,21 @@ class AgentAdapter(Protocol):
     capability_verified: bool
     provider_identity: ProviderIdentity | None
     metadata: dict[str, object]
+    inherit_process_environment: bool
+    environment_passthrough: tuple[str, ...]
+    stdin_closed_when_unused: bool
+    suppress_live_stream: bool
+    requires_attempt_ledger: bool
+    sanitize_reviewer_environment: bool
+    set_pwd: bool
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
 
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput: ...
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None: ...
+
+    def prepared_execution_root(self) -> Path | None: ...
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str: ...
 
@@ -252,6 +263,13 @@ class NativeImplementerAdapter(AgentAdapter, Protocol):
 class _BaseAdapter:
     reviewer = False
     required_hosts: tuple[str, ...] = ()
+    inherit_process_environment = True
+    environment_passthrough: tuple[str, ...] = ()
+    stdin_closed_when_unused = False
+    suppress_live_stream = False
+    requires_attempt_ledger = False
+    sanitize_reviewer_environment = True
+    set_pwd = True
 
     def __init__(self, settings: AgentSettings) -> None:
         self.settings = settings
@@ -284,6 +302,9 @@ class _BaseAdapter:
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         _ = source_root
         _ = snapshot_root
+
+    def prepared_execution_root(self) -> Path | None:
+        return None
 
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         command, use_stdin = self.build_command(prompt)
@@ -854,6 +875,10 @@ def create_agent_pair(
         return NativeCodexAdapter(settings, role_binding=binding)
     if provider == "claude" and role is AgentRoleName.REVIEWER:
         return NativeClaudeReviewAdapter(settings, role_binding=binding)
+    if provider == "antigravity" and role is AgentRoleName.REVIEWER:
+        from antigravity_adapter import NativeAntigravityReviewAdapter
+
+        return NativeAntigravityReviewAdapter(settings, role_binding=binding)
     raise ValueError(
         f"slot={slot.value} provider={provider}: missing transport/role rights binding"
     )

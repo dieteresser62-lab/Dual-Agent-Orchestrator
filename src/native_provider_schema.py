@@ -817,7 +817,7 @@ def _normalize_antigravity(command: Sequence[str]) -> ProviderTransportProfile:
     output_format = _take_pair(values, "--output-format")
     agent = _take_pair(values, "--agent")
     if (not prompt or not schema or not log_path or not model or not effort
-        or re.fullmatch(r"[1-9][0-9]*s", timeout) is None
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)s", timeout) is None
         or output_format != "json" or agent != "dao-reviewer"
         or sorted(values) != sorted(("--disable-slash-commands", "--sandbox"))):
         raise NativeProviderSchemaError("unclassified Antigravity command arguments")

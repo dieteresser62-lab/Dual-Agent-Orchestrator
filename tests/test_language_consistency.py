@@ -1158,8 +1158,8 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         if "# retirement-negative-control" not in line
         and not _allowed_retirement_reference_line(path, line)
     )
-    # Slice 1 admits only the evidence, operator reference and offline probe.
-    # Later adapter and register paths need their own explicit classification.
+    # Each provider-specific Slice path is explicitly classified here. The
+    # remaining retired protocol and third-role patterns still fail closed.
     relative = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else ""
     new_provider_paths = relative.startswith("docs/evidence/antigravity/") or relative in {
         "docs/reference/antigravity-reviewer.md",
@@ -1178,10 +1178,16 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "tests/test_native_review_request.py",
         "tests/test_role_certification.py",
         "tests/fixtures/native-provider-projection-baseline-v1.json",
+        "src/antigravity_adapter.py",
+        "src/agent_adapters.py",
+        "src/agent_config.py",
+        "src/agent_runtime.py",
+        "tests/test_antigravity_adapter.py",
+        "tests/test_cli.py",
+        "tests/fixtures/antigravity-envelopes-v1.json",
     }
     retired = (
         "agy" + ".exe",
-        "ANTI" + "GRAVITY_",
         "orchestrator-artifact-" + "v1",
         "native-agent-codex-request-" + "v1",
         "native-agent-codex-result-" + "v1",
@@ -1191,7 +1197,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "native-claude-review-" + "v1",
     )
     if not new_provider_paths:
-        retired = ("anti" + "gravity", *retired)
+        retired = ("anti" + "gravity", "ANTI" + "GRAVITY_", *retired)
     lowered = text.casefold()
     hits = [token for token in retired if token.casefold() in lowered]
     if not new_provider_paths and re.search(r"(?<![A-Za-z0-9_])" + "agy" + r"(?![A-Za-z0-9_])", text, re.I):

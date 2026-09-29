@@ -46,6 +46,37 @@ def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     assert config.workflow.merge_completed_branch is True
 
 
+@pytest.mark.parametrize("timeout", (0, 17))
+def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(tmp_path: Path, timeout: int) -> None:
+    operations = (
+        ("codex", "implementer", "implementer_plan"),  # allowlist:provider -- profile configuration: complete budget table
+        ("codex", "implementer", "implementer_plan_revision"),  # allowlist:provider -- profile configuration: complete budget table
+        ("codex", "implementer", "implementer_implementation"),  # allowlist:provider -- profile configuration: complete budget table
+        ("codex", "implementer", "implementer_correction"),  # allowlist:provider -- profile configuration: complete budget table
+        ("antigravity", "reviewer", "reviewer_plan_review"),
+        ("antigravity", "reviewer", "reviewer_slice_review"),
+        ("antigravity", "reviewer", "reviewer_final_review"),
+    )
+    budget = "".join(
+        f'[[provider_input_budget]]\nprovider = "{provider}"\nrole = "{role}"\n'
+        f'operation = "{operation}"\nmax_chars = 4000000\nmax_bytes = 16000000\n'
+        for provider, role, operation in operations
+    )
+    config_path = _write_config(
+        tmp_path,
+        '[roles]\nreviewer = "agy"\nfinal_reviewer = "agy"\n'
+        '[agent_profiles.agy]\nprovider = "antigravity"\nmodel = "gemini-3.1-pro-high"\n'
+        f'effort = "high"\ntimeout_seconds = {timeout}\n' + budget,
+    )
+    config = load_repo_config(config_path)
+    assert config.agent_profiles["agy"].timeout_seconds == (timeout or None)
+    assert config.provider_input_budget.select(
+        "antigravity", "reviewer", "reviewer_final_review"
+    ).max_bytes == 16_000_000
+    with pytest.raises(ConfigError, match="not-certified"):
+        parse_args([], cwd=tmp_path, environ={})
+
+
 def test_shipped_roles_and_profiles_resolve_with_final_inheritance(tmp_path: Path) -> None:
     args = parse_args([], cwd=tmp_path, environ={})
     assert {slot: setting.name for slot, setting in args.slot_settings.items()} == {

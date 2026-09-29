@@ -1,0 +1,4387 @@
+{
+  "schema_version": "antigravity-envelopes-v1",
+  "note": "Sanitized Phase-0 and historical PoC envelopes; response prose capped at 512 characters. SHA-256 names the full source file.",
+  "cases": [
+    {
+      "name": "soft_deny_s1",
+      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s1/agy-P1/process/stdout.txt",
+      "stdout_sha256": "df5288fe419fd851ee8cc2feb69898734f9fe2b6a42b5a5495557209c2e42920",
+      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s1/agy-P1/process/stderr.txt",
+      "stderr_sha256": "2f70f945243833d446f0501960769e51d4aabe7f6b4f4f502a24883d197ccc06",
+      "exit_code": 0,
+      "envelope": {
+        "conversation_id": "49ce4c78-2c38-4fdf-abf4-3ee2b03b1768",
+        "status": "SUCCESS",
+        "response": "",
+        "duration_seconds": 25.369418588,
+        "num_turns": 1,
+        "json_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 20,
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "maxLength": 600,
+                    "type": "string"
+                  },
+                  "tool": {
+                    "maxLength": 120,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "tool",
+                  "outcome"
+                ],
+                "type": "object"
+              },
+              "maxItems": 40,
+              "type": "array"
+            },
+            "loaded_instructions": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "positive_control": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "tools_available": {
+              "maxLength": 2000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "positive_control",
+            "tools_available",
+            "loaded_instructions",
+            "attempts"
+          ],
+          "type": "object"
+        },
+        "usage": {
+          "input_tokens": 14062,
+          "output_tokens": 1004,
+          "thinking_tokens": 942,
+          "cache_read_tokens": 0,
+          "total_tokens": 15066
+        },
+        "denied_actions": [
+          {
+            "action": "read_file",
+            "display_name": "ViewFile"
+          }
+        ]
+      },
+      "stderr": "jetski: no output produced — a tool required the \"read_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. read_file(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+    },
+    {
+      "name": "soft_deny_s4",
+      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-P6/process/stdout.txt",
+      "stdout_sha256": "d41e710331d9bf5875a5e95e00cacc9ca05370aff3590b86a9cfba158bdf95b5",
+      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-P6/process/stderr.txt",
+      "stderr_sha256": "2f70f945243833d446f0501960769e51d4aabe7f6b4f4f502a24883d197ccc06",
+      "exit_code": 0,
+      "envelope": {
+        "conversation_id": "21bc02b2-62c5-4072-ba66-1744988c2e16",
+        "status": "SUCCESS",
+        "response": "",
+        "duration_seconds": 4.778523488,
+        "num_turns": 1,
+        "json_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 20,
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "maxLength": 600,
+                    "type": "string"
+                  },
+                  "tool": {
+                    "maxLength": 120,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "tool",
+                  "outcome"
+                ],
+                "type": "object"
+              },
+              "maxItems": 40,
+              "type": "array"
+            },
+            "loaded_instructions": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "positive_control": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "tools_available": {
+              "maxLength": 2000,
+              "type": "string"
+            }
+          },
+          "required": [
+            "positive_control",
+            "tools_available",
+            "loaded_instructions",
+            "attempts"
+          ],
+          "type": "object"
+        },
+        "usage": {
+          "input_tokens": 4962,
+          "output_tokens": 401,
+          "thinking_tokens": 278,
+          "cache_read_tokens": 0,
+          "total_tokens": 5363
+        },
+        "denied_actions": [
+          {
+            "action": "read_file",
+            "display_name": "ViewFile"
+          }
+        ]
+      },
+      "stderr": "jetski: no output produced — a tool required the \"read_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. read_file(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n"
+    },
+    {
+      "name": "error_with_output",
+      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-F1/process/stdout.txt",
+      "stdout_sha256": "876e0ec8d20a1a072ee9e1fb757d1884d57c84823502aea5eb5e7a1b1afaba38",
+      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-F1/process/stderr.txt",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_code": 0,
+      "envelope": {
+        "conversation_id": "6a42ebce-ee68-4b67-a117-29ffadd79b9f",
+        "status": "ERROR",
+        "response": "{\n  \"request_id\": \"native-review-request-d715e068fbd7039bb45d3b790f0ddf47dd5e57e09538832b02971978bb85b422\",\n  \"disposition\": \"REJECTED\",\n  \"disposition_reason\": \"Der Plan-Review wird abgelehnt, da das laut Vertrag zwingend erforderliche Plandokument 'docs/plan.md' im Repository fehlt.\",\n  \"findings\": [\n    {\n      \"finding_id\": \"R-01\",\n      \"description\": \"Das Plandokument 'docs/plan.md' ist im Arbeitsverzeichnis nicht vorhanden. Das 'repo'-Verzeichnis ist vollständig leer, weshalb der Plan nicht überprüft",
+        "error": "Your previous response contained an improperly formatted function call: Malformed function call: Failed to parse function call: Function call is empty - no input to parse.\nPlease retry with a properly formatted function call\nRetries remaining: 3",
+        "duration_seconds": 200.824717561,
+        "num_turns": 2,
+        "structured_output": {
+          "result": {
+            "anchors": [],
+            "decision": "denied",
+            "new_findings": [
+              {
+                "acceptance_test": {
+                  "kind": "prose",
+                  "text": "Das Plandokument 'docs/plan.md' existiert im Repository und beschreibt das inklusive Schwellenwertverhalten mit einem Boundary-Test für 10."
+                },
+                "affected_paths": [
+                  "docs/plan.md"
+                ],
+                "finding_class": "FINDING",
+                "finding_id": "R-01",
+                "summary": "Das Plandokument 'docs/plan.md' fehlt im Arbeitsverzeichnis vollständig, wodurch der Plan nicht überprüft werden kann."
+              }
+            ],
+            "pre_mortem": "Ohne das formelle Plandokument fehlt jegliche Grundlage für die architektonische Implementierung. Dies führt garantiert zum Scheitern der nachfolgenden Umsetzung, da die Entwicklungsziele undefiniert bleiben.",
+            "request_id": "native-review-request-d715e068fbd7039bb45d3b790f0ddf47dd5e57e09538832b02971978bb85b422",
+            "result_type": "review_result",
+            "review_evidence": {
+              "break_condition": "Abbruch der Review, da das im Vertrag zwingend geforderte Plan-Artefakt 'docs/plan.md' nicht vorliegt (Verzeichnis 'repo' ist leer).",
+              "dimensions": "Die Überprüfung der Architekturgrundlagen und Verträge konnte nicht durchgeführt werden, da die Dateien fehlen.",
+              "largest_residual_risk": "Ein komplett fehlendes Plandokument bedeutet ein maximales Risiko für den gesamten Entwicklungszyklus."
+            },
+            "reviewer": "reviewer",
+            "schema_version": "native-agent-review-result-v3",
+            "status_changes": []
+          }
+        },
+        "json_schema": {
+          "$defs": {
+            "acceptance_test": {
+              "$ref": "#/$defs/prose_acceptance"
+            },
+            "anchor": {
+              "additionalProperties": false,
+              "properties": {
+                "anchor_id": {
+                  "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$",
+                  "type": "string"
+                },
+                "expected": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "input_fixture": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "tolerance": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "anchor_id",
+                "input_fixture",
+                "expected",
+                "tolerance"
+              ],
+              "type": "object"
+            },
+            "bound_approved_finding": {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "const": "FINDING",
+                  "type": "string"
+                },
+                "finding_id": {
+                  "enum": [
+                    "R-01",
+                    "R-02",
+                    "R-03",
+                    "R-04",
+                    "R-05",
+                    "R-06",
+                    "R-07",
+                    "R-08",
+                    "R-09",
+                    "R-10",
+                    "R-11",
+                    "R-12",
+                    "R-13",
+                    "R-14",
+                    "R-15",
+                    "R-16",
+                    "R-17",
+                    "R-18",
+                    "R-19",
+                    "R-20",
+                    "R-21",
+                    "R-22",
+                    "R-23",
+                    "R-24",
+                    "R-25",
+                    "R-26",
+                    "R-27",
+                    "R-28",
+                    "R-29",
+                    "R-30",
+                    "R-31",
+                    "R-32"
+                  ],
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths"
+              ],
+              "type": "object"
+            },
+            "bound_denied_finding": {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "enum": [
+                    "BLOCKER",
+                    "FINDING"
+                  ],
+                  "type": "string"
+                },
+                "finding_id": {
+                  "enum": [
+                    "R-01",
+                    "R-02",
+                    "R-03",
+                    "R-04",
+                    "R-05",
+                    "R-06",
+                    "R-07",
+                    "R-08",
+                    "R-09",
+                    "R-10",
+                    "R-11",
+                    "R-12",
+                    "R-13",
+                    "R-14",
+                    "R-15",
+                    "R-16",
+                    "R-17",
+                    "R-18",
+                    "R-19",
+                    "R-20",
+                    "R-21",
+                    "R-22",
+                    "R-23",
+                    "R-24",
+                    "R-25",
+                    "R-26",
+                    "R-27",
+                    "R-28",
+                    "R-29",
+                    "R-30",
+                    "R-31",
+                    "R-32"
+                  ],
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths"
+              ],
+              "type": "object"
+            },
+            "bound_plan_approved": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "new_findings": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "status_changes": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "anchors": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/anchor"
+                  },
+                  "type": "array"
+                },
+                "decision": {
+                  "const": "approved",
+                  "type": "string"
+                },
+                "new_findings": {
+                  "items": {
+                    "$ref": "#/$defs/bound_approved_finding"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "pre_mortem": {
+                  "maxLength": 3000,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "request_id": {
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "review_result",
+                  "type": "string"
+                },
+                "review_evidence": {
+                  "$ref": "#/$defs/evidence"
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                },
+                "status_changes": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/status_change"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "decision",
+                "new_findings",
+                "status_changes",
+                "anchors",
+                "review_evidence",
+                "pre_mortem"
+              ],
+              "type": "object"
+            },
+            "bound_plan_denied": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "new_findings": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "status_changes": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "anchors": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/anchor"
+                  },
+                  "type": "array"
+                },
+                "decision": {
+                  "const": "denied",
+                  "type": "string"
+                },
+                "new_findings": {
+                  "items": {
+                    "$ref": "#/$defs/bound_denied_finding"
+                  },
+                  "maxItems": 32,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "pre_mortem": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "request_id": {
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "review_result",
+                  "type": "string"
+                },
+                "review_evidence": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/evidence"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                },
+                "status_changes": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/status_change"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "decision",
+                "new_findings",
+                "status_changes",
+                "anchors",
+                "review_evidence",
+                "pre_mortem"
+              ],
+              "type": "object"
+            },
+            "bound_plan_stop": {
+              "additionalProperties": false,
+              "properties": {
+                "rationale": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "remediation_paths": {
+                  "items": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "request_id": {
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "stop_request",
+                  "type": "string"
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "rule_id": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "rule_id",
+                "rationale",
+                "remediation_paths"
+              ],
+              "type": "object"
+            },
+            "bound_status_change": {
+              "additionalProperties": false,
+              "properties": {
+                "closure": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/finding_closure"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "OPEN",
+                    "CLOSED"
+                  ]
+                }
+              },
+              "required": [
+                "finding_id",
+                "status",
+                "rationale",
+                "closure"
+              ],
+              "type": "object"
+            },
+            "common": {
+              "properties": {
+                "request_id": {
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "enum": [
+                    "review_result",
+                    "stop_request",
+                    "final_review_completed"
+                  ]
+                },
+                "reviewer": {
+                  "enum": [
+                    "reviewer"
+                  ]
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer"
+              ],
+              "type": "object"
+            },
+            "evidence": {
+              "additionalProperties": false,
+              "properties": {
+                "break_condition": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "dimensions": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "largest_residual_risk": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dimensions",
+                "largest_residual_risk",
+                "break_condition"
+              ],
+              "type": "object"
+            },
+            "final_review_completed": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "new_findings": {
+                      "items": {
+                        "$ref": "#/$defs/finding"
+                      },
+                      "maxItems": 512,
+                      "type": "array"
+                    },
+                    "occurrences": {
+                      "items": {
+                        "$ref": "#/$defs/final_review_occurrence"
+                      },
+                      "maxItems": 10000,
+                      "type": "array"
+                    },
+                    "pre_mortem": {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "final_review_completed"
+                    },
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    },
+                    "reviewer": {
+                      "const": "reviewer"
+                    },
+                    "scan_complete": {
+                      "type": "boolean"
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "scan_complete",
+                    "new_findings",
+                    "occurrences",
+                    "review_evidence",
+                    "pre_mortem"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "final_review_occurrence": {
+              "additionalProperties": false,
+              "properties": {
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "maxLength": 3000,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "rationale"
+              ],
+              "type": "object"
+            },
+            "finding": {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "enum": [
+                    "BLOCKER",
+                    "FINDING"
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths"
+              ],
+              "type": "object"
+            },
+            "finding_closure": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "fixed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "evidence": {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "rejection_reason": {
+                      "enum": [
+                        "no_defect",
+                        "out_of_scope",
+                        "already_fixed"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "rejection_reason",
+                    "evidence"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "prose_acceptance": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prose"
+                },
+                "text": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "type": "object"
+            },
+            "review_result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "new_findings": {
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "status_changes": {
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "review_evidence": {
+                          "$ref": "#/$defs/evidence"
+                        }
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "anchors": {
+                      "items": {
+                        "$ref": "#/$defs/anchor"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    "decision": {
+                      "enum": [
+                        "approved",
+                        "denied"
+                      ]
+                    },
+                    "new_findings": {
+                      "items": {
+                        "$ref": "#/$defs/finding"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
+                    "pre_mortem": {
+                      "anyOf": [
+                        {
+                          "maxLength": 3000,
+                          "minLength": 1,
+                          "pattern": "^[^\\x00]*$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "review_result"
+                    },
+                    "review_evidence": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/evidence"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "reviewer": {
+                      "enum": [
+                        "reviewer"
+                      ]
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    },
+                    "status_changes": {
+                      "items": {
+                        "$ref": "#/$defs/status_change"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "decision",
+                    "new_findings",
+                    "status_changes",
+                    "anchors",
+                    "review_evidence",
+                    "pre_mortem"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "safe_path": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+              "type": "string"
+            },
+            "status_change": {
+              "additionalProperties": false,
+              "properties": {
+                "closure": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/finding_closure"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "OPEN",
+                    "CLOSED"
+                  ]
+                }
+              },
+              "required": [
+                "finding_id",
+                "status",
+                "rationale",
+                "closure"
+              ],
+              "type": "object"
+            },
+            "stop_request": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rationale": {
+                      "maxLength": 3000,
+                      "minLength": 1,
+                      "pattern": "^[^\\x00]*$",
+                      "type": "string"
+                    },
+                    "remediation_paths": {
+                      "items": {
+                        "maxLength": 1000,
+                        "minLength": 1,
+                        "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "stop_request"
+                    },
+                    "reviewer": {
+                      "enum": [
+                        "reviewer"
+                      ]
+                    },
+                    "rule_id": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "pattern": "^[^\\x00]*$",
+                      "type": "string"
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "rule_id",
+                    "rationale",
+                    "remediation_paths"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/bound_plan_approved"
+                },
+                {
+                  "$ref": "#/$defs/bound_plan_denied"
+                },
+                {
+                  "$ref": "#/$defs/bound_plan_stop"
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "title": "Native Claude plan writer projection",
+          "type": "object"
+        },
+        "usage": {
+          "input_tokens": 89910,
+          "output_tokens": 16229,
+          "thinking_tokens": 13271,
+          "cache_read_tokens": 141725,
+          "total_tokens": 106139
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "valid_s6",
+      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s6/agy-F3/process/stdout.txt",
+      "stdout_sha256": "5dcbe52446d072f33a908b7e0fac65e7961e8bd59ec62e3b1582bf46e2f68990",
+      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s6/agy-F3/process/stderr.txt",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_code": 0,
+      "envelope": {
+        "conversation_id": "1fadfb29-93e1-4d78-b532-d9d4eb1c7bd7",
+        "status": "SUCCESS",
+        "response": "{\"result\":\"{\\n  \\\"contract_verified\\\": true,\\n  \\\"code_changes_approved\\\": false,\\n  \\\"review_decision\\\": \\\"REJECT\\\",\\n  \\\"findings\\\": [\\n    {\\n      \\\"finding_id\\\": \\\"R-01\\\",\\n      \\\"description\\\": \\\"Die Funktion `eligible` in `src/limit.py` verwendet den strikten Operator `\\u003c` anstatt `\\u003c=`. Dadurch liefert `eligible(10)` den Wert `False`. Dies verletzt das Abnahmekriterium, welches den Wert `True` für den Eingabewert 10 verlangt, und führt zum Fehlschlag des Tests `test_upper_bound_inclusive`.\\",
+        "duration_seconds": 119.21287268,
+        "num_turns": 2,
+        "structured_output": {
+          "result": {
+            "anchors": [],
+            "decision": "denied",
+            "new_findings": [
+              {
+                "acceptance_test": {
+                  "kind": "prose",
+                  "text": "Das Abnahmekriterium 'eligible(10) must be True' fordert, dass der Grenzwert 10 eingeschlossen ist. Der Test test_upper_bound_inclusive in tests/test_limit.py verifiziert dies. Der Fehler in src/limit.py (Operator < statt <=) führt zum Validierungsfehlschlag."
+                },
+                "affected_paths": [
+                  "src/limit.py"
+                ],
+                "evidence_anchor_sha256": null,
+                "finding_class": "FINDING",
+                "finding_id": "R-01",
+                "predecessor_finding_ref": null,
+                "summary": "Die Funktion eligible in src/limit.py verwendet den strikten Operator < anstatt <=. Dadurch liefert eligible(10) fälschlicherweise False. Dies verletzt das Abnahmekriterium."
+              }
+            ],
+            "pre_mortem": "Der Implementierer könnte versuchen, die Zusicherung im Test tests/test_limit.py an das fehlerhafte Verhalten anzupassen, anstatt die fehlerhafte Logik in src/limit.py zu beheben.",
+            "request_id": "native-review-request-d78b57e57864928d392e899b2ab96af1c3aa6d4ba221d1b17c8a71a0a2c61d07",
+            "result_type": "review_result",
+            "review_evidence": {
+              "break_condition": "Die Validierung ist fehlgeschlagen (Exit 1), da eligible(10) in src/limit.py fälschlicherweise False zurückgibt.",
+              "dimensions": "Überprüfung von src/limit.py auf Erfüllung der Abnahmekriterien sowie Abgleich mit dem erwarteten Testverhalten in tests/test_limit.py.",
+              "largest_residual_risk": "Es verbleibt kein unentscheidbares Restrisiko, da die Fehlerursache durch Code-Inspektion von src/limit.py (Zeile 2) eindeutig nachgewiesen wurde."
+            },
+            "reviewer": "reviewer",
+            "schema_version": "native-agent-review-result-v3",
+            "status_changes": []
+          }
+        },
+        "json_schema": {
+          "$defs": {
+            "acceptance_test": {
+              "$ref": "#/$defs/prose_acceptance"
+            },
+            "anchor": {
+              "additionalProperties": false,
+              "properties": {
+                "anchor_id": {
+                  "description": "Use a distinct anchor_id for every anchor in this response.",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$",
+                  "type": "string"
+                },
+                "expected": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "input_fixture": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "tolerance": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "anchor_id",
+                "input_fixture",
+                "expected",
+                "tolerance"
+              ],
+              "type": "object"
+            },
+            "bound_approved_finding": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "evidence_anchor_sha256": {
+                      "type": "null"
+                    },
+                    "predecessor_finding_ref": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "evidence_anchor_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "predecessor_finding_ref": {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "description": "List unique canonical repository-relative POSIX paths. Duplicate paths are forbidden even when the provider omits uniqueItems.",
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "const": "FINDING",
+                  "type": "string"
+                },
+                "finding_id": {
+                  "enum": [
+                    "R-01",
+                    "R-02",
+                    "R-03",
+                    "R-04",
+                    "R-05",
+                    "R-06",
+                    "R-07",
+                    "R-08",
+                    "R-09",
+                    "R-10",
+                    "R-11",
+                    "R-12",
+                    "R-13",
+                    "R-14",
+                    "R-15",
+                    "R-16",
+                    "R-17",
+                    "R-18",
+                    "R-19",
+                    "R-20",
+                    "R-21",
+                    "R-22",
+                    "R-23",
+                    "R-24",
+                    "R-25",
+                    "R-26",
+                    "R-27",
+                    "R-28",
+                    "R-29",
+                    "R-30",
+                    "R-31",
+                    "R-32"
+                  ],
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "description": "Provide predecessor_finding_ref and evidence_anchor_sha256 together or both null. A Finding cannot be its own predecessor.",
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths",
+                "predecessor_finding_ref",
+                "evidence_anchor_sha256"
+              ],
+              "type": "object"
+            },
+            "bound_denied_finding": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "evidence_anchor_sha256": {
+                      "type": "null"
+                    },
+                    "predecessor_finding_ref": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "evidence_anchor_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "predecessor_finding_ref": {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "description": "List unique canonical repository-relative POSIX paths. Duplicate paths are forbidden even when the provider omits uniqueItems.",
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "enum": [
+                    "BLOCKER",
+                    "FINDING"
+                  ],
+                  "type": "string"
+                },
+                "finding_id": {
+                  "enum": [
+                    "R-01",
+                    "R-02",
+                    "R-03",
+                    "R-04",
+                    "R-05",
+                    "R-06",
+                    "R-07",
+                    "R-08",
+                    "R-09",
+                    "R-10",
+                    "R-11",
+                    "R-12",
+                    "R-13",
+                    "R-14",
+                    "R-15",
+                    "R-16",
+                    "R-17",
+                    "R-18",
+                    "R-19",
+                    "R-20",
+                    "R-21",
+                    "R-22",
+                    "R-23",
+                    "R-24",
+                    "R-25",
+                    "R-26",
+                    "R-27",
+                    "R-28",
+                    "R-29",
+                    "R-30",
+                    "R-31",
+                    "R-32"
+                  ],
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "description": "Provide predecessor_finding_ref and evidence_anchor_sha256 together or both null. A Finding cannot be its own predecessor.",
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths",
+                "predecessor_finding_ref",
+                "evidence_anchor_sha256"
+              ],
+              "type": "object"
+            },
+            "bound_slice_initial_approved": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "new_findings": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "status_changes": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "anchors": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/anchor"
+                  },
+                  "type": "array"
+                },
+                "decision": {
+                  "const": "approved",
+                  "type": "string"
+                },
+                "new_findings": {
+                  "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature. Every new Finding must be closed in this response for approval.",
+                  "items": {
+                    "$ref": "#/$defs/bound_approved_finding"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "pre_mortem": {
+                  "maxLength": 3000,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "request_id": {
+                  "description": "Copy the exact request_id from the current canonical request.",
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "review_result",
+                  "type": "string"
+                },
+                "review_evidence": {
+                  "$ref": "#/$defs/evidence"
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                },
+                "status_changes": {
+                  "description": "Each Finding ID may occur at most once. Close every open Finding assigned to this plan or Slice before approval; a newly opened Finding may be closed in the same response.",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-01",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-02",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-03",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-04",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-05",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-06",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-07",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-08",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-09",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-10",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-11",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-12",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-13",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-14",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-15",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-16",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-17",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-18",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-19",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-20",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-21",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-22",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-23",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-24",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-25",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-26",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-27",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-28",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-29",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-30",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-31",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "closure": {
+                                "type": "null"
+                              },
+                              "status": {
+                                "const": "OPEN"
+                              }
+                            }
+                          },
+                          {
+                            "properties": {
+                              "closure": {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              "status": {
+                                "const": "CLOSED"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "closure": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/$defs/finding_closure"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finding_id": {
+                            "const": "R-32",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                            "maxLength": 3000,
+                            "minLength": 1,
+                            "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "CLOSED",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finding_id",
+                          "status",
+                          "rationale",
+                          "closure"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "maxItems": 32,
+                  "minItems": 0,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "decision",
+                "new_findings",
+                "status_changes",
+                "anchors",
+                "review_evidence",
+                "pre_mortem"
+              ],
+              "type": "object"
+            },
+            "bound_slice_initial_denied": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "new_findings": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "status_changes": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "anchors": {
+                  "const": [],
+                  "items": {
+                    "$ref": "#/$defs/anchor"
+                  },
+                  "type": "array"
+                },
+                "decision": {
+                  "const": "denied",
+                  "type": "string"
+                },
+                "new_findings": {
+                  "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature.",
+                  "items": {
+                    "$ref": "#/$defs/bound_denied_finding"
+                  },
+                  "maxItems": 32,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "pre_mortem": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "request_id": {
+                  "description": "Copy the exact request_id from the current canonical request.",
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "review_result",
+                  "type": "string"
+                },
+                "review_evidence": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/evidence"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                },
+                "status_changes": {
+                  "const": [],
+                  "description": "Each Finding ID may occur at most once. A denied review must leave at least one reviewer-owned Finding or BLOCKER open.",
+                  "items": {
+                    "$ref": "#/$defs/status_change"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "decision",
+                "new_findings",
+                "status_changes",
+                "anchors",
+                "review_evidence",
+                "pre_mortem"
+              ],
+              "type": "object"
+            },
+            "bound_slice_initial_stop": {
+              "additionalProperties": false,
+              "properties": {
+                "rationale": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "remediation_paths": {
+                  "description": "List canonical repository-relative POSIX paths in ascending UTF-8 byte order, without duplicates or the .orchestrator root and its descendants.",
+                  "items": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "request_id": {
+                  "description": "Copy the exact request_id from the current canonical request.",
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "const": "stop_request",
+                  "type": "string"
+                },
+                "reviewer": {
+                  "const": "reviewer",
+                  "type": "string"
+                },
+                "rule_id": {
+                  "description": "Stop rules: BRANCH-MISMATCH: The active branch differs from the feature branch persisted for this run. CONTRACT-UNCLEAR: The current step contract is technically ambiguous and requires user direction. OPERATOR-PREREQUISITE-MISSING: An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid. SCOPE-EXTENSION-REQUESTED: The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid. UNEXPECTED-PATH: The canonical diff contains a path outside the persisted Slice scope. VALIDATION-UNAVAILABLE: Required validation cannot be executed and has no approved replacement.",
+                  "enum": [
+                    "BRANCH-MISMATCH",
+                    "CONTRACT-UNCLEAR",
+                    "OPERATOR-PREREQUISITE-MISSING",
+                    "SCOPE-EXTENSION-REQUESTED",
+                    "UNEXPECTED-PATH",
+                    "VALIDATION-UNAVAILABLE"
+                  ],
+                  "maxLength": 200,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer",
+                "rule_id",
+                "rationale",
+                "remediation_paths"
+              ],
+              "type": "object"
+            },
+            "bound_status_change": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "closure": {
+                      "type": "null"
+                    },
+                    "status": {
+                      "const": "OPEN"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "closure": {
+                      "$ref": "#/$defs/finding_closure"
+                    },
+                    "status": {
+                      "const": "CLOSED"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "closure": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/finding_closure"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "OPEN",
+                    "CLOSED"
+                  ]
+                }
+              },
+              "required": [
+                "finding_id",
+                "status",
+                "rationale",
+                "closure"
+              ],
+              "type": "object"
+            },
+            "common": {
+              "properties": {
+                "request_id": {
+                  "pattern": "^native-review-request-[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "result_type": {
+                  "enum": [
+                    "review_result",
+                    "stop_request",
+                    "final_review_completed"
+                  ]
+                },
+                "reviewer": {
+                  "enum": [
+                    "reviewer"
+                  ]
+                },
+                "schema_version": {
+                  "const": "native-agent-review-result-v3"
+                }
+              },
+              "required": [
+                "schema_version",
+                "result_type",
+                "request_id",
+                "reviewer"
+              ],
+              "type": "object"
+            },
+            "evidence": {
+              "additionalProperties": false,
+              "properties": {
+                "break_condition": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "dimensions": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                },
+                "largest_residual_risk": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dimensions",
+                "largest_residual_risk",
+                "break_condition"
+              ],
+              "type": "object"
+            },
+            "final_review_completed": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "new_findings": {
+                      "items": {
+                        "$ref": "#/$defs/finding"
+                      },
+                      "maxItems": 512,
+                      "type": "array"
+                    },
+                    "occurrences": {
+                      "items": {
+                        "$ref": "#/$defs/final_review_occurrence"
+                      },
+                      "maxItems": 10000,
+                      "type": "array"
+                    },
+                    "pre_mortem": {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "final_review_completed"
+                    },
+                    "review_evidence": {
+                      "$ref": "#/$defs/evidence"
+                    },
+                    "reviewer": {
+                      "const": "reviewer"
+                    },
+                    "scan_complete": {
+                      "type": "boolean"
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "scan_complete",
+                    "new_findings",
+                    "occurrences",
+                    "review_evidence",
+                    "pre_mortem"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "final_review_occurrence": {
+              "additionalProperties": false,
+              "properties": {
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "maxLength": 3000,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "rationale"
+              ],
+              "type": "object"
+            },
+            "finding": {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance_test": {
+                  "$ref": "#/$defs/acceptance_test"
+                },
+                "affected_paths": {
+                  "description": "List unique canonical repository-relative POSIX paths. Duplicate paths are forbidden even when the provider omits uniqueItems.",
+                  "items": {
+                    "$ref": "#/$defs/safe_path"
+                  },
+                  "maxItems": 256,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "evidence_anchor_sha256": {
+                  "oneOf": [
+                    {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_class": {
+                  "enum": [
+                    "BLOCKER",
+                    "FINDING"
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "predecessor_finding_ref": {
+                  "oneOf": [
+                    {
+                      "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "finding_id",
+                "finding_class",
+                "summary",
+                "acceptance_test",
+                "affected_paths"
+              ],
+              "type": "object"
+            },
+            "finding_closure": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "fixed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "evidence": {
+                      "maxLength": 3000,
+                      "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "rejection_reason": {
+                      "enum": [
+                        "no_defect",
+                        "out_of_scope",
+                        "already_fixed"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "rejection_reason",
+                    "evidence"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "prose_acceptance": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prose"
+                },
+                "text": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "type": "object"
+            },
+            "review_result": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "new_findings": {
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "status_changes": {
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "review_evidence": {
+                          "$ref": "#/$defs/evidence"
+                        }
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "anchors": {
+                      "items": {
+                        "$ref": "#/$defs/anchor"
+                      },
+                      "maxItems": 64,
+                      "type": "array"
+                    },
+                    "decision": {
+                      "enum": [
+                        "approved",
+                        "denied"
+                      ]
+                    },
+                    "new_findings": {
+                      "items": {
+                        "$ref": "#/$defs/finding"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
+                    "pre_mortem": {
+                      "anyOf": [
+                        {
+                          "maxLength": 3000,
+                          "minLength": 1,
+                          "pattern": "^[^\\x00]*$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "review_result"
+                    },
+                    "review_evidence": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/evidence"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "reviewer": {
+                      "enum": [
+                        "reviewer"
+                      ]
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    },
+                    "status_changes": {
+                      "items": {
+                        "$ref": "#/$defs/status_change"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "decision",
+                    "new_findings",
+                    "status_changes",
+                    "anchors",
+                    "review_evidence",
+                    "pre_mortem"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "safe_path": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+              "type": "string"
+            },
+            "status_change": {
+              "additionalProperties": false,
+              "properties": {
+                "closure": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/finding_closure"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finding_id": {
+                  "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "rationale": {
+                  "maxLength": 3000,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00]*$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "OPEN",
+                    "CLOSED"
+                  ]
+                }
+              },
+              "required": [
+                "finding_id",
+                "status",
+                "rationale",
+                "closure"
+              ],
+              "type": "object"
+            },
+            "stop_request": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/common"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rationale": {
+                      "maxLength": 3000,
+                      "minLength": 1,
+                      "pattern": "^[^\\x00]*$",
+                      "type": "string"
+                    },
+                    "remediation_paths": {
+                      "items": {
+                        "maxLength": 1000,
+                        "minLength": 1,
+                        "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "request_id": {
+                      "pattern": "^native-review-request-[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "result_type": {
+                      "const": "stop_request"
+                    },
+                    "reviewer": {
+                      "enum": [
+                        "reviewer"
+                      ]
+                    },
+                    "rule_id": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "pattern": "^[^\\x00]*$",
+                      "type": "string"
+                    },
+                    "schema_version": {
+                      "const": "native-agent-review-result-v3"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "rule_id",
+                    "rationale",
+                    "remediation_paths"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/bound_slice_initial_denied"
+                },
+                {
+                  "$ref": "#/$defs/bound_slice_initial_stop"
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "title": "Native Claude slice_initial writer projection",
+          "type": "object"
+        },
+        "usage": {
+          "input_tokens": 70931,
+          "output_tokens": 11443,
+          "thinking_tokens": 7978,
+          "cache_read_tokens": 97175,
+          "total_tokens": 82374
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "print_timeout",
+      "source": "/home/dieter/repos/Dual-Agent-Orchestrator/inbox/backlog/agy-json-poc/results/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stdout.json",
+      "stdout_sha256": "069c2fba623565ce79760274738ffe32bdfa156007d8bd88d97c1f4158cb2953",
+      "stderr_source": "/home/dieter/repos/Dual-Agent-Orchestrator/inbox/backlog/agy-json-poc/results/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stderr.txt",
+      "stderr_sha256": "a534ee5682fb348186a27ac72d10b7f94bd46f96323a028430c26c8dc956f65a",
+      "exit_code": 0,
+      "envelope": {
+        "conversation_id": "9e47144e-50c8-4ea7-8996-4af69b300d23",
+        "status": "SUCCESS",
+        "response": "{\"a\":[\"wrong\"]}\n{\"a\":[\"wrong\"],\"toolAction\":\"Finishing task\",\"toolSummary\":\"Task completed\"}\n{\"a\":[\"wrong\"]}\n{\"a\":[\"wrong\"]}\n{\"a\":\"\",\"toolAction\":\"Finishing task\",\"toolSummary\":\"Task completed\"}\n{\"a\":[\"wrong\"]}\n{\"a\":{},\"toolAction\":\"Finishing task\",\"toolSummary\":\"Task completed\"}\n{\"a\":[\"wrong\"]}\nCRITICAL INSTRUCTION 1: I must prioritize specific tools over generic ones. \nCRITICAL INSTRUCTION 2: I am choosing to try finishing the task. Since the `finish` tool is failing with a const error on parameter `a`, I",
+        "duration_seconds": 116.568626531,
+        "num_turns": 4,
+        "json_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "const": [
+                "x",
+                "y"
+              ]
+            }
+          },
+          "required": [
+            "a"
+          ],
+          "type": "object"
+        },
+        "usage": {
+          "input_tokens": 60708,
+          "output_tokens": 12045,
+          "thinking_tokens": 11684,
+          "cache_read_tokens": 89627,
+          "total_tokens": 72753
+        }
+      },
+      "stderr": "[agy] print timeout after 2m0s with turn in progress; returning partial output\n"
+    }
+  ]
+}
