@@ -154,6 +154,47 @@ def test_resume_rejects_changed_antigravity_home_before_binary_probe(monkeypatch
         workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 
+def test_resume_judges_isolation_for_the_recorded_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Branch review 29 Sep 2026: a run recorded with the default reviewer must stay
+    # resumable when the current TOML now names the experimental reviewer for that slot.
+    profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
+    assert profiles["reviewer"].isolation_options_sha256 is None
+    state = init_workflow_state(
+        run_id="toml-switched-reviewer", task_file="/tmp/task.md", branch="feature/qualification",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2, "3",
+            implementer_profile=profiles["implementer"], reviewer_profile=profiles["reviewer"],
+            final_reviewer_profile=profiles["final_reviewer"],
+        ),
+    )
+
+    class Certifications:
+        def require_occupancy(self, *_args, **_kwargs):
+            return None
+
+        def require(self, _provider, _role, slot, **_kwargs):
+            recorded = profiles[slot.value]
+            return SimpleNamespace(**{name: getattr(recorded, name) for name in (
+                "manufacturer", "capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256",
+            )}, digest=recorded.certification_sha256)
+
+    class ProbeReached(Exception):
+        pass
+
+    def probe(*_args, **_kwargs):
+        raise ProbeReached
+
+    monkeypatch.setattr(workflow_run_setup, "load_role_certifications", lambda: Certifications())
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", probe)
+    slots = {slot: AgentSettings(profile.provider, profile.binary, profile.model, None, profile.effort) for slot, profile in profiles.items()}
+    slots["reviewer"] = AgentSettings("antigravity", "agy", "gemini-3.1-pro-high", None, "high",
+                                      antigravity_home="/home/operator/reviewer", antigravity_run_root="/var/tmp/dao-agy-review-1000")
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    with pytest.raises(ProbeReached):
+        workflow_run_setup._apply_resumed_agent_profiles(args, state)
+
+
 @pytest.mark.parametrize("slot", ("reviewer", "final_reviewer"))
 def test_resume_rejects_old_unrestricted_claude_qualification_before_probe(
     monkeypatch: pytest.MonkeyPatch, slot: str,

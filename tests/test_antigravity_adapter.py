@@ -982,3 +982,25 @@ def test_prestart_identity_check_uses_bound_entry_under_minimal_path(
     adapter.provider_identity = SimpleNamespace(kind="verified", entry_path="agy")
     with pytest.raises(agent_runtime.AgentCompatibilityError, match="Missing CLI binary"):
         agent_runtime._check_bound_provider_identity(adapter, path="/usr/bin:/bin")
+
+
+def test_denied_actions_stop_even_under_a_transient_error_status() -> None:
+    # Branch review 29 Sep 2026: a denial hidden behind a stream interruption was
+    # classified as transient network and would have been retried automatically.
+    base = {"status": "ERROR",
+            "error": "The stream was interrupted. Please continue the task you were working on.",
+            "denied_actions": [{"tool": "read_file"}], "structured_output": {"result": {}},
+            "json_schema": {"flag": True}, "usage": {}}
+    with pytest.raises(AgentOutputError) as caught:
+        AntigravityTransport.envelope(json.dumps(base), "", 0, '{"flag":true}')
+    assert caught.value.kind_hint is AgentFailureKind.PERMISSION
+
+
+def test_a_new_attempt_never_reports_the_previous_attempts_usage(tmp_path: Path) -> None:
+    # Branch review 29 Sep 2026: failed attempts recorded the prior attempt's token usage.
+    adapter = NativeAntigravityReviewAdapter(_settings(17), isolated_home=tmp_path / "home",
+                                             run_root=Path("/var/tmp/dao-agy-usage-test"))
+    adapter.metadata = {"usage": {"total_tokens": 12345}}
+    with pytest.raises(AgentOutputError, match="not prepared"):
+        adapter.prepare_native_provider_input(object())  # type: ignore[arg-type]
+    assert adapter.metadata == {}

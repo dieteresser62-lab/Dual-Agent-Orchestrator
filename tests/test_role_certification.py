@@ -226,6 +226,17 @@ def test_agy_experimental_requires_both_canaries_and_separate_slot_entries(tmp_p
     with pytest.raises(CertificationError, match="missing qualification evidence"):
         one_slot.require("antigravity", AgentRoleName.REVIEWER, AgentSlot.FINAL_REVIEWER,
                          model="gemini-4-pro")
+    # Branch review 29 Sep 2026: a later "certified" status must not skip the canary check.
+    publish(lambda doc: doc.update(status="pending"))
+
+    def certify(table: dict[str, object]) -> None:
+        for row in table["certifications"]:
+            if row["provider"] == "antigravity":
+                row["status"] = "certified"
+
+    _mutate(tmp_path, certify)
+    with pytest.raises(CertificationError, match="both AGY canaries"):
+        load_role_certifications(root=tmp_path)
     publish()
     table = load_role_certifications(root=tmp_path)
     for slot in (AgentSlot.REVIEWER, AgentSlot.FINAL_REVIEWER):

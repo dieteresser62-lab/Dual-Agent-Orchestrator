@@ -168,7 +168,7 @@ def _validate_evidence_slots(document: dict[str, Any]) -> None:
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "invalid evidence test node ID or description")
 
 
-def _validate_agy_canaries(root: Path, reference: dict[str, Any]) -> None:
+def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_family_pattern: str) -> None:
     ref = _require_keys(reference, {"path", "sha256"}, "canary reference")
     if ref["path"] != "docs/evidence/antigravity/canary-v1.json":
         raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
@@ -235,6 +235,7 @@ def _validate_agy_canaries(root: Path, reference: dict[str, Any]) -> None:
         if not isinstance(proof.get("commit_sha"), str) or re.fullmatch(r"[0-9a-f]{40}", proof["commit_sha"]) is None:
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary commit is invalid")
         if (not isinstance(proof.get("model"), str) or re.fullmatch(r"gemini-[a-z0-9.-]+", proof["model"]) is None
+            or re.fullmatch(model_family_pattern.removeprefix("^").removesuffix("$"), proof["model"]) is None
             or type(proof.get("timeout_seconds")) is not int or proof["timeout_seconds"] < 0):
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary profile is invalid")
         if slot == "final_reviewer" and proof.get("claude_slice_review_sha256") != _CLAUDE_Q3_SHA256:  # allowlist:provider -- certification data: saved Claude review
@@ -395,8 +396,9 @@ def _load_role_certifications(
             if canary_ref["path"] != "docs/evidence/antigravity/canary-v1.json":
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
             _read_file(root, canary_ref["path"], expected_digest=canary_ref["sha256"])
-        if provider == "antigravity" and row["status"] == "experimental":
-            _validate_agy_canaries(root, row["canary_evidence"])
+        if provider == "antigravity" and row["status"] != "candidate":
+            # Any admitted status (experimental or a later certified) needs passed canaries.
+            _validate_agy_canaries(root, row["canary_evidence"], model_family_pattern=row["model_family_pattern"])
         raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
         if evidence_path not in evidence_cache:
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)

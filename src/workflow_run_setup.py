@@ -400,7 +400,9 @@ def _apply_resumed_agent_profiles(
             or profile.policy_sha256 != certificate.policy_sha256
             or profile.certification_sha256 != certificate.digest):
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
-        if profile.isolation_options_sha256 != isolation_options_digest(current):
+        # The persisted profile wins: judge isolation paths for the recorded provider,
+        # not for whatever provider the current TOML now names for this slot.
+        if profile.isolation_options_sha256 != isolation_options_digest(replace(current, name=profile.provider)):
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} isolation paths changed")
         for field, profile_field in (("binary", "binary"), ("model", "model"), ("timeout", "timeout_seconds"), ("effort", "effort")):
             selected = getattr(current, "timeout_seconds" if field == "timeout" else field)

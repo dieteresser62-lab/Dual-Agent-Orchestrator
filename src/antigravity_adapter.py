@@ -333,6 +333,9 @@ class AntigravityTransport:
 
         if exit_code != 0:
             fail(AntigravityTransport.exit_diagnostic(exit_code), AgentFailureKind.PROCESS)
+        if envelope.get("denied_actions") not in (None, []):
+            # A denied tool attempt stops the run even when the stream also failed.
+            fail("denied-actions", AgentFailureKind.PERMISSION)
         if envelope.get("status") != "SUCCESS":
             error_text = envelope.get("error")
             if envelope.get("status") == "ERROR" and isinstance(error_text, str):
@@ -567,6 +570,7 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         raise RuntimeError("antigravity requires a native review bundle")
 
     def prepare_native_provider_input(self, bundle: NativeReviewRequestBundle) -> PreparedProviderInput:
+        self.metadata = {}  # a failed attempt must never report the previous attempt's usage
         workspace = self.prepared_workspace
         if workspace is None:
             raise AgentOutputError("antigravity isolation workspace is not prepared", kind_hint=AgentFailureKind.PERMISSION)
@@ -616,10 +620,14 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
             raise AgentOutputError("antigravity request binding is missing", kind_hint=AgentFailureKind.OUTPUT)
         exit_code = int(extra_files.get("exit_code", "0"))
         if stdout.strip():
-            preliminary = (
-                strict_json_object(stdout)
-                if classify_agy_stderr(stderr)[0] is None else {}
-            )
+            try:
+                # Usage only; the envelope check below owns every failure class.
+                preliminary = (
+                    strict_json_object(stdout)
+                    if classify_agy_stderr(stderr)[0] is None and exit_code == 0 else {}
+                )
+            except AgentOutputError:
+                preliminary = {}
             preliminary_usage = preliminary.get("usage")
             if isinstance(preliminary_usage, dict):
                 self.metadata = {"usage": {
