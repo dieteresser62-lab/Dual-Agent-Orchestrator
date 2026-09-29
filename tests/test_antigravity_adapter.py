@@ -944,3 +944,11 @@ def test_run_records_accept_registered_reviewer_providers() -> None:
 
     assert _agent_provider_role_matches("antigravity", Role.REVIEWER)
     assert not _agent_provider_role_matches("unregistered", Role.REVIEWER)
+
+
+def test_workflow_bootstrap_facts_accept_the_registered_agy_reviewer() -> None:
+    # Found by the third real AGY run (29 Sep 2026): bootstrap facts accepted only the
+    # providers of the shipped TOML, so the first AGY review halted before its start.
+    from role_occupancy import registered_providers
+
+    assert "antigravity" in registered_providers()
