@@ -122,7 +122,8 @@ def test_measured_envelopes_have_source_digests_and_distinct_rejections() -> Non
     expected = {
         "soft_deny_s1": AgentFailureKind.PERMISSION,
         "soft_deny_s4": AgentFailureKind.PERMISSION,
-        "error_with_output": AgentFailureKind.OUTPUT,
+        # Operator decision 29 Sep 2026: the measured malformed-call ERROR is transient.
+        "error_with_output": AgentFailureKind.NETWORK,
         "print_timeout": AgentFailureKind.TIMEOUT,
     }
     for name, kind in expected.items():
@@ -187,10 +188,29 @@ def test_measured_stream_interruption_is_transient_and_never_accepted() -> None:
     with pytest.raises(AgentOutputError) as caught:
         AntigravityTransport.envelope(json.dumps(base), "", 0, '{"flag":true}')
     assert caught.value.kind_hint is AgentFailureKind.NETWORK
-    assert "stream-interrupted (agy-stderr-v3)" in str(caught.value)
+    assert "stream-interrupted (agy-stderr-v4)" in str(caught.value)
     assert interrupted not in str(caught.value)
     for change in ({"error": interrupted + " Retry."}, {"error": "bad"},
                    {"status": "SUCCESS"}, {"status": "FAILED"}):
+        with pytest.raises(AgentOutputError) as caught:
+            AntigravityTransport.envelope(json.dumps({**base, **change}), "", 0, '{"flag":true}')
+        assert caught.value.kind_hint is AgentFailureKind.OUTPUT
+
+
+def test_measured_malformed_function_call_is_transient_and_never_accepted() -> None:
+    # Measured live on 28 Sep (Phase-0 s4 F1) and 29 Sep 2026 (agy-quality-s2 Q1), AGY 1.2.12.
+    malformed = ("Your previous response contained an improperly formatted function call: "
+                 "Malformed function call: Failed to parse function call: Function call is empty - "
+                 "no input to parse.\nPlease retry with a properly formatted function call\n"
+                 "Retries remaining: 3")
+    base = {"status": "ERROR", "error": malformed, "structured_output": {"result": {"request_id": "x"}},
+            "json_schema": {"flag": True}, "usage": {}}
+    with pytest.raises(AgentOutputError) as caught:
+        AntigravityTransport.envelope(json.dumps(base), "", 0, '{"flag":true}')
+    assert caught.value.kind_hint is AgentFailureKind.NETWORK
+    assert "malformed-function-call (agy-stderr-v4)" in str(caught.value)
+    for change in ({"error": malformed.replace("Retries remaining: 3", "Retries remaining: none")},
+                   {"error": malformed + "\nextra"}, {"status": "SUCCESS"}):
         with pytest.raises(AgentOutputError) as caught:
             AntigravityTransport.envelope(json.dumps({**base, **change}), "", 0, '{"flag":true}')
         assert caught.value.kind_hint is AgentFailureKind.OUTPUT

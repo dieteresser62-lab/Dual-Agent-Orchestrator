@@ -994,7 +994,7 @@ def _stream_interrupted(row: dict, raw: dict) -> tuple[dict, dict]:
         status="ERROR",
         error="The stream was interrupted. Please continue the task you were working on.")
     envelope["exit_code"] = 0
-    envelope["technical_error"] = "AgentOutputError: antigravity stream-interrupted (agy-stderr-v3)"
+    envelope["technical_error"] = "AgentOutputError: antigravity stream-interrupted (agy-stderr-v4)"
     failed.update(status="technical_rejection", failure_kind="network",
                   checks={"writer_and_domain": False})
     return failed, envelope

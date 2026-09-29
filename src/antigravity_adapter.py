@@ -39,7 +39,7 @@ from role_binding import RoleBinding, binding_for_role
 from workflow_state import AgentFailureKind
 
 
-STDERR_CLASSIFIER_VERSION = "agy-stderr-v3"
+STDERR_CLASSIFIER_VERSION = "agy-stderr-v4"
 logger = logging.getLogger(__name__)
 AGY_DENY = (
     "command(*)", "write_file(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
@@ -68,6 +68,14 @@ _DIAL_FAILURE = re.compile(
 # failure even when a result exists. The result is never accepted; the failure is
 # transient transport, so the production retry policy may start a fresh call.
 _STREAM_INTERRUPTED = re.compile(r"^The stream was interrupted\. Please continue the task you were working on\.$")
+# Measured 28 and 29 Sep 2026 (AGY 1.2.12): an ERROR envelope after an internally malformed tool
+# call, again with a result present. Operator decision 29 Sep 2026: a transient provider failure;
+# NETWORK is the runtime's transient class, so the production retry policy may start a fresh call.
+_MALFORMED_CALL = re.compile(
+    r"^Your previous response contained an improperly formatted function call: "
+    r"Malformed function call: [^\n]{1,300}\n"
+    r"Please retry with a properly formatted function call\nRetries remaining: [0-9]+$"
+)
 
 
 def _reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -327,9 +335,11 @@ class AntigravityTransport:
             fail(AntigravityTransport.exit_diagnostic(exit_code), AgentFailureKind.PROCESS)
         if envelope.get("status") != "SUCCESS":
             error_text = envelope.get("error")
-            if (envelope.get("status") == "ERROR" and isinstance(error_text, str)
-                    and _STREAM_INTERRUPTED.fullmatch(error_text.strip())):
-                fail("stream-interrupted", AgentFailureKind.NETWORK)
+            if envelope.get("status") == "ERROR" and isinstance(error_text, str):
+                if _STREAM_INTERRUPTED.fullmatch(error_text.strip()):
+                    fail("stream-interrupted", AgentFailureKind.NETWORK)
+                if _MALFORMED_CALL.fullmatch(error_text.strip()):
+                    fail("malformed-function-call", AgentFailureKind.NETWORK)
             fail("unsuccessful-status", AgentFailureKind.OUTPUT)
         if envelope.get("error") not in (None, ""):
             fail("envelope-error", AgentFailureKind.OUTPUT)
