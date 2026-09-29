@@ -952,3 +952,33 @@ def test_workflow_bootstrap_facts_accept_the_registered_agy_reviewer() -> None:
     from role_occupancy import registered_providers
 
     assert "antigravity" in registered_providers()
+
+
+def test_prestart_identity_check_uses_bound_entry_under_minimal_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Found by the fourth real AGY run (29 Sep 2026): the profile names the binary
+    # "agy" (installed in ~/.local/bin) and the isolated environment's PATH omits that
+    # directory, so the pre-start re-verification failed with "Missing CLI binary".
+    from types import SimpleNamespace
+    import agent_runtime
+
+    tool_dir = tmp_path / "bin"
+    tool_dir.mkdir()
+    binary = tool_dir / "agy"
+    binary.write_text("#!/bin/sh\necho 1.2.13\n", encoding="utf-8")
+    binary.chmod(0o755)
+    bound = SimpleNamespace(kind="verified", entry_path=str(binary))
+    adapter = SimpleNamespace(name="antigravity", cli_binary="agy", provider_identity=bound,
+                              bound_slot="reviewer", capability=SimpleNamespace(version_args=("--version",)))
+    seen = {}
+
+    def capture(entry, version_args, runner, *, path, expected):
+        seen["entry"] = entry
+        return expected
+
+    monkeypatch.setattr(agent_runtime, "capture_provider_identity", capture)
+    assert agent_runtime._check_bound_provider_identity(adapter, path="/usr/bin:/bin") is bound
+    assert seen["entry"] == str(binary)
+    adapter.provider_identity = SimpleNamespace(kind="verified", entry_path="agy")
+    with pytest.raises(agent_runtime.AgentCompatibilityError, match="Missing CLI binary"):
+        agent_runtime._check_bound_provider_identity(adapter, path="/usr/bin:/bin")

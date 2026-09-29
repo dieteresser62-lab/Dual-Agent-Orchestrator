@@ -950,7 +950,12 @@ def _check_bound_provider_identity(adapter: AgentAdapter, *, path: str | None = 
     if bound.kind != "verified":
         raise AgentCompatibilityError(f"slot={slot}: dry-run binary identity cannot authorize a provider start")
     search_path = os.environ.get("PATH", os.defpath) if path is None else path
-    entry = _resolve_agent_binary(adapter.cli_binary, path=search_path)
+    binary = adapter.cli_binary
+    if not Path(binary).is_absolute() and Path(bound.entry_path).is_absolute():
+        # A provider environment may use a minimal PATH (an isolated reviewer starts
+        # from env -i); re-verify the exact entry bound at run start, not a name lookup.
+        binary = bound.entry_path
+    entry = _resolve_agent_binary(binary, path=search_path)
     if entry is None:
         raise AgentCompatibilityError(f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}")
     try:
