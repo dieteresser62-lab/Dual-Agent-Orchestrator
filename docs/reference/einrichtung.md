@@ -341,9 +341,8 @@ diesen Slot; ohne ihn erbt der Finalreviewer das Reviewerprofil.
 
 Die auskommentierte Vorlage `experimental_antigravity` wird erst aktiv, wenn
 sie in das Lauf-TOML kopiert und ein Reviewslot in `[roles]` ausdrücklich darauf
-gesetzt wird. Beide AGY-Slots sind
-bis zum Abschluss der direkten Live-Canaries `candidate` und können deshalb
-noch keinen Lauf starten. Danach ist die Auswahl nur `experimental` für
+gesetzt wird. Beide AGY-Slots sind seit den bestandenen direkten
+Live-Canaries vom 29.09.2026 `experimental`; die Auswahl gilt nur für
 private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Ein AGY-Aufruf sendet den
 vollständigen Snapshot, die Anfrage, das Schema und die Evidenz an Google.
 Codex bleibt Implementer, Claude bleibt Standardreviewer. Für eine Auswahl

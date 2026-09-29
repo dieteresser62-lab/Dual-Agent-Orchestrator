@@ -23,14 +23,132 @@ import time
 from datetime import datetime, timezone
 import tempfile
 import tomllib
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 ROOT = Path(__file__).resolve().parents[1]
 OPERATOR_DECISIONS = ROOT / "docs/evidence/antigravity/operator-decisions-v1.json"
 OPERATOR_DECISIONS_SHA256 = "b31fefd88e1ffe0f40622a94663754374f54b11624a2c132f0c6777b01be3e78"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
+from scripts.qualification.profiles import (
+    LEGACY_CANDIDATE, LEGACY_REFERENCE, LEGACY_CAPABILITIES,
+    LEGACY_REFERENCE_DECISION_KEY, LEGACY_REFERENCE_EVIDENCE_ID,
+    LEGACY_REFERENCE_DIGEST_KEY, LEGACY_REFERENCE_DESCRIPTION,
+    DEFAULT_REVIEW_CAPABILITY, IMPLEMENTER_CAPABILITY, LEGACY_RUNTIME, LEGACY_BLIND_WORDS,
+    REVIEW_ENVELOPES,
+)
 FORMAT_REPO_FIXTURE = ROOT / "tests/fixtures/reviewer-format-repo-v1.json"
 FORMAT_REPO_SHA256 = "3b6f775aebdc90075524f942c1749233c3c63ddc56d9ed19a58dd1cf82a4fa15"
+
+
+@dataclass(frozen=True)
+class QualificationPair:
+    candidate: str
+    reference: str
+    capabilities: dict[str, str]
+    evidence_directory: Path
+
+    @property
+    def providers(self) -> tuple[str, str]:
+        return self.candidate, self.reference
+
+    def capability(self, provider: str) -> str:
+        if provider not in self.providers:
+            raise ValueError(f"provider {provider!r} is outside the qualification pair")
+        return self.capabilities[provider]
+
+
+def qualification_pair(protocol: dict) -> QualificationPair:
+    """v5 has the documented historical pair; later protocols bind it explicitly."""
+    version = protocol.get("schema_version")
+    if version == "qualification-protocol-v5":
+        if "candidate_provider" in protocol or "reference_provider" in protocol:
+            raise ValueError("v5 cannot redefine its historical pair")
+        return QualificationPair(LEGACY_CANDIDATE, LEGACY_REFERENCE, LEGACY_CAPABILITIES,
+                                 ROOT / "docs/evidence/antigravity")
+    if version != "qualification-protocol-v6":
+        raise ValueError("unsupported qualification protocol")
+    candidate, reference = protocol.get("candidate_provider"), protocol.get("reference_provider")
+    profiles = protocol.get("provider_profiles")
+    directory = protocol.get("evidence_directory")
+    if (not isinstance(candidate, str) or not isinstance(reference, str) or
+            not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", candidate) or
+            not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", reference) or
+            candidate == reference or
+            not isinstance(profiles, dict) or set(profiles) != {candidate, reference} or
+            not all(isinstance(profiles[name], str) and profiles[name] for name in profiles) or
+            not isinstance(directory, str) or not directory or
+            ".." in Path(directory).parts):
+        raise ValueError("v6 requires an explicit pair, capability profiles and evidence directory")
+    return QualificationPair(candidate, reference, profiles, (ROOT / directory).resolve())
+
+
+def _series_keys(pair: QualificationPair) -> tuple[tuple[str, str], ...]:
+    return (("transport", pair.candidate), ("large_output", pair.candidate),
+            ("print_timeout", pair.candidate), ("quality", pair.candidate),
+            ("quality", pair.reference))
+
+
+def _reference_decision_key(protocol: dict) -> str:
+    return (LEGACY_REFERENCE_DECISION_KEY if protocol["schema_version"] == "qualification-protocol-v5"
+            else "reference_special_decision")
+
+
+def _protocol_file(path: Path | None) -> dict:
+    return strict_json((path or ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+
+
+def _runtime_profile(protocol: dict, provider: str) -> dict:
+    pair = qualification_pair(protocol)
+    pair.capability(provider)
+    if protocol["schema_version"] == "qualification-protocol-v5":
+        return LEGACY_RUNTIME[provider]
+    runtime = protocol.get("provider_runtime", {}).get(provider)
+    if (not isinstance(runtime, dict) or not isinstance(runtime.get("model"), str)
+            or not runtime["model"] or not isinstance(runtime.get("effort"), str)
+            or not runtime["effort"] or type(runtime.get("isolation")) is not bool):
+        raise ValueError("v6 provider runtime profile is incomplete")
+    return runtime
+
+
+def _qualification_adapter(protocol: dict, provider: str, profile: dict,
+                           binary: Path, timeout: int | None,
+                           canary: bool = False):
+    from agent_config import AgentSettings
+    from agent_adapters import create_reviewer_qualification_adapter
+
+    pair = qualification_pair(protocol)
+    capability = pair.capability(provider)
+    runtime = _runtime_profile(protocol, provider)
+    model_matches = profile.get("model") == runtime["model"]
+    if canary and provider == pair.candidate:
+        pattern = (r"gemini-[a-z0-9.-]+" if protocol["schema_version"] == "qualification-protocol-v5"
+                   else runtime.get("canary_model_pattern", re.escape(runtime["model"])))
+        model_matches = isinstance(profile.get("model"), str) and bool(re.fullmatch(pattern, profile["model"]))
+    if not model_matches or profile.get("effort") != runtime["effort"]:
+        raise ValueError("qualification model or effort differs from protocol")
+    options = profile.get("provider_options", {}).get(capability, {})
+    if runtime.get("isolation") and (not options.get("home") or not options.get("run_root")):
+        raise ValueError("qualification isolation paths are missing")
+    settings = AgentSettings(capability, str(binary), profile["model"], timeout,
+                             profile["effort"], antigravity_home=options.get("home"),
+                             antigravity_run_root=options.get("run_root"))
+    return create_reviewer_qualification_adapter(settings)
+
+
+def _review_budget(capability: str):
+    from provider_input_budget import (ProviderInputBudgetPolicy, ProviderInputBudgetRule,
+                                       default_provider_input_budget_policy)
+
+    defaults = default_provider_input_budget_policy()
+    if capability == DEFAULT_REVIEW_CAPABILITY:
+        return defaults
+    return ProviderInputBudgetPolicy(
+        tuple(ProviderInputBudgetRule(capability if rule.provider == DEFAULT_REVIEW_CAPABILITY else rule.provider,
+                                     rule.role, rule.operation, rule.max_chars, rule.max_bytes)
+              for rule in defaults.rules),
+        (("implementer", "implementer", IMPLEMENTER_CAPABILITY), ("reviewer", "reviewer", capability),
+         ("final_reviewer", "reviewer", capability)))
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -467,23 +585,29 @@ def materialize_format_repo(case: str, destination: Path) -> None:
 
 
 def validate_format_response(case: str, envelope: dict, *, exit_code: int = 0,
-                             stderr: str = "", bundle=None) -> dict:
+                             stderr: str = "", bundle=None,
+                             transport_profile: str = "antigravity") -> dict:
     """Judge writer, bound domain result and case semantics independently."""
     from native_review_contract import parse_bound_native_contract_result
     from schema_validation import validate_schema_document
 
     bundle = bundle or build_format_case(case)
+    try:
+        envelope_profile = REVIEW_ENVELOPES[transport_profile]
+    except KeyError as exc:
+        raise ValueError("review envelope profile is not registered") from exc
     checks = {}
     checks["exit_zero"] = exit_code == 0
-    checks["status_success"] = envelope.get("status") == "SUCCESS"
-    checks["no_error"] = not envelope.get("error")
-    denied = envelope.get("denied_actions")
+    checks["status_success"] = envelope.get(envelope_profile.success_field) == envelope_profile.success_value
+    checks["no_error"] = not envelope.get(envelope_profile.error_field)
+    denied = envelope.get(envelope_profile.denials_field)
     checks["no_denials"] = denied is None or denied == []
     checks["stderr_clean"] = not any(re.search(pattern, stderr, re.I) for pattern in
         (r"timeout", r"timed\s+out", r"deadline", r"AGY_ERROR", r"auto.denied",
          r"cancel(?:ed|led|lation)", r"interrupt(?:ed|ion)"))
     writer = strict_json(bundle.provider_response_schema_json)
-    checks["schema_echo"] = typed_equal(envelope.get("json_schema"), writer)
+    checks["schema_echo"] = (typed_equal(envelope.get(envelope_profile.schema_echo_field), writer)
+                             if envelope_profile.schema_echo_field else True)
     structured = envelope.get("structured_output")
     checks["structured_output_object"] = (
         isinstance(structured, dict) and set(structured) == {"result"}
@@ -627,7 +751,14 @@ def _case_chains(calls: list[dict]) -> list[list[dict]]:
 def validate_qualification(document: dict) -> None:
     if not __debug__:
         raise RuntimeError("optimized mode cannot validate the protocol")
-    assert document["schema_version"] == "qualification-protocol-v5"
+    assert document["schema_version"] in {"qualification-protocol-v5", "qualification-protocol-v6"}
+    pair = qualification_pair(document)
+    if document["schema_version"] == "qualification-protocol-v6":
+        from native_provider_schema import provider_capability
+        for provider in pair.providers:
+            provider_capability(pair.capability(provider))
+            assert pair.capability(provider) in REVIEW_ENVELOPES
+            _runtime_profile(document, provider)
     assert document["campaign"] == "slim" and document["target_status"] == "experimental"
     assert document["sample_counts"] == {"transport": 12, "large_output": 2,
         "print_timeout": 1, "quality_per_provider": 6, "canaries": 2}
@@ -640,11 +771,12 @@ def validate_qualification(document: dict) -> None:
     assert "Ganze betroffene Serie wiederholen" in document["restart_rule"]
     assert set(document["slots"]) == {"reviewer", "final_reviewer"}
     assert document["phase0_sha256"] == sha(
-        (ROOT / "docs/evidence/antigravity/phase-0-v1.json").read_bytes())
+        (pair.evidence_directory / "phase-0-v1.json").read_bytes())
     assert document["quality"]["corpus_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
     assert document["quality"]["rubric_sha256"] == sha(
-        (ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+        (pair.evidence_directory / "quality-rubric-v1.json").read_bytes())
+    assert document["quality"]["providers"] == list(pair.providers)
     assert document["production_retry"]["failure_kinds"] == sorted(PRODUCTION_RETRY_KINDS)
     assert document["production_retry"]["max_retries_per_case"] == MAX_PRODUCTION_RETRIES
     assert document["production_retry"]["contract_max_retries_per_case"] == MAX_CONTRACT_RETRIES
@@ -658,7 +790,8 @@ def qualification_ready(protocol: dict, corpus: dict) -> bool:
     review = corpus.get("operator_review")
     return (protocol["quality"].get("corpus_operator_review") == "approved_blanket"
             and isinstance(review, dict) and review.get("status") == "approved_blanket"
-            and review.get("date") == "2026-09-29"
+            and (review.get("date") == "2026-09-29" if protocol["schema_version"] == "qualification-protocol-v5"
+                 else isinstance(review.get("date"), str) and bool(review["date"]))
             and bool(review.get("basis")) and bool(review.get("operator_note"))
             and corpus.get("preregistered_classification") == protocol["quality"].get("preregistered_classification")
             and sha(json.dumps(corpus, ensure_ascii=False, indent=2,
@@ -668,6 +801,7 @@ def qualification_ready(protocol: dict, corpus: dict) -> bool:
 
 def probe_plan(protocol: dict) -> list[dict]:
     validate_qualification(protocol)
+    pair = qualification_pair(protocol)
     result = []
     for case in EXPECTED_FORMAT:
         for session in (1, 2):
@@ -679,21 +813,26 @@ def probe_plan(protocol: dict) -> list[dict]:
     result.append({"series": "print_timeout", "count": 1,
                    "limit_seconds": protocol["limits"]["probe_seconds"]})
     for case in range(1, 7):
-        result.append({"series": "quality", "case": case, "providers": 2})
+        row = {"series": "quality", "case": case, "providers": 2}
+        if protocol["schema_version"] != "qualification-protocol-v5":
+            row.update(candidate_provider=pair.candidate, reference_provider=pair.reference)
+        result.append(row)
     for slot in ("reviewer", "final_reviewer"):
         result.append({"series": "canary", "slot": slot})
     return result
 
 
-def qualification_cases(kind: str, provider: str) -> tuple[str, ...]:
+def qualification_cases(kind: str, provider: str,
+                        pair: QualificationPair | None = None) -> tuple[str, ...]:
     """The frozen, ordered call set for one independently restartable series."""
-    if kind == "transport" and provider == "agy":
+    pair = pair or qualification_pair({"schema_version": "qualification-protocol-v5"})
+    if kind == "transport" and provider == pair.candidate:
         return tuple(f"{case}:{session}" for case in EXPECTED_FORMAT for session in (1, 2))
-    if kind == "large_output" and provider == "agy":
+    if kind == "large_output" and provider == pair.candidate:
         return ("128", "512")
-    if kind == "print_timeout" and provider == "agy":
+    if kind == "print_timeout" and provider == pair.candidate:
         return ("T1",)
-    if kind == "quality" and provider in {"agy", "claude"}:  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    if kind == "quality" and provider in pair.providers:
         return tuple(f"Q{n}" for n in range(1, 7))
     raise ValueError("unknown qualification series or provider")
 
@@ -759,7 +898,7 @@ def _validate_attempt_bindings(row: dict, protocol: dict) -> None:
         raise ValueError("qualification attempt lacks a required binding or metric")
     if row["role"] != "reviewer" or row["slot"] != _qualified_slot(row["case_id"], row["kind"]):
         raise ValueError("qualification role or slot differs from frozen allocation")
-    if row["case_id"] not in qualification_cases(row["kind"], row["provider"]):
+    if row["case_id"] not in qualification_cases(row["kind"], row["provider"], qualification_pair(protocol)):
         raise ValueError("qualification case differs from frozen series")
     if row["probe_limit_seconds"] != protocol["limits"]["probe_seconds"]:
         raise ValueError("qualification probe limit changed")
@@ -882,19 +1021,22 @@ _RUNTIME_DEADLINE = re.compile(r"^AgentProcessError: antigravity timed out after
 
 
 def _print_timeout_checks(status: str, failure_kind: str | None, technical_error: str | None,
-                          stderr: str, has_result: bool) -> dict:
+                          stderr: str, has_result: bool,
+                          capability: str = "antigravity") -> dict:
     """A timeout is safe when it is a technical rejection from AGY's print timeout or the runtime deadline."""
     from antigravity_adapter import classify_agy_stderr
 
     rejected = status == "technical_rejection" and technical_error is not None
-    shape = (classify_agy_stderr(stderr)[1] == "print-timeout"
-             or bool(_RUNTIME_DEADLINE.fullmatch(technical_error or "")))
+    shape = ((classify_agy_stderr(stderr)[1] == "print-timeout"
+              or bool(_RUNTIME_DEADLINE.fullmatch(technical_error or "")))
+             if capability == "antigravity" else bool(technical_error))
     return {"print_timeout": rejected and failure_kind == "timeout" and shape,
             "no_valid_stop": rejected and not has_result}
 
 
 def _verify_recorded_result(row: dict, raw: dict,
-                            previous: tuple[dict, dict] | None = None) -> bool:
+                            previous: tuple[dict, dict] | None = None,
+                            protocol: dict | None = None) -> bool:
     """Rebuild the transmitted request and independently parse recorded output.
 
     Returns False for a quality call recorded against a superseded corpus revision:
@@ -917,7 +1059,8 @@ def _verify_recorded_result(row: dict, raw: dict,
         spec = replace(spec, retry_feedback=feedback)
     elif row.get("retry_feedback") is not None:
         raise ValueError("retry feedback belongs only to a contract retry")
-    bundle = build_native_review_request(spec, profile="antigravity" if row["provider"] == "agy" else "claude")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    pair = qualification_pair(protocol or {"schema_version": "qualification-protocol-v5"})
+    bundle = build_native_review_request(spec, profile=pair.capability(row["provider"]))
     stored_request = raw.get("request_document")
     stored_writer = raw.get("writer_schema")
     if (not isinstance(stored_request, dict) or not isinstance(stored_writer, dict) or
@@ -944,7 +1087,7 @@ def _verify_recorded_result(row: dict, raw: dict,
     if row["kind"] == "print_timeout":
         expected = _print_timeout_checks(row["status"], row.get("failure_kind"),
                                          raw.get("technical_error"), raw.get("stderr", ""),
-                                         isinstance(response, dict))
+                                         isinstance(response, dict), pair.capability(row["provider"]))
         if set(row["checks"]) != set(expected) or any(
                 row["checks"][name] and not expected[name] for name in expected):
             raise ValueError("print timeout checks claim more than the recorded failure shows")
@@ -956,7 +1099,7 @@ def _verify_recorded_result(row: dict, raw: dict,
             if _reproduce_contract_rejection(response, bundle) != row["contract_rejection"]:
                 raise ValueError("recorded contract rejection is not reproducible")
             return
-        if row.get("failure_kind") == "network" and row["provider"] == "agy":
+        if row.get("failure_kind") == "network" and pair.capability(row["provider"]) == "antigravity":
             from agent_adapters import AgentOutputError
             from antigravity_adapter import AntigravityTransport
             try:
@@ -967,21 +1110,22 @@ def _verify_recorded_result(row: dict, raw: dict,
                 if getattr(exc.kind_hint, "value", None) == "network":
                     return
             raise ValueError("recorded transient network failure is not reproducible")
-        if row.get("failure_kind") == "timeout" and row["provider"] == "agy":
+        if row.get("failure_kind") == "timeout" and pair.capability(row["provider"]) == "antigravity":
             if (classify_agy_stderr(raw.get("stderr", ""))[1] != "print-timeout"
                     and row["duration_seconds"] < row["probe_limit_seconds"]):
                 raise ValueError("recorded transient timeout is not reproducible")
         return
     if raw.get("technical_error") is not None or not isinstance(response, dict):
         raise ValueError("successful attempt lacks a sole result")
-    if row["provider"] == "agy" and not typed_equal(
+    if pair.capability(row["provider"]) == "antigravity" and not typed_equal(
             envelope.get("json_schema"), strict_json(bundle.provider_response_schema_json)):
         raise ValueError("transmitted AGY writer echo differs")
     validate_native_review_provider_response(response, bundle)
     domain = parse_bound_native_contract_result(response, bundle.bound_context)
     if row["kind"] == "transport":
         actual = validate_format_response(row["case_id"][:2], envelope,
-            exit_code=int(raw.get("exit_code") or 0), stderr=raw.get("stderr", ""), bundle=bundle)
+            exit_code=int(raw.get("exit_code") or 0), stderr=raw.get("stderr", ""), bundle=bundle,
+            transport_profile=pair.capability(row["provider"]))
         if actual["checks"] != row["checks"]:
             raise ValueError("transport checks differ from the recorded envelope")
     elif row["kind"] == "large_output":
@@ -1022,12 +1166,12 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
             raise ValueError("qualification envelope is unsanitized or changed")
         prior = next((item for item in attempts if item["call_id"] == row.get("retry_of")), None)
         if _verify_recorded_result(row, clean, None if prior is None else (
-                prior, by_envelope[prior["call_id"]])) is False:
+                prior, by_envelope[prior["call_id"]]), protocol) is False:
             superseded.add(row["call_id"])
         groups.setdefault((row["kind"], row["provider"]), []).append(row)
     verdicts = {}
     for key, rows in groups.items():
-        expected = qualification_cases(*key)
+        expected = qualification_cases(*key, qualification_pair(protocol))
         by_series: dict[str, list[dict]] = {}
         for row in rows:
             by_series.setdefault(row["series_id"], []).append(row)
@@ -1081,8 +1225,7 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
                                                           if row["status"] == "technical_rejection"
                                                           and row.get("failure_kind") in PRODUCTION_RETRY_KINDS],
                                    "failed_cases": [chain[0]["case_id"] for chain, ok in zip(chains, case_pass) if not ok]}
-    for kind, provider in (("transport", "agy"), ("large_output", "agy"),
-                           ("print_timeout", "agy"), ("quality", "agy"), ("quality", "claude")):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    for kind, provider in _series_keys(qualification_pair(protocol)):
         if (kind, provider) not in groups:
             verdicts[f"pending-{kind}-{provider}"] = {
                 "kind": kind, "provider": provider, "passed": False,
@@ -1094,7 +1237,8 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
 def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
     """Propose, never install, the finite measured timeout."""
     eligible = {name for name, result in verdicts.items() if result["passed"] and
-                result["provider"] == "agy" and result["kind"] in {"transport", "large_output", "quality"}}
+                result["provider"] == qualification_pair(protocol).candidate and
+                result["kind"] in {"transport", "large_output", "quality"}}
     measurements = [row for row in series["attempts"]
                     if row["series_id"] in eligible and row["status"] == "success"]
     if not any(row["kind"] == "large_output" and row["case_id"] == "512" for row in measurements):
@@ -1109,7 +1253,8 @@ def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
             "profile_zero_allowed": True}
 
 
-def size_override(decisions: dict | None, verdicts: dict) -> dict | None:
+def size_override(decisions: dict | None, verdicts: dict,
+                  pair: QualificationPair | None = None) -> dict | None:
     """Accept only the recorded operator exception for the measured 128 case."""
     if decisions is None:
         return None
@@ -1121,14 +1266,17 @@ def size_override(decisions: dict | None, verdicts: dict) -> dict | None:
     if len(matches) != 1:
         raise ValueError("duplicate size override")
     row = matches[0]
+    pair = pair or qualification_pair({"schema_version": "qualification-protocol-v5"})
+    series_id = row.get("series")
     if (row.get("decision") != "approve_experimental_despite_failed_size_case"
-        or row.get("series") != "agy-large-s1" or row.get("failed_case") != "128"
+        or not isinstance(series_id, str) or row.get("failed_case") != "128"
+        or (pair.candidate == LEGACY_CANDIDATE and series_id != f"{LEGACY_CANDIDATE}-large-s1")
         or row.get("not_run") != ["512"]
         or not isinstance(row.get("documented_weakness"), str)
         or not row["documented_weakness"].strip()
-        or verdicts.get("agy-large-s1", {}).get("failed_cases") != ["128"]
-        or verdicts["agy-large-s1"].get("kind") != "large_output"
-        or verdicts["agy-large-s1"].get("provider") != "agy"):
+        or verdicts.get(series_id, {}).get("failed_cases") != ["128"]
+        or verdicts[series_id].get("kind") != "large_output"
+        or verdicts[series_id].get("provider") != pair.candidate):
         raise ValueError("size override differs from the recorded failed case")
     return {"series": row["series"], "failed_case": row["failed_case"],
             "documented_weakness": row["documented_weakness"]}
@@ -1137,6 +1285,7 @@ def size_override(decisions: dict | None, verdicts: dict) -> dict | None:
 def qualification_summary(series: dict, envelopes: dict, protocol: dict,
                           quality_results: dict, decisions: dict | None = None) -> dict:
     verdicts = validate_qualification_evidence(series, envelopes, protocol)
+    pair = qualification_pair(protocol)
     corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -1146,13 +1295,13 @@ def qualification_summary(series: dict, envelopes: dict, protocol: dict,
     for name, row in verdicts.items():
         latest[(row["kind"], row["provider"])] = row
     required = all(latest.get(key, {}).get("passed") for key in (
-        ("transport", "agy"), ("print_timeout", "agy"),
-        ("quality", "agy"), ("quality", "claude")))  # allowlist:provider -- certification data: reference quality result
-    override = size_override(decisions, verdicts)
-    size_passed = latest.get(("large_output", "agy"), {}).get("passed", False)
-    qualified = bool(required and quality["agy"]["passed"] and
-                     (quality["claude"]["passed"] or  # allowlist:provider -- certification data: reference quality result
-                      quality_results.get("claude_special_decision") == "approve_experimental")  # allowlist:provider -- certification data: reference quality result
+        ("transport", pair.candidate), ("print_timeout", pair.candidate),
+        ("quality", pair.candidate), ("quality", pair.reference)))
+    override = size_override(decisions, verdicts, pair)
+    size_passed = latest.get(("large_output", pair.candidate), {}).get("passed", False)
+    qualified = bool(required and quality[pair.candidate]["passed"] and
+                     (quality[pair.reference]["passed"] or
+                      quality_results.get(_reference_decision_key(protocol)) == "approve_experimental")
                      and (size_passed or override))
     summary = {"series": verdicts, "quality": quality,
                "qualified_for_canary": qualified,
@@ -1204,7 +1353,8 @@ def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
                         protocol: dict, rubric: dict) -> dict:
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus is not approved at its frozen digest")
-    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v5":
+    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") not in {
+            protocol["schema_version"], "qualification-protocol-v5"}:
         raise ValueError("quality rubric version differs")
     if assessment.get("schema_version") != "blind-assessment-v1" or mapping.get("schema_version") != "blind-mapping-v1" or mapping.get("seed") != protocol["quality"]["blind_seed"]:
         raise ValueError("blind input version or seed differs")
@@ -1216,12 +1366,12 @@ def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
     if sorted(secret[row]["case"] for row in ids) != sorted(list(cases) * 2):
         raise ValueError("two responses per quality case required")
     if {(row["provider"], row["case"]) for row in secret.values()} != {
-            (provider, case) for provider in ("agy", "claude") for case in cases}:  # allowlist:provider -- certification data: independent blind quality rating
+            (provider, case) for provider in qualification_pair(protocol).providers for case in cases}:
         raise ValueError("each provider must have every quality case once")
     entries = []
     for row in responses:
         identifier, bound = row["id"], secret[row["id"]]
-        if bound["provider"] not in {"agy", "claude"}:  # allowlist:provider -- certification data: independent blind quality rating
+        if bound["provider"] not in qualification_pair(protocol).providers:
             raise ValueError("unknown provider in secret mapping")
         encoded = json.dumps(row["content"], ensure_ascii=False, sort_keys=True).encode()
         if sha(encoded) != bound["content_sha256"]:
@@ -1314,7 +1464,7 @@ def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
                     "mapping": digest(mapping)}, "ratings": ratings, "agreement": [],
                 "operator_questions": [], "operator_decisions": [], "judgments": [],
                 "judgments_frozen_sha256": None, "judgments_frozen_at": None,
-                "unblinded_at": None, "mapping": {}, "claude_special_decision": None}  # allowlist:provider -- certification data: independent blind quality rating
+                "unblinded_at": None, "mapping": {}, _reference_decision_key(protocol): None}
     if set(mapping.get("mapping", {})) != {row["id"] for row in packet["responses"]}:
         raise ValueError("blind mapping differs")
     by_rater = {name: {row["id"]: row for row in rating["judgments"]}
@@ -1383,7 +1533,7 @@ def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
             "judgments_frozen_at": now if complete else None,
             "unblinded_at": datetime.now(timezone.utc).isoformat() if complete else None,
             "mapping": mapping["mapping"] if complete else {},
-            "claude_special_decision": None}  # allowlist:provider -- certification data: independent blind quality rating
+            _reference_decision_key(protocol): None}
 
 
 def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
@@ -1396,7 +1546,7 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
         raise ValueError("quality corpus digest differs")
     if results.get("status") != "complete":
         return {provider: {"passed": False, "incomplete": True}
-                for provider in ("agy", "claude")}  # allowlist:provider -- certification data: independent blind quality rating
+                for provider in qualification_pair(protocol).providers}
     if set(results.get("ratings", {})) != {"codex", "steering"}:  # allowlist:provider -- certification data: independent blind quality rating
         raise ValueError("both independent ratings required")
     if results.get("packet_sha256") != results["ratings"]["codex"].get("packet_sha256") or results.get("packet_sha256") != results["ratings"]["steering"].get("packet_sha256"):  # allowlist:provider -- certification data: independent blind quality rating
@@ -1452,7 +1602,7 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
             if row[criterion] != expected:
                 raise ValueError("final judgment differs from raters or operator")
     scores = {}
-    for provider in ("agy", "claude"):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    for provider in qualification_pair(protocol).providers:
         selected = [(row, cases[mapping[row["id"]]["case"]]) for row in judgments
                     if mapping[row["id"]]["provider"] == provider]
         if {case["id"] for _, case in selected} != set(cases):
@@ -1480,12 +1630,13 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
         scores[provider] = {"passed": passed, "critical": critical, "defects": defects,
                             "clean_false_positives": false_positives,
                             "invented_critical": invented}
-    special = results.get("claude_special_decision")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-    if scores["agy"]["passed"] and not scores["claude"]["passed"]:  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    pair = qualification_pair(protocol)
+    special = results.get(_reference_decision_key(protocol))
+    if scores[pair.candidate]["passed"] and not scores[pair.reference]["passed"]:
         if special not in {None, "approve_experimental", "deny_experimental"}:
             raise ValueError("invalid operator decision for weaker reference")
     elif special is not None:
-        raise ValueError("Claude special decision is permitted only for a weaker reference")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+        raise ValueError("special decision is permitted only for a weaker reference")
     return scores
 
 
@@ -1706,8 +1857,9 @@ def _preflight_series_position(attempts: list[dict], *, kind: str, provider: str
                                series_id: str, case_id: str, commit_sha: str,
                                profile_sha256: str, binary_sha256: str,
                                writer_sha256: str, restart_diagnosis: str | None,
-                               restart_change: str | None, retry_of: str | None = None) -> None:
-    expected = qualification_cases(kind, provider)
+                               restart_change: str | None, retry_of: str | None = None,
+                               pair: QualificationPair | None = None) -> None:
+    expected = qualification_cases(kind, provider, pair)
     for row in attempts:
         if row["series_id"] == series_id and (row["kind"], row["provider"]) != (kind, provider):
             raise ValueError("series id belongs to another provider or campaign kind")
@@ -1798,7 +1950,8 @@ def _current_commit() -> str:
 
 def _assert_committed_qualification_code() -> None:
     command = subprocess.run(
-        ["/usr/bin/git", "status", "--porcelain", "--", "src", "scripts/probe_reviewer.py"],
+        ["/usr/bin/git", "status", "--porcelain", "--", "src", "scripts/probe_reviewer.py",
+         "scripts/qualification"],
         cwd=ROOT, capture_output=True, text=True, timeout=10, check=True,
         env={"PATH": "/usr/bin:/bin"})
     if command.stdout.strip():
@@ -1812,7 +1965,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                            restart_diagnosis: str | None = None,
                            restart_change: str | None = None,
                            tag: str | None = None,
-                           production_retry_of: str | None = None) -> dict:
+                           production_retry_of: str | None = None,
+                           protocol_file: Path | None = None) -> dict:
     """One opt-in call through the final native adapter, protection and parser."""
     if not live:
         raise PermissionError("qualification provider call requires --live")
@@ -1829,9 +1983,10 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if profile.get("commit_sha") != _current_commit():
         raise ValueError("qualification profile commit differs from current code HEAD")
     _assert_committed_qualification_code()
-    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+    protocol = _protocol_file(protocol_file)
     validate_qualification(protocol)
-    if case_id not in qualification_cases(kind, provider):
+    pair = qualification_pair(protocol)
+    if case_id not in qualification_cases(kind, provider, pair):
         raise ValueError("call differs from frozen qualification cases")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", series_id) or not re.fullmatch(
             r"[A-Za-z0-9_-]{1,80}", call_id):
@@ -1873,32 +2028,14 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if ledger_path.exists() and any(strict_json(line)["call_id"] == call_id for line in
                                     ledger_path.read_bytes().splitlines()):
         raise ValueError("call has a prior ledger intent; reconcile before any restart")
-    from agent_adapters import AgentSettings, NativeClaudeReviewAdapter  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-    from antigravity_adapter import NativeAntigravityReviewAdapter
     from agent_runtime import OrchestratorConfig, run_native_review_agent
     from native_review_request import build_native_review_request
-    from provider_input_budget import ProviderInputBudgetPolicy, ProviderInputBudgetRule, default_provider_input_budget_policy
 
     binary = Path(profile["binary"])
     if not binary.is_absolute() or not binary.is_file():
         raise ValueError("profile binary must be an absolute regular file")
-    options = profile.get("provider_options", {}).get("antigravity", {})
-    if provider == "agy":
-        if profile.get("model") != "gemini-3.1-pro-high" or profile.get("effort") != "high":
-            raise ValueError("AGY qualification fixes model and effort")
-        if not options.get("home") or not options.get("run_root"):
-            raise ValueError("AGY qualification requires isolated home and run root")
-        settings = AgentSettings("antigravity", str(binary), profile["model"],
-                                 qualified_timeout, profile["effort"],
-                                 antigravity_home=options["home"], antigravity_run_root=options["run_root"])
-        adapter = NativeAntigravityReviewAdapter(settings)
-        capability = "antigravity"
-    else:
-        if profile.get("model") != "opus" or profile.get("effort") != "high":
-            raise ValueError("Claude qualification fixes opus/high")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        settings = AgentSettings("claude", str(binary), "opus", qualified_timeout, "high")  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        adapter = NativeClaudeReviewAdapter(settings)  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        capability = "claude"  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    capability = pair.capability(provider)
+    adapter = _qualification_adapter(protocol, provider, profile, binary, qualified_timeout)
     spec = build_qualification_spec(kind, case_id, run_id=f"qualification-{series_id}-{call_id}")
     retry_feedback = None
     if production_retry_of is not None:
@@ -1919,17 +2056,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         binary_sha256=sha(binary.read_bytes()),
         writer_sha256=sha(bundle.provider_response_schema_json.encode()),
         restart_diagnosis=restart_diagnosis, restart_change=restart_change,
-        retry_of=production_retry_of)
-    defaults = default_provider_input_budget_policy()
-    if provider == "agy":
-        budget = ProviderInputBudgetPolicy(
-            tuple(ProviderInputBudgetRule("antigravity" if rule.provider == "claude" else rule.provider,  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-                                          rule.role, rule.operation, rule.max_chars, rule.max_bytes)
-                  for rule in defaults.rules),
-            (("implementer", "implementer", "codex"), ("reviewer", "reviewer", "antigravity"),  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-             ("final_reviewer", "reviewer", "antigravity")))
-    else:
-        budget = defaults
+        retry_of=production_retry_of, pair=pair)
+    budget = _review_budget(capability)
     ledger = _QualificationLedger(ledger_path, call_id)
     raw = {}
     extract = adapter.extract_output
@@ -1980,12 +2108,13 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if kind == "transport" and isinstance(envelope, dict):
         checks = validate_format_response(case_id[:2], envelope, bundle=bundle,
                                           exit_code=int(raw.get("exit_code") or 0),
-                                          stderr=raw.get("stderr", ""))["checks"]
+                                          stderr=raw.get("stderr", ""),
+                                          transport_profile=capability)["checks"]
     elif kind == "print_timeout":
         partial = envelope.get("structured_output") if isinstance(envelope, dict) else None
         checks = _print_timeout_checks("technical_rejection" if error else "success",
                                        failure_kind, error, raw.get("stderr", ""),
-                                       isinstance(partial, dict) and isinstance(partial.get("result"), dict))
+                                       isinstance(partial, dict) and isinstance(partial.get("result"), dict), capability)
         checks["no_valid_stop"] = checks["no_valid_stop"] and domain is None
     elif kind == "large_output":
         response = envelope.get("structured_output", {}).get("result", {}) if isinstance(envelope, dict) else {}
@@ -2004,7 +2133,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         "probe_limit_seconds": protocol["limits"]["probe_seconds"],
         "started_at": started_at, "duration_seconds": round(elapsed, 3),
         "status": "technical_rejection" if error else "success",
-        "denials": (envelope.get("denied_actions") or []) if isinstance(envelope, dict) else [],
+        "denials": (envelope.get(REVIEW_ENVELOPES[capability].denials_field) or [])
+                   if isinstance(envelope, dict) else [],
         "usage": envelope.get("usage") if isinstance(envelope, dict) else None,
         "quota": quota_observation if quota_observation is not None else (
             envelope.get("quota") if isinstance(envelope, dict) else None),
@@ -2040,30 +2170,40 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     return series["attempts"][-1]
 
 
-def _validated_claude_slice_review() -> tuple[dict, str]:  # allowlist:provider -- certification data: saved Claude review
-    """Read the stored, request-bound Claude Q3 slice result without starting Claude."""  # allowlist:provider -- certification data: saved Claude review
+def _validated_reference_slice_review(protocol: dict) -> tuple[dict, str]:
+    """Read a stored, request-bound reference Q3 result without a provider start."""
     from native_review_request import build_native_review_request, validate_native_review_provider_response
     from native_review_contract import parse_bound_native_contract_result
 
-    series = read_evidence(ROOT / "docs/evidence/antigravity/qualification-series-v1.json")
-    envelopes = read_evidence(ROOT / "docs/evidence/antigravity/qualification-envelopes-v1.json.gz")
-    rows = [row for row in series["attempts"] if row["series_id"] == "claude-quality-s3"  # allowlist:provider -- certification data: saved Claude review
-            and row["provider"] == "claude" and row["case_id"] == "Q3"]  # allowlist:provider -- certification data: saved Claude review
+    pair = qualification_pair(protocol)
+    series = read_evidence(pair.evidence_directory / "qualification-series-v1.json")
+    envelope_path = pair.evidence_directory / "qualification-envelopes-v1.json.gz"
+    if not envelope_path.exists():
+        envelope_path = envelope_path.with_suffix("")
+    envelopes = read_evidence(envelope_path)
+    verdicts = validate_qualification_evidence(series, envelopes, protocol)
+    successful = [name for name, verdict in verdicts.items()
+                  if verdict["kind"] == "quality" and verdict["provider"] == pair.reference and verdict["passed"]]
+    if not successful:
+        raise ValueError("stored reference quality series is unavailable")
+    rows = [row for row in series["attempts"] if row["series_id"] == successful[-1]
+            and row["provider"] == pair.reference and row["case_id"] == "Q3"]
     if len(rows) != 1 or rows[0]["status"] != "success" or not all(rows[0]["checks"].values()):
-        raise ValueError("stored Claude slice review is unavailable or invalid")  # allowlist:provider -- certification data: saved Claude review
+        raise ValueError("stored reference slice review is unavailable or invalid")
     row = rows[0]
     raw = next(item["envelope"] for item in envelopes["envelopes"] if item["call_id"] == row["call_id"])
     result = raw["envelope"]["structured_output"]["result"]
     spec = build_qualification_spec("quality", "Q3", run_id=f"qualification-{row['series_id']}-{row['call_id']}")
-    bundle = build_native_review_request(spec, profile="claude")  # allowlist:provider -- certification data: saved Claude review
+    bundle = build_native_review_request(spec, profile=pair.capability(pair.reference))
     validate_native_review_provider_response(result, bundle)
     parse_bound_native_contract_result(result, bundle.bound_context)
     return result, sha(canonical(result).encode())
 
 
 def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
-                    live: bool = False, quicktest: bool = False) -> dict:
-    """Run one direct AGY review through the final adapter and bound validators."""
+                    live: bool = False, quicktest: bool = False,
+                    protocol_file: Path | None = None) -> dict:
+    """Run one direct candidate review through the production reviewer adapter."""
     if not live:
         raise PermissionError("canary and quicktest require --live")
     if slot not in {"reviewer", "final_reviewer"} or quicktest and slot != "reviewer":
@@ -2072,54 +2212,48 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
     if profile.get("live") is not True or profile.get("commit_sha") != _current_commit():
         raise ValueError("live canary profile must bind the committed code HEAD")
     _assert_committed_qualification_code()
+    protocol = _protocol_file(protocol_file)
+    validate_qualification(protocol)
+    pair = qualification_pair(protocol)
+    capability = pair.capability(pair.candidate)
     binary = Path(profile["binary"])
     if not binary.is_absolute() or not binary.is_file() or binary.is_symlink():
-        raise ValueError("AGY binary must be an absolute regular file")
-    if not re.fullmatch(r"gemini-[a-z0-9.-]+", profile.get("model", "")) or profile.get("effort") != "high":
-        raise ValueError("canary needs a Gemini model and high effort")
-    options = profile.get("provider_options", {}).get("antigravity", {})
-    if not options.get("home") or not options.get("run_root"):
-        raise ValueError("canary needs isolated Antigravity home and run root")
+        raise ValueError("candidate binary must be an absolute regular file")
+    runtime = _runtime_profile(protocol, pair.candidate)
+    if profile.get("effort") != runtime["effort"]:
+        raise ValueError("canary effort differs from protocol")
     timeout = profile.get("timeout_seconds", 600)
     if type(timeout) is not int or timeout < 0:
         raise ValueError("canary timeout must be a non-negative integer")
     if quicktest:
         timeout = min(timeout or 240, 240)  # a real F2 review measured 90–250 s
     case = "F2" if quicktest else "F4" if slot == "reviewer" else "F5"
-    name = "quicktest-agy" if quicktest else f"canary-{slot}"
+    name = f"quicktest-{pair.candidate}" if quicktest else f"canary-{slot}"
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / f"{name}-v1.json"
     ledger_path = output_dir / f"{name}-ledger.jsonl"
     if report_path.exists() or ledger_path.exists():
         raise FileExistsError("direct review already has evidence or an unresolved start intent")
-    from agent_config import AgentSettings
-    from antigravity_adapter import NativeAntigravityReviewAdapter
     from agent_runtime import OrchestratorConfig, run_native_review_agent
     from native_review_request import NativeReviewEvidenceInput, build_native_review_request
-    from provider_input_budget import ProviderInputBudgetPolicy, ProviderInputBudgetRule, default_provider_input_budget_policy
 
-    settings = AgentSettings("antigravity", str(binary), profile["model"], timeout or None,
-                             "high", antigravity_home=options["home"],
-                             antigravity_run_root=options["run_root"])
-    defaults = default_provider_input_budget_policy()
-    budget = ProviderInputBudgetPolicy(tuple(ProviderInputBudgetRule(
-        "antigravity" if rule.provider == "claude" else rule.provider,  # allowlist:provider -- transport: AGY review budget
-        rule.role, rule.operation, rule.max_chars, rule.max_bytes) for rule in defaults.rules),
-        (("implementer", "implementer", "codex"), ("reviewer", "reviewer", "antigravity"),  # allowlist:provider -- transport: AGY review budget
-         ("final_reviewer", "reviewer", "antigravity")))
+    adapter = _qualification_adapter(protocol, pair.candidate, profile, binary, timeout or None,
+                                     canary=True)
+    budget = _review_budget(capability)
     with tempfile.TemporaryDirectory(prefix="dao-canary-", dir=output_dir) as temporary:
         source = Path(temporary) / "repo"
         materialize_format_repo(case, source)
         source_sha = _source_digest(source)
         spec = build_qualification_spec("transport", f"{case}:1", run_id=f"{name}-{_current_commit()[:12]}")
-        claude_digest = None  # allowlist:provider -- certification data: saved Claude review
+        reference_digest = None
         if slot == "final_reviewer":
-            prior, claude_digest = _validated_claude_slice_review()  # allowlist:provider -- certification data: saved Claude review
-            evidence = NativeReviewEvidenceInput("claude_slice_review", "review_evidence",  # allowlist:provider -- certification data: saved Claude review
-                "Previously validated Claude slice review from quality Q3: " + canonical(prior))  # allowlist:provider -- certification data: saved Claude review
+            prior, reference_digest = _validated_reference_slice_review(protocol)
+            label = LEGACY_REFERENCE_EVIDENCE_ID if protocol["schema_version"] == "qualification-protocol-v5" else "reference_slice_review"
+            description = (LEGACY_REFERENCE_DESCRIPTION if label == LEGACY_REFERENCE_EVIDENCE_ID
+                           else "Previously validated reference slice review from quality Q3: ")
+            evidence = NativeReviewEvidenceInput(label, "review_evidence", description + canonical(prior))
             spec = replace(spec, evidence=tuple(sorted((*spec.evidence, evidence), key=lambda item: item.evidence_id)))
-        bundle = build_native_review_request(spec, profile="antigravity")
-        adapter = NativeAntigravityReviewAdapter(settings)
+        bundle = build_native_review_request(spec, profile=capability)
         raw = {}
         extract = adapter.extract_output
         def capture_output(stdout, stderr, extra_files):
@@ -2146,7 +2280,8 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
             envelope = {}
         if error is None:
             result = validate_format_response(case, envelope, bundle=bundle,
-                exit_code=int(raw.get("exit_code") or 0), stderr=raw.get("stderr", ""))
+                exit_code=int(raw.get("exit_code") or 0), stderr=raw.get("stderr", ""),
+                transport_profile=capability)
             passed = bool(result["pass"] and domain is not None)
         else:
             result, passed = {"checks": {}}, False
@@ -2159,7 +2294,7 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
         checks = {"writer": result["checks"].get("writer_schema", False),
                   "domain": result["checks"].get("domain_contract", False) and result["checks"].get("case_semantics", False),
                   "effective_rights": passed, "isolation_postcheck": passed,
-                  "no_denials": not bool(envelope.get("denied_actions")) and passed}
+                  "no_denials": not bool(envelope.get(REVIEW_ENVELOPES[capability].denials_field)) and passed}
         proof = {"slot": slot, "case": case, "request_id": bundle.bound_context.request_id,
                  "request_sha256": sha(bundle.canonical_json.encode()),
                  "writer_sha256": sha(bundle.provider_response_schema_json.encode()),
@@ -2167,12 +2302,15 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
                  "binary_sha256": sha(binary.read_bytes()), "commit_sha": profile["commit_sha"],
                  "model": profile["model"], "timeout_seconds": timeout,
                  "checks": checks, "raw": proof_raw, "raw_sha256": digest(proof_raw)}
-        if claude_digest is not None:  # allowlist:provider -- certification data: saved Claude review
-            proof["claude_slice_review_sha256"] = claude_digest  # allowlist:provider -- certification data: saved Claude review
-        report = {"schema_version": "antigravity-direct-review-v1", "mode": "quicktest" if quicktest else "canary",
-                  "provider": "antigravity", "role": "reviewer", "slot": slot, "case": case,
+        if reference_digest is not None:
+            proof[LEGACY_REFERENCE_DIGEST_KEY if protocol["schema_version"] == "qualification-protocol-v5" else "reference_slice_review_sha256"] = reference_digest
+        report = {"schema_version": "antigravity-direct-review-v1" if protocol["schema_version"] == "qualification-protocol-v5" else "reviewer-direct-review-v1", "mode": "quicktest" if quicktest else "canary",
+                  "provider": capability if protocol["schema_version"] == "qualification-protocol-v5" else pair.candidate,
+                  "role": "reviewer", "slot": slot, "case": case,
                   "status": "passed" if passed else "failed", "duration_seconds": round(time.monotonic()-started, 3),
                   "proof": proof}
+        if protocol["schema_version"] != "qualification-protocol-v5":
+            report["capability_profile"] = capability
         _write_evidence_file(report_path, report)
         ledger._record("result", status=report["status"])
         return report
@@ -2204,7 +2342,8 @@ def execute_probe(argv: list[str], *, cwd: Path, out: Path, profile_file: Path |
     return result
 
 
-def blind_package(responses: list[dict], *, seed: int) -> tuple[dict, dict]:
+def blind_package(responses: list[dict], *, seed: int,
+                  provider_words: tuple[str, ...] = ()) -> tuple[dict, dict]:
     """Return assessment data and separate reversible mapping."""
     if not isinstance(seed, int):
         raise TypeError("seed must be a fixed integer")
@@ -2225,8 +2364,9 @@ def blind_package(responses: list[dict], *, seed: int) -> tuple[dict, dict]:
     assessments, mapping = [], {}
     for number, (provider, case, content, digest_value, input_digest) in enumerate(rows, 1):
         neutral_id = f"B{number:03d}"
-        mention = bool(re.search(r"\b(?:antigravity|agy|claude|codex|gemini)\b",  # allowlist:provider -- certification data: self-identification scan
-                                 json.dumps(content, ensure_ascii=False), re.I))
+        words = {*LEGACY_BLIND_WORDS, *provider_words}
+        mention = any(re.search(r"\b" + re.escape(word) + r"\b",
+                                json.dumps(content, ensure_ascii=False), re.I) for word in words)
         assessments.append({"id": neutral_id, "content": content,
                             "possible_self_identification": mention})
         mapping[neutral_id] = {"provider": provider, "case": case,
@@ -2240,7 +2380,7 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
     """Take complete quality series without filtering individual bad outputs."""
     verdicts = validate_qualification_evidence(series, envelopes, protocol)
     selected = {}
-    for provider in ("agy", "claude"):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    for provider in qualification_pair(protocol).providers:
         names = [name for name, verdict in verdicts.items()
                  if verdict["kind"] == "quality" and verdict["provider"] == provider]
         if not names or not verdicts[names[-1]]["passed"]:
@@ -2248,14 +2388,14 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
         selected[provider] = names[-1]
     raw = {row["call_id"]: row["envelope"] for row in envelopes["envelopes"]}
     sources = []
-    for provider in ("agy", "claude"):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    for provider in qualification_pair(protocol).providers:
         for chain in _case_chains([row for row in series["attempts"]
                                    if row["series_id"] == selected[provider]]):
             row = chain[-1]
             content = raw[row["call_id"]]["envelope"]["structured_output"]["result"]
             sources.append({"provider": provider, "case": row["case_id"], "content": content})
     if len(sources) != 12 or {(row["provider"], row["case"]) for row in sources} != {
-            (provider, f"Q{number}") for provider in ("agy", "claude") for number in range(1, 7)}:  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+            (provider, f"Q{number}") for provider in qualification_pair(protocol).providers for number in range(1, 7)}:
         raise ValueError("blind inputs must contain each provider and quality case once")
     return sources
 
@@ -2263,12 +2403,14 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
 def verify_quality_mapping(results: dict, series: dict, envelopes: dict, protocol: dict) -> None:
     """After unblinding, prove each neutral ID maps to recorded content bytes."""
     sources = quality_blind_sources(series, envelopes, protocol)
-    assessment, expected = blind_package(sources, seed=protocol["quality"]["blind_seed"])
+    pair = qualification_pair(protocol)
+    assessment, expected = blind_package(sources, seed=protocol["quality"]["blind_seed"],
+        provider_words=(*pair.providers, *pair.capabilities.values()))
     if results.get("mapping") != expected["mapping"]:
         raise ValueError("quality mapping differs from the frozen blind package")
     if results.get("status") == "complete":
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
-        rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+        rubric = strict_json((qualification_pair(protocol).evidence_directory / "quality-rubric-v1.json").read_bytes())
         packet = export_rater_packet(assessment, expected, corpus, protocol, rubric)
         answers = {"schema_version": "quality-operator-answers-v1",
                    "answers": results["operator_decisions"]}
@@ -2310,7 +2452,8 @@ def main() -> int:
     cr.add_argument("output", type=Path)
     cr.add_argument("--operator-answers", type=Path)
     cr.add_argument("--questions-out", type=Path)
-    cr.add_argument("--claude-special-decision", choices=("approve_experimental", "deny_experimental"))  # allowlist:provider -- certification data: independent blind quality rating
+    cr.add_argument("--claude-special-decision", choices=("approve_experimental", "deny_experimental"))  # allowlist:provider -- certification data: v5 CLI compatibility
+    cr.add_argument("--reference-special-decision", choices=("approve_experimental", "deny_experimental"))
     f = sub.add_parser("prepare-blind-inputs")
     f.add_argument("series", type=Path)
     f.add_argument("envelopes", type=Path)
@@ -2325,7 +2468,7 @@ def main() -> int:
     q = sub.add_parser("qualification-call")
     q.add_argument("kind", choices=("transport", "large_output", "print_timeout", "quality"))
     q.add_argument("case_id")
-    q.add_argument("provider", choices=("agy", "claude"))  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+    q.add_argument("provider")
     q.add_argument("--series-id", required=True)
     q.add_argument("--call-id", required=True)
     q.add_argument("--profile", type=Path, required=True)
@@ -2343,7 +2486,7 @@ def main() -> int:
     canary.add_argument("--output-dir", type=Path, required=True)
     canary.add_argument("--live", action="store_true")
     quick = sub.add_parser("quicktest")
-    quick.add_argument("provider", choices=("agy",))
+    quick.add_argument("provider")
     quick.add_argument("--profile", type=Path, required=True)
     quick.add_argument("--live", action="store_true")
     m = sub.add_parser("prepare-case")
@@ -2355,7 +2498,9 @@ def main() -> int:
     e.add_argument("series", type=Path)
     e.add_argument("envelopes", type=Path)
     e.add_argument("--quality-results", type=Path)
-    e.add_argument("--operator-decisions", type=Path, default=OPERATOR_DECISIONS)
+    e.add_argument("--operator-decisions", type=Path)
+    for command in (b, rp, pr, cr, f, q, canary, quick, e):
+        command.add_argument("--protocol", type=Path)
     args = parser.parse_args()
     if args.command == "validate-format":
         result = validate_format_response(args.case, strict_json(args.envelope.read_bytes()),
@@ -2367,7 +2512,7 @@ def main() -> int:
         print(json.dumps(probe_plan(strict_json(args.protocol.read_bytes())), indent=2))
         return 0
     if args.command == "blind":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         validate_qualification(protocol)
         if args.seed != protocol["quality"]["blind_seed"]:
             raise ValueError("blind seed differs from the frozen qualification protocol")
@@ -2378,14 +2523,16 @@ def main() -> int:
             raise ValueError("mapping must be stored separately from assessment")
         sources = strict_json(args.responses.read_bytes())
         if len(sources) != 12 or {(row["provider"], row["case"]) for row in sources} != {
-                (provider, f"Q{number}") for provider in ("agy", "claude") for number in range(1, 7)}:  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
+                (provider, f"Q{number}") for provider in qualification_pair(protocol).providers for number in range(1, 7)}:
             raise ValueError("blind input requires exactly Q1–Q6 per provider")
-        assessment, mapping = blind_package(sources, seed=args.seed)
+        pair = qualification_pair(protocol)
+        assessment, mapping = blind_package(sources, seed=args.seed,
+            provider_words=(*pair.providers, *pair.capabilities.values()))
         args.assessment.write_text(json.dumps(assessment, ensure_ascii=False, indent=2) + "\n")
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
     if args.command == "prepare-blind-inputs":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -2394,9 +2541,9 @@ def main() -> int:
         _write_evidence_file(args.output, sources)
         return 0
     if args.command == "export-rater-packets":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
-        rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+        rubric = strict_json((qualification_pair(protocol).evidence_directory / "quality-rubric-v1.json").read_bytes())
         packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
             strict_json(args.mapping.read_bytes()), corpus, protocol, rubric)
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -2407,12 +2554,12 @@ def main() -> int:
                           "ids": [row["id"] for row in packet["responses"]]}))
         return 0
     if args.command == "render-rater-prompt":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         packet = strict_json(args.packet.read_bytes())
         args.output.write_text(render_rater_prompt(packet, protocol))
         return 0
     if args.command == "combine-quality-ratings":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         mapping = strict_json(args.mapping.read_bytes())
@@ -2420,7 +2567,12 @@ def main() -> int:
                    "steering": strict_json(args.steering_rating.read_bytes())}
         answers = strict_json(args.operator_answers.read_bytes()) if args.operator_answers else None
         result = combine_quality_ratings(packet, mapping, ratings, corpus, protocol, answers)
-        result["claude_special_decision"] = args.claude_special_decision  # allowlist:provider -- certification data: independent blind quality rating
+        if args.claude_special_decision and protocol["schema_version"] != "qualification-protocol-v5":  # allowlist:provider -- certification data: v5 CLI compatibility
+            raise ValueError("new protocols use --reference-special-decision")
+        decision = args.claude_special_decision or args.reference_special_decision  # allowlist:provider -- certification data: v5 CLI compatibility
+        if args.claude_special_decision and args.reference_special_decision:  # allowlist:provider -- certification data: v5 CLI compatibility
+            raise ValueError("reference decision supplied twice")
+        result[_reference_decision_key(protocol)] = decision
         result["scores"] = grade_quality(result, corpus, protocol)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         if args.questions_out:
@@ -2460,28 +2612,32 @@ def main() -> int:
             if args.quota_observation else None,
             restart_diagnosis=args.restart_diagnosis,
             restart_change=args.restart_change, tag=args.tag,
-            production_retry_of=args.production_retry_of)
+            production_retry_of=args.production_retry_of, protocol_file=args.protocol)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
     if args.command == "canary-call":
         result = run_canary_call(args.slot, profile_file=args.profile,
-            output_dir=args.output_dir, live=args.live)
+            output_dir=args.output_dir, live=args.live, protocol_file=args.protocol)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "passed" else 1
     if args.command == "quicktest":
-        with tempfile.TemporaryDirectory(prefix="dao-agy-quicktest-") as temporary:
+        pair = qualification_pair(_protocol_file(args.protocol))
+        if args.provider != pair.candidate:
+            raise ValueError("quicktest provider differs from candidate")
+        with tempfile.TemporaryDirectory(prefix="dao-reviewer-quicktest-") as temporary:
             result = run_canary_call("reviewer", profile_file=args.profile,
-                output_dir=Path(temporary), live=args.live, quicktest=True)
+                output_dir=Path(temporary), live=args.live, quicktest=True, protocol_file=args.protocol)
         print(json.dumps({"schema_version": result["schema_version"], "mode": "quicktest",
             "status": result["status"], "duration_seconds": result["duration_seconds"],
             "checks": result["proof"]["checks"]}, sort_keys=True))
         return 0 if result["status"] == "passed" else 1
     if args.command == "evaluate-qualification":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
+        protocol = _protocol_file(args.protocol)
         series = read_evidence(args.series)
         envelopes = read_evidence(args.envelopes)
-        decisions_bytes = args.operator_decisions.read_bytes()
-        if sha(decisions_bytes) != OPERATOR_DECISIONS_SHA256:
+        decisions_path = args.operator_decisions or qualification_pair(protocol).evidence_directory / "operator-decisions-v1.json"
+        decisions_bytes = decisions_path.read_bytes()
+        if protocol["schema_version"] == "qualification-protocol-v5" and sha(decisions_bytes) != OPERATOR_DECISIONS_SHA256:
             raise ValueError("operator decisions digest differs from the accepted decision")
         if not args.quality_results:
             raise ValueError("qualification needs bound blind quality results")

@@ -242,15 +242,15 @@ Pflichtflags und das exakte Transportprofil. Effektive Rechte und Isolation
 werden bei jedem AGY-Review nachgeprüft; ältere oder unbekannte Formate halten
 fail-closed an.
 
-Antigravity (AGY) ist derzeit nur **Kandidat** für Reviewer und Finalreviewer:
-die zwei direkten Live-Canaries stehen aus. Nach beiden positiven Nachweisen
-können die Slots getrennt als `experimental` zugelassen und ausdrücklich per
-TOML ausgewählt werden. Die mitgelieferte Besetzung bleibt Codex als Implementer
+Antigravity (AGY) ist nach zwei bestandenen direkten Live-Canaries für Reviewer
+und Finalreviewer als `experimental` zugelassen und kann ausdrücklich per TOML
+ausgewählt werden. Die mitgelieferte Besetzung bleibt Codex als Implementer
 und Claude für beide Reviews. Der Umfang ist privat/DIY unter WSL 2, Ubuntu und
 ext4; ein AGY-Review übermittelt den vollständigen Snapshot samt Anfrage,
 Schema und Evidenz an Google. Die Größenmessung mit 128 Befunden scheiterte;
 ein endlicher Timeoutvorschlag ist daher nicht gemessen. Positive Werte und `0`
 sind frei konfigurierbar. Ablauf und Befehle: [Antigravity-Reviewer](docs/reference/antigravity-reviewer.md).
+Für neue Kandidaten beschreibt die [Reviewer-Zertifizierung](docs/reference/reviewer-certification.md) den gemeinsamen Ablauf.
 
 Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 

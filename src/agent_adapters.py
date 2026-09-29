@@ -854,6 +854,30 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
+def is_native_review_adapter(adapter: object) -> bool:
+    """Whether a slot adapter is one of the registered native review transports."""
+    if isinstance(adapter, NativeClaudeReviewAdapter):  # allowlist:provider -- transport: registered native review adapter
+        return True
+    from antigravity_adapter import NativeAntigravityReviewAdapter
+
+    return isinstance(adapter, NativeAntigravityReviewAdapter)
+
+
+def create_reviewer_qualification_adapter(settings: AgentSettings) -> AgentAdapter:
+    """Build the production reviewer transport without a certification gate.
+
+    Qualification and direct canaries establish that gate; they still use the
+    same role binding and adapter class as a normal reviewer slot.
+    """
+    if settings.name == "claude":
+        return NativeClaudeReviewAdapter(settings, role_binding=binding_for_role(AgentRoleName.REVIEWER))
+    if settings.name == "antigravity":
+        from antigravity_adapter import NativeAntigravityReviewAdapter
+
+        return NativeAntigravityReviewAdapter(settings, role_binding=binding_for_role(AgentRoleName.REVIEWER))
+    raise ValueError(f"provider={settings.name}: missing reviewer transport registration")
+
+
 def create_agent_pair(
     provider: str, role: AgentRoleName, *, slot: AgentSlot,
     settings: AgentSettings, certifications: CertificationTable | None = None,
@@ -873,12 +897,8 @@ def create_agent_pair(
     binding = binding_for_role(role)
     if provider == "codex" and role is AgentRoleName.IMPLEMENTER:
         adapter = NativeCodexAdapter(settings, role_binding=binding)
-    elif provider == "claude" and role is AgentRoleName.REVIEWER:
-        adapter = NativeClaudeReviewAdapter(settings, role_binding=binding)
-    elif provider == "antigravity" and role is AgentRoleName.REVIEWER:
-        from antigravity_adapter import NativeAntigravityReviewAdapter
-
-        adapter = NativeAntigravityReviewAdapter(settings, role_binding=binding)
+    elif role is AgentRoleName.REVIEWER:
+        adapter = create_reviewer_qualification_adapter(settings)
     else:
         raise ValueError(
             f"slot={slot.value} provider={provider}: missing transport/role rights binding"

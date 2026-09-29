@@ -83,5 +83,5 @@
 ## Experimental Antigravity reviewer
 
 - The shipped reviewer and final reviewer remain Claude; Codex is the sole implementer. Antigravity is selectable per run only by explicit TOML slot binding after both direct canaries have passed and both slot certifications are `experimental`.
-- Until the two live canaries are recorded, both Antigravity slots remain `candidate` and fail closed at start and resume. No automatic provider switch occurs.
+- Both Antigravity slots are `experimental` since the two live canaries passed on 29 September 2026; a missing or tampered canary proof fails closed at start and resume. No automatic provider switch occurs.
 - This option is for private DIY use on WSL 2 / Ubuntu / ext4. Every Antigravity review sends the full snapshot, request, schema and evidence to Google. Positive timeout values and `0` require no separate approval.

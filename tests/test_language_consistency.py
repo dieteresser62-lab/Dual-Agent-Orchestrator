@@ -1163,8 +1163,12 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
     relative = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else ""
     new_provider_paths = relative.startswith("docs/evidence/antigravity/") or path.name == "orchestrator.toml" or relative in {
         "docs/reference/antigravity-reviewer.md",
+        "docs/reference/reviewer-certification.md",
         "scripts/probe_reviewer.py",
+        "scripts/qualification/profiles.py",
+        "scripts/qualification/run_probe.py",
         "tests/test_reviewer_probe.py",
+        "tests/test_reviewer_qualification_tools.py",
         "tests/fixtures/reviewer-quality-corpus-v1.json",
         "tests/fixtures/reviewer-format-s6-v1.json",
         "tests/fixtures/reviewer-format-repo-v1.json",

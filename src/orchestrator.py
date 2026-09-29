@@ -16,8 +16,8 @@ from typing import Callable, Mapping, get_args, get_type_hints
 from agent_adapters import (
     AgentAdapter,
     PROVIDER_FAILURE_METRIC_KEYS,
-    NativeClaudeReviewAdapter,
     NativeCodexAdapter,
+    is_native_review_adapter,
 )
 from agent_runtime import (
     AgentInvocationError,
@@ -1619,7 +1619,9 @@ class ProductionWorkflowDriver:
             )
         self.assert_structured_decision_context()
         native_adapter = self._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
-        if not isinstance(native_adapter, NativeClaudeReviewAdapter):
+        # Every certified reviewer slot uses a registered native review transport;
+        # the provider is bound by the slot certification, not by this check.
+        if not is_native_review_adapter(native_adapter):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
             )

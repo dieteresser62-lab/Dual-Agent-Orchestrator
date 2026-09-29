@@ -26,6 +26,11 @@ timeout_seconds = 0
 
 # After both canaries pass and both entries are experimental, copy this profile
 # into the run's TOML and bind the intended review slot explicitly in [roles].
+# The [[provider_input_budget]] rules must then match the occupancy exactly: replace
+# the reviewer rules below by provider = "antigravity" rules for the slots it holds
+# (reviewer_plan_review, reviewer_slice_review, reviewer_final_review).
+# Optional [agent_profiles.experimental_antigravity.provider_options.antigravity] sets
+# the isolated home (one interactive login there) and the private run root below /var/tmp.
 # [agent_profiles.experimental_antigravity]
 # provider = "antigravity"
 # binary = "agy"

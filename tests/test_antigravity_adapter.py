@@ -903,3 +903,19 @@ def test_resume_identity_recheck_uses_isolated_capability_runner(
     monkeypatch.setattr(antigravity_adapter.subprocess, "run", fake_run)
     agent_runtime.verify_agent_capabilities(adapter)
     assert seen == [(0, "1.2.12", "")]
+
+
+def test_orchestrator_review_path_accepts_the_registered_agy_transport(tmp_path: Path) -> None:
+    import inspect
+
+    import orchestrator
+    from agent_adapters import is_native_review_adapter
+
+    adapter = NativeAntigravityReviewAdapter(_settings(17), isolated_home=tmp_path / "home",
+                                             run_root=Path("/var/tmp/dao-agy-review-test"))
+    assert is_native_review_adapter(adapter)
+    assert not is_native_review_adapter(object())
+    source = inspect.getsource(orchestrator.ProductionWorkflowDriver.invoke_reviewer)
+    assert "is_native_review_adapter(native_adapter)" in source
+    assert orchestrator.is_native_review_adapter is is_native_review_adapter
+
