@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
-from role_binding import binding_for_role
+from role_binding import binding_for, binding_for_role
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +27,10 @@ _BASELINE = {
     (AgentSlot.REVIEWER, "claude"),
     (AgentSlot.FINAL_REVIEWER, "claude"),
 }
+_LEGACY_CANARY_FORMATS = {
+    "antigravity-canary-v1": ("antigravity", "docs/evidence/antigravity/canary-v1.json"),
+}
+_CANARY_CHECKS = frozenset({"writer", "domain", "effective_rights", "isolation_postcheck", "no_denials"})
 
 
 class CertificationErrorCode(StrEnum):
@@ -242,6 +246,67 @@ def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_famil
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "final canary lacks Claude slice evidence")  # allowlist:provider -- certification data: saved Claude review
 
 
+def _wire_digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _validate_role_canaries(
+    document: dict[str, Any], *, provider: str, role: AgentRoleName,
+    slot: AgentSlot, model_family_pattern: str | None,
+) -> None:
+    _require_keys(document, {"schema_version", "status", "slots"}, "role canary document")
+    if document["status"] != "passed" or not isinstance(document["slots"], dict):
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "role canary did not pass")
+    slots = document["slots"]
+    if not slots or not set(slots) <= {item.value for item in AgentSlot} or slot.value not in slots:
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"missing canary for {slot.value}")
+    request_ids: set[str] = set()
+    for name, raw_item in slots.items():
+        item = _require_keys(raw_item, {"provider", "role", "slot", "case", "transport_series", "status", "proof"}, "role canary slot")
+        if (item["provider"] != provider or item["role"] != role_for_slot(AgentSlot(name)).value
+            or item["slot"] != name or item["status"] != "passed"
+            or not isinstance(item["case"], str) or not item["case"].strip()
+            or not isinstance(item["transport_series"], str) or not item["transport_series"].strip()):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"{name} canary binding differs")
+        proof = _require_keys(item["proof"], {
+            "request_id", "request_sha256", "writer_sha256", "raw_sha256",
+            "profile_sha256", "model", "profile", "checks", "raw",
+            "provider", "role", "slot", "case", "transport_series",
+        }, "role canary proof")
+        if any(proof[field] != item[field] for field in ("provider", "role", "slot", "case", "transport_series")):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary proof binding differs")
+        if (not isinstance(proof["request_id"], str) or not proof["request_id"].strip()
+            or proof["request_id"] in request_ids):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary request identity is invalid or reused")
+        request_ids.add(proof["request_id"])
+        if any(not isinstance(proof[key], str) or _SHA256.fullmatch(proof[key]) is None
+               for key in ("request_sha256", "writer_sha256", "raw_sha256", "profile_sha256")):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary digest is invalid")
+        checks = proof["checks"]
+        if (not isinstance(checks, dict) or not _CANARY_CHECKS <= checks.keys()
+            or not all(value is True for value in checks.values())):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary checks failed")
+        profile, model = proof["profile"], proof["model"]
+        if (not isinstance(profile, dict) or profile.get("provider") != provider
+            or profile.get("model") != model or _wire_digest(profile) != proof["profile_sha256"]
+            or not isinstance(model, str) or not model
+            or model_family_pattern is not None and re.fullmatch(model_family_pattern, model) is None):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary model or profile differs")
+        raw = proof["raw"]
+        if not isinstance(raw, dict) or _wire_digest(raw) != proof["raw_sha256"]:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary raw proof differs")
+        evidence = raw.get("evidence")
+        if (raw.get("request_id") != proof["request_id"] or raw.get("status") != "success"
+            or not isinstance(evidence, dict)
+            or not isinstance(evidence.get("request_document"), dict)
+            or not isinstance(evidence.get("writer_schema"), dict)
+            or evidence["request_document"].get("request_id") != proof["request_id"]
+            or _wire_digest(evidence["request_document"]) != proof["request_sha256"]
+            or _wire_digest(evidence["writer_schema"]) != proof["writer_sha256"]):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary request or writer proof differs")
+
+
 @dataclass(frozen=True, slots=True)
 class RoleProviderCertification:
     """The probe_profile is the probed transport profile from the capability register; not a model or effort filter."""
@@ -336,14 +401,15 @@ def _load_role_certifications(
     entries: list[RoleProviderCertification] = []
     seen: set[tuple[AgentSlot, str]] = set()
     evidence_cache: dict[str, dict[str, Any]] = {}
+    canary_cache: dict[str, dict[str, Any]] = {}
     for raw in rows:
         expected_keys = {
             "slot", "role", "provider", "capability_profile", "manufacturer", "status", "probe_profile",
             "version_scope", "capability_sha256", "policy_sha256",
             "rights_sha256", "evidence",
         }
-        if isinstance(raw, dict) and raw.get("provider") == "antigravity":
-            expected_keys.update({"model_family_pattern", "canary_evidence"})
+        if isinstance(raw, dict):
+            expected_keys.update({key for key in ("model_family_pattern", "canary_evidence") if key in raw})
         row = _require_keys(raw, expected_keys, "certification")
         try:
             slot = AgentSlot(row["slot"])
@@ -361,16 +427,19 @@ def _load_role_certifications(
         seen.add(key)
         if row["status"] not in {"certified", "experimental", "candidate"}:
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "unknown certification status")
-        if row["status"] == "candidate" and provider != "antigravity":
-            raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "candidate provider is not measured")
         if key in _BASELINE and row["status"] != "certified":
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "baseline qualification is not certified")
         manufacturer = row["manufacturer"]
         if manufacturer != manufacturers[provider]:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "provider manufacturer differs")
         model_family_pattern = row.get("model_family_pattern")
-        if provider == "antigravity" and (manufacturer != "google" or model_family_pattern != r"^gemini-[a-z0-9.-]+$"):
-            raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "Antigravity manufacturer/model family differs from measured Gemini family")
+        if model_family_pattern is not None:
+            if not isinstance(model_family_pattern, str) or not model_family_pattern.startswith("^") or not model_family_pattern.endswith("$"):
+                raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "model family pattern must be anchored")
+            try:
+                re.compile(model_family_pattern)
+            except re.error as exc:
+                raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "invalid model family pattern") from exc
         profile_id = row["capability_profile"]
         provider_row = provider_rows.get(profile_id)
         if provider_row is None or provider_row["provider"] != provider:
@@ -382,23 +451,53 @@ def _load_role_certifications(
         }
         if row["probe_profile"] != expected_probe_profile or row["version_scope"] != expected_version:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "probe profile or version differs from capability register")
+        if model_family_pattern is not None and (
+            not isinstance(expected_probe_profile.get("model"), str)
+            or re.fullmatch(model_family_pattern, expected_probe_profile["model"]) is None
+        ):
+            raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "model family differs from capability profile")
         if row["capability_sha256"] != _digest(provider_row):
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "capability digest differs")
-        binding = binding_for_role(role)
+        try:
+            binding = binding_for(provider, role)
+        except KeyError as exc:
+            if row["status"] != "candidate":
+                raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH,
+                                         "missing provider/role rights binding") from exc
+            binding = binding_for_role(role)
         if row["policy_sha256"] != binding.policy_sha256:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "policy digest differs")
         if row["rights_sha256"] != binding.rights_sha256:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "rights digest differs")
         evidence = _require_keys(row["evidence"], {"path", "sha256"}, "evidence reference")
         evidence_path, evidence_digest = evidence["path"], evidence["sha256"]
-        if provider == "antigravity":
-            canary_ref = _require_keys(row["canary_evidence"], {"path", "sha256"}, "canary reference")
-            if canary_ref["path"] != "docs/evidence/antigravity/canary-v1.json":
-                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
-            _read_file(root, canary_ref["path"], expected_digest=canary_ref["sha256"])
-        if provider == "antigravity" and row["status"] != "candidate":
-            # Any admitted status (experimental or a later certified) needs passed canaries.
-            _validate_agy_canaries(root, row["canary_evidence"], model_family_pattern=row["model_family_pattern"])
+        canary_ref = row.get("canary_evidence")
+        if key not in _BASELINE and row["status"] != "candidate" and canary_ref is None:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "missing canary evidence")
+        if canary_ref is not None:
+            canary_ref = _require_keys(canary_ref, {"path", "sha256"}, "canary reference")
+            canary_path = canary_ref["path"]
+            if canary_path not in canary_cache:
+                canary_cache[canary_path] = _parse_json(
+                    _read_file(root, canary_path, expected_digest=canary_ref["sha256"]), canary_path,
+                )
+            else:
+                _read_file(root, canary_path, expected_digest=canary_ref["sha256"])
+            canary = canary_cache[canary_path]
+            canary_version = canary["schema_version"]
+            if canary_version in _LEGACY_CANARY_FORMATS:
+                if (provider, canary_path) != _LEGACY_CANARY_FORMATS[canary_version]:
+                    raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected legacy canary evidence path")
+                if row["status"] != "candidate":
+                    _validate_agy_canaries(root, canary_ref, model_family_pattern=model_family_pattern)
+            elif canary["schema_version"] == "role-canary-v1":
+                if not canary_path.startswith(f"docs/evidence/{provider}/"):
+                    raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary evidence provider path differs")
+                if row["status"] != "candidate":
+                    _validate_role_canaries(canary, provider=provider, role=role, slot=slot,
+                                            model_family_pattern=model_family_pattern)
+            else:
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unknown canary evidence version")
         raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
         if evidence_path not in evidence_cache:
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)

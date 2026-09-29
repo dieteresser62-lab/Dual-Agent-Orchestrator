@@ -52,6 +52,20 @@ _ROLE_BINDINGS = {
     ),
 }
 
+# This registry names only the measured legacy pairs. New pairs require their
+# own explicit rights and policy binding before they can be admitted.
+_PAIR_BINDINGS: dict[tuple[str, AgentRoleName], RoleBinding] = {
+    ("codex", AgentRoleName.IMPLEMENTER): _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER],  # allowlist:provider -- certification data: measured implementer binding
+    ("claude", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],  # allowlist:provider -- certification data: measured reviewer binding
+    ("antigravity", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],
+}
+
+
+def binding_for(provider: str, role: AgentRoleName) -> RoleBinding:
+    if not isinstance(provider, str) or not provider:
+        raise TypeError("provider must be a nonempty string")
+    return _PAIR_BINDINGS[(provider, role)]
+
 
 def binding_for_role(role: AgentRoleName) -> RoleBinding:
     if not isinstance(role, AgentRoleName):

@@ -88,6 +88,7 @@ def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(
         "schemas/native-provider-schema-capabilities-v2.json",
         "docs/evidence/role-certification-v1.json",
         "docs/evidence/role-certification-reviewer-restricted-v1.json",
+        "docs/evidence/role-certification-candidates-v1.json",
         "docs/evidence/antigravity/capability-v1.json",
         "docs/evidence/antigravity/canary-v1.json",
     ):

@@ -206,6 +206,116 @@
         ]
       },
       "capability_profile": "claude"
+    },
+    {
+      "slot": "reviewer",
+      "role": "reviewer",
+      "provider": "codex",
+      "manufacturer": "openai",
+      "status": "candidate",
+      "version_scope": {
+        "cli_version": "codex-cli 0.156.1",
+        "version_policy": "forward"
+      },
+      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+      "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
+      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
+      "evidence": {
+        "path": "docs/evidence/role-certification-candidates-v1.json",
+        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+      },
+      "probe_profile": {
+        "provider": "codex",
+        "binary_name": "codex",
+        "model": "gpt-6-sol",
+        "reasoning_or_effort": "medium",
+        "schema_transport": "output-schema-file",
+        "semantic_flags": [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--color=never",
+          "--json",
+          "--output-last-message=<runtime-file>",
+          "stdin=-"
+        ]
+      },
+      "capability_profile": "codex"
+    },
+    {
+      "slot": "final_reviewer",
+      "role": "reviewer",
+      "provider": "codex",
+      "manufacturer": "openai",
+      "status": "candidate",
+      "version_scope": {
+        "cli_version": "codex-cli 0.156.1",
+        "version_policy": "forward"
+      },
+      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+      "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
+      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
+      "evidence": {
+        "path": "docs/evidence/role-certification-candidates-v1.json",
+        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+      },
+      "probe_profile": {
+        "provider": "codex",
+        "binary_name": "codex",
+        "model": "gpt-6-sol",
+        "reasoning_or_effort": "medium",
+        "schema_transport": "output-schema-file",
+        "semantic_flags": [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--color=never",
+          "--json",
+          "--output-last-message=<runtime-file>",
+          "stdin=-"
+        ]
+      },
+      "capability_profile": "codex"
+    },
+    {
+      "slot": "implementer",
+      "role": "implementer",
+      "provider": "claude",
+      "manufacturer": "anthropic",
+      "status": "candidate",
+      "version_scope": {
+        "cli_version": "2.1.283 (Claude Code)",
+        "version_policy": "forward"
+      },
+      "capability_sha256": "1a00e39485bdc480c6ca82359b17fac91770caf84100ddedab2a2fb4bf0ab48f",
+      "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
+      "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+      "evidence": {
+        "path": "docs/evidence/role-certification-candidates-v1.json",
+        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+      },
+      "probe_profile": {
+        "provider": "claude",
+        "binary_name": "claude",
+        "model": "opus",
+        "reasoning_or_effort": "high",
+        "schema_transport": "json-schema-argument",
+        "semantic_flags": [
+          "-p",
+          "--output-format=json",
+          "--tools=Read",
+          "--allowedTools=Read",
+          "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
+          "--permission-mode=dontAsk",
+          "--restricted",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--prompt-suggestions=false",
+          "--no-session-persistence",
+          "--disable-slash-commands"
+        ]
+      },
+      "capability_profile": "claude"
     }
   ]
 }

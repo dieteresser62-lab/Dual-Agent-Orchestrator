@@ -1,0 +1,23 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "implementer": [
+      {
+        "node_id": "tests/test_role_certification.py::test_new_candidate_pairs_are_blocked_at_start_and_resume",
+        "proves": "The new implementer pair remains a candidate and is rejected at start and resume."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_role_certification.py::test_new_candidate_pairs_are_blocked_at_start_and_resume",
+        "proves": "The new reviewer pair remains a candidate and is rejected at start and resume."
+      }
+    ],
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_role_certification.py::test_new_candidate_pairs_are_blocked_at_start_and_resume",
+        "proves": "The new final reviewer pair remains a candidate and is rejected at start and resume."
+      }
+    ]
+  }
+}

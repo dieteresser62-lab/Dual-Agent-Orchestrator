@@ -48,7 +48,7 @@ from native_review_request import (
     build_native_review_request,
 )
 from agent_roles import AgentRoleName
-from role_binding import binding_for_role
+from role_binding import binding_for
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from provider_input_efficiency import (
     ProviderInputEfficiencyError,
@@ -198,7 +198,8 @@ def native_implementer_request(
     )
     evidence = [
         NativeImplementerEvidenceInput(
-            "native-policy", "system_policy", binding_for_role(AgentRoleName.IMPLEMENTER).policy
+            "native-policy", "system_policy",
+            binding_for(state.protocol_binding.implementer_profile.provider, AgentRoleName.IMPLEMENTER).policy,
         )
     ]
     request_assignment = context.assignment

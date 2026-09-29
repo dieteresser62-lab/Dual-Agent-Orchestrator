@@ -36,6 +36,8 @@ from workflow import (
     WorkflowHistory,
 )
 import workflow_requests
+import role_binding
+from agent_roles import AgentRoleName
 from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_IMPLEMENTER_SYSTEM_POLICY
 from task_contract import TaskMode, parse_task_contract
 from validation_matrix import ValidationCommand, ValidationMatrix
@@ -124,6 +126,11 @@ def test_request_builders_pass_bound_slot_capability_profiles(
         task_digest="b" * 64, task_scope_patterns=("docs/internal/plan.md",),
         target_branch="feature/swapped",
         protocol_binding=binding,
+    )
+    monkeypatch.setitem(
+        role_binding._PAIR_BINDINGS,
+        (binding.implementer_profile.provider, AgentRoleName.IMPLEMENTER),
+        role_binding.binding_for_role(AgentRoleName.IMPLEMENTER),
     )
     observed: dict[str, str] = {}
     monkeypatch.setattr(

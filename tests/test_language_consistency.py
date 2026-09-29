@@ -937,6 +937,9 @@ _PROVIDER_REFERENCE_CATEGORIES = (
 _PROVIDER_COUPLING_BASELINE = (
     ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"
 )
+# Certification rows are the provider registry itself; their provider names
+# grow when a new pair is registered. Keep the ratchet on executable files.
+_PROVIDER_REGISTRY_PATHS = frozenset({"schemas/role-provider-certifications-v1.json"})
 
 
 def _matches_config_path(root: Path, path: Path, pattern: str) -> bool:
@@ -1041,6 +1044,8 @@ def _provider_coupling_hits(
     ]
     for path in files:
         relative = path.relative_to(resolved_root).as_posix()
+        if relative in _PROVIDER_REGISTRY_PATHS:
+            continue
         actual = _provider_name_counts(path.read_text(encoding="utf-8"))
         expected = baseline.get(relative, {})
         for name in _PROVIDER_NAMES:
@@ -1185,6 +1190,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "docs/reference/einrichtung.md",
         "src/native_provider_schema.py",
         "src/role_certification.py",
+        "src/role_binding.py",
         "tests/test_native_provider_schema.py",
         "tests/test_native_contract_differential.py",
         "tests/test_native_review_request.py",

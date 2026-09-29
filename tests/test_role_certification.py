@@ -13,10 +13,11 @@ from typing import Callable
 import pytest
 
 import agent_adapters
+import role_binding
 from agent_adapters import NativeClaudeReviewAdapter, NativeCodexAdapter, create_agent_pair
 from agent_config import AgentSettings
 from agent_roles import AgentRoleName, AgentSlot
-from role_binding import binding_for_role
+from role_binding import binding_for, binding_for_role
 from role_certification import (
     CertificationError, CertificationErrorCode, CertificationTable, load_role_certifications,
 )
@@ -30,10 +31,11 @@ EVIDENCE = "docs/evidence/role-certification-v1.json"
 REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.json"
 AGY_EVIDENCE = "docs/evidence/antigravity/capability-v1.json"
 CANARY_EVIDENCE = "docs/evidence/antigravity/canary-v1.json"
+CANDIDATE_EVIDENCE = "docs/evidence/role-certification-candidates-v1.json"
 
 
 def _copy_sources(root: Path) -> None:
-    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, CANARY_EVIDENCE,
+    paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, CANARY_EVIDENCE, CANDIDATE_EVIDENCE,
              "schemas/native-provider-schema-capabilities-v2.json",
              "docs/evidence/antigravity/phase-0-v1.json",
              "docs/evidence/antigravity/qualification-series-v1.json",
@@ -91,12 +93,16 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
         (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "experimental"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
+        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "candidate"),  # allowlist:provider -- certification data: candidate row
+        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "candidate"),  # allowlist:provider -- certification data: candidate row
+        (AgentSlot.IMPLEMENTER, AgentRoleName.IMPLEMENTER, "claude", "anthropic", "candidate"),  # allowlist:provider -- certification data: candidate row
     ]
     assert table.entries[2].evidence_sha256 == table.entries[4].evidence_sha256
     assert table.entries[0].probe_profile["model"] == "gpt-6-sol"
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
     assert [entry.capability_profile for entry in table.entries] == [
         "codex", "antigravity", "claude", "antigravity", "claude",
+        "codex", "codex", "claude",  # allowlist:provider -- certification data: candidate profiles
     ]
     assert not hasattr(table.entries[0], "profile")
 
@@ -247,20 +253,165 @@ def test_agy_experimental_requires_both_canaries_and_separate_slot_entries(tmp_p
                       model="gemini-4-pro")
 
 
+def test_new_candidate_pairs_are_blocked_at_start_and_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    table = load_role_certifications()
+    selected = {
+        AgentSlot.IMPLEMENTER: "claude", AgentSlot.REVIEWER: "codex",  # allowlist:provider -- certification data: candidate occupancy
+        AgentSlot.FINAL_REVIEWER: "codex",  # allowlist:provider -- certification data: candidate occupancy
+    }
+    models = {
+        AgentSlot.IMPLEMENTER: "opus", AgentSlot.REVIEWER: "gpt-6-sol",
+        AgentSlot.FINAL_REVIEWER: "gpt-6-sol",
+    }
+    with pytest.raises(CertificationError, match="slot=implementer provider=claude.*missing qualification evidence"):  # allowlist:provider -- certification data: candidate rejection
+        table.require_occupancy(selected, models=models)
+    for slot in AgentSlot:
+        with pytest.raises(CertificationError, match=f"slot={slot.value} provider={selected[slot]}.*missing qualification evidence"):
+            table.require(selected[slot], AgentRoleName.IMPLEMENTER if slot is AgentSlot.IMPLEMENTER
+                          else AgentRoleName.REVIEWER, slot, model=models[slot])
+    monkeypatch.setattr("workflow_run_setup.load_role_certifications", lambda: table)
+    settings = {slot.value: AgentSettings(selected[slot], selected[slot], models[slot], 600, "high")
+                for slot in AgentSlot}
+    persisted = SimpleNamespace(protocol_binding=SimpleNamespace(**{
+        f"{slot.value}_profile": SimpleNamespace(provider=selected[slot], model=models[slot])
+        for slot in AgentSlot
+    }))
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*missing qualification evidence"):
+        _apply_resumed_agent_profiles(Namespace(slot_settings=settings), persisted)
+    assert binding_for("codex", AgentRoleName.IMPLEMENTER) is binding_for_role(AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: baseline binding
+    assert binding_for("claude", AgentRoleName.REVIEWER) is binding_for_role(AgentRoleName.REVIEWER)  # allowlist:provider -- certification data: baseline binding
+    with pytest.raises(KeyError):
+        binding_for(selected[AgentSlot.REVIEWER], AgentRoleName.REVIEWER)
+
+
+def test_generic_provider_canary_gates_candidate_experimental_and_certified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _copy_sources(tmp_path)
+    capability_path = tmp_path / "schemas/native-provider-schema-capabilities-v2.json"
+    capabilities = json.loads(capability_path.read_text())
+    profile = json.loads(json.dumps(capabilities["providers"][2]))
+    profile["provider"] = profile["profile_id"] = "fiction"
+    profile["transport_profile"]["provider"] = "fiction"
+    profile["transport_profile"]["model"] = "sample-v1"
+    capabilities["providers"].append(profile)
+    capability_path.write_text(json.dumps(capabilities))
+    evidence_path = "docs/evidence/fiction/capability-v1.json"
+    evidence_file = tmp_path / evidence_path
+    evidence_file.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / CANDIDATE_EVIDENCE, evidence_file)
+    evidence_sha = hashlib.sha256(evidence_file.read_bytes()).hexdigest()
+    source = json.loads((tmp_path / TABLE).read_text())["certifications"][5]
+    row = json.loads(json.dumps(source))
+    row.update(provider="fiction", manufacturer="sample-maker", capability_profile="fiction",
+               probe_profile=profile["transport_profile"],
+               capability_sha256=hashlib.sha256(json.dumps(profile, sort_keys=True,
+                   separators=(",", ":")).encode()).hexdigest(),
+               evidence={"path": evidence_path, "sha256": evidence_sha},
+               model_family_pattern=r"^sample-[a-z0-9-]+$")
+    canary_path = "docs/evidence/fiction/role-canary-v1.json"
+    request = {"request_id": "request-fiction-1"}
+    writer = {"type": "object"}
+    runtime_profile = {"provider": "fiction", "model": "sample-v1"}
+    digest = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode()).hexdigest()
+    raw = {"request_id": request["request_id"], "status": "success",
+           "evidence": {"request_document": request, "writer_schema": writer}}
+    canary = {"schema_version": "role-canary-v1", "status": "passed", "slots": {
+        "reviewer": {"provider": "fiction", "role": "reviewer", "slot": "reviewer",
+                     "case": "sample-review", "transport_series": "sample-series", "status": "passed",
+                     "proof": {"provider": "fiction", "role": "reviewer", "slot": "reviewer",
+                               "case": "sample-review", "transport_series": "sample-series",
+                               "request_id": request["request_id"], "request_sha256": digest(request),
+                               "writer_sha256": digest(writer), "raw_sha256": digest(raw),
+                               "profile_sha256": digest(runtime_profile), "model": "sample-v1",
+                               "profile": runtime_profile,
+                               "checks": {"writer": True, "domain": True, "effective_rights": True,
+                                          "isolation_postcheck": True, "no_denials": True},
+                               "raw": raw}}}}
+    canary_file = tmp_path / canary_path
+
+    def publish() -> None:
+        canary_file.write_text(json.dumps(canary))
+        row["canary_evidence"] = {"path": canary_path,
+                                  "sha256": hashlib.sha256(canary_file.read_bytes()).hexdigest()}
+        _mutate(tmp_path, lambda table: table["certifications"].__setitem__(-1, row))
+
+    _mutate(tmp_path, lambda table: (table["provider_manufacturers"].update(fiction="sample-maker"),
+                                      table["certifications"].append(row)))
+    table = load_role_certifications(root=tmp_path)
+    with pytest.raises(CertificationError, match="missing qualification evidence"):
+        table.require("fiction", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model="sample-v1")
+    row["status"] = "experimental"
+    _mutate(tmp_path, lambda table: table["certifications"].__setitem__(-1, row))
+    with pytest.raises(CertificationError, match="missing provider/role rights binding"):
+        load_role_certifications(root=tmp_path)
+    monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("fiction", AgentRoleName.REVIEWER),
+                        binding_for_role(AgentRoleName.REVIEWER))
+    with pytest.raises(CertificationError, match="missing canary evidence"):
+        load_role_certifications(root=tmp_path)
+    publish()
+    table = load_role_certifications(root=tmp_path)
+    assert table.require("fiction", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model="sample-v2").status == "experimental"
+    with pytest.raises(CertificationError, match="does not match manufacturer sample-maker family"):
+        table.require("fiction", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model="other-v1")
+    for field, value in (("status", "pending"), ("slot", "final_reviewer")):
+        original = canary["slots"]["reviewer"][field]
+        canary["slots"]["reviewer"][field] = value
+        publish()
+        with pytest.raises(CertificationError):
+            load_role_certifications(root=tmp_path)
+        canary["slots"]["reviewer"][field] = original
+    canary["slots"]["reviewer"]["proof"]["raw"]["status"] = "error"
+    publish()
+    with pytest.raises(CertificationError, match="raw proof differs"):
+        load_role_certifications(root=tmp_path)
+    canary["slots"]["reviewer"]["proof"]["raw"]["status"] = "success"
+    publish()
+    row["status"] = "certified"
+    publish()
+    assert load_role_certifications(root=tmp_path).require(
+        "fiction", AgentRoleName.REVIEWER, AgentSlot.REVIEWER, model="sample-v3").status == "certified"
+    canary["status"] = "pending"
+    publish()
+    with pytest.raises(CertificationError, match="role canary did not pass"):
+        load_role_certifications(root=tmp_path)
+    canary["status"] = "passed"
+    duplicate = json.loads(json.dumps(canary["slots"]["reviewer"]))
+    duplicate["slot"] = duplicate["proof"]["slot"] = "final_reviewer"
+    canary["slots"]["final_reviewer"] = duplicate
+    publish()
+    with pytest.raises(CertificationError, match="reused"):
+        load_role_certifications(root=tmp_path)
+    canary["slots"].pop("final_reviewer")
+    canary["slots"]["reviewer"]["proof"]["writer_sha256"] = "0" * 64
+    publish()
+    with pytest.raises(CertificationError, match="request or writer proof differs"):
+        load_role_certifications(root=tmp_path)
+    canary["slots"]["reviewer"]["proof"]["writer_sha256"] = digest(writer)
+    row["model_family_pattern"] = r"^other-[a-z0-9-]+$"
+    publish()
+    with pytest.raises(CertificationError, match="model family differs from capability profile"):
+        load_role_certifications(root=tmp_path)
+
+
 def test_every_evidence_node_id_exists_in_the_test_suite() -> None:
     _assert_node_ids_exist(json.loads((ROOT / EVIDENCE).read_text()))
     _assert_node_ids_exist(json.loads((ROOT / REVIEWER_EVIDENCE).read_text()))
     _assert_node_ids_exist(json.loads((ROOT / AGY_EVIDENCE).read_text()))
+    _assert_node_ids_exist(json.loads((ROOT / CANDIDATE_EVIDENCE).read_text()))
 
 
 def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -> None:
     _copy_sources(tmp_path)
     assert not (tmp_path / "tests").exists()
-    assert len(load_role_certifications(root=tmp_path).entries) == 5
+    assert len(load_role_certifications(root=tmp_path).entries) == 8
 
 
 @pytest.mark.parametrize("change,code", [
-    (lambda doc: doc["certifications"].pop(), CertificationErrorCode.BASELINE_MISSING),
+    (lambda doc: doc["certifications"].pop(4), CertificationErrorCode.BASELINE_MISSING),
     (lambda doc: doc["certifications"].append(doc["certifications"][0]), CertificationErrorCode.DUPLICATE_ENTRY),
     (lambda doc: doc["certifications"][0].update(status="unknown"), CertificationErrorCode.ENTRY_INVALID),
     (lambda doc: doc["certifications"][0].update(status="experimental"), CertificationErrorCode.SOURCE_MISMATCH),
@@ -334,7 +485,7 @@ def test_unknown_evidence_node_is_a_test_failure_only(tmp_path: Path) -> None:
             node_id="tests/test_agent_adapters.py::test_missing_evidence_node"
         ),
     )
-    assert len(load_role_certifications(root=tmp_path).entries) == 5
+    assert len(load_role_certifications(root=tmp_path).entries) == 8
     with pytest.raises(AssertionError, match="test_missing_evidence_node"):
         _assert_node_ids_exist(json.loads((tmp_path / EVIDENCE).read_text()))
 
@@ -366,3 +517,12 @@ def test_factory_checks_pair_and_slot_before_instantiating(monkeypatch: pytest.M
 
 def test_import_has_no_global_registry() -> None:
     assert "AGENT_REGISTRY" not in vars(agent_adapters)
+
+
+def test_agy_rows_keep_the_measured_gemini_family_binding() -> None:
+    # Steering review of Slice C1: the Gemini binding moved from code into the table.
+    # The AGY CLI also offers other vendors' models, so the data must stay pinned.
+    table = json.loads((ROOT / TABLE).read_text())
+    rows = [row for row in table["certifications"] if row["provider"] == "antigravity"]
+    assert rows and all(row["manufacturer"] == "google" and
+                        row["model_family_pattern"] == r"^gemini-[a-z0-9.-]+$" for row in rows)
