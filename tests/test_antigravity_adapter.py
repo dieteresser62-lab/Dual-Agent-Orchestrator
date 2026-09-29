@@ -919,3 +919,19 @@ def test_orchestrator_review_path_accepts_the_registered_agy_transport(tmp_path:
     assert "is_native_review_adapter(native_adapter)" in source
     assert orchestrator.is_native_review_adapter is is_native_review_adapter
 
+
+
+def test_every_certification_lookup_binds_the_slot_model() -> None:
+    # Found by the first real AGY run (29 Sep 2026): record creation called require()
+    # without the model, so the Gemini family binding rejected an experimental AGY slot.
+    import ast
+
+    missing = []
+    for path in sorted((Path(__file__).resolve().parents[1] / "src").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "require" and len(node.args) >= 3
+                    and not any(keyword.arg == "model" for keyword in node.keywords)):
+                missing.append(f"{path.name}:{node.lineno}")
+    assert missing == []

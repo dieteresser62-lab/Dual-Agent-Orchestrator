@@ -332,7 +332,7 @@ def _create_production_state(
 
     def bound_profile(slot: AgentSlot) -> AgentProfileBinding:
         settings = slots[slot.value]
-        certificate = certifications.require(settings.name, role_for_slot(slot), slot)
+        certificate = certifications.require(settings.name, role_for_slot(slot), slot, model=settings.model)
         return AgentProfileBinding(
             model=settings.model, effort=settings.effort, provider=settings.name,
             profile_name=settings.profile_name,

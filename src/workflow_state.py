@@ -296,7 +296,7 @@ def scripted_profile_binding(slot: str) -> AgentProfileBinding:
         for field in ("binary", "model", "timeout", "effort")
     })
     config = resolve_agent_settings(namespace, {})[slot]
-    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected)
+    cert = load_role_certifications().require(config.name, role_for_slot(selected), selected, model=config.model)
     identity = ProviderIdentity.dry_run(slot)
     return AgentProfileBinding(
         config.model, config.effort, config.name, config.binary,
