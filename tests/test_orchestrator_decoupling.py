@@ -1,0 +1,349 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from dataclasses import replace
+import hashlib
+import json
+import shutil
+
+import pytest
+
+import agent_adapters
+from agent_roles import AgentRoleName, AgentSlot
+from cli import ConfigError, load_repo_config, parse_args
+from provider_input_budget import default_provider_input_budget_policy
+from role_occupancy import provider_roles
+from workflow_state import WorkflowStep
+
+
+def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Promote only test copies of candidate pairs with generic fake proofs."""
+    import cli
+    import role_binding
+    import role_certification
+    import workflow_production
+    import workflow_run_setup
+    from role_binding import binding_for_role
+
+    root = Path(__file__).resolve().parents[1]
+    table_path = "schemas/role-provider-certifications-v1.json"
+    for relative in (
+        table_path,
+        "schemas/native-provider-schema-capabilities-v2.json",
+        "docs/evidence/role-certification-v1.json",
+        "docs/evidence/role-certification-reviewer-restricted-v1.json",
+        "docs/evidence/role-certification-candidates-v1.json",
+        "docs/evidence/antigravity/capability-v1.json",
+        "docs/evidence/antigravity/canary-v1.json",
+        "docs/evidence/antigravity/phase-0-v1.json",
+        "docs/evidence/antigravity/qualification-series-v1.json",
+        "docs/evidence/antigravity/quality-results-v1.json",
+        "docs/evidence/antigravity/operator-decisions-v1.json",
+    ):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / relative, target)
+    monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("claude", AgentRoleName.IMPLEMENTER), binding_for_role(AgentRoleName.IMPLEMENTER))  # allowlist:provider -- certification data: fake new pair
+    monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("codex", AgentRoleName.REVIEWER), binding_for_role(AgentRoleName.REVIEWER))  # allowlist:provider -- certification data: fake new pair
+    table = json.loads((tmp_path / table_path).read_text(encoding="utf-8"))
+
+    def digest(value: object) -> str:
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    for provider, slots, model in (
+        ("claude", ("implementer",), "opus"),  # allowlist:provider -- certification data: fake canary
+        ("codex", ("reviewer", "final_reviewer"), "gpt-6-sol"),  # allowlist:provider -- certification data: fake canary
+    ):
+        cases = {}
+        for slot in slots:
+            role = "implementer" if slot == "implementer" else "reviewer"
+            request = {"request_id": f"fake-{provider}-{slot}"}
+            writer = {"type": "object"}
+            profile = {"provider": provider, "model": model}
+            raw = {"request_id": request["request_id"], "status": "success", "evidence": {"request_document": request, "writer_schema": writer}}
+            fields = {"provider": provider, "role": role, "slot": slot, "case": "fake-journey", "transport_series": "task-c2"}
+            cases[slot] = {**fields, "status": "passed", "proof": {
+                **fields, "request_id": request["request_id"], "request_sha256": digest(request),
+                "writer_sha256": digest(writer), "raw_sha256": digest(raw),
+                "profile_sha256": digest(profile), "model": model, "profile": profile,
+                "checks": {key: True for key in ("writer", "domain", "effective_rights", "isolation_postcheck", "no_denials")},
+                "raw": raw,
+            }}
+        path = f"docs/evidence/{provider}/role-canary-v1.json"
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"schema_version": "role-canary-v1", "status": "passed", "slots": cases}), encoding="utf-8")
+        reference = {"path": path, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+        for row in table["certifications"]:
+            if row["provider"] == provider and row["slot"] in slots:
+                row["status"] = "experimental"
+                row["canary_evidence"] = reference
+    (tmp_path / table_path).write_text(json.dumps(table), encoding="utf-8")
+    original = role_certification.load_role_certifications
+    loader = lambda: original(root=tmp_path)
+    for module in (cli, role_certification, workflow_production, workflow_run_setup, agent_adapters):
+        monkeypatch.setattr(module, "load_role_certifications", loader)
+    loader()
+
+
+@pytest.mark.parametrize(
+    ("implementer", "reviewer", "final_reviewer"),
+    (
+        ("codex", "claude", "claude"),  # allowlist:provider -- profile configuration: baseline topology
+        ("codex", "antigravity", "antigravity"),  # allowlist:provider -- profile configuration: review topology
+        ("claude", "codex", "codex"),  # allowlist:provider -- profile configuration: target topology
+    ),
+)
+def test_budget_defaults_follow_selected_slots(
+    implementer: str, reviewer: str, final_reviewer: str,
+) -> None:
+    occupancy = (
+        ("implementer", "implementer", implementer),
+        ("reviewer", "reviewer", reviewer),
+        ("final_reviewer", "reviewer", final_reviewer),
+    )
+    policy = default_provider_input_budget_policy(occupancy)
+    assert len(policy.rules) == 7
+    assert policy.select(implementer, "implementer", WorkflowStep.IMPLEMENTER_PLAN.value)
+    assert policy.select(reviewer, "reviewer", WorkflowStep.REVIEWER_SLICE_REVIEW.value)
+    assert policy.select(final_reviewer, "reviewer", WorkflowStep.REVIEWER_FINAL_REVIEW.value)
+    assert {rule.provider for rule in policy.rules} == {implementer, reviewer, final_reviewer}
+
+
+def test_repo_defaults_and_explicit_budget_use_selected_occupancy(tmp_path: Path) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(
+        '[roles]\nimplementer = "writer"\nreviewer = "reader"\nfinal_reviewer = "reader"\n'
+        '[agent_profiles.writer]\nprovider = "claude"\nmodel = "sonnet"\neffort = "high"\n'  # allowlist:provider -- profile configuration: selected implementer
+        '[agent_profiles.reader]\nprovider = "codex"\nmodel = "gpt-6-sol"\neffort = "high"\n',  # allowlist:provider -- profile configuration: selected reviewer
+        encoding="utf-8",
+    )
+    loaded = load_repo_config(config)
+    assert loaded.provider_input_budget.select("claude", "implementer", "implementer_plan")  # allowlist:provider -- profile configuration: selected implementer
+    assert loaded.provider_input_budget.select("codex", "reviewer", "reviewer_final_review")  # allowlist:provider -- profile configuration: selected reviewer
+    assert {rule.provider for rule in loaded.provider_input_budget.rules} == {"claude", "codex"}  # allowlist:provider -- profile configuration: selected topology
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '[[provider_input_budget]]\nprovider = "antigravity"\n'
+            'role = "reviewer"\noperation = "reviewer_plan_review"\n'
+            'max_chars = 10\nmax_bytes = 10\n'
+        )
+    with pytest.raises(ConfigError, match="must be complete"):
+        load_repo_config(config)
+
+
+@pytest.mark.parametrize(
+    "occupancy",
+    (
+        {AgentSlot.IMPLEMENTER: "codex", AgentSlot.REVIEWER: "codex", AgentSlot.FINAL_REVIEWER: "claude"},  # allowlist:provider -- profile configuration: invalid topology
+        {AgentSlot.IMPLEMENTER: "claude", AgentSlot.REVIEWER: "codex", AgentSlot.FINAL_REVIEWER: "claude"},  # allowlist:provider -- profile configuration: invalid topology
+    ),
+)
+def test_provider_roles_reject_implementer_review_collision(occupancy: dict[AgentSlot, str]) -> None:
+    with pytest.raises(ValueError, match="conflicting roles"):
+        provider_roles(occupancy)
+
+
+@pytest.mark.parametrize(
+    ("implementer", "reviewer", "final_reviewer"),
+    (("codex", "codex", "claude"), ("claude", "codex", "claude")),  # allowlist:provider -- profile configuration: invalid topologies
+)
+def test_colliding_topology_is_rejected_before_provider_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    implementer: str, reviewer: str, final_reviewer: str,
+) -> None:
+    _fake_certifications(tmp_path / "qualification", monkeypatch)
+    models = {"codex": "gpt-6-sol", "claude": "opus"}  # allowlist:provider -- profile configuration: fake models
+    names = {"implementer": implementer, "reviewer": reviewer, "final_reviewer": final_reviewer}
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(
+        "[roles]\n" + "".join(f'{slot} = "{slot}"\n' for slot in names)
+        + "".join(
+            f'[agent_profiles.{slot}]\nprovider = "{provider}"\nmodel = "{models[provider]}"\neffort = "high"\n'
+            for slot, provider in names.items()
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="manufacturer|conflict"):
+        parse_args([], cwd=tmp_path, environ={})
+
+
+def test_registered_fake_transports_are_accepted_per_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeImplementer:
+        name = "claude"  # allowlist:provider -- transport: fake implementer
+        execution_boundary_profile = "none"
+
+    class FakeReviewer:
+        name = "codex"  # allowlist:provider -- transport: fake reviewer
+
+    monkeypatch.setitem(agent_adapters.NATIVE_IMPLEMENTER_TRANSPORTS, "claude", FakeImplementer)  # allowlist:provider -- transport: fake registration
+    monkeypatch.setitem(agent_adapters.NATIVE_REVIEW_TRANSPORTS, "codex", FakeReviewer)  # allowlist:provider -- transport: fake registration
+    assert agent_adapters.is_native_implementer_adapter(FakeImplementer())
+    assert agent_adapters.is_native_review_adapter(FakeReviewer())
+    assert not agent_adapters.is_native_implementer_adapter(SimpleNamespace(name="claude"))  # allowlist:provider -- transport: registration negative control
+    assert not agent_adapters.is_native_review_adapter(SimpleNamespace(name="codex"))  # allowlist:provider -- transport: registration negative control
+    assert not agent_adapters.is_native_implementer_adapter(FakeReviewer())
+
+
+def test_generic_implementer_preparation_has_no_codex_boundary(  # allowlist:provider -- transport: boundary test
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_runtime
+    from test_agent_adapters import _codex_bundle  # allowlist:provider -- transport: existing request fixture
+    from provider_input_budget import PreparedProviderInput, ProviderInputComponent
+
+    prepared = PreparedProviderInput(("fake",), None, (ProviderInputComponent("stdin_prompt", "prompt"),))
+
+    class FakeImplementer:
+        name = "claude"  # allowlist:provider -- transport: fake implementer
+        execution_boundary_profile = "none"
+
+        def prepare_native_provider_input(self, bundle):
+            assert bundle is request
+            return prepared
+
+    request = _codex_bundle()  # allowlist:provider -- transport: existing request fixture
+
+    def capture(adapter, prompt, **kwargs):
+        assert isinstance(adapter, FakeImplementer)
+        assert prompt == request.canonical_json
+        assert kwargs["prepared_provider_input"] is prepared
+        assert kwargs["execution_root_override"] is None
+        raise RuntimeError("captured generic preparation")
+
+    monkeypatch.setattr(agent_runtime, "run_agent", capture)
+    with pytest.raises(RuntimeError, match="captured generic preparation"):
+        agent_runtime.run_native_implementer_agent(
+            FakeImplementer(), request,
+            config=agent_runtime.OrchestratorConfig(repo_root=tmp_path),
+            shorten=lambda text, _limit: text or "",
+            operation="implementer_plan", binding_fingerprint="a" * 64,
+        )
+
+
+def test_live_stream_and_quota_use_transport_profiles() -> None:
+    from datetime import datetime, timezone
+    from agent_runtime import _compact_stream_text, parse_quota_reset
+
+    adapter = SimpleNamespace(name="fiction", reviewer=False, live_stream_profile="json-events")
+    assert _compact_stream_text(
+        adapter, "stdout", '{"item":{"text":"progress"}}', {}
+    ) == "progress"
+    reset = parse_quota_reset(
+        "fiction", "reset at 2026-09-30T10:00:00Z",
+        received_at=datetime(2026, 9, 29, tzinfo=timezone.utc),
+        reset_profile="standard",
+    )
+    assert reset is not None
+    assert reset.reset_at_utc == datetime(2026, 9, 30, 10, tzinfo=timezone.utc)
+
+
+def test_existing_topology_request_bytes_match_pre_slice_digests() -> None:
+    from native_implementer_request import build_native_implementer_request
+    from native_review_request import build_native_review_request
+    from test_native_implementer_request import _spec as implementer_spec
+    from test_native_review_request import _spec as review_spec
+    from test_antigravity_adapter import _bundle as alternative_review_bundle
+
+    requests = (
+        (build_native_implementer_request(implementer_spec()).canonical_json,
+         "4cde1043b4abcb1e20d24a28195a7fbbfde2229866853ad8b09a1dc07b2c8ae4"),
+        (build_native_review_request(review_spec()).canonical_json,
+         "15cb6a530b96433f69d4f60e1a39cdeab6af3a0d90a00b8e056c2475f5f92097"),
+        (alternative_review_bundle().canonical_json,
+         "fa6239da816e18a62a2f913660e3b5787d16246cf72bbe54dbadd51fcd5ab7ca"),
+    )
+    for content, expected in requests:
+        assert hashlib.sha256(content.encode("utf-8")).hexdigest() == expected
+
+
+@pytest.mark.parametrize(
+    ("implementer", "reviewer"),
+    (("codex", "claude"), ("codex", "antigravity"), ("claude", "codex")),  # allowlist:provider -- profile configuration: journey topologies
+)
+def test_topology_plan_slice_final_review_and_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    implementer: str, reviewer: str,
+) -> None:
+    import test_orchestrator_runtime as fixture
+    from agent_adapters import NativeClaudeReviewAdapter, NativeCodexAdapter, build_slot_agent_registry  # allowlist:provider -- transport: registered fake base classes
+    from artifact_store import ArtifactStore
+    from artifact_models import FinalReviewCompletedPayload
+    from orchestrator import ProductionWorkflowDriver, run_production_workflow
+    from workflow import ImplementerInvocation, ReviewerInvocation
+    from workflow_state import WorkUnitKind
+
+    if implementer == "claude":  # allowlist:provider -- profile configuration: target fake journey
+        _fake_certifications(tmp_path / "qualification", monkeypatch)
+
+        class FakeImplementer(NativeCodexAdapter):  # allowlist:provider -- transport: fake implementer base
+            pass
+
+        class FakeReviewer(NativeClaudeReviewAdapter):  # allowlist:provider -- transport: fake reviewer base
+            pass
+
+        monkeypatch.setitem(agent_adapters.NATIVE_IMPLEMENTER_TRANSPORTS, "claude", FakeImplementer)  # allowlist:provider -- transport: fake registration
+        monkeypatch.setitem(agent_adapters.NATIVE_REVIEW_TRANSPORTS, "codex", FakeReviewer)  # allowlist:provider -- transport: fake registration
+
+    repository = fixture._repository(tmp_path, "feature/fake-topology")
+    if reviewer != "claude" or implementer != "codex":  # allowlist:provider -- profile configuration: selected journey
+        provider_model = {"codex": "gpt-6-sol", "claude": "opus", "antigravity": "gemini-3.1-pro-high"}  # allowlist:provider -- profile configuration: fake models
+        (repository / "orchestrator.toml").write_text(
+            '[roles]\nimplementer = "writer"\nreviewer = "reader"\nfinal_reviewer = "reader"\n'
+            f'[agent_profiles.writer]\nprovider = "{implementer}"\nmodel = "{provider_model[implementer]}"\neffort = "high"\n'
+            f'[agent_profiles.reader]\nprovider = "{reviewer}"\nmodel = "{provider_model[reviewer]}"\neffort = "high"\n',
+            encoding="utf-8",
+        )
+        fixture._git(repository, "add", "orchestrator.toml")
+        fixture._git(repository, "commit", "-m", "test slot profiles")
+    task = tmp_path / "task.md"
+    fixture._write_task(task, "feature/fake-topology", "src/one.py")
+    args = fixture._args(repository, task)
+    registry = build_slot_agent_registry(args.slot_settings)
+    assert agent_adapters.is_native_implementer_adapter(registry["implementer"])
+    assert agent_adapters.is_native_review_adapter(registry["reviewer"])
+    assert agent_adapters.is_native_review_adapter(registry["final_reviewer"])
+    steps: list[WorkflowStep] = []
+
+    def implement(_driver: ProductionWorkflowDriver, invocation: ImplementerInvocation):
+        steps.append(invocation.step)
+        target = repository / "src/one.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if invocation.step is WorkflowStep.IMPLEMENTER_PLAN:
+            target.write_text("value = 0\n", encoding="utf-8")
+            return fixture._native_plan_output(invocation, summary="add implementation", scope_paths=("src/one.py",))
+        target.write_text("value = 1\n", encoding="utf-8")
+        return fixture._native_implementation_output(invocation)
+
+    def review(driver: ProductionWorkflowDriver, invocation: ReviewerInvocation):
+        steps.append(invocation.step)
+        if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW:
+            return fixture._native_final_review_output(driver, invocation, finding_id="R-01")
+        return fixture._native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", implement)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
+    monkeypatch.chdir(repository)
+    result = run_production_workflow(task, args)
+    assert result.workflow_completed, result.state.current_work_unit.gate.detail
+    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert {WorkflowStep.IMPLEMENTER_PLAN, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+            WorkflowStep.REVIEWER_PLAN_REVIEW, WorkflowStep.REVIEWER_SLICE_REVIEW,
+            WorkflowStep.REVIEWER_FINAL_REVIEW} <= set(steps)
+    chain = ArtifactStore(repository, result.state.run_id).load_chain()
+    assert sum(isinstance(record.payload, FinalReviewCompletedPayload) for record in chain) == 1
+    resumed_args = fixture._args(repository, task)
+    resumed_args.resume = True
+    resumed = run_production_workflow(task, resumed_args)
+    assert resumed.workflow_completed
+    assert steps.count(WorkflowStep.REVIEWER_FINAL_REVIEW) == 1
+    drifted_args = fixture._args(repository, task)
+    drifted_args.resume = True
+    drifted_args.agent_profile_overrides = frozenset({("reviewer", "model")})
+    drifted_args.slot_settings["reviewer"] = replace(
+        drifted_args.slot_settings["reviewer"], model="different-model"
+    )
+    from state_io import StateSchemaError
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF"):
+        run_production_workflow(task, drifted_args)

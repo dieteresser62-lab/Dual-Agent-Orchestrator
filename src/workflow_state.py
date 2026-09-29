@@ -201,6 +201,8 @@ class ProtocolMode(str, Enum):
     STRUCTURED_V2 = "structured-v2"
 
 
+# Historical names identify immutable protocol versions, not provider assignments.
+# Keep their serialized field names and values stable for record replay and resume.
 NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v3"
 NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v3"
 
@@ -1406,11 +1408,11 @@ class BootstrapCheckFact:
         for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
             if not SHA256_PATTERN.fullmatch(value):
                 raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
-        from role_occupancy import provider_roles, registered_providers
+        from role_occupancy import registered_providers
 
-        # Bootstrap facts name the slot's provider; a certified non-default reviewer
-        # (an experimental reviewer) is valid although the shipped TOML omits it.
-        if (self.provider not in provider_roles() and self.provider not in registered_providers()) or self.role not in {role.value for role in AgentRole}:
+        # The immutable run profile binds the actual slot. The capability register
+        # validates provider syntax here; no shipped TOML occupancy is consulted.
+        if self.provider not in registered_providers() or self.role not in {role.value for role in AgentRole}:
             raise WorkflowStateValidationError("bootstrap provider and role are invalid")
         _require_non_empty(self.operation, "bootstrap operation")
         _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")

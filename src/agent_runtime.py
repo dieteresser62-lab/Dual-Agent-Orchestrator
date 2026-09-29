@@ -578,7 +578,7 @@ def _compact_stream_text(
     if not text:
         return None
 
-    if channel == "stdout" and adapter.name == "codex" and text.startswith("{"):
+    if channel == "stdout" and getattr(adapter, "live_stream_profile", "plain") == "json-events" and text.startswith("{"):
         try:
             event = json.loads(text)
         except json.JSONDecodeError:
@@ -1079,7 +1079,7 @@ def verify_agent_capabilities(
         adapter.model,
         adapter.effort,
         f"{adapter.timeout}s" if adapter.timeout else "unlimited",
-        "read-only-reviewer" if adapter.reviewer else "workspace-write-implementer",
+        getattr(adapter, "log_profile", "read-only-reviewer" if adapter.reviewer else "workspace-write-implementer"),
     )
 
 
@@ -1570,6 +1570,19 @@ def _adapter_role(adapter: AgentAdapter) -> str:
     return AgentRoleName.REVIEWER.value if adapter.reviewer else AgentRoleName.IMPLEMENTER.value
 
 
+def _require_input_budget_registration(
+    agent_key: str, operation: str | None, policy: ProviderInputBudgetPolicy,
+) -> None:
+    # Preserve the missing-operation diagnosis for legacy scripted adapters.
+    # Real starts require a rule in the run's slot-bound policy.
+    if not policy.registered_operations(agent_key) and (
+        operation or agent_key not in PROVIDER_OPERATIONS
+    ):
+        raise ProviderInputBudgetError(
+            f"adapter {agent_key!r} has no provider input budget registration"
+        )
+
+
 def run_agent(
     adapter: AgentAdapter,
     prompt: str,
@@ -1591,12 +1604,7 @@ def run_agent(
         return build_dry_run_agent_output(agent_key, prompt)
     if getattr(adapter, "requires_attempt_ledger", False) and attempt_invocation is None:
         raise ValueError("adapter start requires a provider attempt ledger")
-    if (agent_key not in PROVIDER_OPERATIONS
-        and not config.provider_input_budget.registered_operations(agent_key)):
-        raise ProviderInputBudgetError(
-            f"adapter {agent_key!r} has no provider input budget registration"
-        )
-
+    _require_input_budget_registration(agent_key, operation, config.provider_input_budget)
     workspace: ReviewerWorkspace | None = None
     execution_root = (
         execution_root_override.resolve()
@@ -1972,6 +1980,8 @@ def run_native_review_agent_checked(
             adapter.name,
             exc,
             invocation_id=invocation_id,
+            quota_reset_profile=getattr(adapter, "quota_reset_profile", "standard"),
+            session_limit_profile=getattr(adapter, "session_limit_profile", "standard"),
         )
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
@@ -2007,7 +2017,7 @@ def run_native_review_agent_checked(
 
 @dataclass(frozen=True, slots=True)
 class NativeAgentImplementerOutput:
-    """One schema-, request-, and domain-bound native Codex result."""
+    """One schema-, request-, and domain-bound native implementer result."""
 
     result: ImplementerContractResult
     canonical_json: str
@@ -2033,11 +2043,18 @@ def run_native_implementer_agent(
     validated_response_callback: Callable[[str], None] | None = None,
     execution_boundary: NativeCodexExecutionBoundary | None = None,
 ) -> NativeAgentImplementerOutput:
-    """Run native Codex without marker parsing, flag extraction, or repair."""
-    boundary = execution_boundary or NativeCodexExecutionBoundary.production(
-        config.repo_root
-    )
-    prepared = adapter.prepare_native_provider_input(bundle, boundary)
+    """Run a registered native implementer without marker parsing or repair."""
+    if getattr(adapter, "execution_boundary_profile", "typed-sandbox") == "typed-sandbox":
+        boundary = execution_boundary or NativeCodexExecutionBoundary.production(
+            config.repo_root
+        )
+        prepared = adapter.prepare_native_provider_input(bundle, boundary)
+        execution_root = boundary.execution_root
+    else:
+        if execution_boundary is not None:
+            raise ValueError("execution boundary is not supported by this transport")
+        prepared = adapter.prepare_native_provider_input(bundle)
+        execution_root = None
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -2049,7 +2066,7 @@ def run_native_implementer_agent(
         pre_start_callback=pre_start_callback,
         attempt_invocation=attempt_invocation,
         prepared_provider_input=prepared,
-        execution_root_override=boundary.execution_root,
+        execution_root_override=execution_root,
     )
     try:
         document = json.loads(canonical)
@@ -2175,6 +2192,8 @@ def run_native_implementer_agent_checked(
             adapter.name,
             exc,
             invocation_id=invocation_id,
+            quota_reset_profile=getattr(adapter, "quota_reset_profile", "standard"),
+            session_limit_profile=getattr(adapter, "session_limit_profile", "standard"),
         )
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
@@ -2256,10 +2275,15 @@ def parse_quota_reset(
     received_at: datetime,
     provider_data: Mapping[str, object] | None = None,
     local_timezone: tzinfo | None = None,
+    reset_profile: str | None = None,
 ) -> QuotaReset | None:
     """Parse only unambiguous provider reset evidence, normalized to UTC."""
-    if agent_key not in {"codex", "claude"}:
-        raise ValueError("quota parser requires a known agent role")
+    if reset_profile is None:
+        from agent_adapters import NATIVE_IMPLEMENTER_TRANSPORTS, _review_transports
+        transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(agent_key) or _review_transports().get(agent_key)
+        if transport is None:
+            raise ValueError("quota parser requires a registered transport")
+        reset_profile = transport.quota_reset_profile
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("quota parser received_at must be timezone-aware")
     received_utc = received_at.astimezone(timezone.utc)
@@ -2338,7 +2362,7 @@ def parse_quota_reset(
         return None
 
     dated_local_values: list[tuple[datetime, str]] = []
-    if agent_key == "codex" and _CODEX_DATED_LOCAL_RESET_TRIGGER_PATTERN.search(
+    if reset_profile == "dated-local" and _CODEX_DATED_LOCAL_RESET_TRIGGER_PATTERN.search(
         provider_text or ""
     ):
         source_zone = local_timezone or _system_local_timezone()
@@ -2600,12 +2624,35 @@ def is_structured_output_retry_exhaustion(
     )
 
 
+def _registered_session_limit_profile(agent_key: str) -> str:
+    from agent_adapters import NATIVE_IMPLEMENTER_TRANSPORTS, _review_transports
+
+    transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(agent_key) or _review_transports().get(agent_key)
+    return getattr(transport, "session_limit_profile", "standard")
+
+
+def _diagnostic_texts(value: object) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    found: list[str] = []
+    for key, child in value.items():
+        if isinstance(child, Mapping):
+            found.extend(_diagnostic_texts(child))
+        elif isinstance(child, str) and key in _PROVIDER_DIAGNOSTIC_KEYS:
+            found.append(child)
+        elif key in {"status", "code"} and isinstance(child, int):
+            found.append(str(child))
+    return found
+
+
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
     *,
     invocation_id: str,
     received_at: datetime | None = None,
+    quota_reset_profile: str | None = None,
+    session_limit_profile: str | None = None,
 ) -> AgentInvocationError:
     """Classify one failed invocation without retrying or substituting its role."""
     stamp = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -2647,22 +2694,11 @@ def classify_agent_failure(
         if technical_text == provider_text:
             technical_text += "; classified=output"
     lowered = technical_text.lower()
-    def diagnostic_texts(value: object) -> list[str]:
-        if not isinstance(value, Mapping):
-            return []
-        found: list[str] = []
-        for key, child in value.items():
-            if isinstance(child, Mapping):
-                found.extend(diagnostic_texts(child))
-            elif isinstance(child, str) and key in _PROVIDER_DIAGNOSTIC_KEYS:
-                found.append(child)
-            elif key in {"status", "code"} and isinstance(child, int):
-                found.append(str(child))
-        return found
-
-    structured_text = " ".join(diagnostic_texts(provider_data))
-    claude_technical_session_limit = (
-        agent_key == "claude"
+    structured_text = " ".join(_diagnostic_texts(provider_data))
+    if session_limit_profile is None:
+        session_limit_profile = _registered_session_limit_profile(agent_key)
+    technical_session_limit = (
+        session_limit_profile == "technical-session-limit"
         and (
             isinstance(exc, AgentProcessError)
             or (
@@ -2704,13 +2740,14 @@ def classify_agent_failure(
     elif (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
-        or claude_technical_session_limit
+        or technical_session_limit
     ):
         reset = parse_quota_reset(
             agent_key,
             technical_text,
             received_at=stamp,
             provider_data=provider_data if isinstance(provider_data, Mapping) else None,
+            reset_profile=quota_reset_profile,
         )
         return QuotaReachedError(
             agent_key,

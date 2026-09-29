@@ -231,24 +231,40 @@ class ProviderInputBudgetPolicy:
         return hashlib.sha256(encoded).hexdigest()
 
 
-def default_provider_input_budget_policy() -> ProviderInputBudgetPolicy:
+def default_provider_input_budget_policy(
+    occupancy: tuple[tuple[str, str, str], ...] | None = None,
+) -> ProviderInputBudgetPolicy:
     # Final review reads the full branch from its read-only workspace; it
     # does not serialize that branch into the provider request.  Its metered
     # input has the same components as a Slice review, so the same generous
     # safety ceiling remains appropriate for both operations.
+    selected = occupancy if occupancy is not None else tuple(
+        (slot.value, (AgentRoleName.IMPLEMENTER if slot is AgentSlot.IMPLEMENTER else AgentRoleName.REVIEWER).value, provider)
+        for slot, provider in role_occupancy.current_pre_toml_occupancy().items()
+    )
+    operations = {
+        (provider, role, operation)
+        for slot, role, provider in selected
+        for operation in (
+            _ROLE_OPERATIONS[AgentRoleName.IMPLEMENTER]
+            if slot == AgentSlot.IMPLEMENTER.value else
+            {WorkflowStep.REVIEWER_FINAL_REVIEW.value}
+            if slot == AgentSlot.FINAL_REVIEWER.value else
+            _ROLE_OPERATIONS[AgentRoleName.REVIEWER] - {WorkflowStep.REVIEWER_FINAL_REVIEW.value}
+        )
+    }
     return ProviderInputBudgetPolicy(
         tuple(
             ProviderInputBudgetRule(
                 provider,
-                PROVIDER_ROLES[provider],
+                role,
                 operation,
                 4_000_000,
                 16_000_000,
             )
-            for provider, operations in sorted(PROVIDER_OPERATIONS.items())
-            for operation in sorted(operations)
+            for provider, role, operation in sorted(operations)
         ),
-        tuple((slot.value, (AgentRoleName.IMPLEMENTER if slot is AgentSlot.IMPLEMENTER else AgentRoleName.REVIEWER).value, provider) for slot, provider in role_occupancy.current_pre_toml_occupancy().items()),
+        selected,
     )
 
 

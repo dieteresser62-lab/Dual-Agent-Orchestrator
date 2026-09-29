@@ -1,6 +1,7 @@
 """Current slot occupancy and its provider-to-role projection."""
 
 from pathlib import Path
+from collections.abc import Mapping
 import tomllib
 
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
@@ -16,10 +17,10 @@ def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
     }
 
 
-def provider_roles() -> dict[str, AgentRoleName]:
+def provider_roles(occupancy: Mapping[AgentSlot, str] | None = None) -> dict[str, AgentRoleName]:
     """Derive each provider's role from the occupied slots."""
     roles: dict[str, AgentRoleName] = {}
-    for slot, provider in current_pre_toml_occupancy().items():
+    for slot, provider in (current_pre_toml_occupancy() if occupancy is None else occupancy).items():
         role = role_for_slot(slot)
         prior = roles.setdefault(provider, role)
         if prior is not role:

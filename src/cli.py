@@ -463,7 +463,7 @@ def load_repo_config(path: Path) -> RepoConfig:
         provider_input_budget=(
             _load_provider_input_budget(raw["provider_input_budget"], occupancy)
             if "provider_input_budget" in raw
-            else default_provider_input_budget_policy()
+            else default_provider_input_budget_policy(occupancy)
         ),
         repository=(
             _load_repository(raw["repository"])

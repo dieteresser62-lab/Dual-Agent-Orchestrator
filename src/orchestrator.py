@@ -16,7 +16,7 @@ from typing import Callable, Mapping, get_args, get_type_hints
 from agent_adapters import (
     AgentAdapter,
     PROVIDER_FAILURE_METRIC_KEYS,
-    NativeCodexAdapter,
+    is_native_implementer_adapter,
     is_native_review_adapter,
 )
 from agent_runtime import (
@@ -1184,7 +1184,7 @@ class ProductionWorkflowDriver:
             )
         self.assert_structured_decision_context()
         native_adapter = self._adapter_for_slot("implementer")
-        if not isinstance(native_adapter, NativeCodexAdapter):
+        if not is_native_implementer_adapter(native_adapter):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
             )

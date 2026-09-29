@@ -256,7 +256,6 @@ class NativeReviewAdapter(AgentAdapter, Protocol):
 class NativeImplementerAdapter(AgentAdapter, Protocol):
     def prepare_native_provider_input(
         self, bundle: NativeImplementerRequestBundle,
-        execution_boundary: NativeCodexExecutionBoundary | None = None,
     ) -> PreparedProviderInput: ...
 
 
@@ -270,6 +269,14 @@ class _BaseAdapter:
     requires_attempt_ledger = False
     sanitize_reviewer_environment = True
     set_pwd = True
+    live_stream_profile = "plain"
+    quota_reset_profile = "standard"
+    session_limit_profile = "standard"
+    execution_boundary_profile = "none"
+
+    @property
+    def log_profile(self) -> str:
+        return "read-only-reviewer" if self.reviewer else "workspace-write-implementer"
 
     def __init__(self, settings: AgentSettings) -> None:
         self.settings = settings
@@ -388,6 +395,9 @@ class _BaseAdapter:
 class NativeCodexAdapter(_BaseAdapter):
     """Codex transport whose last message is one schema-bound JSON object."""
 
+    live_stream_profile = "json-events"
+    quota_reset_profile = "dated-local"
+    execution_boundary_profile = "typed-sandbox"
     required_hosts = ("chatgpt.com", "api.openai.com")
     capability = CapabilitySpec(
         version_args=("--version",),
@@ -580,6 +590,7 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
     """Claude reviewer transport whose output is the native review JSON object."""
 
     reviewer = True
+    session_limit_profile = "technical-session-limit"
     required_hosts = ("api.anthropic.com",)
     capability = CapabilitySpec(
         version_args=("--version",),
@@ -854,13 +865,31 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
-def is_native_review_adapter(adapter: object) -> bool:
-    """Whether a slot adapter is one of the registered native review transports."""
-    if isinstance(adapter, NativeClaudeReviewAdapter):  # allowlist:provider -- transport: registered native review adapter
-        return True
+NATIVE_IMPLEMENTER_TRANSPORTS: dict[str, type[AgentAdapter]] = {
+    "codex": NativeCodexAdapter,
+}
+NATIVE_REVIEW_TRANSPORTS: dict[str, type[AgentAdapter]] = {
+    "claude": NativeClaudeReviewAdapter,
+}
+
+
+def _review_transports() -> dict[str, type[AgentAdapter]]:
     from antigravity_adapter import NativeAntigravityReviewAdapter
 
-    return isinstance(adapter, NativeAntigravityReviewAdapter)
+    NATIVE_REVIEW_TRANSPORTS.setdefault("antigravity", NativeAntigravityReviewAdapter)
+    return NATIVE_REVIEW_TRANSPORTS
+
+
+def is_native_implementer_adapter(adapter: object) -> bool:
+    """Accept only a transport registered for the adapter's provider."""
+    transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(getattr(adapter, "name", None))
+    return transport is not None and isinstance(adapter, transport)
+
+
+def is_native_review_adapter(adapter: object) -> bool:
+    """Whether a slot adapter is one of the registered native review transports."""
+    transport = _review_transports().get(getattr(adapter, "name", None))
+    return transport is not None and isinstance(adapter, transport)
 
 
 def create_reviewer_qualification_adapter(
@@ -872,13 +901,10 @@ def create_reviewer_qualification_adapter(
     same role binding and adapter class as a normal reviewer slot.
     """
     binding = role_binding or binding_for(settings.name, AgentRoleName.REVIEWER)
-    if settings.name == "claude":
-        return NativeClaudeReviewAdapter(settings, role_binding=binding)
-    if settings.name == "antigravity":
-        from antigravity_adapter import NativeAntigravityReviewAdapter
-
-        return NativeAntigravityReviewAdapter(settings, role_binding=binding)
-    raise ValueError(f"provider={settings.name}: missing reviewer transport registration")
+    transport = _review_transports().get(settings.name)
+    if transport is None:
+        raise ValueError(f"provider={settings.name}: missing reviewer transport registration")
+    return transport(settings, role_binding=binding)
 
 
 def create_agent_pair(
@@ -898,8 +924,13 @@ def create_agent_pair(
     if settings.name != provider:
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for(provider, role)
-    if provider == "codex" and role is AgentRoleName.IMPLEMENTER:
-        adapter = NativeCodexAdapter(settings, role_binding=binding)
+    if role is AgentRoleName.IMPLEMENTER:
+        transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(provider)
+        if transport is None:
+            raise ValueError(
+                f"slot={slot.value} provider={provider}: missing transport/role rights binding"
+            )
+        adapter = transport(settings, role_binding=binding)
     elif role is AgentRoleName.REVIEWER:
         adapter = create_reviewer_qualification_adapter(settings, role_binding=binding)
     else:

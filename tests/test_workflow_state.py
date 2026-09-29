@@ -1446,14 +1446,10 @@ def test_state_scope_rejects_orchestrator_internal_paths() -> None:
         )
 
 
-def test_bootstrap_fact_accepts_synthetic_registered_role_occupancy(monkeypatch) -> None:
+def test_bootstrap_fact_uses_registry_without_shipped_occupancy(monkeypatch) -> None:
     import role_occupancy
-    from agent_roles import AgentRoleName
 
-    monkeypatch.setattr(role_occupancy, "provider_roles", lambda: {
-        "claude": AgentRoleName.IMPLEMENTER,
-        "codex": AgentRoleName.REVIEWER,
-    })
+    monkeypatch.setattr(role_occupancy, "provider_roles", lambda: (_ for _ in ()).throw(AssertionError("shipped occupancy read")))
     fact = BootstrapCheckFact(
         "provider_input_measurement", "a" * 64, "claude", "implementer",
         "implementer_plan", 1, "b" * 64, "allowed",

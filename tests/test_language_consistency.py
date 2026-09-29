@@ -1201,6 +1201,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "src/agent_config.py",
         "src/agent_runtime.py",
         "tests/test_antigravity_adapter.py",
+        "tests/test_orchestrator_decoupling.py",
         "tests/test_cli.py",
         "tests/test_agent_config.py",
         "tests/test_workflow_run_setup.py",
