@@ -113,11 +113,11 @@ def test_request_builders_pass_bound_slot_capability_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from role_certification import load_role_certifications
-    digests = {entry.provider: entry.capability_sha256 for entry in load_role_certifications().entries}
+    digests = {(entry.provider, entry.role): entry.capability_sha256 for entry in load_role_certifications().entries}
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2, "3",
-        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude", capability_sha256=digests["claude"]),  # allowlist:provider -- transport: swapped occupancy fixture
-        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex", capability_sha256=digests["codex"]),  # allowlist:provider -- transport: swapped occupancy fixture
+        implementer_profile=replace(scripted_profile_binding("implementer"), provider="claude", capability_sha256=digests[("claude", AgentRoleName.IMPLEMENTER)]),  # allowlist:provider -- transport: swapped occupancy fixture
+        reviewer_profile=replace(scripted_profile_binding("reviewer"), provider="codex", capability_sha256=digests[("codex", AgentRoleName.REVIEWER)]),  # allowlist:provider -- transport: swapped occupancy fixture
         final_reviewer_profile=scripted_profile_binding("final_reviewer"),
     )
     state = init_workflow_state(
@@ -143,7 +143,7 @@ def test_request_builders_pass_bound_slot_capability_profiles(
     )
     _codex_bundle(state=state)  # allowlist:provider -- transport: implementer request fixture
     _review_bundle(state=state.with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW))
-    assert observed == {"implementer": "claude", "reviewer": "codex"}  # allowlist:provider -- transport: forwarded profiles
+    assert observed == {"implementer": "claude", "reviewer": "codex-reviewer"}  # allowlist:provider -- transport: forwarded profiles
 
 
 def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> None:

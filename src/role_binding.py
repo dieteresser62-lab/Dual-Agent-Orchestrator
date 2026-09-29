@@ -56,6 +56,22 @@ _ROLE_BINDINGS = {
 # own explicit rights and policy binding before they can be admitted.
 _PAIR_BINDINGS: dict[tuple[str, AgentRoleName], RoleBinding] = {
     ("codex", AgentRoleName.IMPLEMENTER): _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER],  # allowlist:provider -- certification data: measured implementer binding
+    ("codex", AgentRoleName.REVIEWER): RoleBinding(  # allowlist:provider -- certification data: isolated reviewer binding
+        AgentRoleName.REVIEWER,
+        _ROLE_BINDINGS[AgentRoleName.REVIEWER].contract,
+        _ROLE_BINDINGS[AgentRoleName.REVIEWER].policy,
+        MappingProxyType({
+            "profile": "dao-reviewer",
+            "read_roots": ":minimal,<codex-package-root>,:workspace_roots/.",  # allowlist:provider -- certification data: symbolic read roots
+            "sandbox_flag": "absent",
+            "network": "disabled",
+            "user_config": "ignored",
+            "exec_rules": "ignored",
+            "project_docs": "disabled",
+            "shell_environment": "core",
+            "disabled_features": "apps,plugins,multi_agent,goals,browser_use,computer_use,image_generation,hooks,skill_search,tool_suggest,remote_plugin",
+        }),
+    ),
     ("claude", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],  # allowlist:provider -- certification data: measured reviewer binding
     ("antigravity", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],
 }

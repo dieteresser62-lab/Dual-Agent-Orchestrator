@@ -939,7 +939,11 @@ _PROVIDER_COUPLING_BASELINE = (
 )
 # Certification rows are the provider registry itself; their provider names
 # grow when a new pair is registered. Keep the ratchet on executable files.
-_PROVIDER_REGISTRY_PATHS = frozenset({"schemas/role-provider-certifications-v1.json"})
+_PROVIDER_REGISTRY_PATHS = frozenset({
+    "schemas/role-provider-certifications-v1.json",
+    "schemas/native-provider-schema-capabilities-v2.json",
+    "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer proof register
+})
 
 
 def _matches_config_path(root: Path, path: Path, pattern: str) -> bool:
@@ -1197,6 +1201,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "tests/test_role_certification.py",
         "tests/fixtures/native-provider-projection-baseline-v1.json",
         "src/antigravity_adapter.py",
+        "src/codex_review_adapter.py",  # allowlist:provider -- transport: active reviewer adapter
         "src/agent_adapters.py",
         "src/agent_config.py",
         "src/agent_runtime.py",

@@ -40,6 +40,7 @@ from provider_input_budget import (
     default_provider_input_budget_policy, measure_provider_input,
 )
 from provider_identity import ProviderIdentity
+from reviewer_input import REVIEW_INPUT_PATH_PLACEHOLDER
 
 
 FIXTURE = Path(__file__).parent / "fixtures/antigravity-envelopes-v1.json"
@@ -61,7 +62,7 @@ def _settings(timeout: int | None = 1800) -> AgentSettings:
     return AgentSettings("antigravity", "agy", "gemini-3.1-pro-high", timeout, "high")
 
 
-def _bundle():
+def _bundle(*, criterion: str = "Review exactly one change."):
     attestation = ValidationAttestation(
         attestation_id="validation-agy-fake", diff_fingerprint="c" * 64,
         expected_commands=("pytest",),
@@ -79,7 +80,7 @@ def _bundle():
             context=context, review_kind=NativeReviewKind.SLICE,
             target_branch="feature/fake", base_commit="b" * 40,
             authorized_paths=("src/example.py",),
-            acceptance_criteria=("Review exactly one change.",),
+            acceptance_criteria=(criterion,),
             evidence=(NativeReviewEvidenceInput("diff", "diff", "diff --git"),),
         ), profile="antigravity",
     )
@@ -98,6 +99,35 @@ def _workspace(tmp_path: Path) -> AntigravityWorkspace:
     settings = home / "settings.json"
     settings.write_text("{}", encoding="utf-8")
     return AntigravityWorkspace(container, repo, input_dir, home, agent, settings, container / "agy.log")
+
+
+def _input_digest(prepared: PreparedProviderInput) -> str:
+    content = json.dumps(
+        [(item.name, item.content) for item in prepared.components],
+        ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
+def test_repeated_review_input_measurement_is_stable_and_wire_paths_are_real(tmp_path: Path) -> None:
+    digests = []
+    for index, bundle in enumerate((_bundle(), _bundle(), _bundle(criterion="Review another change."))):
+        workspace = _workspace(tmp_path / f"dao-agy-run-{index:06d}")
+        adapter = NativeAntigravityReviewAdapter(_settings(), isolated_home=workspace.home)
+        adapter.bind_prepared_workspace(workspace)
+        prepared = adapter.prepare_native_provider_input(bundle)
+        digests.append(_input_digest(prepared))
+        assert REVIEW_INPUT_PATH_PLACEHOLDER in next(
+            item.content for item in prepared.components if item.name == "packet_manifest"
+        )
+        assert REVIEW_INPUT_PATH_PLACEHOLDER not in " ".join(prepared.command)
+        assert str(workspace.input_dir / "native-review-manifest.md") in " ".join(prepared.command)
+        assert REVIEW_INPUT_PATH_PLACEHOLDER not in "".join(
+            path.read_text(encoding="utf-8") for path in workspace.input_dir.rglob("*") if path.is_file()
+        )
+        adapter.cleanup()
+    assert digests[0] == digests[1]
+    assert digests[0] != digests[2]
 
 
 def _isolated_adapter(tmp_path: Path, run_root: Path) -> NativeAntigravityReviewAdapter:
@@ -283,10 +313,12 @@ def test_prepared_command_is_measured_and_timeout_consistent(
         "system_policy", "response_schema", "packet_manifest", "start_directive",
         "request_chunk_001",
     }
-    assert any("ü" in item.content for item in prepared.components if item.name == "start_directive")
-    assert next(item.content for item in prepared.components if item.name == "packet_manifest") == (
-        workspace.input_dir / "native-review-manifest.md"
-    ).read_text(encoding="utf-8")
+    assert "ü" in command[2]  # The transmitted directive keeps the actual path.
+    measured_manifest = next(item.content for item in prepared.components if item.name == "packet_manifest")
+    transmitted_manifest = (workspace.input_dir / "native-review-manifest.md").read_text(encoding="utf-8")
+    assert REVIEW_INPUT_PATH_PLACEHOLDER in measured_manifest
+    assert REVIEW_INPUT_PATH_PLACEHOLDER not in transmitted_manifest
+    assert str(workspace.input_dir) in transmitted_manifest
     defaults = default_provider_input_budget_policy()
     policy = ProviderInputBudgetPolicy(
         tuple(ProviderInputBudgetRule(

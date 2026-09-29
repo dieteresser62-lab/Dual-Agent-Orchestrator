@@ -34,6 +34,7 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         "docs/evidence/role-certification-v1.json",
         "docs/evidence/role-certification-reviewer-restricted-v1.json",
         "docs/evidence/role-certification-candidates-v1.json",
+        "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer candidate proof
         "docs/evidence/antigravity/capability-v1.json",
         "docs/evidence/antigravity/canary-v1.json",
         "docs/evidence/antigravity/phase-0-v1.json",
@@ -45,7 +46,6 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, target)
     monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("claude", AgentRoleName.IMPLEMENTER), binding_for_role(AgentRoleName.IMPLEMENTER))  # allowlist:provider -- certification data: fake new pair
-    monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("codex", AgentRoleName.REVIEWER), binding_for_role(AgentRoleName.REVIEWER))  # allowlist:provider -- certification data: fake new pair
     table = json.loads((tmp_path / table_path).read_text(encoding="utf-8"))
 
     def digest(value: object) -> str:
@@ -267,7 +267,7 @@ def test_topology_plan_slice_final_review_and_resume(
     implementer: str, reviewer: str,
 ) -> None:
     import test_orchestrator_runtime as fixture
-    from agent_adapters import NativeClaudeReviewAdapter, NativeCodexAdapter, build_slot_agent_registry  # allowlist:provider -- transport: registered fake base classes
+    from agent_adapters import NativeCodexAdapter, build_slot_agent_registry  # allowlist:provider -- transport: registered fake base classes
     from artifact_store import ArtifactStore
     from artifact_models import FinalReviewCompletedPayload
     from orchestrator import ProductionWorkflowDriver, run_production_workflow
@@ -280,11 +280,7 @@ def test_topology_plan_slice_final_review_and_resume(
         class FakeImplementer(NativeCodexAdapter):  # allowlist:provider -- transport: fake implementer base
             pass
 
-        class FakeReviewer(NativeClaudeReviewAdapter):  # allowlist:provider -- transport: fake reviewer base
-            pass
-
         monkeypatch.setitem(agent_adapters.NATIVE_IMPLEMENTER_TRANSPORTS, "claude", FakeImplementer)  # allowlist:provider -- transport: fake registration
-        monkeypatch.setitem(agent_adapters.NATIVE_REVIEW_TRANSPORTS, "codex", FakeReviewer)  # allowlist:provider -- transport: fake registration
 
     repository = fixture._repository(tmp_path, "feature/fake-topology")
     if reviewer != "claude" or implementer != "codex":  # allowlist:provider -- profile configuration: selected journey
@@ -305,6 +301,27 @@ def test_topology_plan_slice_final_review_and_resume(
     assert agent_adapters.is_native_review_adapter(registry["reviewer"])
     assert agent_adapters.is_native_review_adapter(registry["final_reviewer"])
     steps: list[WorkflowStep] = []
+    expected_review = None
+    if implementer == "claude":  # allowlist:provider -- transport: reviewer fake process boundary
+        import agent_runtime
+        from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: real reviewer adapter
+        package = tmp_path / "node_modules/@openai/codex"  # allowlist:provider -- transport: fake identity package
+        (package / "bin").mkdir(parents=True)
+        native = package / "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"  # allowlist:provider -- transport: installed npm layout
+        native.parent.mkdir(parents=True)
+        native.write_text("fake native binary")
+        native.chmod(0o755)
+        entry = package / "bin/codex.js"  # allowlist:provider -- transport: fake identity entry
+        entry.write_text("fake")
+
+        def fake_reviewer_process(adapter, prompt, *, prepared_provider_input, **_kwargs):
+            assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: real reviewer adapter
+            assert prepared_provider_input.stdin_text.startswith(adapter.role_binding.policy)
+            adapter.before_provider_process()
+            adapter.invocation.last_message_file.write_text(json.dumps({"result": json.loads(expected_review.canonical_json)}))
+            return adapter.extract_output("", "", {})
+
+        monkeypatch.setattr(agent_runtime, "run_agent", fake_reviewer_process)
 
     def implement(_driver: ProductionWorkflowDriver, invocation: ImplementerInvocation):
         steps.append(invocation.step)
@@ -319,8 +336,25 @@ def test_topology_plan_slice_final_review_and_resume(
     def review(driver: ProductionWorkflowDriver, invocation: ReviewerInvocation):
         steps.append(invocation.step)
         if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW:
-            return fixture._native_final_review_output(driver, invocation, finding_id="R-01")
-        return fixture._native_review_approval(invocation)
+            expected = fixture._native_final_review_output(driver, invocation, finding_id="R-01")
+        else:
+            expected = fixture._native_review_approval(invocation)
+        if implementer != "claude":  # allowlist:provider -- transport: existing baseline fake reviews
+            return expected
+        from agent_runtime import OrchestratorConfig, run_native_review_agent
+        from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: real reviewer adapter
+        adapter = driver._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
+        assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: real reviewer adapter
+        adapter.provider_identity = SimpleNamespace(kind="verified", entry_path=str(entry))
+        nonlocal expected_review
+        expected_review = expected
+        return run_native_review_agent(
+            adapter, invocation.native_request,
+            config=OrchestratorConfig(repo_root=repository),
+            shorten=lambda value, _limit: value or "",
+            reviewer_manifest_paths=invocation.review_packet.manifest.snapshot_paths if invocation.review_packet else None,
+            operation=invocation.step.value, binding_fingerprint=invocation.fingerprint,
+        )
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", implement)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)

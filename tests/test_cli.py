@@ -89,6 +89,7 @@ def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(
         "docs/evidence/role-certification-v1.json",
         "docs/evidence/role-certification-reviewer-restricted-v1.json",
         "docs/evidence/role-certification-candidates-v1.json",
+        "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer candidate proof
         "docs/evidence/antigravity/capability-v1.json",
         "docs/evidence/antigravity/canary-v1.json",
     ):

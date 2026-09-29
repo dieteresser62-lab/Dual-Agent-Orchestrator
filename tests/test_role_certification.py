@@ -32,10 +32,12 @@ REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.jso
 AGY_EVIDENCE = "docs/evidence/antigravity/capability-v1.json"
 CANARY_EVIDENCE = "docs/evidence/antigravity/canary-v1.json"
 CANDIDATE_EVIDENCE = "docs/evidence/role-certification-candidates-v1.json"
+CODEX_REVIEW_CANDIDATE_EVIDENCE = "docs/evidence/codex/reviewer-candidate-v1.json"  # allowlist:provider -- certification data: reviewer proof
 
 
 def _copy_sources(root: Path) -> None:
     paths = {TABLE, EVIDENCE, REVIEWER_EVIDENCE, AGY_EVIDENCE, CANARY_EVIDENCE, CANDIDATE_EVIDENCE,
+             CODEX_REVIEW_CANDIDATE_EVIDENCE,  # allowlist:provider -- certification data: reviewer proof
              "schemas/native-provider-schema-capabilities-v2.json",
              "docs/evidence/antigravity/phase-0-v1.json",
              "docs/evidence/antigravity/qualification-series-v1.json",
@@ -102,7 +104,7 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
     assert [entry.capability_profile for entry in table.entries] == [
         "codex", "antigravity", "claude", "antigravity", "claude",
-        "codex", "codex", "claude",  # allowlist:provider -- certification data: candidate profiles
+            "codex-reviewer", "codex-reviewer", "claude",  # allowlist:provider -- certification data: candidate profiles
     ]
     assert not hasattr(table.entries[0], "profile")
 
@@ -282,8 +284,7 @@ def test_new_candidate_pairs_are_blocked_at_start_and_resume(
         _apply_resumed_agent_profiles(Namespace(slot_settings=settings), persisted)
     assert binding_for("codex", AgentRoleName.IMPLEMENTER) is binding_for_role(AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: baseline binding
     assert binding_for("claude", AgentRoleName.REVIEWER) is binding_for_role(AgentRoleName.REVIEWER)  # allowlist:provider -- certification data: baseline binding
-    with pytest.raises(KeyError):
-        binding_for(selected[AgentSlot.REVIEWER], AgentRoleName.REVIEWER)
+    assert binding_for(selected[AgentSlot.REVIEWER], AgentRoleName.REVIEWER).permissions["profile"] == "dao-reviewer"
 
 
 def test_generic_provider_canary_gates_candidate_experimental_and_certified(
@@ -311,6 +312,7 @@ def test_generic_provider_canary_gates_candidate_experimental_and_certified(
                    separators=(",", ":")).encode()).hexdigest(),
                evidence={"path": evidence_path, "sha256": evidence_sha},
                model_family_pattern=r"^sample-[a-z0-9-]+$")
+    row["rights_sha256"] = binding_for_role(AgentRoleName.REVIEWER).rights_sha256
     canary_path = "docs/evidence/fiction/role-canary-v1.json"
     request = {"request_id": "request-fiction-1"}
     writer = {"type": "object"}
@@ -402,6 +404,7 @@ def test_every_evidence_node_id_exists_in_the_test_suite() -> None:
     _assert_node_ids_exist(json.loads((ROOT / REVIEWER_EVIDENCE).read_text()))
     _assert_node_ids_exist(json.loads((ROOT / AGY_EVIDENCE).read_text()))
     _assert_node_ids_exist(json.loads((ROOT / CANDIDATE_EVIDENCE).read_text()))
+    _assert_node_ids_exist(json.loads((ROOT / CODEX_REVIEW_CANDIDATE_EVIDENCE).read_text()))  # allowlist:provider -- certification data: reviewer proof
 
 
 def test_runtime_certification_does_not_need_a_tests_directory(tmp_path: Path) -> None:

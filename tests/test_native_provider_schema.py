@@ -104,9 +104,11 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         "antigravity",
         "claude",
         "codex",
+        "codex-reviewer",  # allowlist:provider -- profile configuration: reviewer transport
     ]
     assert {item["profile_id"]: item["version_policy"] for item in capabilities["providers"]} == {
         "antigravity": "forward", "claude": "forward", "codex": "forward",
+        "codex-reviewer": "forward",  # allowlist:provider -- profile configuration: reviewer version policy
     }
     assert {
         frozenset(item["features"]) for item in capabilities["providers"]

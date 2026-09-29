@@ -875,8 +875,10 @@ NATIVE_REVIEW_TRANSPORTS: dict[str, type[AgentAdapter]] = {
 
 def _review_transports() -> dict[str, type[AgentAdapter]]:
     from antigravity_adapter import NativeAntigravityReviewAdapter
+    from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: reviewer registration
 
     NATIVE_REVIEW_TRANSPORTS.setdefault("antigravity", NativeAntigravityReviewAdapter)
+    NATIVE_REVIEW_TRANSPORTS.setdefault("codex", NativeCodexReviewAdapter)  # allowlist:provider -- transport: reviewer registration
     return NATIVE_REVIEW_TRANSPORTS
 
 

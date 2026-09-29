@@ -14,7 +14,10 @@ from native_review_request import (
     NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec,
     build_native_review_request,
 )
-from reviewer_input import ReviewerInputError, _split_text_at_lines, build_reviewer_input
+from reviewer_input import (
+    REVIEW_INPUT_PATH_PLACEHOLDER, ReviewerInputError, _split_text_at_lines,
+    build_reviewer_input, measured_reviewer_path_text,
+)
 from test_agent_adapters import _review_bundle
 
 
@@ -128,6 +131,33 @@ def test_paged_manifest_and_chunk_bytes_match_start_head(
         ]
     finally:
         adapter.cleanup()
+
+
+def test_fixed_measurement_path_stabilizes_paged_manifest(tmp_path: Path) -> None:
+    base = _review_bundle()
+    bundle = build_native_review_request(NativeReviewRequestSpec(
+        context=base.bound_context.context,
+        review_kind=NativeReviewKind.SLICE,
+        target_branch="feature/native",
+        base_commit="b" * 40,
+        authorized_paths=("src/workflow.py",),
+        acceptance_criteria=("Inspect all evidence.",),
+        evidence=(NativeReviewEvidenceInput("e" * 180, "diff", "z" * 240_001),),
+    ))
+    measurements = []
+    for suffix in ("aaaaaa", "bbbbbb"):
+        input_dir = tmp_path / f"random-review-run-{suffix}" / "container/input"
+        input_dir.mkdir(parents=True)
+        prepared = build_reviewer_input(
+            bundle, input_dir, chunk_chars=5_000,
+            measured_path_placeholder=REVIEW_INPUT_PATH_PLACEHOLDER,
+        )
+        assert len(prepared.manifest_pages) > 1
+        measurements.append(tuple((item.name, item.content) for item in prepared.components))
+        assert REVIEW_INPUT_PATH_PLACEHOLDER in measured_reviewer_path_text(prepared.directive, input_dir)
+        assert REVIEW_INPUT_PATH_PLACEHOLDER not in prepared.directive
+        assert REVIEW_INPUT_PATH_PLACEHOLDER not in prepared.manifest_file.read_text(encoding="utf-8")
+    assert measurements[0] == measurements[1]
 
 
 def test_materialization_failure_and_abort_remove_temporary_files(

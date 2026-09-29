@@ -6,8 +6,10 @@ import copy
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 from typing import Any, Iterable, Mapping, Sequence
 from schema_patterns import schema_pattern_violations
 
@@ -117,6 +119,19 @@ AGY_SEMANTIC_FLAGS = (
     "--print-timeout=<seconds>", "--disable-slash-commands", "--sandbox",
     "--model=<model>", "--effort=<effort>", "--log-file=<runtime-file>",
     "--agent=dao-reviewer",
+)
+CODEX_REVIEW_DISABLED_FEATURES = (  # allowlist:provider -- profile configuration: reviewer CLI binding
+    "apps", "plugins", "multi_agent", "goals", "browser_use", "computer_use",
+    "image_generation", "hooks", "skill_search", "tool_suggest", "remote_plugin",
+)
+CODEX_REVIEW_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: reviewer CLI binding
+    "exec", "--skip-git-repo-check", "--ephemeral", "--color=never", "--json",
+    "--output-schema=<runtime-file>", "--output-last-message=<runtime-file>",
+    "-C=<container>", "--ignore-user-config", "--ignore-rules",
+    *(f"--disable={feature}" for feature in CODEX_REVIEW_DISABLED_FEATURES),  # allowlist:provider -- profile configuration: reviewer CLI binding
+    "web_search=disabled", "project_doc_max_bytes=0",
+    "shell_environment_policy.inherit=core", "permissions=dao-reviewer",
+    "default_permissions=dao-reviewer", "stdin=-",
 )
 KNOWN_SCHEMA_KEYWORDS = OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS | frozenset(
     SCHEMA_FEATURE_KEYWORDS
@@ -692,8 +707,13 @@ def _schema_pointer(pointer: str, *parts: str) -> str:
 
 
 def normalize_transport_profile(
-    provider: str, command: Sequence[str]
+    provider: str, command: Sequence[str], *, bound_package_root: Path | None = None,
+    bound_container: Path | None = None, bound_runtime_dir: Path | None = None,
 ) -> ProviderTransportProfile:
+    if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
+        if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
+            raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
+        return _normalize_codex_reviewer(command, bound_package_root, bound_container, bound_runtime_dir)  # allowlist:provider -- profile configuration: reviewer transport
     if provider == "codex":
         return _normalize_codex(command)
     if provider == "claude":
@@ -737,6 +757,103 @@ def _normalize_codex(command: Sequence[str]) -> ProviderTransportProfile:
             "--output-last-message=<runtime-file>",
             "stdin=-",
         ),
+    )
+
+
+def codex_review_permission_config(package_root: Path) -> str:  # allowlist:provider -- profile configuration: reviewer CLI binding
+    root = str(package_root)
+    if not package_root.is_absolute() or any(ord(char) < 32 or char in {'"', '\\'} for char in root):
+        raise NativeProviderSchemaError("unsafe Codex package root")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    return (
+        'permissions.dao-reviewer={filesystem={":minimal"="read",'
+        f'"{root}"="read"' + ',":workspace_roots"={"."="read"}}}'
+    )
+
+
+def validate_codex_review_package_root(package_root: Path) -> None:  # allowlist:provider -- profile configuration: reviewer package boundary
+    if (not package_root.is_absolute() or package_root.parts[-3:] != ("node_modules", "@openai", "codex")  # allowlist:provider -- profile configuration: npm package root
+        or not package_root.is_dir() or package_root.resolve() != package_root
+        or not (package_root / "bin" / "codex.js").is_file()):  # allowlist:provider -- profile configuration: npm package entry
+        raise NativeProviderSchemaError("Codex reviewer package root differs")  # allowlist:provider -- profile configuration: reviewer package boundary
+    candidates = (
+        *package_root.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"),  # allowlist:provider -- profile configuration: npm native binary
+        *package_root.glob("vendor/*/bin/codex"),  # allowlist:provider -- profile configuration: legacy native binary
+    )
+    if len(candidates) != 1:
+        raise NativeProviderSchemaError("Codex reviewer package has no unique native binary")  # allowlist:provider -- profile configuration: reviewer package boundary
+    try:
+        binary = candidates[0]
+        target = binary.resolve(strict=True)
+        metadata = binary.stat()
+        within_root = all(
+            part.resolve(strict=True).is_relative_to(package_root)
+            for part in (binary, *binary.parents)
+            if part != package_root and part.is_relative_to(package_root)
+        )
+    except (OSError, RuntimeError) as exc:
+        raise NativeProviderSchemaError("Codex reviewer native binary is missing") from exc  # allowlist:provider -- profile configuration: reviewer package boundary
+    if (not within_root or not target.is_relative_to(package_root) or not stat.S_ISREG(metadata.st_mode)
+        or not metadata.st_mode & 0o111 or not os.access(binary, os.X_OK)):
+        raise NativeProviderSchemaError("Codex reviewer native binary is unsafe")  # allowlist:provider -- profile configuration: reviewer package boundary
+
+
+def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: reviewer CLI binding
+    command: Sequence[str], bound_package_root: Path,
+    bound_container: Path, bound_runtime_dir: Path,
+) -> ProviderTransportProfile:
+    if not command or Path(command[0]).name != "codex":  # allowlist:provider -- profile configuration: reviewer CLI binding
+        raise NativeProviderSchemaError("Codex reviewer binary differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    values = list(command[1:])
+    if any(flag.startswith(("--sandbox", "--dangerously-", "--add-dir")) or flag == "--full-auto" for flag in values):
+        raise NativeProviderSchemaError("Codex reviewer command broadens permissions")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    # Exact ordered grammar rejects duplicate flags, unknown settings and wider roots.
+    if len(values) != 51:
+        raise NativeProviderSchemaError("Codex reviewer command length differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    expected_fixed = [
+        "exec", "--model", values[2], "--config", values[4],
+        "--skip-git-repo-check", "--ephemeral", "--color", "never", "--json",
+        "--output-schema", values[11], "--output-last-message", values[13],
+        "-C", values[15], "--ignore-user-config", "--ignore-rules",
+    ]
+    if values[:18] != expected_fixed or not values[2] or not re.fullmatch(r'model_reasoning_effort="[a-z]+"', values[4]):
+        raise NativeProviderSchemaError("Codex reviewer core flags differ")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    for path in (values[11], values[13], values[15]):
+        if not Path(path).is_absolute():
+            raise NativeProviderSchemaError("Codex reviewer paths must be absolute")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    container = Path(values[15])
+    if not container.is_dir() or any(Path(path).is_relative_to(container) for path in (values[11], values[13])):
+        raise NativeProviderSchemaError("Codex reviewer runtime files must be outside container")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    if (container != bound_container or Path(values[11]) != bound_runtime_dir / "response-schema.json"
+        or Path(values[13]) != bound_runtime_dir / "last-message.json"):
+        raise NativeProviderSchemaError("reviewer container or runtime path differs from bound workspace")
+    disabled = [item for feature in CODEX_REVIEW_DISABLED_FEATURES for item in ("--disable", feature)]  # allowlist:provider -- profile configuration: reviewer CLI binding
+    if values[18:40] != disabled:
+        raise NativeProviderSchemaError("Codex reviewer disabled features differ")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    if values[40:50:2] != ["-c"] * 5 or values[50] != "-":
+        raise NativeProviderSchemaError("Codex reviewer config flags differ")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    config = values[41:50:2]
+    if config[:3] != [
+        'web_search="disabled"', "project_doc_max_bytes=0",
+        'shell_environment_policy.inherit="core"',
+    ] or config[4] != 'default_permissions="dao-reviewer"':
+        raise NativeProviderSchemaError("Codex reviewer hardening differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    match = re.fullmatch(
+        r'permissions\.dao-reviewer=\{filesystem=\{":minimal"="read","([^"\r\n]+)"="read",":workspace_roots"=\{"\."="read"\}\}\}',
+        config[3],
+    )
+    if match is None:
+        raise NativeProviderSchemaError("Codex reviewer filesystem profile differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
+    package_root = Path(match.group(1))
+    validate_codex_review_package_root(package_root)  # allowlist:provider -- profile configuration: reviewer package boundary
+    if codex_review_permission_config(package_root) != config[3]:  # allowlist:provider -- profile configuration: canonical permission grammar
+        raise NativeProviderSchemaError("Codex reviewer package path is unsafe")  # allowlist:provider -- profile configuration: canonical permission grammar
+    if package_root != bound_package_root:
+        raise NativeProviderSchemaError("reviewer package root differs from bound identity")
+    return ProviderTransportProfile(
+        provider="codex", binary_name="codex", model=values[2],  # allowlist:provider -- profile configuration: reviewer CLI binding
+        reasoning_or_effort=values[4].removeprefix('model_reasoning_effort="').removesuffix('"'),
+        schema_transport="output-schema-file",
+        semantic_flags=CODEX_REVIEW_SEMANTIC_FLAGS,  # allowlist:provider -- profile configuration: reviewer CLI binding
     )
 
 

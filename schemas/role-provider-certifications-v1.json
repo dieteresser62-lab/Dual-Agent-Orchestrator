@@ -217,12 +217,12 @@
         "cli_version": "codex-cli 0.156.1",
         "version_policy": "forward"
       },
-      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+      "capability_sha256": "d29f75a04b57f2048152ac24bc9f5fe8b65883da0e1926fdf78a9c15575d62b4",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
-      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
+      "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
-        "path": "docs/evidence/role-certification-candidates-v1.json",
-        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+        "path": "docs/evidence/codex/reviewer-candidate-v1.json",
+        "sha256": "f9f78ffc433f546298f3a06772a50787bec3912eca30b5a0a172becb84119913"
       },
       "probe_profile": {
         "provider": "codex",
@@ -236,11 +236,31 @@
           "--ephemeral",
           "--color=never",
           "--json",
+          "--output-schema=<runtime-file>",
           "--output-last-message=<runtime-file>",
+          "-C=<container>",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--disable=apps",
+          "--disable=plugins",
+          "--disable=multi_agent",
+          "--disable=goals",
+          "--disable=browser_use",
+          "--disable=computer_use",
+          "--disable=image_generation",
+          "--disable=hooks",
+          "--disable=skill_search",
+          "--disable=tool_suggest",
+          "--disable=remote_plugin",
+          "web_search=disabled",
+          "project_doc_max_bytes=0",
+          "shell_environment_policy.inherit=core",
+          "permissions=dao-reviewer",
+          "default_permissions=dao-reviewer",
           "stdin=-"
         ]
       },
-      "capability_profile": "codex"
+      "capability_profile": "codex-reviewer"
     },
     {
       "slot": "final_reviewer",
@@ -252,12 +272,12 @@
         "cli_version": "codex-cli 0.156.1",
         "version_policy": "forward"
       },
-      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+      "capability_sha256": "d29f75a04b57f2048152ac24bc9f5fe8b65883da0e1926fdf78a9c15575d62b4",
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
-      "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
+      "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
-        "path": "docs/evidence/role-certification-candidates-v1.json",
-        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+        "path": "docs/evidence/codex/reviewer-candidate-v1.json",
+        "sha256": "f9f78ffc433f546298f3a06772a50787bec3912eca30b5a0a172becb84119913"
       },
       "probe_profile": {
         "provider": "codex",
@@ -271,11 +291,31 @@
           "--ephemeral",
           "--color=never",
           "--json",
+          "--output-schema=<runtime-file>",
           "--output-last-message=<runtime-file>",
+          "-C=<container>",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--disable=apps",
+          "--disable=plugins",
+          "--disable=multi_agent",
+          "--disable=goals",
+          "--disable=browser_use",
+          "--disable=computer_use",
+          "--disable=image_generation",
+          "--disable=hooks",
+          "--disable=skill_search",
+          "--disable=tool_suggest",
+          "--disable=remote_plugin",
+          "web_search=disabled",
+          "project_doc_max_bytes=0",
+          "shell_environment_policy.inherit=core",
+          "permissions=dao-reviewer",
+          "default_permissions=dao-reviewer",
           "stdin=-"
         ]
       },
-      "capability_profile": "codex"
+      "capability_profile": "codex-reviewer"
     },
     {
       "slot": "implementer",

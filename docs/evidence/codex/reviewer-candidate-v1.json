@@ -1,0 +1,63 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "implementer": [
+      {
+        "node_id": "tests/test_role_certification.py::test_new_candidate_pairs_are_blocked_at_start_and_resume",
+        "proves": "The new implementer pair remains a candidate and is rejected at start and resume."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_six_fake_review_format_cases_use_bound_writer",
+        "proves": "The bound reviewer writer and adapter accept fake F1-F6 results through the read-only container."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_final_writer_and_fake_result_support_512_findings",
+        "proves": "The final reviewer writer accepts the 512-finding boundary and domain rules stop an exhausted discovery."
+      },
+      {
+        "node_id": "tests/test_orchestrator_decoupling.py::test_topology_plan_slice_final_review_and_resume",
+        "proves": "A fake implementer and real reviewer adapter with a fake process complete plan, slice, final review, and resume."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_review_command_rejects_broader_or_unknown_flags",
+        "proves": "The reviewer command rejects sandbox bypasses, missing hardening, wider roots, and unknown flags."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_container_change_during_fake_process_fails_postcheck",
+        "proves": "A changed sealed review container fails the post-run integrity check."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_profile_root_must_match_bound_package_identity",
+        "proves": "The transport profile cannot authorize a different package root than the bound provider identity."
+      }
+    ],
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_six_fake_review_format_cases_use_bound_writer",
+        "proves": "The bound reviewer writer and adapter accept fake F1-F6 results through the read-only container."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_final_writer_and_fake_result_support_512_findings",
+        "proves": "The final reviewer writer accepts the 512-finding boundary and domain rules stop an exhausted discovery."
+      },
+      {
+        "node_id": "tests/test_orchestrator_decoupling.py::test_topology_plan_slice_final_review_and_resume",
+        "proves": "A fake implementer and real reviewer adapter with a fake process complete plan, slice, final review, and resume."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_review_command_rejects_broader_or_unknown_flags",
+        "proves": "The reviewer command rejects sandbox bypasses, missing hardening, wider roots, and unknown flags."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_container_change_during_fake_process_fails_postcheck",
+        "proves": "A changed sealed review container fails the post-run integrity check."
+      },
+      {
+        "node_id": "tests/test_codex_review_adapter.py::test_profile_root_must_match_bound_package_identity",
+        "proves": "The transport profile cannot authorize a different package root than the bound provider identity."
+      }
+    ]
+  }
+}

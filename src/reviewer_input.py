@@ -115,11 +115,21 @@ class ReviewerInputBundle:
     components: tuple[ProviderInputComponent, ...]
 
 
+REVIEW_INPUT_PATH_PLACEHOLDER = "<review-input>"
+
+
+def measured_reviewer_path_text(content: str, input_dir: Path) -> str:
+    """Replace only the random review input path in measured text."""
+    return content.replace(str(input_dir), REVIEW_INPUT_PATH_PLACEHOLDER)
+
+
 def build_reviewer_input(
     bundle: NativeReviewRequestBundle, runtime_dir: Path, *,
     chunk_chars: int = REVIEW_PACKET_CHUNK_CHARS,
+    normalize_runtime_path: bool = True,
+    measured_path_placeholder: str | None = None,
 ) -> ReviewerInputBundle:
-    """Write input files in manifest order and measure their actual UTF-8 bytes."""
+    """Write input files in manifest order and bind measured components."""
     if not isinstance(bundle, NativeReviewRequestBundle):
         raise TypeError("native Claude adapter requires NativeReviewRequestBundle")
     request_chunks = _split_text_at_lines(bundle.canonical_json, chunk_chars)
@@ -179,11 +189,17 @@ def build_reviewer_input(
 
     runtime_path = str(runtime_dir)
     # Use the actual directory prefix, including any non-default adapter name.
-    runtime_prefix = runtime_dir.name.rsplit("-runtime-", 1)[0] + "-runtime-"
-    random_suffix = runtime_dir.name.removeprefix(runtime_prefix)
-    stable_runtime_path = str(
-        runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
-    )
+    if measured_path_placeholder is not None:
+        stable_runtime_path = measured_path_placeholder
+    elif normalize_runtime_path:
+        runtime_prefix = runtime_dir.name.rsplit("-runtime-", 1)[0] + "-runtime-"
+        random_suffix = runtime_dir.name.removeprefix(runtime_prefix)
+        stable_runtime_path = str(
+            runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
+        )
+    else:
+        # Container inputs retain their actual paths in measured components.
+        stable_runtime_path = runtime_path
 
     def stable_paths(content: str) -> str:
         return content.replace(runtime_path, stable_runtime_path)

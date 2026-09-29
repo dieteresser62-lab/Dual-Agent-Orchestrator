@@ -34,7 +34,10 @@ from native_provider_schema import (
 from native_review_contract import NativeReviewContractError, canonical_native_review_json
 from native_review_request import NativeReviewRequestBundle
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
-from reviewer_input import REVIEW_PACKET_CHUNK_CHARS, ReviewerInputError, build_reviewer_input
+from reviewer_input import (
+    REVIEW_INPUT_PATH_PLACEHOLDER, REVIEW_PACKET_CHUNK_CHARS, ReviewerInputError,
+    build_reviewer_input, measured_reviewer_path_text,
+)
 from role_binding import RoleBinding, binding_for_role
 from workflow_state import AgentFailureKind
 
@@ -580,7 +583,10 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         if self.role_binding.policy not in agent_text:
             raise AgentOutputError("antigravity agent lacks the bound reviewer policy", kind_hint=AgentFailureKind.PERMISSION)
         try:
-            reviewer_input = build_reviewer_input(bundle, workspace.input_dir, chunk_chars=REVIEW_PACKET_CHUNK_CHARS)
+            reviewer_input = build_reviewer_input(
+                bundle, workspace.input_dir, chunk_chars=REVIEW_PACKET_CHUNK_CHARS,
+                measured_path_placeholder=REVIEW_INPUT_PATH_PLACEHOLDER,
+            )
             schema_json = bundle.provider_response_schema_json
             schema_path = workspace.input_dir / "writer-schema.json"
             schema_path.write_bytes(schema_json.encode("utf-8"))
@@ -595,11 +601,11 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
             if len(transmitted_files) != len(reviewer_input.components):
                 raise ReviewerInputError("antigravity manifest component count differs")
             components = [
-                *(ProviderInputComponent(item.name, path.read_text(encoding="utf-8"))
-                  for item, path in zip(reviewer_input.components, transmitted_files, strict=True)),
+                *(ProviderInputComponent(item.name, item.content)
+                  for item, _path in zip(reviewer_input.components, transmitted_files, strict=True)),
                 ProviderInputComponent("system_policy", agent_text),
                 ProviderInputComponent("response_schema", schema_path.read_text(encoding="utf-8")),
-                ProviderInputComponent("start_directive", directive),
+                ProviderInputComponent("start_directive", measured_reviewer_path_text(directive, workspace.input_dir)),
             ]
             self.env = self._isolated_environment()
             self._writer_json = schema_json

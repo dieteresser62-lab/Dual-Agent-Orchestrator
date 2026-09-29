@@ -161,6 +161,75 @@
         "positional_tuple": "Codex rejected prefixItems/items=false because array items must be an object."
       },
       "profile_id": "codex"
+    },
+    {
+      "provider": "codex",
+      "binary_name": "codex",
+      "cli_version": "codex-cli 0.156.1",
+      "version_policy": "forward",
+      "transport_profile": {
+        "provider": "codex",
+        "binary_name": "codex",
+        "model": "gpt-6-sol",
+        "reasoning_or_effort": "medium",
+        "schema_transport": "output-schema-file",
+        "semantic_flags": [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--color=never",
+          "--json",
+          "--output-schema=<runtime-file>",
+          "--output-last-message=<runtime-file>",
+          "-C=<container>",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--disable=apps",
+          "--disable=plugins",
+          "--disable=multi_agent",
+          "--disable=goals",
+          "--disable=browser_use",
+          "--disable=computer_use",
+          "--disable=image_generation",
+          "--disable=hooks",
+          "--disable=skill_search",
+          "--disable=tool_suggest",
+          "--disable=remote_plugin",
+          "web_search=disabled",
+          "project_doc_max_bytes=0",
+          "shell_environment_policy.inherit=core",
+          "permissions=dao-reviewer",
+          "default_permissions=dao-reviewer",
+          "stdin=-"
+        ]
+      },
+      "features": {
+        "closed_object": true,
+        "const_list": false,
+        "min_max_items": true,
+        "nested_any_of": true,
+        "nested_one_of": false,
+        "positional_tuple": false,
+        "unique_items": false,
+        "portable_pattern": true,
+        "optional_properties": false,
+        "null_type": true,
+        "all_of": false,
+        "not_schema": false,
+        "strict_writer": true,
+        "max_length": true,
+        "min_length": true,
+        "const_value": true,
+        "enum_values": true,
+        "refs": true,
+        "defs": true,
+        "numeric_constraints": true,
+        "format_keyword": true
+      },
+      "probe_evidence": {
+        "offline_read_boundary": "Operator-side offline probe 2026-09-29 (codex-cli 0.156.1, local fake Responses server): profile-only boundary blocked external reads, writes and network; --sandbox combined with the profile removed the protection."
+      },
+      "profile_id": "codex-reviewer"
     }
   ]
 }
