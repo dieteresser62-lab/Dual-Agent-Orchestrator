@@ -26,6 +26,16 @@
     "safe_technical_rejection_required": true,
     "success_without_output_is_failure": true
   },
+  "production_retry": {
+    "classifier": "agy-stderr-v2: ERROR-Umschlag „The stream was interrupted. Please continue the task you were working on.“ wird als network eingestuft; das Ergebnis wird nie angenommen.",
+    "failure_kinds": [
+      "network",
+      "timeout"
+    ],
+    "max_retries_per_case": 2,
+    "rule": "Ein Aufruf, der technisch mit einem transienten Fehler (network, timeout) scheitert, darf wie im Produktivpfad direkt mit einem frischen Aufruf desselben Falls wiederholt werden, höchstens zweimal je Fall. Der Fall zählt nach seinem letzten Aufruf. Jede Wiederholung und jeder transiente Fehler wird im Urteil gezählt und berichtet. Nicht-transiente Fehler, Vertrags- und Semantikfehler werden nie wiederholt. Der Print-Timeout-Fall T1 wird nie wiederholt. Das ist weder ein Neustart noch ein Einzelretake im Sinne der Neustartregel.",
+    "source": "agent_runtime.TransientRetryPolicy (NETWORK/TIMEOUT, maximum_auto_resumes=2)"
+  },
   "quality": {
     "agreement_rule": "Beide unabhängigen Blind-Bewerter bewerten jede Antwort je Kriterium. Übereinstimmung gilt; bei Uneinigkeit entscheidet der Operator nur diesen Punkt mit einer protokollierten Ja/Nein-Frage in Alltagssprache. Ausnahme: Die Zahl unbegründeter Befunde in Defektfällen geht nicht in die Qualitätsregel ein; bei Uneinigkeit gilt dort ohne Operatorfrage die höhere Zahl.",
     "blind_seed": 20260929,
@@ -56,7 +66,7 @@
       "steering"
     ],
     "rating_rubric": "quality-rubric-v1.json",
-    "rubric_sha256": "62f1e093bbe1de2fe7391d7f8cfc554a43bfeb1fc06ebac7615621fe9be65fa3",
+    "rubric_sha256": "125ac1269e26477c1e26904e7dec1803c9a8c2429808759ffcb367399a77f7fb",
     "unblinding_rule": "Erst nach vollständigem Endurteil und dokumentierten Operatorantworten entblinden. Bei verfehlter Claude-Regel entscheidet der Operator danach über die experimentelle Auswahl."
   },
   "quality_rule": {
@@ -75,7 +85,7 @@
     "quality_per_provider": 6,
     "transport": 12
   },
-  "schema_version": "qualification-protocol-v2",
+  "schema_version": "qualification-protocol-v3",
   "slots": {
     "final_reviewer": {
       "canary": "final_reviewer",
@@ -106,12 +116,11 @@
       "shared_protection_and_quality": true
     }
   },
-  "superseded_by": "v3",
-  "superseded_reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf",
   "supersedes": {
     "plan_deviation": "Die blinde Bewertung übernehmen zwei unabhängige Bewerter (Codex und Steuermann) statt des Operators (Operatorentscheidung vom 29.09.2026). Der Operator entscheidet nur Uneinigkeiten und nach der Entblindung über die experimentelle Auswahl. Fallzahlen, Bestehens- und Neustartregel sind unverändert; quality_rule.verbatim_from_plan gibt den ursprünglichen Plantext wieder.",
-    "reason": "Bewerterverfahren geändert vor der ersten Messung",
-    "version": "v1"
+    "reason": "Produktionsgleiche Transient-Wiederholung nach dem ersten Messaufruf (Operatorentscheidung 29.09.2026)",
+    "v2_evidence": "Serie agy-transport-s1 (ein Aufruf F1:1, status ERROR „The stream was interrupted“) bleibt als negative v2-Serie in den Nachweisen sichtbar.",
+    "version": "v2"
   },
   "target_status": "experimental",
   "transport": {

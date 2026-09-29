@@ -175,6 +175,27 @@ def test_schema_echo_is_type_exact_and_status_exit_denials_jointly_checked() -> 
     assert AntigravityTransport.exit_diagnostic(1) != AntigravityTransport.exit_diagnostic(3)
 
 
+def test_measured_stream_interruption_is_transient_and_never_accepted() -> None:
+    # Measured live on 29 Sep 2026 (AGY 1.2.12, envelope sha256 b63c5b4e…): an ERROR
+    # status with a complete structured result and exit code 0.
+    interrupted = "The stream was interrupted. Please continue the task you were working on."
+    base = {
+        "status": "ERROR", "error": interrupted,
+        "structured_output": {"result": {"request_id": "x"}},
+        "json_schema": {"flag": True}, "usage": {},
+    }
+    with pytest.raises(AgentOutputError) as caught:
+        AntigravityTransport.envelope(json.dumps(base), "", 0, '{"flag":true}')
+    assert caught.value.kind_hint is AgentFailureKind.NETWORK
+    assert "stream-interrupted (agy-stderr-v2)" in str(caught.value)
+    assert interrupted not in str(caught.value)
+    for change in ({"error": interrupted + " Retry."}, {"error": "bad"},
+                   {"status": "SUCCESS"}, {"status": "FAILED"}):
+        with pytest.raises(AgentOutputError) as caught:
+            AntigravityTransport.envelope(json.dumps({**base, **change}), "", 0, '{"flag":true}')
+        assert caught.value.kind_hint is AgentFailureKind.OUTPUT
+
+
 @pytest.mark.parametrize("stderr, kind", [
     ("authentication required", AgentFailureKind.AUTH),
     ("quota exceeded", AgentFailureKind.QUOTA),

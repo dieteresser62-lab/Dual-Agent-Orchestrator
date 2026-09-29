@@ -577,10 +577,33 @@ def validate_phase0(document: dict) -> None:
     assert document["gate"]["f6_finding"]["expected_rule"] == "DISCOVERY_OUTPUT_LIMIT"
 
 
+PRODUCTION_RETRY_KINDS = frozenset({"network", "timeout"})
+MAX_PRODUCTION_RETRIES = 2  # agent_runtime.TransientRetryPolicy.maximum_auto_resumes
+
+
+def _case_chains(calls: list[dict]) -> list[list[dict]]:
+    """Group one series into cases; a production retry directly follows its transient failure."""
+    chains: list[list[dict]] = []
+    for row in calls:
+        retry_of = row.get("retry_of")
+        if retry_of is None:
+            chains.append([row])
+            continue
+        previous = chains[-1][-1] if chains else None
+        if (previous is None or row["kind"] == "print_timeout"
+                or previous["call_id"] != retry_of or previous["case_id"] != row["case_id"]
+                or previous["status"] != "technical_rejection"
+                or previous.get("failure_kind") not in PRODUCTION_RETRY_KINDS
+                or len(chains[-1]) > MAX_PRODUCTION_RETRIES):
+            raise ValueError(f"{row['series_id']}: invalid production retry {row['call_id']}")
+        chains[-1].append(row)
+    return chains
+
+
 def validate_qualification(document: dict) -> None:
     if not __debug__:
         raise RuntimeError("optimized mode cannot validate the protocol")
-    assert document["schema_version"] == "qualification-protocol-v2"
+    assert document["schema_version"] == "qualification-protocol-v3"
     assert document["campaign"] == "slim" and document["target_status"] == "experimental"
     assert document["sample_counts"] == {"transport": 12, "large_output": 2,
         "print_timeout": 1, "quality_per_provider": 6, "canaries": 2}
@@ -598,6 +621,8 @@ def validate_qualification(document: dict) -> None:
         (ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
     assert document["quality"]["rubric_sha256"] == sha(
         (ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
+    assert document["production_retry"]["failure_kinds"] == sorted(PRODUCTION_RETRY_KINDS)
+    assert document["production_retry"]["max_retries_per_case"] == MAX_PRODUCTION_RETRIES
     assert document["format_regression_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-format-s6-v1.json").read_bytes())
 
@@ -735,6 +760,15 @@ def _validate_attempt_bindings(row: dict, protocol: dict) -> None:
         raise ValueError("qualification quota metric is invalid")
     if row["status"] not in {"success", "technical_rejection"}:
         raise ValueError("qualification status is invalid")
+    failure_kind = row.get("failure_kind")
+    if failure_kind is not None and failure_kind not in {
+            "quota", "auth", "network", "permission", "timeout", "binary", "process",
+            "output", "runtime", "unclassified"}:
+        raise ValueError("qualification failure kind is invalid")
+    if row["status"] == "success" and failure_kind is not None:
+        raise ValueError("successful qualification call cannot carry a failure kind")
+    if row.get("retry_of") is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", row["retry_of"]):
+        raise ValueError("qualification retry reference is invalid")
     if not isinstance(row["tag"], str) or not row["tag"].strip() or len(row["tag"]) > 100:
         raise ValueError("qualification tag is invalid")
     started = datetime.fromisoformat(row["started_at"].replace("Z", "+00:00"))
@@ -796,6 +830,21 @@ def _verify_recorded_result(row: dict, raw: dict) -> None:
     if row["status"] != "success":
         if raw.get("technical_error") is None:
             raise ValueError("failed attempt lacks its technical diagnosis")
+        if row.get("failure_kind") == "network" and row["provider"] == "agy":
+            from agent_adapters import AgentOutputError
+            from antigravity_adapter import AntigravityTransport
+            try:
+                AntigravityTransport.envelope(canonical(envelope), raw.get("stderr", ""),
+                                              int(raw.get("exit_code") or 0),
+                                              canonical(stored_writer))
+            except AgentOutputError as exc:
+                if getattr(exc.kind_hint, "value", None) == "network":
+                    return
+            raise ValueError("recorded transient network failure is not reproducible")
+        if row.get("failure_kind") == "timeout" and row["provider"] == "agy":
+            if (classify_agy_stderr(raw.get("stderr", ""))[1] != "print-timeout"
+                    and row["duration_seconds"] < row["probe_limit_seconds"]):
+                raise ValueError("recorded transient timeout is not reproducible")
         return
     if raw.get("technical_error") is not None or not isinstance(response, dict):
         raise ValueError("successful attempt lacks a sole result")
@@ -862,7 +911,8 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
             by_series.setdefault(row["series_id"], []).append(row)
         earlier: list[dict] = []
         for series_id, calls in by_series.items():
-            observed = tuple(row["case_id"] for row in calls)
+            chains = _case_chains(calls)
+            observed = tuple(chain[0]["case_id"] for chain in chains)
             if observed != expected[:len(observed)]:
                 raise ValueError(f"{series_id}: repeated, skipped or reordered call")
             if len({row["request_id"] for row in calls}) != len(calls):
@@ -892,19 +942,26 @@ def validate_qualification_evidence(series: dict, envelopes: dict, protocol: dic
                 else:
                     passed = row["status"] == "success" and bool(checks) and all(checks.values())
                 call_pass.append(passed)
-            if earlier and len(earlier[-1][0]) == len(expected) and all(earlier[-1][1]):
+            outcome = dict(zip((row["call_id"] for row in calls), call_pass))
+            case_pass = [outcome[chain[-1]["call_id"]] for chain in chains]
+            if earlier and len(earlier[-1][1]) == len(expected) and all(earlier[-1][1]):
                 raise ValueError("successful series cannot be restarted")
-            earlier.append((calls, call_pass))
+            earlier.append((calls, case_pass))
             verdicts[series_id] = {"kind": key[0], "provider": key[1],
-                                   "passed": len(calls) == len(expected) and all(call_pass),
-                                   "incomplete": len(calls) != len(expected), "calls": len(calls),
-                                   "failed_cases": [row["case_id"] for row, ok in zip(calls, call_pass) if not ok]}
+                                   "passed": len(chains) == len(expected) and all(case_pass),
+                                   "incomplete": len(chains) != len(expected), "calls": len(calls),
+                                   "production_retries": sum(len(chain) - 1 for chain in chains),
+                                   "transient_failures": [row["call_id"] for row in calls
+                                                          if row["status"] == "technical_rejection"
+                                                          and row.get("failure_kind") in PRODUCTION_RETRY_KINDS],
+                                   "failed_cases": [chain[0]["case_id"] for chain, ok in zip(chains, case_pass) if not ok]}
     for kind, provider in (("transport", "agy"), ("large_output", "agy"),
                            ("print_timeout", "agy"), ("quality", "agy"), ("quality", "claude")):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
         if (kind, provider) not in groups:
             verdicts[f"pending-{kind}-{provider}"] = {
                 "kind": kind, "provider": provider, "passed": False,
-                "incomplete": True, "calls": 0, "failed_cases": []}
+                "incomplete": True, "calls": 0, "production_retries": 0,
+                "transient_failures": [], "failed_cases": []}
     return verdicts
 
 
@@ -912,7 +969,8 @@ def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
     """Propose, never install, the finite measured timeout."""
     eligible = {name for name, result in verdicts.items() if result["passed"] and
                 result["provider"] == "agy" and result["kind"] in {"transport", "large_output", "quality"}}
-    measurements = [row for row in series["attempts"] if row["series_id"] in eligible]
+    measurements = [row for row in series["attempts"]
+                    if row["series_id"] in eligible and row["status"] == "success"]
     if not any(row["kind"] == "large_output" and row["case_id"] == "512" for row in measurements):
         raise ValueError("512-finding success is required for timeout proposal")
     maximum = max(row["duration_seconds"] for row in measurements)
@@ -963,7 +1021,7 @@ def export_rater_packet(assessment: dict, mapping: dict, corpus: dict,
                         protocol: dict, rubric: dict) -> dict:
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus is not approved at its frozen digest")
-    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v2":
+    if rubric.get("schema_version") != "quality-rubric-v1" or rubric.get("protocol_version") != "qualification-protocol-v3":
         raise ValueError("quality rubric version differs")
     if assessment.get("schema_version") != "blind-assessment-v1" or mapping.get("schema_version") != "blind-mapping-v1" or mapping.get("seed") != protocol["quality"]["blind_seed"]:
         raise ValueError("blind input version or seed differs")
@@ -1465,7 +1523,7 @@ def _preflight_series_position(attempts: list[dict], *, kind: str, provider: str
                                series_id: str, case_id: str, commit_sha: str,
                                profile_sha256: str, binary_sha256: str,
                                writer_sha256: str, restart_diagnosis: str | None,
-                               restart_change: str | None) -> None:
+                               restart_change: str | None, retry_of: str | None = None) -> None:
     expected = qualification_cases(kind, provider)
     for row in attempts:
         if row["series_id"] == series_id and (row["kind"], row["provider"]) != (kind, provider):
@@ -1473,10 +1531,17 @@ def _preflight_series_position(attempts: list[dict], *, kind: str, provider: str
     prior_ids = list(dict.fromkeys(row["series_id"] for row in attempts
                                   if (row["kind"], row["provider"]) == (kind, provider)))
     same = [row for row in attempts if row["series_id"] == series_id]
+    if retry_of is not None:
+        candidate = {"call_id": "(next)", "series_id": series_id, "kind": kind,
+                     "case_id": case_id, "retry_of": retry_of}
+        if not same or prior_ids[-1] != series_id:
+            raise ValueError("production retry requires an active series")
+        _case_chains(same + [candidate])
     if same:
         if prior_ids[-1] != series_id:
             raise ValueError("an earlier series cannot resume after a restart")
-        if len(same) >= len(expected) or case_id != expected[len(same)]:
+        firsts = _case_chains(same)
+        if retry_of is None and (len(firsts) >= len(expected) or case_id != expected[len(firsts)]):
             raise ValueError("next call must follow the frozen series order")
         if restart_diagnosis or restart_change:
             raise ValueError("restart rationale belongs only on a new series's first call")
@@ -1492,8 +1557,10 @@ def _preflight_series_position(attempts: list[dict], *, kind: str, provider: str
             raise ValueError("first series cannot claim a restart")
         return
     prior = [row for row in attempts if row["series_id"] == prior_ids[-1]]
-    if len(prior) == len(expected) and all(row["status"] == "success" and
-                                         all(row["checks"].values()) for row in prior):
+    prior_chains = _case_chains(prior)
+    if len(prior_chains) == len(expected) and all(
+            chain[-1]["status"] == "success" and all(chain[-1]["checks"].values())
+            for chain in prior_chains):
         raise ValueError("successful series cannot be restarted")
     if not restart_diagnosis or not restart_change:
         raise ValueError("restart requires diagnosis and concrete change")
@@ -1559,7 +1626,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                            quota_observation: dict | None = None,
                            restart_diagnosis: str | None = None,
                            restart_change: str | None = None,
-                           tag: str | None = None) -> dict:
+                           tag: str | None = None,
+                           production_retry_of: str | None = None) -> dict:
     """One opt-in call through the final native adapter, protection and parser."""
     if not live:
         raise PermissionError("qualification provider call requires --live")
@@ -1576,7 +1644,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     if profile.get("commit_sha") != _current_commit():
         raise ValueError("qualification profile commit differs from current code HEAD")
     _assert_committed_qualification_code()
-    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+    protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
     validate_qualification(protocol)
     if case_id not in qualification_cases(kind, provider):
         raise ValueError("call differs from frozen qualification cases")
@@ -1655,7 +1723,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         commit_sha=profile["commit_sha"], profile_sha256=sha(profile_file.read_bytes()),
         binary_sha256=sha(binary.read_bytes()),
         writer_sha256=sha(bundle.provider_response_schema_json.encode()),
-        restart_diagnosis=restart_diagnosis, restart_change=restart_change)
+        restart_diagnosis=restart_diagnosis, restart_change=restart_change,
+        retry_of=production_retry_of)
     defaults = default_provider_input_budget_policy()
     if provider == "agy":
         budget = ProviderInputBudgetPolicy(
@@ -1676,6 +1745,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     start = time.monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
     error = None
+    failure_kind = None
     domain = None
     try:
         output = run_native_review_agent(
@@ -1688,6 +1758,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         domain = output.result
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+        classified = getattr(exc, "kind", None) or getattr(exc, "kind_hint", None)
+        failure_kind = getattr(classified, "value", None) or "unclassified"
     elapsed = time.monotonic() - start
     try:
         envelope = strict_json(raw.get("stdout", "{}"))
@@ -1740,6 +1812,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         "session_id": (envelope.get("conversation_id") or envelope.get("session_id"))
                       if isinstance(envelope, dict) else None,
         "output_bytes": len(raw.get("stdout", "").encode()), "checks": checks,
+        "failure_kind": failure_kind, "retry_of": production_retry_of,
     }
     if public_validation_sha is not None:
         row["public_validation_sha256"] = public_validation_sha
@@ -1831,9 +1904,9 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
     raw = {row["call_id"]: row["envelope"] for row in envelopes["envelopes"]}
     sources = []
     for provider in ("agy", "claude"):  # allowlist:provider -- transport: Slice-5 bound reviewer qualification
-        for row in series["attempts"]:
-            if row["series_id"] != selected[provider]:
-                continue
+        for chain in _case_chains([row for row in series["attempts"]
+                                   if row["series_id"] == selected[provider]]):
+            row = chain[-1]
             content = raw[row["call_id"]]["envelope"]["structured_output"]["result"]
             sources.append({"provider": provider, "case": row["case_id"], "content": content})
     if len(sources) != 12 or {(row["provider"], row["case"]) for row in sources} != {
@@ -1917,6 +1990,7 @@ def main() -> int:
     q.add_argument("--restart-diagnosis")
     q.add_argument("--restart-change")
     q.add_argument("--tag")
+    q.add_argument("--production-retry-of")
     q.add_argument("--live", action="store_true")
     m = sub.add_parser("prepare-case")
     m.add_argument("kind", choices=("transport", "large_output", "quality"))
@@ -1938,7 +2012,7 @@ def main() -> int:
         print(json.dumps(probe_plan(strict_json(args.protocol.read_bytes())), indent=2))
         return 0
     if args.command == "blind":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         validate_qualification(protocol)
         if args.seed != protocol["quality"]["blind_seed"]:
             raise ValueError("blind seed differs from the frozen qualification protocol")
@@ -1956,7 +2030,7 @@ def main() -> int:
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
     if args.command == "prepare-blind-inputs":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
@@ -1965,7 +2039,7 @@ def main() -> int:
         _write_evidence_file(args.output, sources)
         return 0
     if args.command == "export-rater-packets":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         rubric = strict_json((ROOT / "docs/evidence/antigravity/quality-rubric-v1.json").read_bytes())
         packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
@@ -1978,12 +2052,12 @@ def main() -> int:
                           "ids": [row["id"] for row in packet["responses"]]}))
         return 0
     if args.command == "render-rater-prompt":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         args.output.write_text(render_rater_prompt(packet, protocol))
         return 0
     if args.command == "combine-quality-ratings":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         mapping = strict_json(args.mapping.read_bytes())
@@ -2030,11 +2104,12 @@ def main() -> int:
             quota_observation=strict_json(args.quota_observation.read_bytes())
             if args.quota_observation else None,
             restart_diagnosis=args.restart_diagnosis,
-            restart_change=args.restart_change, tag=args.tag)
+            restart_change=args.restart_change, tag=args.tag,
+            production_retry_of=args.production_retry_of)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "success" else 1
     if args.command == "evaluate-qualification":
-        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v2.json").read_bytes())
+        protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v3.json").read_bytes())
         series = strict_json(args.series.read_bytes())
         envelopes = strict_json(args.envelopes.read_bytes())
         verdicts = validate_qualification_evidence(series, envelopes, protocol)

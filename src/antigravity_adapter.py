@@ -39,7 +39,7 @@ from role_binding import RoleBinding, binding_for_role
 from workflow_state import AgentFailureKind
 
 
-STDERR_CLASSIFIER_VERSION = "agy-stderr-v1"
+STDERR_CLASSIFIER_VERSION = "agy-stderr-v2"
 logger = logging.getLogger(__name__)
 AGY_DENY = (
     "command(*)", "write_file(*)", "mcp(*)", "read_url(*)", "execute_url(*)",
@@ -56,6 +56,10 @@ _NETWORK = re.compile(r"(?:network error|connection refused|connection reset|dns
 _SCHEMA = re.compile(r"(?:invalid json schema|schema validation failed|invalid schema)", re.I)
 _MODEL = re.compile(r"(?:unknown model|model not found|invalid model)", re.I)
 _PERMISSION = re.compile(r"(?:permission denied|auto-denied|permission request rejected)", re.I)
+# Measured 29 Sep 2026 (AGY 1.2.12): an ERROR envelope may carry this transient stream
+# failure even when a result exists. The result is never accepted; the failure is
+# transient transport, so the production retry policy may start a fresh call.
+_STREAM_INTERRUPTED = re.compile(r"^The stream was interrupted\. Please continue the task you were working on\.$")
 
 
 def _reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -312,6 +316,10 @@ class AntigravityTransport:
         if exit_code != 0:
             fail(AntigravityTransport.exit_diagnostic(exit_code), AgentFailureKind.PROCESS)
         if envelope.get("status") != "SUCCESS":
+            error_text = envelope.get("error")
+            if (envelope.get("status") == "ERROR" and isinstance(error_text, str)
+                    and _STREAM_INTERRUPTED.fullmatch(error_text.strip())):
+                fail("stream-interrupted", AgentFailureKind.NETWORK)
             fail("unsuccessful-status", AgentFailureKind.OUTPUT)
         if envelope.get("error") not in (None, ""):
             fail("envelope-error", AgentFailureKind.OUTPUT)

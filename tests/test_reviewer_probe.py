@@ -94,7 +94,7 @@ def test_protection_plan_and_fake_evaluation(tmp_path: Path) -> None:
 
 
 def test_qualification_protocol_counts_rules_slots_and_evidence_digests() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     probe.validate_qualification(protocol)
     assert protocol["quality"]["corpus_sha256"] == sha(FIXTURES / "reviewer-quality-corpus-v1.json")
     assert protocol["phase0_sha256"] == sha(EVIDENCE / "phase-0-v1.json")
@@ -177,7 +177,7 @@ def test_quality_corpus_is_approved_and_independently_reproducible(tmp_path: Pat
     corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
     assert corpus["operator_review"]["status"] == "approved_blanket"
     assert probe.qualification_ready(
-        load(EVIDENCE / "qualification-protocol-v2.json"), corpus)
+        load(EVIDENCE / "qualification-protocol-v3.json"), corpus)
     assert len(corpus["cases"]) == 6
     assert sum(c["defect"] for c in corpus["cases"]) == 4
     assert {c["id"] for c in corpus["cases"] if c["critical"]} == {"Q1", "Q2"}
@@ -466,7 +466,7 @@ def _failed_attempt(kind: str, case_id: str, provider: str, *, series_id: str,
 
 
 def test_series_count_restart_and_failure_visibility() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     series = {"schema_version": "qualification-series-v1", "attempts": []}
     envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
     expected = probe.qualification_cases("transport", "agy")
@@ -523,7 +523,7 @@ def test_series_preflight_prevents_skips_retake_and_undocumented_restart() -> No
 
 def _rating_fixture(q6_findings: list[dict] | None = None) -> tuple[dict, dict, dict, dict, dict]:
     corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     rubric = load(EVIDENCE / "quality-rubric-v1.json")
     sources = [{"provider": provider, "case": case["id"],
                 "content": {"new_findings": copy.deepcopy(q6_findings) if case["id"] == "Q6" and q6_findings is not None else []}}
@@ -554,7 +554,7 @@ def test_v1_rejected_and_blanket_approval_is_digest_bound() -> None:
     with pytest.raises(AssertionError):
         probe.validate_qualification(v1)
     corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     assert probe.qualification_ready(protocol, corpus)
     changed = copy.deepcopy(corpus)
     changed["operator_review"]["operator_note"] = "Altered"
@@ -798,11 +798,11 @@ def test_qualification_call_routes_one_fake_response_through_native_agy_adapter(
     assert probe.validate_qualification_evidence(
         probe.strict_json((out / "qualification-series-v1.json").read_bytes()),
         probe.strict_json((out / "qualification-envelopes-v1.json").read_bytes()),
-        load(EVIDENCE / "qualification-protocol-v2.json"))["s1"]["incomplete"]
+        load(EVIDENCE / "qualification-protocol-v3.json"))["s1"]["incomplete"]
 
 
 def test_print_timeout_is_technical_and_timeout_proposal_uses_512() -> None:
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     series = {"schema_version": "qualification-series-v1", "attempts": []}
     envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
     row, raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s1", call_id="t1")
@@ -821,9 +821,14 @@ def test_print_timeout_is_technical_and_timeout_proposal_uses_512() -> None:
         probe.validate_qualification_evidence(series, changed, protocol)
 
     measurements = {"attempts": [
-        {"series_id": "transport", "kind": "transport", "case_id": "F1:1", "duration_seconds": 210},
-        {"series_id": "size", "kind": "large_output", "case_id": "128", "duration_seconds": 330},
-        {"series_id": "size", "kind": "large_output", "case_id": "512", "duration_seconds": 401},
+        {"series_id": "transport", "kind": "transport", "case_id": "F1:1", "duration_seconds": 590,
+         "status": "technical_rejection", "failure_kind": "network"},
+        {"series_id": "transport", "kind": "transport", "case_id": "F1:1", "duration_seconds": 210,
+         "status": "success"},
+        {"series_id": "size", "kind": "large_output", "case_id": "128", "duration_seconds": 330,
+         "status": "success"},
+        {"series_id": "size", "kind": "large_output", "case_id": "512", "duration_seconds": 401,
+         "status": "success"},
     ]}
     successes = {"transport": {"passed": True, "provider": "agy", "kind": "transport"},
                  "size": {"passed": True, "provider": "agy", "kind": "large_output"}}
@@ -885,7 +890,7 @@ def test_qualification_claude_call_builds_restricted_productive_input(  # allowl
 def test_blind_sources_require_all_twelve_bound_outputs_without_selection() -> None:
     from native_review_request import build_native_review_request
 
-    protocol = load(EVIDENCE / "qualification-protocol-v2.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
     stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]
     templates = {"Q1": "F1", "Q2": "F2", "Q3": "F4", "Q4": "F5", "Q5": "F1", "Q6": "F5"}
     series = {"schema_version": "qualification-series-v1", "attempts": []}
@@ -934,3 +939,130 @@ def test_blind_sources_require_all_twelve_bound_outputs_without_selection() -> N
     reduced_raw["envelopes"].pop()
     with pytest.raises(ValueError, match="not complete"):
         probe.quality_blind_sources(shortened, reduced_raw, protocol)
+
+
+def _quality_success(provider: str, case_id: str, *, series_id: str, call_id: str,
+                     retry_of: str | None = None) -> tuple[dict, dict]:
+    from native_review_request import build_native_review_request
+
+    templates = {"Q1": "F1", "Q2": "F2", "Q3": "F4", "Q4": "F5", "Q5": "F1", "Q6": "F5"}
+    stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]
+    row, raw = _failed_attempt("quality", case_id, provider, series_id=series_id, call_id=call_id)
+    bundle = build_native_review_request(probe.build_qualification_spec(
+        "quality", case_id, run_id=f"qualification-{series_id}-{call_id}"),
+        profile="antigravity" if provider == "agy" else "claude")  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    response = copy.deepcopy(stored[templates[case_id]]["envelope"]["structured_output"]["result"])
+    response["request_id"] = bundle.bound_context.request_id
+    if case_id == "Q3":
+        response["status_changes"][0]["finding_id"] = "R-17"
+    if case_id in {"Q4", "Q6"}:
+        response["new_findings"] = []
+    raw["envelope"] = {"structured_output": {"result": response}, "status": "SUCCESS",
+                       "json_schema": json.loads(bundle.provider_response_schema_json)}
+    raw["technical_error"] = None
+    row.update(status="success", checks={"writer_and_domain": True}, failure_kind=None,
+               retry_of=retry_of, output_bytes=len(probe.canonical(raw["envelope"]).encode()))
+    return row, raw
+
+
+def _stream_interrupted(row: dict, raw: dict) -> tuple[dict, dict]:
+    failed, envelope = copy.deepcopy(row), copy.deepcopy(raw)
+    envelope["envelope"].update(
+        status="ERROR",
+        error="The stream was interrupted. Please continue the task you were working on.")
+    envelope["exit_code"] = 0
+    envelope["technical_error"] = "AgentOutputError: antigravity stream-interrupted (agy-stderr-v2)"
+    failed.update(status="technical_rejection", failure_kind="network",
+                  checks={"writer_and_domain": False})
+    return failed, envelope
+
+
+def test_production_retry_counts_transient_failures_and_uses_final_call() -> None:
+    protocol = load(EVIDENCE / "qualification-protocol-v3.json")
+    assert protocol["production_retry"]["max_retries_per_case"] == 2
+    v2 = load(EVIDENCE / "qualification-protocol-v2.json")
+    assert v2["superseded_by"] == "v3"
+    with pytest.raises(AssertionError):
+        probe.validate_qualification(v2)
+
+    def build(chain_q1: int) -> tuple[dict, dict]:
+        series = {"schema_version": "qualification-series-v1", "attempts": []}
+        envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+        for provider in ("agy", "claude"):  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+            series_id = f"quality-{provider}-s1"
+            for number in range(1, 7):
+                case_id = f"Q{number}"
+                call_id = f"{provider}-{case_id}"
+                if provider == "agy" and case_id == "Q1":
+                    previous = None
+                    for attempt in range(chain_q1):
+                        this_id = call_id if attempt == 0 else f"{call_id}-r{attempt}"
+                        row, raw = _stream_interrupted(*_quality_success(
+                            provider, case_id, series_id=series_id, call_id=this_id,
+                            retry_of=previous))
+                        probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+                        previous = this_id
+                    call_id, retry_of = f"{call_id}-r{chain_q1}", previous
+                else:
+                    retry_of = None
+                row, raw = _quality_success(provider, case_id, series_id=series_id,
+                                            call_id=call_id, retry_of=retry_of)
+                probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+        return series, envelopes
+
+    series, envelopes = build(2)
+    verdicts = probe.validate_qualification_evidence(series, envelopes, protocol)
+    agy = verdicts["quality-agy-s1"]
+    assert agy["passed"] and agy["production_retries"] == 2 and agy["calls"] == 8
+    assert agy["transient_failures"] == ["agy-Q1", "agy-Q1-r1"]
+    sources = probe.quality_blind_sources(series, envelopes, protocol)
+    q1 = next(item for item in sources if item["provider"] == "agy" and item["case"] == "Q1")
+    final = next(row for row in envelopes["envelopes"] if row["call_id"] == "agy-Q1-r2")
+    assert q1["content"] == final["envelope"]["envelope"]["structured_output"]["result"]
+
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe.validate_qualification_evidence(*build(3), protocol)
+
+    forged_series, forged_envelopes = build(1)
+    forged = next(row for row in forged_envelopes["envelopes"] if row["call_id"] == "agy-Q1")
+    forged["envelope"]["envelope"]["error"] = "Some other failure."
+    next(row for row in forged_series["attempts"] if row["call_id"] == "agy-Q1")[
+        "envelope_sha256"] = probe.sha(probe.canonical(forged["envelope"]).encode())
+    with pytest.raises(ValueError, match="not reproducible"):
+        probe.validate_qualification_evidence(forged_series, forged_envelopes, protocol)
+
+    output_failure_series, output_failure_envelopes = build(1)
+    first = next(row for row in output_failure_series["attempts"] if row["call_id"] == "agy-Q1")
+    first["failure_kind"] = "output"
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe.validate_qualification_evidence(output_failure_series, output_failure_envelopes, protocol)
+
+
+def test_preflight_allows_production_retry_only_after_transient_failure() -> None:
+    common = dict(kind="transport", provider="agy", commit_sha="c" * 40,
+                  profile_sha256="a" * 64, binary_sha256="b" * 64,
+                  writer_sha256="d" * 64, restart_diagnosis=None, restart_change=None)
+    first = {"call_id": "t1", "kind": "transport", "provider": "agy", "series_id": "s1",
+             "case_id": "F1:1", "commit_sha": "c" * 40, "profile_sha256": "a" * 64,
+             "binary_sha256": "b" * 64, "writer_sha256": "d" * 64,
+             "status": "technical_rejection", "failure_kind": "network",
+             "retry_of": None, "checks": {"writer": False}}
+    probe._preflight_series_position([first], series_id="s1", case_id="F1:1",
+                                     retry_of="t1", **common)
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe._preflight_series_position([first], series_id="s1", case_id="F1:2",
+                                         retry_of="t1", **common)
+    retried = [first, dict(first, call_id="t1-r1", retry_of="t1"),
+               dict(first, call_id="t1-r2", retry_of="t1-r1")]
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe._preflight_series_position(retried, series_id="s1", case_id="F1:1",
+                                         retry_of="t1-r2", **common)
+    probe._preflight_series_position(retried, series_id="s1", case_id="F1:2", **common)
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe._preflight_series_position([dict(first, failure_kind="output")], series_id="s1",
+                                         case_id="F1:1", retry_of="t1", **common)
+    timeout = dict(first, kind="print_timeout", case_id="T1", failure_kind="timeout")
+    with pytest.raises(ValueError, match="invalid production retry"):
+        probe._preflight_series_position(
+            [timeout], series_id="s1", case_id="T1", retry_of="t1",
+            **dict(common, kind="print_timeout"))
