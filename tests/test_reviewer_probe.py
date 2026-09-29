@@ -107,6 +107,12 @@ def test_qualification_protocol_counts_rules_slots_and_evidence_digests() -> Non
     assert protocol["quality_rule"]["critical_required"] == 2
     assert protocol["quality_rule"]["defects_required"] == 3
     assert "keine Einzelretakes oder Filter" in protocol["restart_rule"]
+    assert [len(probe.qualification_cases(kind, provider)) for kind, provider in (
+        ("transport", "agy"), ("large_output", "agy"),
+        ("print_timeout", "agy"), ("quality", "agy"), ("quality", "claude"))] == [12, 2, 1, 6, 6]  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    assert load(EVIDENCE / "qualification-series-v1.json")["attempts"] == []
+    assert load(EVIDENCE / "qualification-envelopes-v1.json")["envelopes"] == []
+    assert load(EVIDENCE / "quality-results-v1.json")["judgments"] == []
 
 
 def test_s6_stored_envelopes_against_current_writer_domain_and_case_semantics() -> None:
@@ -357,3 +363,397 @@ def test_snapshot_symlinks_and_sanitizer(tmp_path: Path) -> None:
     probe.redact(tmp_path, redacted)
     assert not probe.scan(redacted)
     assert target.read_text() == "person@example.invalid ya29.secret"
+
+
+def test_large_fixture_has_exact_independent_defects_and_withheld_proof(tmp_path: Path) -> None:
+    for count in (128, 512):
+        root = tmp_path / str(count)
+        paths = probe.materialize_large_repo(count, root)
+        assert len(paths) == count == len(set(paths))
+        assert len(probe.large_hidden_proof(count).split("def test_boundary_")) - 1 == count
+        assert all("< LIMIT" in (root / path).read_text() for path in paths)
+        assert {path.relative_to(root).as_posix() for path in root.rglob("test_*.py")} == {
+            "tests/test_public.py"}
+        assert probe.verify_qualification_source("large_output", str(count), root) == probe._frozen_source_digest(
+            "large_output", str(count))
+        environment = {"PATH": "/no-provider-bin", "PYTHONPATH": str(root),
+                       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+        public = subprocess.run([sys.executable, "-m", "pytest", "tests/test_public.py", "-q",
+                                 "-p", "no:cacheprovider"], cwd=root, env=environment,
+                                capture_output=True, text=True, timeout=30, check=False)
+        assert public.returncode == 0 and "1 passed" in public.stdout
+        proof_path = tmp_path / f"proof_{count}.py"
+        proof_path.write_text(probe.large_hidden_proof(count), encoding="utf-8")
+        hidden = subprocess.run([sys.executable, "-m", "pytest", str(proof_path), "-q",
+                                 "--tb=no", "-p", "no:cacheprovider"], cwd=tmp_path,
+                                env=environment, capture_output=True, text=True,
+                                timeout=30, check=False)
+        assert hidden.returncode == 1 and f"{count} failed" in hidden.stdout
+        assert probe.verify_qualification_source("large_output", str(count), root) == probe._frozen_source_digest(
+            "large_output", str(count))
+        spec = probe.build_qualification_spec("large_output", str(count), run_id=f"large-{count}")
+        assert spec.context.max_new_findings == (129 if count == 128 else 512)
+        assert len(spec.authorized_paths) == count
+        assert "test_boundary_" not in "".join(item.content for item in spec.evidence)
+
+
+def test_quality_requests_use_frozen_context_without_hidden_proof(tmp_path: Path) -> None:
+    from native_review_request import build_native_review_request
+    corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
+    for case in corpus["cases"]:
+        root = tmp_path / case["id"]
+        probe.materialize_quality_repo(case["id"], root)
+        assert probe.verify_qualification_source("quality", case["id"], root) == probe._frozen_source_digest(
+            "quality", case["id"])
+        spec = probe.build_qualification_spec("quality", case["id"], run_id="quality-" + case["id"])
+        bundle = build_native_review_request(spec, profile="antigravity")
+        assert spec.context.diff_fingerprint == case["review_context"]["binding"]["diff_fingerprint"]
+        assert bundle.document["authorized_paths"] == case["review_context"]["authorized_paths"]
+        assert case["proof"]["content"] not in bundle.canonical_json
+        assert case["proof"]["hidden_file"] not in bundle.canonical_json
+        if case["id"] == "Q3":
+            assert bundle.document["review_contract"]["previous_findings"]
+        if case["id"] in {"Q4", "Q6"}:
+            assert bundle.document["review_kind"] == "final_review"
+
+
+def _failed_attempt(kind: str, case_id: str, provider: str, *, series_id: str,
+                    call_id: str) -> tuple[dict, dict]:
+    from native_review_request import build_native_review_request
+    bundle = build_native_review_request(probe.build_qualification_spec(
+        kind, case_id, run_id=f"qualification-{series_id}-{call_id}"),
+        profile="antigravity" if provider == "agy" else "claude")  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    row = {
+        "call_id": call_id, "series_id": series_id, "kind": kind, "provider": provider,
+        "role": "reviewer", "slot": probe._qualified_slot(case_id, kind),
+        "case_id": case_id, "request_id": bundle.bound_context.request_id,
+        "case_sha256": probe._frozen_source_digest(kind, case_id),
+        "request_sha256": probe.sha(bundle.canonical_json.encode()),
+        "writer_sha256": probe.sha(bundle.provider_response_schema_json.encode()),
+        "profile_sha256": "a" * 64, "binary_sha256": "b" * 64,
+        "commit_sha": "c" * 40, "probe_limit_seconds": 600,
+        "started_at": "2026-09-29T08:00:00+00:00", "duration_seconds": 1.0,
+        "status": "technical_rejection", "denials": [], "usage": None,
+        "quota": None, "tag": "test", "output_bytes": 0,
+        "checks": {"writer_and_domain": False},
+    }
+    return row, {"envelope": {}, "stderr": "", "exit_code": None,
+                 "technical_error": "synthetic failure",
+                 "request_document": json.loads(bundle.canonical_json),
+                 "writer_schema": json.loads(bundle.provider_response_schema_json)}
+
+
+def test_series_count_restart_and_failure_visibility() -> None:
+    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    series = {"schema_version": "qualification-series-v1", "attempts": []}
+    envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+    expected = probe.qualification_cases("transport", "agy")
+    for position, case in enumerate(expected[:-1], 1):
+        row, raw = _failed_attempt("transport", case, "agy", series_id="s1", call_id=f"a{position}")
+        probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    verdicts = probe.validate_qualification_evidence(series, envelopes, protocol)
+    assert verdicts["s1"]["incomplete"] and verdicts["s1"]["calls"] == 11
+    assert not verdicts["s1"]["passed"]
+    row, raw = _failed_attempt("transport", expected[-1], "agy", series_id="s1", call_id="a12")
+    probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    verdicts = probe.validate_qualification_evidence(series, envelopes, protocol)
+    assert verdicts["s1"]["calls"] == 12
+    assert verdicts["s1"]["failed_cases"] == list(expected)
+    with pytest.raises(ValueError, match="already recorded"):
+        probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    restart, raw = _failed_attempt("transport", expected[0], "agy", series_id="s2", call_id="b1")
+    restart["restart_diagnosis"] = "Provider rejected the old writer."
+    restart["restart_change"] = "Writer update at a new commit."
+    probe.append_qualification_attempt(series, envelopes, attempt=restart, envelope=raw)
+    with pytest.raises(ValueError, match="did not change"):
+        probe.validate_qualification_evidence(series, envelopes, protocol)
+    restart["commit_sha"] = "d" * 40
+    series["attempts"][-1]["commit_sha"] = "d" * 40
+    assert probe.validate_qualification_evidence(series, envelopes, protocol)["s2"]["incomplete"]
+    assert len(series["attempts"]) == 13
+
+
+def test_series_preflight_prevents_skips_retake_and_undocumented_restart() -> None:
+    common = dict(kind="transport", provider="agy", commit_sha="c" * 40,
+                  profile_sha256="a" * 64, binary_sha256="b" * 64,
+                  writer_sha256="d" * 64, restart_diagnosis=None,
+                  restart_change=None)
+    with pytest.raises(ValueError, match="first frozen case"):
+        probe._preflight_series_position([], series_id="s1", case_id="F2:1", **common)
+    first = {"kind": "transport", "provider": "agy", "series_id": "s1",
+             "case_id": "F1:1", "commit_sha": "c" * 40,
+             "profile_sha256": "a" * 64, "binary_sha256": "b" * 64,
+             "writer_sha256": "d" * 64, "status": "technical_rejection",
+             "checks": {"writer": False}}
+    probe._preflight_series_position([first], series_id="s1", case_id="F1:2", **common)
+    with pytest.raises(ValueError, match="frozen series order"):
+        probe._preflight_series_position([first], series_id="s1", case_id="F2:1", **common)
+    with pytest.raises(ValueError, match="requires diagnosis"):
+        probe._preflight_series_position([first], series_id="s2", case_id="F1:1", **common)
+    changed = dict(common, commit_sha="e" * 40,
+                   restart_diagnosis="Technical output failed.",
+                   restart_change="Updated committed adapter.")
+    probe._preflight_series_position([first], series_id="s2", case_id="F1:1", **changed)
+    second = dict(first, series_id="s2", commit_sha="e" * 40)
+    with pytest.raises(ValueError, match="earlier series"):
+        probe._preflight_series_position([first, second], series_id="s1", case_id="F1:2", **common)
+
+
+def _blind_quality_result(corpus: dict) -> dict:
+    mapping = {}
+    judgments = []
+    for provider in ("agy", "claude"):  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        for case in corpus["cases"]:
+            identifier = f"B{len(judgments) + 1:03d}"
+            mapping[identifier] = {"provider": provider, "case": case["id"],
+                "content_sha256": "a" * 64, "input_sha256": "b" * 64}
+            judgments.append({"id": identifier, "defect_found": bool(case["defect"]),
+                              "false_positive_count": 0, "invented_critical": False,
+                              "reason": "Independently checked against hidden proof."})
+    return {"schema_version": "quality-results-v1", "blind_seed": 20260929,
+            "judgments": judgments, "mapping": mapping,
+            "judgments_frozen_sha256": probe.digest(judgments),
+            "judgments_frozen_at": "2026-09-29T08:00:00Z",
+            "unblinded_at": "2026-09-29T09:00:00Z",
+            "claude_special_decision": None}  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+
+
+def test_quality_rule_is_absolute_and_claude_is_separate() -> None:  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    corpus = load(FIXTURES / "reviewer-quality-corpus-v1.json")
+    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    original = _blind_quality_result(corpus)
+    assert all(result["passed"] for result in probe.grade_quality(original, corpus, protocol).values())
+    for provider, case_id, field in (("agy", "Q1", "defect_found"),
+                                     ("agy", "Q2", "defect_found"),
+                                     ("agy", "Q5", "invented_critical")):
+        changed = copy.deepcopy(original)
+        row = next(row for row in changed["judgments"] if changed["mapping"][row["id"]]["provider"] == provider
+                   and changed["mapping"][row["id"]]["case"] == case_id)
+        row[field] = not row[field]
+        changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
+        assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
+    changed = copy.deepcopy(original)
+    for row in changed["judgments"]:
+        if changed["mapping"][row["id"]]["provider"] == "agy" and changed["mapping"][row["id"]]["case"] in {"Q5", "Q6"}:
+            row["false_positive_count"] = 1
+    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
+    assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
+    changed = copy.deepcopy(original)
+    for row in changed["judgments"]:
+        if changed["mapping"][row["id"]]["provider"] == "agy" and changed["mapping"][row["id"]]["case"] in {"Q3", "Q4"}:
+            row["defect_found"] = False
+    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
+    assert probe.grade_quality(changed, corpus, protocol)["agy"]["defects"] == 2
+    assert not probe.grade_quality(changed, corpus, protocol)["agy"]["passed"]
+    changed = copy.deepcopy(original)
+    row = next(row for row in changed["judgments"] if changed["mapping"][row["id"]]["provider"] == "claude"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+               and changed["mapping"][row["id"]]["case"] == "Q1")
+    row["defect_found"] = False
+    changed["judgments_frozen_sha256"] = probe.digest(changed["judgments"])
+    with pytest.raises(ValueError, match="operator decision"):
+        probe.grade_quality(changed, corpus, protocol)
+    changed["claude_special_decision"] = "deny_experimental"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    result = probe.grade_quality(changed, corpus, protocol)
+    assert result["agy"]["passed"] and not result["claude"]["passed"]  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    changed["judgments_frozen_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="digest-frozen"):
+        probe.grade_quality(changed, corpus, protocol)
+
+
+def test_qualification_live_gate_and_evidence_sanitization(tmp_path: Path) -> None:
+    profile = tmp_path / "profile.toml"
+    profile.write_text('live = false\n', encoding="utf-8")
+    with pytest.raises(PermissionError, match="--live"):
+        probe.run_qualification_call(kind="transport", case_id="F1:1", provider="agy",
+            series_id="s1", call_id="a1", profile_file=profile, source_repo=tmp_path,
+            output_dir=tmp_path / "out")
+    with pytest.raises(PermissionError, match="profile"):
+        probe.run_qualification_call(kind="transport", case_id="F1:1", provider="agy",
+            series_id="s1", call_id="a1", profile_file=profile, source_repo=tmp_path,
+            output_dir=tmp_path / "out", live=True)
+    cleaned = probe.sanitize_evidence({"stderr": "person@example.invalid ya29.secret"})
+    assert "person@example.invalid" not in str(cleaned) and "ya29.secret" not in str(cleaned)
+
+
+def test_qualification_call_routes_one_fake_response_through_native_agy_adapter(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    import agent_runtime
+    from antigravity_adapter import NativeAntigravityReviewAdapter
+    from native_review_contract import parse_bound_native_contract_result
+
+    source = tmp_path / "repo"
+    probe.materialize_format_repo("F1", source)
+    profile = tmp_path / "profile.toml"
+    profile.write_text(
+        'live = true\nmodel = "gemini-3.1-pro-high"\neffort = "high"\n'
+        f'binary = "{sys.executable}"\ncommit_sha = "{"c" * 40}"\n'
+        f'[provider_options.antigravity]\nhome = "{tmp_path / "home"}"\n'
+        f'run_root = "{tmp_path / "runs"}"\n', encoding="utf-8")
+    observed = []
+    stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]["F1"]["envelope"]
+
+    def fake_native_review(adapter, bundle, **kwargs):
+        assert isinstance(adapter, NativeAntigravityReviewAdapter)
+        assert kwargs["attempt_invocation"].call_id == "a1"
+        assert kwargs["operation"] == "reviewer_plan_review"
+        response = copy.deepcopy(stored["structured_output"]["result"])
+        response["request_id"] = bundle.bound_context.request_id
+        envelope = {**stored, "structured_output": {"result": response},
+                    "json_schema": json.loads(bundle.provider_response_schema_json)}
+        adapter.extract_output(json.dumps(envelope), "", {"exit_code": "0"})
+        observed.append(bundle.bound_context.request_id)
+        return SimpleNamespace(result=parse_bound_native_contract_result(
+            response, bundle.bound_context))
+
+    monkeypatch.setattr(agent_runtime, "run_native_review_agent", fake_native_review)
+    monkeypatch.setattr(NativeAntigravityReviewAdapter, "extract_output", lambda self, stdout, stderr, extra: "captured")
+    monkeypatch.setattr(probe, "_current_commit", lambda: "c" * 40)
+    monkeypatch.setattr(probe, "_assert_committed_qualification_code", lambda: None)
+    out = tmp_path / "out"
+    row = probe.run_qualification_call(kind="transport", case_id="F1:1", provider="agy",
+        series_id="s1", call_id="a1", profile_file=profile,
+        source_repo=source, output_dir=out, live=True)
+    assert observed == [row["request_id"]]
+    assert row["status"] == "success"
+    assert all(row["checks"].values())
+    assert probe.strict_json((out / "qualification-series-v1.json").read_bytes())["attempts"][0]["call_id"] == "a1"
+    assert probe.validate_qualification_evidence(
+        probe.strict_json((out / "qualification-series-v1.json").read_bytes()),
+        probe.strict_json((out / "qualification-envelopes-v1.json").read_bytes()),
+        load(EVIDENCE / "qualification-protocol-v1.json"))["s1"]["incomplete"]
+
+
+def test_print_timeout_is_technical_and_timeout_proposal_uses_512() -> None:
+    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    series = {"schema_version": "qualification-series-v1", "attempts": []}
+    envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+    row, raw = _failed_attempt("print_timeout", "T1", "agy", series_id="timeout-s1", call_id="t1")
+    row["checks"] = {"print_timeout": True, "no_valid_stop": True}
+    raw["stderr"] = "[agy] print timeout after 1s with turn in progress; returning partial output"
+    raw["envelope"] = {"status": "SUCCESS", "structured_output": None}
+    probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    verdicts = probe.validate_qualification_evidence(series, envelopes, protocol)
+    assert verdicts["timeout-s1"]["passed"]
+    changed = copy.deepcopy(envelopes)
+    changed["envelopes"][0]["envelope"]["envelope"]["structured_output"] = {
+        "result": {"result_type": "stop_request"}}
+    series["attempts"][0]["envelope_sha256"] = probe.sha(probe.canonical(
+        changed["envelopes"][0]["envelope"]).encode())
+    with pytest.raises(ValueError, match="print timeout"):
+        probe.validate_qualification_evidence(series, changed, protocol)
+
+    measurements = {"attempts": [
+        {"series_id": "transport", "kind": "transport", "case_id": "F1:1", "duration_seconds": 210},
+        {"series_id": "size", "kind": "large_output", "case_id": "128", "duration_seconds": 330},
+        {"series_id": "size", "kind": "large_output", "case_id": "512", "duration_seconds": 401},
+    ]}
+    successes = {"transport": {"passed": True, "provider": "agy", "kind": "transport"},
+                 "size": {"passed": True, "provider": "agy", "kind": "large_output"}}
+    proposal = probe.timeout_proposal(measurements, successes, protocol)
+    assert proposal["suggested_seconds"] == 660  # ceil(1.5 * 401 / 60) * 60
+    assert proposal["profile_zero_allowed"] is True
+    assert proposal["censored_by_limit"] is False
+
+
+def test_qualification_claude_call_builds_restricted_productive_input(  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    import agent_runtime
+    from agent_adapters import NativeClaudeReviewAdapter  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    from native_review_contract import parse_bound_native_contract_result
+
+    source = tmp_path / "quality"
+    probe.materialize_quality_repo("Q1", source)
+    fake_binary = tmp_path / "claude"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    fake_binary.write_text("#!/bin/sh\n# dao-probe-fake-v1\n", encoding="utf-8")
+    fake_binary.chmod(0o700)
+    profile = tmp_path / "claude.toml"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    profile.write_text(
+        f'live = true\nmodel = "opus"\neffort = "high"\n'
+        f'binary = "{fake_binary}"\ncommit_sha = "{"c" * 40}"\n',
+        encoding="utf-8")
+    response = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]["F1"]["envelope"]["structured_output"]["result"]
+    observed = []
+
+    def fake_native_review(adapter, bundle, **kwargs):
+        assert isinstance(adapter, NativeClaudeReviewAdapter)  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        prepared = adapter.prepare_native_provider_input(bundle)
+        assert prepared.command.count("--restricted") == 1
+        assert "--json-schema" in prepared.command
+        assert bundle.canonical_json in "".join(
+            path.read_text() for path in adapter.invocation.reviewer_input.request_files)
+        result = dict(response, request_id=bundle.bound_context.request_id)
+        adapter.extract_output(json.dumps({"is_error": False, "structured_output": {"result": result}}),
+                               "", {"exit_code": "0"})
+        observed.append(prepared.command)
+        adapter.cleanup()
+        return SimpleNamespace(result=parse_bound_native_contract_result(result, bundle.bound_context))
+
+    monkeypatch.setattr(probe, "qualification_ready", lambda protocol, corpus: True)
+    monkeypatch.setattr(probe, "_current_commit", lambda: "c" * 40)
+    monkeypatch.setattr(probe, "_assert_committed_qualification_code", lambda: None)
+    monkeypatch.setattr(agent_runtime, "run_native_review_agent", fake_native_review)
+    monkeypatch.setattr(NativeClaudeReviewAdapter, "extract_output", lambda self, stdout, stderr, extra: "captured")  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    row = probe.run_qualification_call(kind="quality", case_id="Q1", provider="claude",  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        series_id="claude-quality-s1", call_id="q1", profile_file=profile,  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        source_repo=source, output_dir=tmp_path / "out", live=True)
+    assert observed and row["status"] == "success", probe.strict_json(
+        (tmp_path / "out/qualification-envelopes-v1.json").read_bytes())["envelopes"][0]["envelope"]["technical_error"]
+    assert row["slot"] == "reviewer"
+    assert row["checks"] == {"writer_and_domain": True}
+    assert len(row["public_validation_sha256"]) == 64
+
+
+def test_blind_sources_require_all_twelve_bound_outputs_without_selection() -> None:
+    from native_review_request import build_native_review_request
+
+    protocol = load(EVIDENCE / "qualification-protocol-v1.json")
+    stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]
+    templates = {"Q1": "F1", "Q2": "F2", "Q3": "F4", "Q4": "F5", "Q5": "F1", "Q6": "F5"}
+    series = {"schema_version": "qualification-series-v1", "attempts": []}
+    envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+    for provider in ("agy", "claude"):  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+        series_id = f"quality-{provider}-s1"
+        for case_id, template in templates.items():
+            call_id = f"{provider}-{case_id}"
+            row, raw = _failed_attempt("quality", case_id, provider,
+                                       series_id=series_id, call_id=call_id)
+            bundle = build_native_review_request(probe.build_qualification_spec(
+                "quality", case_id, run_id=f"qualification-{series_id}-{call_id}"),
+                profile="antigravity" if provider == "agy" else "claude")  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+            response = copy.deepcopy(stored[template]["envelope"]["structured_output"]["result"])
+            response["request_id"] = bundle.bound_context.request_id
+            if case_id == "Q3":
+                response["status_changes"][0]["finding_id"] = "R-17"
+            if case_id in {"Q4", "Q6"}:
+                response["new_findings"] = []
+            raw["envelope"] = {"structured_output": {"result": response}}
+            if provider == "agy":
+                raw["envelope"].update(status="SUCCESS", json_schema=json.loads(
+                    bundle.provider_response_schema_json))
+            else:
+                raw["envelope"]["is_error"] = False
+            raw["technical_error"] = None
+            row["status"] = "success"
+            row["checks"] = {"writer_and_domain": True}
+            row["output_bytes"] = len(probe.canonical(raw["envelope"]).encode())
+            probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    sources = probe.quality_blind_sources(series, envelopes, protocol)
+    assert len(sources) == 12
+    assert {(item["provider"], item["case"]) for item in sources} == {
+        (provider, f"Q{number}") for provider in ("agy", "claude") for number in range(1, 7)}  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    assessment, mapping = probe.blind_package(sources, seed=protocol["quality"]["blind_seed"])
+    assert len(assessment["responses"]) == 12
+    probe.verify_quality_mapping({"mapping": mapping["mapping"]}, series, envelopes, protocol)
+    modified = copy.deepcopy(mapping["mapping"])
+    modified["B001"]["case"] = "Q6" if modified["B001"]["case"] != "Q6" else "Q5"
+    with pytest.raises(ValueError, match="mapping differs"):
+        probe.verify_quality_mapping({"mapping": modified}, series, envelopes, protocol)
+    # Removing a single outcome leaves the entire series ineligible for blinding.
+    shortened = copy.deepcopy(series)
+    shortened["attempts"].pop()
+    reduced_raw = copy.deepcopy(envelopes)
+    reduced_raw["envelopes"].pop()
+    with pytest.raises(ValueError, match="not complete"):
+        probe.quality_blind_sources(shortened, reduced_raw, protocol)

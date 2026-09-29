@@ -1,0 +1,11 @@
+{
+  "schema_version": "quality-results-v1",
+  "status": "pending_blind_operator_judgment",
+  "blind_seed": 20260929,
+  "judgments": [],
+  "judgments_frozen_sha256": null,
+  "judgments_frozen_at": null,
+  "unblinded_at": null,
+  "mapping": {},
+  "claude_special_decision": null
+}
