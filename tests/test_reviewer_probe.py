@@ -110,9 +110,21 @@ def test_qualification_protocol_counts_rules_slots_and_evidence_digests() -> Non
     assert [len(probe.qualification_cases(kind, provider)) for kind, provider in (
         ("transport", "agy"), ("large_output", "agy"),
         ("print_timeout", "agy"), ("quality", "agy"), ("quality", "claude"))] == [12, 2, 1, 6, 6]  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
-    assert load(EVIDENCE / "qualification-series-v1.json")["attempts"] == []
-    assert load(EVIDENCE / "qualification-envelopes-v1.json")["envelopes"] == []
-    assert load(EVIDENCE / "quality-results-v1.json")["judgments"] == []
+    verdicts = probe.validate_qualification_evidence(
+        probe.read_evidence(EVIDENCE / "qualification-series-v1.json"),
+        probe.read_evidence(EVIDENCE / "qualification-envelopes-v1.json.gz"), protocol)
+    passed = {name for name, verdict in verdicts.items() if verdict["passed"]}
+    assert passed == {"agy-transport-s3", "agy-timeout-s2", "agy-quality-s4",
+                      "claude-quality-s3"}  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    assert verdicts["agy-large-s1"]["failed_cases"] == ["128"]
+    assert {name for name, verdict in verdicts.items() if verdict["superseded_corpus"]} == {
+        "agy-quality-s1", "agy-quality-s3", "claude-quality-s2"}  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    scores = probe.grade_quality(load(EVIDENCE / "quality-results-v1.json"),
+                                 load(FIXTURES / "reviewer-quality-corpus-v1.json"), protocol)
+    assert scores["agy"]["passed"] and not scores["claude"]["passed"]  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
+    decisions = {row["id"]: row for row in load(EVIDENCE / "operator-decisions-v1.json")["decisions"]}
+    assert decisions["size-override"]["failed_case"] == "128"
+    assert load(EVIDENCE / "quality-results-v1.json")["claude_special_decision"] == "approve_experimental"  # allowlist:provider -- certification data: Slice-5 bound reviewer qualification
 
 
 def test_s6_stored_envelopes_against_current_writer_domain_and_case_semantics() -> None:
@@ -1211,3 +1223,33 @@ def test_superseded_corpus_series_stays_visible_and_never_passes() -> None:
     transport_row["case_sha256"] = "e" * 64
     with pytest.raises(ValueError, match="case binding"):
         probe._verify_recorded_result(transport_row, transport_raw)
+
+
+def test_negative_size_result_stays_evaluable_and_cannot_be_forged() -> None:
+    from native_review_request import build_native_review_request
+
+    protocol = load(EVIDENCE / "qualification-protocol-v5.json")
+    stored = load(FIXTURES / "reviewer-format-s6-v1.json")["cases"]
+    row, raw = _failed_attempt("large_output", "128", "agy", series_id="large-s1", call_id="l128")
+    bundle = build_native_review_request(probe.build_qualification_spec(
+        "large_output", "128", run_id="qualification-large-s1-l128"), profile="antigravity")
+    response = copy.deepcopy(stored["F5"]["envelope"]["structured_output"]["result"])
+    response["request_id"] = bundle.bound_context.request_id
+    finding = response["new_findings"][0]
+    finding["affected_paths"] = ["src/boundary_0001.py"]
+    raw["envelope"] = {"status": "SUCCESS", "structured_output": {"result": response},
+                       "json_schema": json.loads(bundle.provider_response_schema_json)}
+    raw["technical_error"] = None
+    measured = {"writer_and_domain": True, "finding_count": False, "unique_ids": False,
+                "scope": True, "all_paths": False, "capacity_semantics": True}
+    row.update(status="success", checks=measured, failure_kind=None,
+               output_bytes=len(probe.canonical(raw["envelope"]).encode()))
+    series = {"schema_version": "qualification-series-v1", "attempts": []}
+    envelopes = {"schema_version": "qualification-envelopes-v1", "envelopes": []}
+    probe.append_qualification_attempt(series, envelopes, attempt=row, envelope=raw)
+    verdict = probe.validate_qualification_evidence(series, envelopes, protocol)["large-s1"]
+    assert not verdict["passed"] and verdict["failed_cases"] == ["128"]
+    forged = copy.deepcopy(series)
+    forged["attempts"][0]["checks"] = {name: True for name in measured}
+    with pytest.raises(ValueError, match="claim more"):
+        probe.validate_qualification_evidence(forged, envelopes, protocol)

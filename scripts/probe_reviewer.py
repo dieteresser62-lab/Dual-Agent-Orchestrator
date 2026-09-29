@@ -34,6 +34,15 @@ def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def read_evidence(path: Path) -> dict:
+    """Read one strict JSON evidence file; large envelope sets may be stored gzip-compressed."""
+    content = path.read_bytes()
+    if path.suffix == ".gz":
+        import gzip
+        content = gzip.decompress(content)
+    return strict_json(content)
+
+
 def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
@@ -812,6 +821,22 @@ def _frozen_source_digest(kind: str, case_id: str) -> str:
         return _source_digest(root)
 
 
+def _large_output_checks(response, domain, count: int, paths: set[str]) -> dict:
+    """Full-parsing checks of one size case, shared by recording and verification."""
+    findings = response.get("new_findings", []) if isinstance(response, dict) else []
+    stop = getattr(domain, "stop_request", None)
+    return {"writer_and_domain": domain is not None,
+            "finding_count": len(findings) == count,
+            "unique_ids": len({item.get("finding_id") for item in findings}) == count,
+            "scope": all(len(item.get("affected_paths", [])) == 1 and
+                         item["affected_paths"][0] in paths for item in findings),
+            "all_paths": {item["affected_paths"][0] for item in findings
+                          if item.get("affected_paths")} == paths,
+            "capacity_semantics": bool(domain is not None and (
+                stop is None if count == 128 else
+                getattr(stop, "rule_id", None) == "DISCOVERY_OUTPUT_LIMIT"))}
+
+
 def _contract_retry_feedback(spec, previous_row: dict, previous_raw: dict):
     """Rebuild production's corrective feedback from the recorded rejected response."""
     from native_review_contract import NativeReviewErrorCode, native_review_retry_guidance
@@ -958,20 +983,12 @@ def _verify_recorded_result(row: dict, raw: dict,
         if actual["checks"] != row["checks"]:
             raise ValueError("transport checks differ from the recorded envelope")
     elif row["kind"] == "large_output":
-        count = int(row["case_id"])
-        findings = response.get("new_findings", [])
-        paths = set(spec.authorized_paths)
-        if (len(findings) != count or
-            len({item["finding_id"] for item in findings}) != count or
-            {item["affected_paths"][0] for item in findings
-             if len(item["affected_paths"]) == 1} != paths or
-            any(len(item["affected_paths"]) != 1 for item in findings) or
-            (count == 128 and domain.stopped) or
-            (count == 512 and (not domain.stopped or
-             domain.stop_request.rule_id != "DISCOVERY_OUTPUT_LIMIT"))):
-            raise ValueError("large output is truncated, out of scope or wrong at capacity")
-        if not all(row["checks"].values()):
-            raise ValueError("large output checks do not certify full parsing")
+        # A negative size result stays evaluable; only claims beyond the evidence are rejected.
+        expected = _large_output_checks(response, domain, int(row["case_id"]),
+                                        set(spec.authorized_paths))
+        if set(row["checks"]) != set(expected) or any(
+                row["checks"][name] and not expected[name] for name in expected):
+            raise ValueError("large output checks claim more than the recorded output shows")
     elif row["kind"] == "quality" and not row["checks"].get("writer_and_domain"):
         raise ValueError("quality attempt did not pass the domain contract")
 
@@ -1913,18 +1930,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         checks["no_valid_stop"] = checks["no_valid_stop"] and domain is None
     elif kind == "large_output":
         response = envelope.get("structured_output", {}).get("result", {}) if isinstance(envelope, dict) else {}
-        findings = response.get("new_findings", []) if isinstance(response, dict) else []
-        expected = int(case_id)
-        paths = set(spec.authorized_paths)
-        checks = {"writer_and_domain": domain is not None,
-                  "finding_count": len(findings) == expected,
-                  "unique_ids": len({f.get("finding_id") for f in findings}) == expected,
-                  "scope": all(len(f.get("affected_paths", [])) == 1 and
-                               f["affected_paths"][0] in paths for f in findings),
-                  "all_paths": {f["affected_paths"][0] for f in findings if f.get("affected_paths")} == paths,
-                  "capacity_semantics": bool(domain is not None and
-                      (getattr(domain, "stop_request", None) is None if expected == 128 else
-                       getattr(getattr(domain, "stop_request", None), "rule_id", None) == "DISCOVERY_OUTPUT_LIMIT"))}
+        checks = _large_output_checks(response, domain, int(case_id), set(spec.authorized_paths))
     else:
         checks = {"writer_and_domain": domain is not None}
     row = {
@@ -2176,8 +2182,8 @@ def main() -> int:
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         if not qualification_ready(protocol, corpus):
             raise PermissionError("quality corpus awaits operator review and matching frozen digest")
-        sources = quality_blind_sources(strict_json(args.series.read_bytes()),
-                                        strict_json(args.envelopes.read_bytes()), protocol)
+        sources = quality_blind_sources(read_evidence(args.series),
+                                        read_evidence(args.envelopes), protocol)
         _write_evidence_file(args.output, sources)
         return 0
     if args.command == "export-rater-packets":
@@ -2252,8 +2258,8 @@ def main() -> int:
         return 0 if result["status"] == "success" else 1
     if args.command == "evaluate-qualification":
         protocol = strict_json((ROOT / "docs/evidence/antigravity/qualification-protocol-v5.json").read_bytes())
-        series = strict_json(args.series.read_bytes())
-        envelopes = strict_json(args.envelopes.read_bytes())
+        series = read_evidence(args.series)
+        envelopes = read_evidence(args.envelopes)
         verdicts = validate_qualification_evidence(series, envelopes, protocol)
         summary = {"series": verdicts}
         eligible = False

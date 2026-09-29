@@ -1,0 +1,40 @@
+{
+  "decisions": [
+    {
+      "basis": "Qualität Korpus-Revision 2 (Protokoll v5): AGY bestanden (2/2 kritisch, 4/4 Defekte, 0 unbegründet, 0 erfunden), Claude verfehlt (2 unbegründete Befunde). Operator entschied nach Entblindung die experimentelle Auswahl trotz schwächerer Referenz.",
+      "date": "2026-09-29",
+      "decision": "approve_experimental",
+      "evidence": "quality-results-v1.json",
+      "id": "quality-claude-special"
+    },
+    {
+      "date": "2026-09-29",
+      "decision": "approve_experimental_despite_failed_size_case",
+      "documented_weakness": "Fasst viele gleichartige Fehler zu einem Befund zusammen; große Befundmengen und die Kapazitätsgrenze sind für AGY nicht nachgewiesen.",
+      "failed_case": "128",
+      "id": "size-override",
+      "not_run": [
+        "512"
+      ],
+      "observed": "AGY meldete statt 128 einzelner Befunde einen einzigen (boundary_0001) und nannte die übrigen Module nur im pre_mortem, obwohl die Anfrage jedes Modul einzeln verlangte.",
+      "plan_deviation": "Laut Plan sind beide Größenfälle Pflicht vor den Canaries; der Operator übersteuert das bewusst.",
+      "series": "agy-large-s1",
+      "timeout_proposal": "keiner; die Zeitgrenze bleibt frei wählbar, 0 bleibt erlaubt"
+    },
+    {
+      "consequence": "Vorwärtskompatible CLI-Versionen (auch neue Hauptversionen) für AGY, Claude und Codex; freie Gemini-Modellwahl innerhalb der Gemini-Bindung; keine Neuzertifizierung. Der Laufzeitschutz je Aufruf bleibt (effektive Rechte, Isolations-Nachkontrolle, fail-closed). Optionaler Schnelltest unter 2 Minuten.",
+      "date": "2026-09-29",
+      "decision": "accept_all_newer_versions",
+      "id": "version-policy",
+      "statement": "Ich würde sämtliche neue Versionen akzeptieren … Hier bin ich pragmatisch und gehe davon aus, dass es funktioniert. Das einzige, was ich akzeptieren würde, wäre ein Quicktest, der innerhalb von sehr kurzer Zeit durch ist."
+    },
+    {
+      "basis": "Revision 1: beide Reviewer meldeten unabhängig fehlende sichtbare Tests in den sauberen Fällen Q5/Q6; das offizielle Ergebnis (beide verfehlt) bleibt dokumentiert.",
+      "date": "2026-09-29",
+      "decision": "correct_test_cases_and_remeasure",
+      "id": "corpus-revision-2"
+    }
+  ],
+  "schema_version": "operator-decisions-v1",
+  "scope": "Task B, Antigravity (AGY) als experimenteller Reviewer; private DIY-Umgebung des Operators"
+}
