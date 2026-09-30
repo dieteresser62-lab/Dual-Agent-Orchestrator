@@ -94,9 +94,24 @@ def implementer_disallowed_tools(settings: dict[str, object]) -> str:
     return ",".join(settings["permissions"]["deny"])  # type: ignore[index]
 
 
+def outermost_protected_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Drop paths inside another protected path.
+
+    The sandbox mounts every write denial read-only and creates a placeholder
+    for a missing one. A missing path below an already read-only parent makes
+    that placeholder impossible, and then every Bash command fails to start.
+    The outer rule already covers the inner path for file tools and Bash.
+    """
+    return tuple(
+        path for path in paths
+        if not any(other != path and path.is_relative_to(other) for other in paths)
+    )
+
+
 def implementer_settings(paths: tuple[Path, ...], root: Path) -> dict[str, object]:
     if not paths or any(not path.is_absolute() for path in paths):
         raise AgentOutputError("implementer protection paths are incomplete")
+    paths = outermost_protected_paths(paths)
     repository = root.resolve(strict=True)
     deny = []
     for path in paths:

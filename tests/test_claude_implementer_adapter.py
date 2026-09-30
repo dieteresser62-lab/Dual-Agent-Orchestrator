@@ -159,8 +159,12 @@ def test_linked_worktree_gitdir_and_common_dir_are_protected() -> None:
     assert Path(gitdir).resolve() in paths
     assert Path(common_dir).resolve() in paths
     settings = implementer_settings(paths, root)
+    deny_write = [Path(item) for item in settings["sandbox"]["filesystem"]["denyWrite"]]
     for path in (gitdir, common_dir):
-        assert str(Path(path).resolve()) in settings["sandbox"]["filesystem"]["denyWrite"]
+        # A linked worktree's gitdir lies inside the common dir, which covers it.
+        resolved = Path(path).resolve()
+        assert any(resolved == item or resolved.is_relative_to(item) for item in deny_write)
+    assert Path(common_dir).resolve() in deny_write
 
 
 def test_queue_symlink_alias_and_target_are_both_protected(tmp_path: Path) -> None:
@@ -443,3 +447,37 @@ def test_protection_path_with_rule_separator_fails_closed(tmp_path: Path) -> Non
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     with pytest.raises(AgentOutputError, match="rule separator"):
         protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1")
+
+
+def test_settings_keep_only_outermost_protected_paths(tmp_path: Path) -> None:
+    # Live smoke 2026-09-30: a missing nested denial below .orchestrator made
+    # bwrap fail before every Bash command ("Can't create file ... Read-only").
+    root, adapter, _, prepared = _prepared(tmp_path)
+    try:
+        settings = json.loads(prepared.command[prepared.command.index("--settings") + 1])
+        deny_write = settings["sandbox"]["filesystem"]["denyWrite"]
+        assert not any(
+            inner != outer and Path(inner).is_relative_to(Path(outer))
+            for inner in deny_write for outer in deny_write
+        )
+        assert str(root.resolve() / ".orchestrator") in deny_write
+        assert "Edit(./.orchestrator/**)" in settings["permissions"]["deny"]
+        assert not any("native-codex-evidence" in rule for rule in settings["permissions"]["deny"])  # allowlist:provider -- transport: evidence namespace
+    finally:
+        adapter.cleanup()
+
+
+def test_normalizer_rejects_nested_protected_paths(tmp_path: Path) -> None:
+    _, adapter, _, prepared = _prepared(tmp_path)
+    command = list(prepared.command)
+    settings = json.loads(command[command.index("--settings") + 1])
+    settings["permissions"]["deny"] += ["Edit(./.orchestrator/checkpoints)", "Edit(./.orchestrator/checkpoints/**)"]
+    settings["sandbox"]["filesystem"]["denyWrite"].append("/nested/placeholder")
+    nested = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    command[command.index("--settings") + 1] = nested
+    command[command.index("--disallowedTools") + 1] = ",".join(settings["permissions"]["deny"])
+    try:
+        with pytest.raises(NativeProviderSchemaError, match="nested"):
+            normalize_transport_profile("claude-implementer", command, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
+    finally:
+        adapter.cleanup()

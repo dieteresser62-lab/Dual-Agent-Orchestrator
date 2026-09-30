@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 from typing import Any, Iterable, Mapping, Sequence
@@ -1002,6 +1002,10 @@ def _validate_claude_implementer_settings(settings: object) -> tuple[str, ...]: 
         paths.append(match.group(1))
     if not {"./.git", "./.orchestrator"} <= set(paths):
         raise NativeProviderSchemaError("Claude implementer deny rules omit a control path")  # allowlist:provider -- profile configuration: implementer settings
+    # A nested denial below a read-only parent stops the sandbox from starting.
+    if any(inner != outer and PurePosixPath(inner).is_relative_to(PurePosixPath(outer))
+           for inner in paths for outer in paths):
+        raise NativeProviderSchemaError("Claude implementer deny rules are nested")  # allowlist:provider -- profile configuration: implementer settings
     expected_sandbox = {
         "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
         "autoAllowBashIfSandboxed": True, "excludedCommands": [],
