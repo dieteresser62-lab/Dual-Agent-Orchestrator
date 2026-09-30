@@ -75,6 +75,9 @@ def _spec(*, assignment: str = "Implement the native boundary.") -> NativeImplem
 def test_native_implementer_request_is_deterministic_and_digest_bound() -> None:
     assert load_native_implementer_request_schema()["$id"] == "native-agent-implementer-request-v3"
     first = build_native_implementer_request(_spec())
+    assert hashlib.sha256(first.provider_response_schema_json.encode()).hexdigest() == (
+        "8bf937f092c712f02515ebd9c8edc905c9bb64b893a619b485d057d88fb687e4"
+    )
     second = build_native_implementer_request(_spec())
     changed = build_native_implementer_request(_spec(assignment="A changed assignment."))
     assert first.canonical_json == second.canonical_json

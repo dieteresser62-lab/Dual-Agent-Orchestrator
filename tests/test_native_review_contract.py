@@ -2133,21 +2133,20 @@ def test_review_writer_retains_unexpressible_rule_descriptions(profile: str) -> 
     writer = native_review_provider_response_schema(_context(), profile=profile)
     definitions = writer["$defs"]
     finding = definitions["bound_denied_finding"]
+    if profile == OPENAI_PROVIDER:
+        finding = finding["anyOf"][0]
     assert "cannot be its own predecessor" in finding["properties"][
         "predecessor_finding_ref"
     ]["description"]
     assert "Duplicate paths" in finding["properties"]["affected_paths"][
         "description"
     ]
-    assert "contiguous ascending order" in definitions[
-        "bound_slice_convergence_denied"
-    ]["properties"]["new_findings"]["description"]
-    assert "at most once" in definitions["bound_slice_convergence_denied"][
-        "properties"
-    ]["status_changes"]["description"]
-    assert "exact request_id" in definitions["bound_slice_convergence_denied"][
-        "properties"
-    ]["request_id"]["description"]
+    denied = definitions["bound_slice_convergence_denied"]
+    if profile == OPENAI_PROVIDER:
+        denied = denied["anyOf"][0]
+    assert "contiguous ascending order" in denied["properties"]["new_findings"]["description"]
+    assert "at most once" in denied["properties"]["status_changes"]["description"]
+    assert "exact request_id" in denied["properties"]["request_id"]["description"]
     assert "exact request_id" in definitions["bound_slice_convergence_stop"][
         "properties"
     ]["request_id"]["description"]

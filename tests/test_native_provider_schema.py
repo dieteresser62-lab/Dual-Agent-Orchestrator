@@ -476,6 +476,63 @@ def test_projected_schema_guard_enforces_other_codex_provider_rules(
         assert_projected_provider_schema(schema, provider="codex")
 
 
+@pytest.mark.parametrize("profile", (OPENAI_PROVIDER, "codex-reviewer"))  # allowlist:provider -- profile configuration: strict reviewer profiles
+@pytest.mark.parametrize(("change", "message"), (
+    ({}, "additionalProperties"),
+    ({"additionalProperties": False}, "required"),
+))
+def test_strict_guard_treats_untyped_properties_as_an_object(profile, change, message) -> None:
+    schema = {
+        "type": "object", "properties": {"value": {"anyOf": [
+            {"properties": {"name": {"type": "string"}}, **change},
+            {"type": "null"},
+        ]}}, "required": ["value"], "additionalProperties": False,
+    }
+    with pytest.raises(NativeProviderSchemaError, match=message):
+        assert_projected_provider_schema(schema, provider=profile)
+
+
+def test_reviewer_overlay_rejects_widened_or_unproved_property() -> None:
+    parent = {"type": "string", "enum": ["a", "b"]}
+    with pytest.raises(NativeProviderSchemaError, match="widens"):
+        native_provider_schema._intersect_overlay_property(parent, {"enum": ["a", "c"]})
+    with pytest.raises(NativeProviderSchemaError, match="not provably narrowing"):
+        native_provider_schema._intersect_overlay_property(parent, {"pattern": "^a$"})
+    assert native_provider_schema._intersect_overlay_property(
+        {"enum": [1]}, {"const": True}
+    ) is None
+
+
+def test_openai_structured_output_limits_reject_each_published_bound() -> None:
+    from native_provider_schema import assert_openai_structured_output_limits
+
+    root = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    cases = [
+        {**root, "properties": {str(i): {"type": "string"} for i in range(5001)}},
+        {**root, "properties": {"v": {"enum": [str(i) for i in range(1001)]}}},
+        {**root, "properties": {"v": {"const": "x" * 120001}}},
+        {**root, "properties": {"v": {"enum": ["x" * 61] * 251}}},
+    ]
+    depth = {"type": "string"}
+    for _ in range(11):
+        depth = {"type": "object", "properties": {"v": depth},
+                 "required": ["v"], "additionalProperties": False}
+    cases.append(depth)
+    for schema in cases:
+        with pytest.raises(NativeProviderSchemaError, match="Structured Outputs limits"):
+            assert_openai_structured_output_limits(schema)
+
+
+def test_capability_and_certification_tables_keep_frozen_bytes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    expected = {
+        "schemas/native-provider-schema-capabilities-v2.json": "fc2d513ceb1e4491709c7e39587a45695d9378af0ef4886c9c5b79f92678eaa9",
+        "schemas/role-provider-certifications-v1.json": "233065d3c8651035a5c7066f3b254ae6f49f7c64be8d0f01db5389aee7321392",
+    }
+    for path, digest in expected.items():
+        assert hashlib.sha256((root / path).read_bytes()).hexdigest() == digest
+
+
 @pytest.mark.parametrize("provider", ("claude", "codex"))
 @pytest.mark.parametrize(
     ("property_schema", "message"),

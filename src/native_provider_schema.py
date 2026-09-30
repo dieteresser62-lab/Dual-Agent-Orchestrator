@@ -102,6 +102,14 @@ OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS = frozenset(
 OPENAI_STRUCTURED_OUTPUT_TYPES = frozenset(
     {"array", "boolean", "integer", "null", "number", "object", "string"}
 )
+# https://developers.openai.com/api/docs/guides/structured-outputs/#objects-have-limitations-on-nesting-depth-and-size
+# The same guide documents the string and enum limits below.
+OPENAI_MAX_OBJECT_PROPERTIES = 5000
+OPENAI_MAX_OBJECT_DEPTH = 10
+OPENAI_MAX_SCHEMA_STRING_LENGTH = 120000
+OPENAI_MAX_ENUM_VALUES = 1000
+OPENAI_LARGE_ENUM_THRESHOLD = 250
+OPENAI_MAX_LARGE_ENUM_STRING_LENGTH = 15000
 OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
     {
         "allOf",
@@ -504,8 +512,232 @@ def lower_reviewer_writer_for_profile(schema: Mapping[str, Any], *, profile: str
                 lower(child)
 
     lower(projected)
+    if not features["optional_properties"]:
+        projected = _expand_reviewer_object_overlays(projected)
+    if features["strict_writer"]:
+        _type_literal_schemas(projected)
     assert_projected_provider_schema(projected, provider=profile)
+    if features["strict_writer"]:
+        assert_openai_structured_output_limits(projected)
     return projected
+
+
+def _schema_children(node: Mapping[str, Any]) -> list[Any]:
+    """Subschemas of one schema node; property names are never schemas."""
+    children: list[Any] = []
+    for key in ("properties", "$defs"):
+        mapping = node.get(key)
+        if isinstance(mapping, Mapping):
+            children.extend(mapping.values())
+    if isinstance(node.get("items"), Mapping):
+        children.append(node["items"])
+    for key in ("anyOf", "oneOf", "allOf"):
+        branches = node.get(key)
+        if isinstance(branches, list):
+            children.extend(branches)
+    return children
+
+
+def _literal_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if value is None:
+        return "null"
+    raise NativeProviderSchemaError("literal schema value has no strict writer type")
+
+
+def _type_literal_schemas(node: Any) -> None:
+    """Give const/enum-only schemas the type their literals already imply.
+
+    Strict Structured Outputs requires a type on every schema. The inferred
+    type admits nothing the literals did not admit, so no constraint is lost.
+    """
+    if not isinstance(node, dict):
+        return
+    if ("const" in node or "enum" in node) and not {"type", "$ref", "anyOf"} & set(node):
+        values = [node["const"]] if "const" in node else node["enum"]
+        if not isinstance(values, list) or not values:
+            raise NativeProviderSchemaError("literal schema has no values")
+        types = sorted({_literal_type(value) for value in values})
+        node["type"] = types[0] if len(types) == 1 else types
+    for child in _schema_children(node):
+        _type_literal_schemas(child)
+
+
+def _untyped_schema_pointers(node: Any, pointer: str = "") -> list[str]:
+    if not isinstance(node, Mapping):
+        return []
+    found = [] if {"type", "$ref", "anyOf"} & set(node) else [pointer or "/"]
+    for key in ("properties", "$defs"):
+        mapping = node.get(key)
+        if isinstance(mapping, Mapping):
+            for name, child in mapping.items():
+                found.extend(_untyped_schema_pointers(child, _schema_pointer(pointer, key, name)))
+    if isinstance(node.get("items"), Mapping):
+        found.extend(_untyped_schema_pointers(node["items"], _schema_pointer(pointer, "items")))
+    for key in ("anyOf", "oneOf", "allOf"):
+        branches = node.get(key)
+        if isinstance(branches, list):
+            for index, child in enumerate(branches):
+                found.extend(_untyped_schema_pointers(child, _schema_pointer(pointer, key, str(index))))
+    return found
+
+
+def _intersect_overlay_property(parent: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any] | None:
+    """Prove an overlay is a subset; None means its branch is impossible."""
+    def same(left: Any, right: Any) -> bool:
+        return json.dumps(left, sort_keys=True, separators=(",", ":")) == json.dumps(
+            right, sort_keys=True, separators=(",", ":")
+        )
+
+    if same(parent, overlay):
+        return copy.deepcopy(parent)
+    if "$ref" in parent or "$ref" in overlay:
+        if "anyOf" not in parent or not any(same(overlay, choice) for choice in parent["anyOf"]):
+            raise NativeProviderSchemaError("reviewer overlay $ref is not a proven subset")
+    if "anyOf" in parent:
+        if not any(same(overlay, choice) for choice in parent["anyOf"]):
+            raise NativeProviderSchemaError("reviewer overlay is not a selected anyOf branch")
+        result = copy.deepcopy(parent)
+        result["anyOf"] = [copy.deepcopy(overlay)]
+        return result
+    allowed = {"type", "const", "enum", "minItems", "maxItems"}
+    if set(overlay) - allowed:
+        raise NativeProviderSchemaError("reviewer overlay constraint is not provably narrowing")
+    result = copy.deepcopy(parent)
+    if "type" in overlay:
+        parent_types = parent.get("type")
+        if parent_types is not None and overlay["type"] not in (
+            parent_types if isinstance(parent_types, list) else [parent_types]
+        ):
+            return None
+        result["type"] = overlay["type"]
+    if "const" in overlay:
+        value = overlay["const"]
+        if "const" in parent and not same(parent["const"], value):
+            return None
+        if "enum" in parent and not any(same(value, item) for item in parent["enum"]):
+            return None
+        result.pop("enum", None)
+        result["const"] = value
+    if "enum" in overlay:
+        values = overlay["enum"]
+        if "const" in parent:
+            if not any(same(parent["const"], value) for value in values):
+                return None
+        elif "enum" in parent:
+            if not all(any(same(value, item) for item in parent["enum"]) for value in values):
+                raise NativeProviderSchemaError("reviewer overlay enum widens its parent")
+            result["enum"] = values
+        else:
+            result["enum"] = values
+    for lower, upper in (("minItems", "maxItems"),):
+        if lower in overlay:
+            result[lower] = max(parent.get(lower, overlay[lower]), overlay[lower])
+        if upper in overlay:
+            result[upper] = min(parent.get(upper, overlay[upper]), overlay[upper])
+        if lower in result and upper in result and result[lower] > result[upper]:
+            return None
+    return result
+
+
+def _expand_reviewer_object_overlays(node: Any) -> Any:
+    if isinstance(node, list):
+        return [_expand_reviewer_object_overlays(child) for child in node]
+    if not isinstance(node, dict):
+        return node
+    properties = node.get("properties")
+    branches = node.get("anyOf")
+    if isinstance(properties, dict) and isinstance(branches, list) and any(
+        isinstance(branch, dict) and "properties" in branch for branch in branches
+    ):
+        variants = []
+        for branch in branches:
+            if not isinstance(branch, dict) or set(branch) != {"properties"} or not isinstance(branch["properties"], dict):
+                raise NativeProviderSchemaError("reviewer object overlay has unsupported shape")
+            variant = copy.deepcopy({key: value for key, value in node.items() if key != "anyOf"})
+            if variant.get("type") != "object" or variant.get("additionalProperties") is not False:
+                raise NativeProviderSchemaError("reviewer object overlay parent is not closed")
+            for name, restriction in branch["properties"].items():
+                if name not in properties or not isinstance(restriction, dict):
+                    raise NativeProviderSchemaError("reviewer object overlay property is unbound")
+                selected = _intersect_overlay_property(properties[name], restriction)
+                if selected is None:
+                    break
+                variant["properties"][name] = selected
+            else:
+                variant["required"] = sorted(variant["properties"])
+                variants.append(_expand_reviewer_object_overlays(variant))
+        if not variants:
+            raise NativeProviderSchemaError("reviewer object overlay has no possible variant")
+        return {"anyOf": variants}
+    return {
+        key: value if key in {"const", "enum"} else _expand_reviewer_object_overlays(value)
+        for key, value in node.items()
+    }
+
+
+def assert_openai_structured_output_limits(schema: Mapping[str, Any]) -> None:
+    """Check the published Structured Outputs limits on the final schema."""
+    definitions = schema.get("$defs", {})
+    property_count = enum_count = string_length = 0
+    large_enums: list[int] = []
+    def measure(node: Any) -> None:
+        nonlocal property_count, enum_count, string_length
+        if isinstance(node, dict):
+            properties = node.get("properties", {})
+            if isinstance(properties, dict):
+                property_count += len(properties)
+                string_length += sum(len(key) for key in properties)
+            defs = node.get("$defs", {})
+            if isinstance(defs, dict):
+                string_length += sum(len(key) for key in defs)
+            enum = node.get("enum")
+            if isinstance(enum, list):
+                enum_count += len(enum)
+                if len(enum) > OPENAI_LARGE_ENUM_THRESHOLD:
+                    large_enums.append(sum(len(value) for value in enum if isinstance(value, str)))
+                string_length += sum(len(value) for value in enum if isinstance(value, str))
+            if isinstance(node.get("const"), str):
+                string_length += len(node["const"])
+            for key, value in node.items():
+                if key not in {"const", "enum"}:
+                    measure(value)
+        elif isinstance(node, list):
+            for child in node:
+                measure(child)
+
+    def depth(node: Any, level: int, active: frozenset[str]) -> int:
+        if isinstance(node, list):
+            return max((depth(child, level, active) for child in node), default=level)
+        if not isinstance(node, dict):
+            return level
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref[len("#/$defs/"):]
+            if name in active or name not in definitions:
+                raise NativeProviderSchemaError("reviewer schema has recursive or unknown definition")
+            return depth(definitions[name], level, active | {name})
+        current = level + (1 if node.get("type") == "object" else 0)
+        return max((depth(value, current, active) for key, value in node.items()
+                    if key not in {"$defs", "const", "enum"}), default=current)
+
+    measure(schema)
+    maximum_depth = depth(schema, 0, frozenset())
+    if (property_count > OPENAI_MAX_OBJECT_PROPERTIES or maximum_depth > OPENAI_MAX_OBJECT_DEPTH
+            or enum_count > OPENAI_MAX_ENUM_VALUES or string_length > OPENAI_MAX_SCHEMA_STRING_LENGTH
+            or any(length > OPENAI_MAX_LARGE_ENUM_STRING_LENGTH for length in large_enums)):
+        raise NativeProviderSchemaError(
+            "reviewer schema exceeds OpenAI Structured Outputs limits: "
+            f"properties={property_count}, depth={maximum_depth}, enum_values={enum_count}, "
+            f"string_length={string_length}, large_enum_lengths={large_enums}"
+        )
 
 
 def lower_reviewer_writer_for_openai(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -556,6 +788,10 @@ def assert_projected_provider_schema(
             violations.append("/type: root must have type object")
         if "anyOf" in projected_schema:
             violations.append("/anyOf: root must not use anyOf")
+        violations.extend(
+            f"{pointer}: strict writer schema must declare a type"
+            for pointer in _untyped_schema_pointers(projected_schema)
+        )
 
     pending: list[tuple[str, Mapping[str, Any]]] = [("", projected_schema)]
     while pending:
@@ -663,7 +899,7 @@ def assert_projected_provider_schema(
                     f"{_schema_pointer(pointer, 'type')}: unsupported JSON type(s) "
                     f"{unsupported_types!r}"
                 )
-            if node.get("type") == "object":
+            if node.get("type") == "object" or isinstance(properties, Mapping):
                 if node.get("additionalProperties") is not False:
                     violations.append(
                         f"{_schema_pointer(pointer, 'additionalProperties')}: "

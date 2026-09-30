@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 
 import pytest
+import native_provider_schema
+import native_review_contract
 
 from agent_adapters import AgentOutputError, create_reviewer_qualification_adapter
 from agent_config import AgentSettings
@@ -15,17 +18,21 @@ from contracts import (
     AgentRole, ApprovalMarker, FindingClass, FindingOrigin, FindingRecord,
     FindingStatus, ValidationAttestation, ValidationRecord, ValidationStatus,
 )
-from native_provider_schema import NativeProviderSchemaError, normalize_transport_profile
+from native_provider_schema import (
+    AGY_PROVIDER, ANTHROPIC_PROVIDER, NativeProviderSchemaError,
+    assert_openai_structured_output_limits,
+    assert_projected_provider_schema, normalize_transport_profile,
+)
 from native_review_contract import (
     NativeReviewContext, NativeReviewErrorCode, native_review_retry_guidance,
-    parse_bound_native_contract_result,
+    native_review_provider_response_schema, parse_bound_native_contract_result,
 )
 from native_review_request import (
     NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec,
     NativeReviewRetryFeedback,
     build_native_review_request, validate_native_review_provider_response,
 )
-from schema_validation import check_schema
+from schema_validation import SchemaMismatch, check_schema, validate_schema_document
 from reviewer_input import REVIEW_INPUT_PATH_PLACEHOLDER
 
 
@@ -63,7 +70,7 @@ def _bundle(*, final: bool = False, maximum: int = 128, convergence: bool = Fals
             finding_id="R-01", finding_class=FindingClass.BLOCKER,
             status=FindingStatus.OPEN, summary="Existing finding",
             acceptance_test="Boundary is inclusive",
-            origin=FindingOrigin("01", 1, AgentRole.REVIEWER),
+            origin=FindingOrigin("PLAN" if plan else "01", 1, AgentRole.REVIEWER),
         ),) if convergence else (),
         allow_new_findings=not convergence,
         validation_attestation=attestation,
@@ -162,6 +169,8 @@ def test_six_fake_review_format_cases_use_bound_writer(tmp_path: Path, case: str
             bound_runtime_dir=adapter.invocation.runtime_dir,
         ).provider == "codex"  # allowlist:provider -- transport: reviewer normalizer
         check_schema(bundle.provider_response_schema)
+        assert_projected_provider_schema(bundle.provider_response_schema, provider="codex-reviewer")  # allowlist:provider -- profile configuration: strict reviewer guard
+        assert_openai_structured_output_limits(bundle.provider_response_schema)
         assert '"prefixItems"' not in bundle.provider_response_schema_json
         assert '"oneOf"' not in bundle.provider_response_schema_json
         pending = [bundle.provider_response_schema]
@@ -191,6 +200,94 @@ def test_final_writer_and_fake_result_support_512_findings(tmp_path: Path) -> No
     validate_native_review_provider_response(result, bundle)
     parsed = parse_bound_native_contract_result(result, bundle.bound_context)
     assert parsed.stopped and parsed.stop_request.rule_id == "DISCOVERY_OUTPUT_LIMIT"
+
+
+def _legacy_open_overlay_writer(monkeypatch: pytest.MonkeyPatch, **options):
+    # Recreate the pre-fix projection without weakening the guard used for the assertion.
+    with monkeypatch.context() as patch:
+        patch.setattr(native_provider_schema, "_expand_reviewer_object_overlays", lambda node: node)
+        patch.setattr(native_provider_schema, "assert_projected_provider_schema", lambda *_args, **_kwargs: None)
+        patch.setattr(native_review_contract, "assert_projected_provider_schema", lambda *_args, **_kwargs: None)
+        return _bundle(**options).provider_response_schema
+
+
+def test_strict_guard_exposes_all_74_legacy_open_overlay_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = _legacy_open_overlay_writer(monkeypatch, case="F2")
+    pending = [old]
+    open_nodes = 0
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            open_nodes += int("properties" in node and node.get("additionalProperties") is not False)
+            pending.extend(value for key, value in node.items() if key not in {"const", "enum"})
+        elif isinstance(node, list):
+            pending.extend(node)
+    assert open_nodes == 74
+    with pytest.raises(NativeProviderSchemaError, match=r"bound_approved_finding/anyOf/0/additionalProperties"):
+        assert_projected_provider_schema(old, provider="codex-reviewer")  # allowlist:provider -- profile configuration: strict reviewer guard
+
+
+def test_existing_reviewer_writers_keep_frozen_bytes() -> None:
+    context = _bundle(case="F2").bound_context.context
+    for profile in (ANTHROPIC_PROVIDER, AGY_PROVIDER):
+        writer = native_review_provider_response_schema(context, profile=profile)
+        payload = json.dumps(writer, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        assert hashlib.sha256(payload).hexdigest() == "3f812a2686cf2ffc9df212eba3f6d8f5a4f1edd449b342632502fbb5cc26ac2f"
+
+
+@pytest.mark.parametrize(("name", "options", "fixture"), (
+    ("plan", {"case": "F1"}, "F1"),
+    ("plan_after", {"case": "F1", "convergence": True}, "F4"),
+    ("slice_first", {"case": "F2"}, "F2"),
+    ("slice_after", {"case": "F2", "convergence": True}, "F4"),
+    ("convergence", {"case": "F4"}, "F4"),
+    ("red", {"case": "F3"}, "F3"),
+    ("final_512", {"final": True, "maximum": 512}, "F5"),
+    ("final_stop", {"case": "F6"}, "F6"),
+))
+def test_all_review_operations_keep_writer_acceptance_and_size(
+    monkeypatch: pytest.MonkeyPatch, name: str, options: dict, fixture: str,
+) -> None:
+    bundle = _bundle(**options)
+    writer = bundle.provider_response_schema
+    old = _legacy_open_overlay_writer(monkeypatch, **options)
+    assert_projected_provider_schema(writer, provider="codex-reviewer")  # allowlist:provider -- profile configuration: strict reviewer guard
+    assert_openai_structured_output_limits(writer)
+    valid = copy.deepcopy(CASES[fixture]["envelope"]["structured_output"]["result"])
+    valid["request_id"] = bundle.bound_context.request_id
+    validate_native_review_provider_response(valid, bundle)
+    examples = [valid]
+    extra = copy.deepcopy(valid)
+    extra["unknown_field"] = 1
+    examples.append(extra)
+    missing = copy.deepcopy(valid)
+    missing.pop("request_id")
+    examples.append(missing)
+    wrong_type = copy.deepcopy(valid)
+    wrong_type["request_id"] = 42
+    examples.append(wrong_type)
+    if valid["result_type"] == "review_result":
+        invalid_evidence = copy.deepcopy(valid)
+        invalid_evidence["review_evidence"] = None if valid["decision"] == "approved" else {"dimensions": ""}
+        examples.append(invalid_evidence)
+        if valid["new_findings"]:
+            invalid_pair = copy.deepcopy(valid)
+            invalid_pair["new_findings"][0]["evidence_anchor_sha256"] = "a" * 64
+            examples.append(invalid_pair)
+        if valid["status_changes"]:
+            invalid_closure = copy.deepcopy(valid)
+            invalid_closure["status_changes"][0]["closure"] = None
+            examples.append(invalid_closure)
+    for index, example in enumerate(examples):
+        accepted = []
+        for schema in (old, writer):
+            try:
+                validate_schema_document({"result": example}, schema)
+                accepted.append(True)
+            except SchemaMismatch:
+                accepted.append(False)
+        assert accepted[0] == accepted[1], (name, index)
+        assert accepted[0] is (index == 0), (name, index)
 
 
 @pytest.mark.parametrize("mutation", (
@@ -387,3 +484,25 @@ def test_contract_rejection_retries_with_bound_feedback_and_fake_process(
         binding_fingerprint="c" * 64,
     )
     assert accepted.result.approval is True
+
+
+def test_strict_reviewer_writers_declare_a_type_on_every_schema() -> None:
+    # Live smoke 2026-09-30: OpenAI rejected an untyped const property with HTTP 400.
+    from native_provider_schema import _untyped_schema_pointers
+
+    for kwargs in ({}, {"final": True, "maximum": 512}):
+        schema = json.loads(_bundle(**kwargs).provider_response_schema_json)
+        assert _untyped_schema_pointers(schema) == []
+        kind = schema["$defs"]["prose_acceptance"]["properties"]["kind"]
+        assert kind["type"] == "string" and "const" in kind
+
+
+def test_strict_guard_rejects_an_untyped_literal_schema() -> None:
+    from native_provider_schema import NativeProviderSchemaError, assert_projected_provider_schema
+
+    schema = {
+        "type": "object", "properties": {"kind": {"const": "text"}},
+        "required": ["kind"], "additionalProperties": False,
+    }
+    with pytest.raises(NativeProviderSchemaError, match="must declare a type"):
+        assert_projected_provider_schema(schema, provider="codex-reviewer")  # allowlist:provider -- profile configuration: reviewer guard
