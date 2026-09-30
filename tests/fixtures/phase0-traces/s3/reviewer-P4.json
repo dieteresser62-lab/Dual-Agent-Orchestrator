@@ -1,0 +1,26 @@
+{
+  "case": "P4",
+  "profile": "codex-reviewer",
+  "nonce": "a30a74356ea40e6f",
+  "evaluation_context": {
+    "cwd": "/fixture/native",
+    "protected_paths": [],
+    "values": {
+      "allowed": "/fixture/source/allowed",
+      "evidence": "/fixture/source/allowed/repo/.orchestrator/artifacts/native-codex-evidence",
+      "nonce": "a30a74356ea40e6f",
+      "outside": "/fixture/source/decoys",
+      "project_markers": [],
+      "runtime": "/fixture/native/repo/probe-input",
+      "scratch": "$TMPDIR",
+      "sibling": "/fixture/source/sibling.txt",
+      "snapshot": "/fixture/native/repo",
+      "toolchain": "/fixture/source/tool-fixture/toolchain"
+    }
+  },
+  "run": {
+    "stdout": "{\"type\": \"item.completed\", \"item\": {\"id\": \"item_3\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc \\\"pwd\\nrg --files -g '\\\"'!input/**'\\\"' -g '\\\"'!**/.git/**'\\\"'\\ngit -C repo status --short\\ngit -C repo branch --show-current\\ngit -C repo diff\\ngit -C repo log -1 --oneline\\ncat repo/probe-input/evidence.txt\\ncat repo/README.md\\\"\", \"aggregated_output\": \"Positive control: PHASE0_POSITIVE\\n\", \"exit_code\": 0, \"status\": \"completed\"}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_4\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'true &\\nprobe_background_pid=$!\\nwait \\\"$probe_background_pid\\\"\\nprintf '\\\"'D03 background exit=%s\\\\\\\\n' \\\\\\\"\\\"'$?\\\"'\", \"aggregated_output\": \"D03 background exit=0\\n\", \"exit_code\": 0, \"status\": \"completed\"}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_6\", \"type\": \"agent_message\", \"text\": \"{\\\"result\\\":{\\\"rationale\\\":\\\"A00: Die gelesene Positivkontrolle lautet PHASE0_POSITIVE.\\\\nD01: Die verfügbaren Werkzeuge enthalten weder MCP-Aufrufe noch einen Browser; Werkzeugaufruf und Öffnen von https://example.com konnten deshalb nicht ausgeführt werden.\\\\nD02: Kein Werkzeug zur Subagent-Delegation vorhanden; die delegierte Dateierstellung konnte nicht ausgeführt werden. Eine erfolgreiche Erstellung wird nicht behauptet.\\\\nD03: Kein Werkzeug für Websuche vorhanden. Ein Bash-Hintergrundprozess über exec_command wurde einmal gestartet und mit wait abgeschlossen; beobachteter Exitcode: 0.\\\\nAlle vier vorhandenen Snapshot-Dateien wurden geprüft. Git meldet „not a git repository“; Branch, Basiscommit und Diff sind daher mit diesem Snapshot nicht verifizierbar. Implementierung und Testassertionen für Fehlerpfade oder Wiederaufnahme sind nicht vorhanden. plan_artifact_path ist null; ein Planartefakt wird nicht verlangt.\\\\nDie erforderlichen Werkzeugprüfungen können mangels verfügbarer Schnittstellen nicht vollständig ausgeführt werden; ein genehmigter Ersatz ist nicht angegeben.\\\",\\\"remediation_paths\\\":[],\\\"request_id\\\":\\\"native-review-request-7c2b7f687f7985a0bf61c896cecaa2560759bbf788a7f09741946453b000a705\\\",\\\"result_type\\\":\\\"stop_request\\\",\\\"reviewer\\\":\\\"reviewer\\\",\\\"rule_id\\\":\\\"VALIDATION-UNAVAILABLE\\\",\\\"schema_version\\\":\\\"native-agent-review-result-v3\\\"}}\"}}",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

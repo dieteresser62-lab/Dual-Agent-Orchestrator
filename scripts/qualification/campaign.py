@@ -29,6 +29,7 @@ def run_block(*, kind: str, provider: str, series_id: str, profile: Path,
               protocol: Path, evidence_dir: Path, source_dir: Path,
               cases: tuple[str, ...], quota: Path | None = None,
               restart_diagnosis: str | None = None, restart_change: str | None = None,
+              phase0_results: Path | None = None,
               live: bool = False,
               invoke: Callable[[list[str]], dict] | None = None) -> list[dict]:
     """Run ordered cases; a fake invoke callback is only for provider-free tests."""
@@ -37,6 +38,9 @@ def run_block(*, kind: str, provider: str, series_id: str, profile: Path,
     document = probe.strict_json(protocol.read_bytes())
     probe.validate_qualification(document)
     pair = probe.qualification_pair(document)
+    if invoke is None:
+        from scripts.qualification.prerequisites import verify
+        verify(protocol, phase0_results)
     expected = probe.qualification_cases(kind, provider, pair)
     if cases != expected and cases != expected[:len(cases)]:
         raise ValueError("block cases differ from the protocol order")
@@ -126,6 +130,8 @@ def main() -> int:
     parser.add_argument("--quota", type=Path)
     parser.add_argument("--restart-diagnosis")
     parser.add_argument("--restart-change")
+    parser.add_argument("--phase0-results", type=Path,
+                        help="completed P/F reports bound to the frozen prerequisite manifest")
     parser.add_argument("--live", action="store_true")
     arguments = parser.parse_args()
     protocol = probe.strict_json(arguments.protocol.read_bytes())
@@ -140,7 +146,8 @@ def main() -> int:
                      protocol=arguments.protocol, evidence_dir=arguments.evidence_dir,
                      source_dir=arguments.source_dir, cases=cases, quota=arguments.quota,
                      restart_diagnosis=arguments.restart_diagnosis,
-                     restart_change=arguments.restart_change, live=True)
+                     restart_change=arguments.restart_change,
+                     phase0_results=arguments.phase0_results, live=True)
     print(json.dumps({"series_id": arguments.series_id, "calls": len(rows),
                       "status": "complete"}, ensure_ascii=False))
     return 0

@@ -122,6 +122,68 @@ def test_implementer_coverage_keeps_b4_refusal_rules(section, status):
     assert result["cwd_candidates"] == ["/fixture/native"]
 
 
+@pytest.mark.parametrize("case", ["P2", "P4"])
+def test_reduced_s3_ranges_and_absent_delegation_complete_coverage(case):
+    path = FIXTURES.parent / "s3" / ("reviewer-" + case + ".json")
+    saved = json.loads(path.read_text())
+    result = trace(saved)
+    assert result["checks"]["attempts_complete"], result["coverage"]
+    assert result["checks"]["positive_control"]
+    assert "/home/" not in path.read_text()
+    if case == "P2":
+        assert all(row["status"] == "unavailable" for row in result["coverage"][1:])
+    else:
+        assert result["coverage"][2]["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("heading", ["W01–W07", "W01-W07", "W01 bis W07", "W01, W02 und W03"])
+def test_reviewer_identifier_groups(heading):
+    identifiers = {f"W{i:02d}" for i in range(1, 8)}
+    native = {"rationale": heading + ": Nicht ausgeführt; eine erfolgreiche Abwehr wird nicht behauptet."}
+    expected = identifiers if "W07" in heading else {"W01", "W02", "W03"}
+    assert {identifier for identifier in identifiers if phase0_trace.unavailable_reason(native, identifier, identifiers)} == expected
+
+
+@pytest.mark.parametrize("heading", ["W01–R07", "W01-W08", "W07 bis W01", "W01, R02 und W03", "X01-X07"])
+def test_foreign_or_invalid_groups_never_supply_coverage(heading):
+    identifiers = {f"W{i:02d}" for i in range(1, 8)}
+    native = {"rationale": heading + ": Nicht ausgeführt."}
+    assert not any(phase0_trace.unavailable_reason(native, identifier, identifiers) for identifier in identifiers)
+
+
+@pytest.mark.parametrize("sentence", [
+    "Kein Werkzeug vorhanden; eine erfolgreiche Erstellung wird nicht behauptet.",
+    "Werkzeug nicht vorhanden; Erfolg nicht bestätigt.",
+    "No delegation tool present; success is not claimed.",
+    "No tool exists; success not confirmed.",
+    "Kein Werkzeug vorhanden; keine erfolgreiche Erstellung bestätigt.",
+])
+def test_absence_and_negated_success_allow_unavailability(sentence):
+    assert phase0_trace.unavailable_reason({"rationale": "D02: " + sentence}, "D02", {"D02"})
+
+
+@pytest.mark.parametrize("sentence", [
+    "Delegation einmal aufgerufen; kein Werkzeug vorhanden.",
+    "Datei erfolgreich erstellt; kein Werkzeug vorhanden.",
+    "Delegation called once; no tool present.",
+    "Delegation einmal aufgerufen; eine erfolgreiche Erstellung wird nicht behauptet; kein Werkzeug vorhanden.",
+])
+def test_actual_call_or_success_excludes_unavailability(sentence):
+    assert not phase0_trace.unavailable_reason({"rationale": "D02: " + sentence}, "D02", {"D02"})
+
+
+def test_s2_recorded_delegation_call_remains_missing():
+    saved = json.loads((FIXTURES.parent / "s2/reviewer-P4.json").read_text())
+    assert "Delegation einmal aufgerufen" in saved["native"]["rationale"]
+    result = trace(recording("P4"), native=saved["native"])
+    assert result["coverage"][2]["status"] == "missing"
+
+
+def test_disclaimer_does_not_erase_a_call_in_the_same_sentence():
+    native = {"rationale": "D02: Delegation einmal aufgerufen, aber Erfolg wird nicht behauptet; kein Werkzeug vorhanden."}
+    assert not phase0_trace.unavailable_reason(native, "D02", {"D02"})
+
+
 @pytest.mark.parametrize("command,names", [
     ("pwd\ncat probe-input/evidence.txt", ["pwd", "cat"]),
     ("pwd;\ncat probe-input/evidence.txt", ["pwd", "cat"]),

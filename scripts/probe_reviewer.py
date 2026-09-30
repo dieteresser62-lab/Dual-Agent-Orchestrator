@@ -151,6 +151,15 @@ def capture_review_output(adapter, raw: dict, stdout: str, stderr: str,
         raise AgentOutputError("measured last-message lacks a sole JSON result", kind_hint=AgentFailureKind.OUTPUT)
 
 
+def measured_review_result(envelope) -> dict | None:
+    """Read the common captured envelope, including native last-message reviews."""
+    structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
+    if not isinstance(structured, dict) or set(structured) != {"result"}:
+        return None
+    response = structured["result"]
+    return response if isinstance(response, dict) else None
+
+
 def _series_keys(pair: QualificationPair) -> tuple[tuple[str, str], ...]:
     return (("transport", pair.candidate), ("large_output", pair.candidate),
             ("print_timeout", pair.candidate), ("quality", pair.candidate),
@@ -696,17 +705,13 @@ def validate_format_response(case: str, envelope: dict, *, exit_code: int = 0,
     writer = strict_json(bundle.provider_response_schema_json)
     checks["schema_echo"] = (typed_equal(envelope.get(envelope_profile.schema_echo_field), writer)
                              if envelope_profile.schema_echo_field else True)
-    structured = envelope.get("structured_output")
-    checks["structured_output_object"] = (
-        isinstance(structured, dict) and set(structured) == {"result"}
-        and isinstance(structured["result"], dict)
-    )
+    response = measured_review_result(envelope)
+    checks["structured_output_object"] = response is not None
     checks["writer_schema"] = False
     checks["domain_contract"] = False
     checks["case_semantics"] = False
     actual_rule = None
     if checks["structured_output_object"]:
-        response = structured["result"]
         try:
             validate_schema_document({"result": response}, writer)
             checks["writer_schema"] = True
@@ -1076,8 +1081,7 @@ def _contract_retry_feedback(spec, previous_row: dict, previous_raw: dict):
     from rejected_response_shape import extract_rejected_native_response_shape
 
     envelope = previous_raw.get("envelope")
-    structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
-    document = structured.get("result") if isinstance(structured, dict) else None
+    document = measured_review_result(envelope)
     code = NativeReviewErrorCode(previous_row["contract_rejection"])
     diagnostic = previous_row.get("orchestrator_diagnostic")
     guidance = native_review_retry_guidance(
@@ -1172,8 +1176,7 @@ def _verify_recorded_result(row: dict, raw: dict,
     envelope = raw.get("envelope")
     if not isinstance(envelope, dict):
         raise ValueError("recorded envelope is not an object")
-    structured = envelope.get("structured_output")
-    response = structured.get("result") if isinstance(structured, dict) else None
+    response = measured_review_result(envelope)
     if row["kind"] == "print_timeout":
         expected = _print_timeout_checks(row["status"], row.get("failure_kind"),
                                          raw.get("technical_error"), raw.get("stderr", ""),
@@ -2209,13 +2212,13 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                                           stderr=raw.get("stderr", ""),
                                           transport_profile=capability)["checks"]
     elif kind == "print_timeout":
-        partial = envelope.get("structured_output") if isinstance(envelope, dict) else None
+        partial = measured_review_result(envelope)
         checks = _print_timeout_checks("technical_rejection" if error else "success",
                                        failure_kind, error, raw.get("stderr", ""),
-                                       isinstance(partial, dict) and isinstance(partial.get("result"), dict), capability)
+                                       partial is not None, capability)
         checks["no_valid_stop"] = checks["no_valid_stop"] and domain is None
     elif kind == "large_output":
-        response = envelope.get("structured_output", {}).get("result", {}) if isinstance(envelope, dict) else {}
+        response = measured_review_result(envelope)
         checks = _large_output_checks(response, domain, int(case_id), set(spec.authorized_paths))
     else:
         checks = {"writer_and_domain": domain is not None}
@@ -2269,14 +2272,15 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     return series["attempts"][-1]
 
 
-def _validated_reference_slice_review(protocol: dict) -> tuple[dict, str]:
+def _validated_reference_slice_review(protocol: dict, evidence_dir: Path | None = None) -> tuple[dict, str]:
     """Read a stored, request-bound reference Q3 result without a provider start."""
     from native_review_request import build_native_review_request, validate_native_review_provider_response
     from native_review_contract import parse_bound_native_contract_result
 
     pair = qualification_pair(protocol)
-    series = read_evidence(pair.evidence_directory / "qualification-series-v1.json")
-    envelope_path = pair.evidence_directory / "qualification-envelopes-v1.json.gz"
+    directory = evidence_dir or pair.evidence_directory
+    series = read_evidence(directory / "qualification-series-v1.json")
+    envelope_path = directory / "qualification-envelopes-v1.json.gz"
     if not envelope_path.exists():
         envelope_path = envelope_path.with_suffix("")
     envelopes = read_evidence(envelope_path)
@@ -2291,7 +2295,7 @@ def _validated_reference_slice_review(protocol: dict) -> tuple[dict, str]:
         raise ValueError("stored reference slice review is unavailable or invalid")
     row = rows[0]
     raw = next(item["envelope"] for item in envelopes["envelopes"] if item["call_id"] == row["call_id"])
-    result = raw["envelope"]["structured_output"]["result"]
+    result = measured_review_result(raw["envelope"])
     spec = build_qualification_spec("quality", "Q3", run_id=f"qualification-{row['series_id']}-{row['call_id']}")
     bundle = build_native_review_request(spec, profile=pair.capability(pair.reference))
     validate_native_review_provider_response(result, bundle)
@@ -2301,7 +2305,8 @@ def _validated_reference_slice_review(protocol: dict) -> tuple[dict, str]:
 
 def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
                     live: bool = False, quicktest: bool = False,
-                    protocol_file: Path | None = None) -> dict:
+                    protocol_file: Path | None = None,
+                    reference_evidence_dir: Path | None = None) -> dict:
     """Run one direct candidate review through the production reviewer adapter."""
     if not live:
         raise PermissionError("canary and quicktest require --live")
@@ -2346,7 +2351,7 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
         spec = build_qualification_spec("transport", f"{case}:1", run_id=f"{name}-{_current_commit()[:12]}")
         reference_digest = None
         if slot == "final_reviewer":
-            prior, reference_digest = _validated_reference_slice_review(protocol)
+            prior, reference_digest = _validated_reference_slice_review(protocol, reference_evidence_dir)
             label = LEGACY_REFERENCE_EVIDENCE_ID if protocol["schema_version"] == "qualification-protocol-v5" else "reference_slice_review"
             description = (LEGACY_REFERENCE_DESCRIPTION if label == LEGACY_REFERENCE_EVIDENCE_ID
                            else "Previously validated reference slice review from quality Q3: ")
@@ -2451,10 +2456,9 @@ def blind_package(responses: list[dict], *, seed: int,
     for source in responses:
         if "envelope" in source:
             envelope = source["envelope"]
-            structured = envelope.get("structured_output")
-            if not isinstance(structured, dict) or set(structured) != {"result"}:
+            content = measured_review_result(envelope)
+            if content is None:
                 raise ValueError("blind source lacks a sole structured result")
-            content = structured["result"]
         else:
             content = source["content"]
         encoded = json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
@@ -2492,7 +2496,9 @@ def quality_blind_sources(series: dict, envelopes: dict, protocol: dict) -> list
         for chain in _case_chains([row for row in series["attempts"]
                                    if row["series_id"] == selected[provider]]):
             row = chain[-1]
-            content = raw[row["call_id"]]["envelope"]["structured_output"]["result"]
+            content = measured_review_result(raw[row["call_id"]]["envelope"])
+            if content is None:
+                raise ValueError("blind source lacks a sole structured result")
             sources.append({"provider": provider, "case": row["case_id"], "content": content})
     if len(sources) != 12 or {(row["provider"], row["case"]) for row in sources} != {
             (provider, f"Q{number}") for provider in qualification_pair(protocol).providers for number in range(1, 7)}:
@@ -2586,6 +2592,8 @@ def main() -> int:
     canary.add_argument("--profile", type=Path, required=True)
     canary.add_argument("--output-dir", type=Path, required=True)
     canary.add_argument("--live", action="store_true")
+    canary.add_argument("--reference-evidence-dir", type=Path,
+                        help="qualification evidence containing the validated reference Q3")
     boundary = sub.add_parser("boundary-check", help="account-free CLI boundary quicktest")
     from scripts.qualification.profiles import ADAPTER_PROFILES
     boundary.add_argument("--pair", choices=(*ADAPTER_PROFILES, "all"), required=True)
@@ -2734,7 +2742,8 @@ def main() -> int:
         return 0 if result["status"] == "success" else 1
     if args.command == "canary-call":
         result = run_canary_call(args.slot, profile_file=args.profile,
-            output_dir=args.output_dir, live=args.live, protocol_file=args.protocol)
+            output_dir=args.output_dir, live=args.live, protocol_file=args.protocol,
+            reference_evidence_dir=args.reference_evidence_dir)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "passed" else 1
     if args.command == "quicktest":

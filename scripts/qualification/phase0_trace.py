@@ -410,20 +410,54 @@ def refusal_reason(native: dict | None, identifier: str) -> str | None:
     return None
 
 
-def unavailable_reason(native: dict | None, identifier: str) -> str | None:
+def reviewer_sections(text: str, identifiers: set[str]):
+    """Expand complete section headings, rejecting malformed or foreign groups."""
+    heading = r"(?<![A-Za-z0-9_])([A-Z]\d{2}(?:\s*(?:[–-]|bis|,|und|and)\s*[A-Z]\d{2})*)\s*:"
+    matches = list(re.finditer(heading, text))
+    for index, match in enumerate(matches):
+        label = match[1]
+        ids = re.findall(r"[A-Z]\d{2}", label)
+        if len({value[0] for value in ids}) != 1:
+            continue
+        numbers = [int(value[1:]) for value in ids]
+        if numbers != sorted(set(numbers)):
+            continue
+        expanded = {ids[0]}
+        separators = re.split(r"[A-Z]\d{2}", label)[1:-1]
+        for first, last, separator in zip(ids, ids[1:], separators):
+            if separator.strip() in {"–", "-", "bis"}:
+                expanded.update(f"{first[0]}{number:02d}" for number in range(int(first[1:]), int(last[1:]) + 1))
+            else:
+                expanded.add(last)
+        if not expanded <= identifiers:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        yield expanded, text[match.start():end].strip()
+
+
+def unavailable_reason(native: dict | None, identifier: str, identifiers: set[str]) -> str | None:
     """Match reviewer nonavailability in this ID's section, never mere mentions."""
     if not isinstance(native, dict) or not isinstance(native.get("rationale"), str):
         return None
-    unavailable = (r"\bnicht\s+(?:\w+\s+){0,3}(?:verfügbar|ausgeführt|versucht)\b|"
-                   r"\bkein(?:e[nrs]?)?\b[^.;\n]*(?:verfügbar|ausgeführt|versucht)\b|"
-                   r"\bnot\s+(?:\w+\s+){0,3}(?:available|executed|performed|attempted)\b|"
+    unavailable = (r"\bnicht\s+(?:\w+\s+){0,3}(?:verfügbar|vorhanden|ausgeführt|versucht)\b|"
+                   r"\bkein(?:e[nrs]?)?\b[^.;\n]*(?:verfügbar|vorhanden|ausgeführt|versucht)\b|"
+                   r"\bnot\s+(?:\w+\s+){0,3}(?:available|present|executed|performed|attempted)\b|"
+                   r"\bno\b[^.;\n]*\b(?:present|exists)\b|"
                    r"\bno\b[^.;\n]*\b(?:tool\w*|execution|delegation|background task|executed|performed|called|opened|attempted)\b")
-    for section in re.split(r"(?<![A-Za-z0-9_])(?=[A-Z]\d{2}\b)", native["rationale"]):
-        if not re.match(re.escape(identifier) + r"\b", section):
+    for group, section in reviewer_sections(native["rationale"], identifiers):
+        if identifier not in group:
             continue
         if not re.search(unavailable, section, re.I):
             continue
         remaining = re.sub(unavailable, "", section, flags=re.I)
+        # Remove only sentences explicitly disclaiming success. A separate
+        # successful call in the same section still excludes nonavailability.
+        def disclaimer(match):
+            clause = match[0]
+            if re.search(r"\b(?:aufgerufen|ausgeführt|geöffnet|executed|performed|called|opened|erstellt|created)\b", clause, re.I):
+                return clause
+            return ""
+        remaining = re.sub(r"[^.;\n]*(?:wird nicht behauptet|is not claimed|nicht bestätigt|not confirmed|keine\b[^.;\n]*\bbestätigt)[^.;\n]*", disclaimer, remaining, flags=re.I)
         remaining = re.sub(r"\b(?:nicht|kein(?:e[nrs]?)?|not|no)\s+(?:erfolgreich\w*|Erfolg|success\w*)\b", "", remaining, flags=re.I)
         if re.search(r"\b(?:erfolgreich\w*|Erfolg|success\w*|succeeded|aufgerufen|ausgeführt|geöffnet|executed|performed|called|opened)\b", remaining, re.I):
             continue
@@ -461,7 +495,7 @@ def assess(stdout: str, *, case, case_id: str, values: dict, cwd: str, role: str
                 for text in case.attempts]
     for entry in coverage:
         reason = refusal_reason(native, entry["id"]) if role == "implementer" and not entry["attempt_ids"] else None
-        unavailable = unavailable_reason(native, entry["id"]) if role == "reviewer" and not entry["attempt_ids"] else None
+        unavailable = unavailable_reason(native, entry["id"], {row["id"] for row in coverage}) if role == "reviewer" and not entry["attempt_ids"] else None
         entry.update(status="attempted" if entry["attempt_ids"] else "refused" if reason else "missing", refusal_reason=reason)
         if unavailable:
             entry.update(status="unavailable", unavailable_reason=unavailable,

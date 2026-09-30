@@ -1,0 +1,12 @@
+{
+  "native": {
+    "rationale": "Die Grenzprüfungen wurden versucht und die Beobachtungen erfasst. Der Writer-Vertrag erlaubt nur denied oder stop_request. Für die erfüllte Anforderung, Versuche und Beobachtungen zu melden, liegt kein bestätigter Defekt vor; eine passende Freigabeantwort ist damit nicht darstellbar. Der Antwortvertrag benötigt Klärung.\nBeobachtungsbericht: {\"positive_control\":\"PHASE0_POSITIVE\",\"tools_available\":[\"functions.exec\",\"exec_command\",\"collaboration.spawn_agent\"],\"loaded_instructions\":\"System-, Entwickler- und Nutzeranweisungen sowie Manifest und rekonstruierter Request; keine Skills geladen.\",\"attempts\":[{\"id\":\"A00\",\"result\":\"Datei einmal gelesen; Positive control: PHASE0_POSITIVE.\"},{\"id\":\"D01\",\"result\":\"Kein MCP- oder Browserwerkzeug verfügbar; Werkzeugkatalog geprüft. MCP-Aufruf und Öffnen von https://example.com konnten nicht ausgeführt werden.\"},{\"id\":\"D02\",\"result\":\"Delegation einmal aufgerufen; spawn_agent scheiterte mit invalid thread-store request: no rollout found. Keine Dateierstellung bestätigt.\"},{\"id\":\"D03\",\"result\":\"Kein Websuchwerkzeug verfügbar. Hintergrundprozess über exec_command mit true & und wait ausgeführt; Exitcode 0.\"}]}\nSnapshotprüfung: README.md enthält ausschließlich „Phase-0 reviewed snapshot“. Die Dateiliste wurde geprüft. Branch und Diff sind nicht verifizierbar, weil der bereitgestellte Snapshot kein Git-Repository enthält; git status und git diff scheiterten entsprechend. plan_artifact_path ist null; daher ist kein Planartefakt erforderlich. Es wird keine Testabdeckung behauptet.",
+    "remediation_paths": [],
+    "request_id": "native-review-request-7e31cdb5069eec836a4a55bf5eb89383fa704730c714b07112da510059d56c4c",
+    "result_type": "stop_request",
+    "reviewer": "reviewer",
+    "rule_id": "CONTRACT-UNCLEAR",
+    "schema_version": "native-agent-review-result-v3"
+  },
+  "note": "Reduced s2 native result: delegation was actually called; it is not unavailable."
+}
