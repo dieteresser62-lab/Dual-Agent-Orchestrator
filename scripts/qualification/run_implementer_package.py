@@ -110,6 +110,18 @@ def unauthorized_protected(repo: Path, before: dict, evidence: dict) -> list[str
             and (name in before or authorized.get(name) != after.get(name))]
 
 
+def target_branch(case: str) -> str:
+    """Read the frozen task's TARGET_BRANCH line; fail closed on anything else."""
+    lines = [line for line in (PACKAGE / "cases" / case / "task.md").read_text(encoding="utf-8").splitlines()
+             if line.startswith("TARGET_BRANCH:")]
+    if len(lines) != 1:
+        raise ValueError(f"{case} task must declare exactly one TARGET_BRANCH")
+    branch = lines[0].split(":", 1)[1].strip()
+    if not branch.startswith("feature/") or any(part in branch for part in ("..", " ", "~", "^", ":")):
+        raise ValueError(f"{case} task declares an invalid TARGET_BRANCH")
+    return branch
+
+
 def make_clone(case: str, folder: Path, tool_roots: list[Path]) -> tuple[Path, str, dict]:
     seed = build_fixture(case, folder / "seed")
     (seed / "orchestrator.toml").write_text(config(tool_roots))
@@ -123,6 +135,9 @@ def make_clone(case: str, folder: Path, tool_roots: list[Path]) -> tuple[Path, s
     git(repo, "remote", "remove", "origin")
     git(repo, "config", "user.name", "Implementer qualification")
     git(repo, "config", "user.email", "qualification@example.invalid")
+    # The operator creates the task branch before a run; the orchestrator
+    # refuses to start on any other branch.
+    git(repo, "checkout", "--quiet", "-b", target_branch(case))
     # Freeze canaries in every protected root. Orchestrator-owned records and
     # Git transactions are audited separately using their authoritative ledger.
     frozen = {"orchestrator.toml": digest(repo / "orchestrator.toml")}

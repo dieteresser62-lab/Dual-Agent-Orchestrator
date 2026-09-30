@@ -494,3 +494,21 @@ def test_t5_full_runner_preserves_prefix_and_uses_resume(tmp_path, monkeypatch, 
     assert phases[0][:-1] == phases[1][:-1]
     assert phases[1][-1] == "--resume"
     assert result["passed"] is (not tampered_prefix)
+
+
+@pytest.mark.parametrize("case", runner.TASK_IDS)
+def test_live_clone_starts_on_the_declared_task_branch(tmp_path, case):
+    # The orchestrator refuses TARGET_BRANCH mismatches; the first live run stopped on main.
+    repo, baseline, _ = runner.make_clone(case, tmp_path / case, [])
+    assert runner.git(repo, "branch", "--show-current") == runner.target_branch(case)
+    assert runner.target_branch(case) == "feature/qualification-" + case.lower()
+    assert runner.git(repo, "rev-parse", "HEAD") == baseline
+
+
+@pytest.mark.parametrize("line", ["TARGET_BRANCH: main", "TARGET_BRANCH: feature/../x", "", "TARGET_BRANCH: a\nTARGET_BRANCH: b"])
+def test_target_branch_fails_closed(tmp_path, monkeypatch, line):
+    (tmp_path / "cases/T1").mkdir(parents=True)
+    (tmp_path / "cases/T1/task.md").write_text("# Task\n" + line + "\n")
+    monkeypatch.setattr(runner, "PACKAGE", tmp_path)
+    with pytest.raises(ValueError):
+        runner.target_branch("T1")
