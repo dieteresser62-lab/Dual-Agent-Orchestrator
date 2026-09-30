@@ -107,8 +107,11 @@ def _authorization(
     start_commit: str,
     *,
     claude_approval: bool = True,
+    semantic_markdown_paths: tuple[str, ...] = (),
 ) -> CommitAuthorization:
-    fingerprint = collect_repository_changes(repository, start_commit).fingerprint
+    fingerprint = collect_repository_changes(
+        repository, start_commit, semantic_markdown_paths=semantic_markdown_paths
+    ).fingerprint
     command = "python3 -m pytest tests/ -v"
     attestation = ValidationAttestation(
         attestation_id="slice-09-validation",
@@ -879,6 +882,49 @@ def test_commit_accepts_exactly_approved_descendant_head_and_commits_only_worktr
     assert _git(repository, "show", "--format=", "--name-only", "HEAD") == (
         "allowed.txt\nrepair.py"
     )
+
+
+@pytest.mark.parametrize("body_changed", (False, True))
+def test_approved_head_drift_preserves_explicit_external_semantic_paths(
+    tmp_path: Path, body_changed: bool,
+) -> None:
+    from test_repo_changes import _managed_slice_markdown
+
+    repository, _ = _new_repository(tmp_path)
+    plan_path = "docs/work-plan.md"
+    boundary, _ = begin_slice(
+        repository_root=repository, slice_id=9,
+        expected_branch="feature/transaction", scope_paths=(plan_path,),
+    )
+    boundary = replace(boundary, semantic_markdown_paths=(plan_path,))
+    (repository / "external.py").write_text("reviewed repair\n", encoding="utf-8")
+    _git(repository, "add", "external.py")
+    _git(repository, "commit", "-m", "reviewed intermediate repair")
+    head = _git(repository, "rev-parse", "HEAD")
+    plan = repository / plan_path
+    plan.parent.mkdir(parents=True)
+    plan.write_text(_managed_slice_markdown(), encoding="utf-8")
+    authorization = replace(
+        _authorization(repository, boundary.start_commit,
+                       semantic_markdown_paths=(plan_path,)),
+        approved_head_commit=head, approved_external_paths=("external.py",),
+    )
+    projected = _managed_slice_markdown("approved audit")
+    if body_changed:
+        projected = projected.replace("semantic body", "unreviewed body")
+    plan.write_text(projected, encoding="utf-8")
+    if body_changed:
+        with pytest.raises(GitTransactionError, match="fingerprint is stale"):
+            commit_slice(repository_root=repository, boundary=boundary,
+                         authorization=authorization, title="semantic boundary")
+        assert _git(repository, "rev-parse", "HEAD") == head
+        assert _git(repository, "diff", "--cached", "--name-only") == ""
+    else:
+        result = commit_slice(repository_root=repository, boundary=boundary,
+                              authorization=authorization, title="semantic boundary")
+        assert result.committed_paths == (plan_path,)
+        assert _git(repository, "rev-parse", "HEAD^") == head
+        assert _git(repository, "show", f"HEAD:{plan_path}") == projected.strip()
 
 
 def test_commit_rejects_stale_approved_head_for_descendant_drift(

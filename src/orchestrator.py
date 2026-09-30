@@ -2183,7 +2183,13 @@ class ProductionWorkflowDriver:
                     *self.active_state.current_slice.scope_paths,
                 )
                 if path is not None
-                and path.startswith("docs/internal/")
+                and (
+                    path in (
+                        self.active_state.work_plan_path,
+                        self.active_state.audit_report_path,
+                    )
+                    or path.startswith("docs/internal/")
+                )
                 and path.endswith(".md")
             }
             semantic_paths = tuple(sorted(candidates))

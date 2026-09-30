@@ -141,7 +141,11 @@ class WorkflowGitCommit:
                 sorted(
                     path
                     for path in current.scope_paths
-                    if path.startswith("docs/internal/") and path.endswith(".md")
+                    if (
+                        path in (state.work_plan_path, state.audit_report_path)
+                        or path.startswith("docs/internal/")
+                    )
+                    and path.endswith(".md")
                 )
             ),
             excluded_control_paths=self._dependencies.bound_task_control_paths(
@@ -256,8 +260,11 @@ class WorkflowGitCommit:
                             *boundary.semantic_markdown_paths,
                             *unexpected_paths,
                         )
-                        if path.startswith("docs/internal/")
-                        and path.endswith(".md")
+                        if path in boundary.semantic_markdown_paths
+                        or (
+                            path.startswith("docs/internal/")
+                            and path.endswith(".md")
+                        )
                     )
                 )
                 transaction_changes = collect_repository_changes(

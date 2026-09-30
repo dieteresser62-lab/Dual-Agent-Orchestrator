@@ -242,12 +242,16 @@ def test_existing_topology_request_bytes_match_pre_slice_digests() -> None:
 
 
 @pytest.mark.parametrize(
-    ("implementer", "reviewer"),
-    (("codex", "claude"), ("codex", "antigravity"), ("claude", "codex")),  # allowlist:provider -- profile configuration: journey topologies
+    ("implementer", "reviewer", "work_plan", "interruption"),
+    (("codex", "claude", None, None), ("codex", "antigravity", None, None), ("claude", "codex", None, None),  # allowlist:provider -- profile configuration: journey topologies
+     ("claude", "codex", "docs/work-plan.md", None),  # allowlist:provider -- profile configuration: external plan artifact regression
+     ("claude", "codex", "docs/work-plan.md", WorkflowStep.REVIEWER_PLAN_REVIEW),  # allowlist:provider -- profile configuration: record-ahead plan recovery
+     ("claude", "codex", "docs/work-plan.md", WorkflowStep.REVIEWER_FINAL_REVIEW)),  # allowlist:provider -- profile configuration: record-ahead final recovery
 )
 def test_topology_plan_slice_final_review_and_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    implementer: str, reviewer: str,
+    implementer: str, reviewer: str, work_plan: str | None,
+    interruption: WorkflowStep | None,
 ) -> None:
     import test_orchestrator_runtime as fixture
     from agent_adapters import build_slot_agent_registry
@@ -276,6 +280,10 @@ def test_topology_plan_slice_final_review_and_resume(
         fixture._git(repository, "commit", "-m", "test slot profiles")
     task = tmp_path / "task.md"
     fixture._write_task(task, "feature/fake-topology", "src/one.py")
+    if work_plan:
+        task.write_text("ORCHESTRATOR_MODE: PLAN_ONLY\n"
+                        f"WORK_PLAN_PATH: {work_plan}\nTARGET_BRANCH: feature/fake-topology\n"
+                        f"TASK_SCOPE: {work_plan}\n", encoding="utf-8")
     args = fixture._args(repository, task)
     registry = build_slot_agent_registry(args.slot_settings)
     assert agent_adapters.is_native_implementer_adapter(registry["implementer"])
@@ -318,8 +326,15 @@ def test_topology_plan_slice_final_review_and_resume(
         target = repository / "src/one.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         if invocation.step is WorkflowStep.IMPLEMENTER_PLAN:
-            target.write_text("value = 0\n", encoding="utf-8")
-            expected = fixture._native_plan_output(invocation, summary="add implementation", scope_paths=("src/one.py",))
+            if work_plan:
+                plan = repository / work_plan
+                plan.parent.mkdir(parents=True, exist_ok=True)
+                plan.write_text("# Work plan\n\n### Slice 1 - Implement one value\n\n"
+                                "**Exakter Änderungspfad**\n\n- `src/one.py`\n\n"
+                                "**Akzeptanzkriterien**\n\n- value equals one.\n", encoding="utf-8")  # allowlist:german -- contract fixture: canonical plan heading
+            else:
+                target.write_text("value = 0\n", encoding="utf-8")
+            expected = fixture._native_plan_output(invocation, summary="add implementation", scope_paths=(work_plan or "src/one.py",))
         else:
             target.write_text("value = 1\n", encoding="utf-8")
             expected = fixture._native_implementation_output(invocation)
@@ -353,6 +368,10 @@ def test_topology_plan_slice_final_review_and_resume(
         adapter.settings = replace(adapter.settings, reviewer_model_catalog_json=hardened_reviewer_catalog({"models": [{"slug": adapter.model}]}, adapter.model))
         nonlocal expected_review
         expected_review = expected
+        driver._persist_native_agent_request_bundle(invocation)
+        driver._write_native_agent_raw_response(
+            driver._native_reviewer_response_path(invocation), expected.canonical_json
+        )
         return run_native_review_agent(
             adapter, invocation.native_request,
             config=OrchestratorConfig(repo_root=repository),
@@ -364,8 +383,39 @@ def test_topology_plan_slice_final_review_and_resume(
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", implement)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
     monkeypatch.chdir(repository)
-    result = run_production_workflow(task, args)
+    original_persist = ProductionWorkflowDriver.persist_native_review_contract
+    interrupted = False
+
+    def persist_then_interrupt(driver, *arguments, **keywords):
+        nonlocal interrupted
+        original_persist(driver, *arguments, **keywords)
+        if (interruption is not None and not interrupted
+                and driver.active_state.current_step is interruption):
+            interrupted = True
+            raise RuntimeError("review decision persisted before interruption")
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "persist_native_review_contract", persist_then_interrupt)
+
+    def run_with_recovery(task, arguments, expected_step):
+        if interruption is not expected_step:
+            return run_production_workflow(task, arguments)
+        with pytest.raises(RuntimeError, match="review decision persisted before interruption"):
+            run_production_workflow(task, arguments)
+        assert interrupted
+        resumed_args = fixture._args(repository, task)
+        resumed_args.resume = True
+        return run_production_workflow(task, resumed_args)
+
+    result = run_with_recovery(task, args, WorkflowStep.REVIEWER_PLAN_REVIEW)
     assert result.workflow_completed, result.state.current_work_unit.gate.detail
+    if work_plan:
+        task = task.with_name("task-implement.md")
+        assert task.is_file()
+        handoff_args = fixture._args(repository, task)
+        handoff_args.resume = False
+        handoff_args.force_overwrite_state = True
+        result = run_with_recovery(task, handoff_args, WorkflowStep.REVIEWER_FINAL_REVIEW)
+        assert result.workflow_completed, result.state.current_work_unit.gate.detail
     assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
     assert {WorkflowStep.IMPLEMENTER_PLAN, WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
             WorkflowStep.REVIEWER_PLAN_REVIEW, WorkflowStep.REVIEWER_SLICE_REVIEW,
@@ -377,6 +427,8 @@ def test_topology_plan_slice_final_review_and_resume(
     resumed = run_production_workflow(task, resumed_args)
     assert resumed.workflow_completed
     assert steps.count(WorkflowStep.REVIEWER_FINAL_REVIEW) == 1
+    if work_plan:
+        assert steps.count(WorkflowStep.REVIEWER_PLAN_REVIEW) == 1
     drifted_args = fixture._args(repository, task)
     drifted_args.resume = True
     drifted_args.agent_profile_overrides = frozenset({("reviewer", "model")})
@@ -386,3 +438,52 @@ def test_topology_plan_slice_final_review_and_resume(
     from state_io import StateSchemaError
     with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF"):
         run_production_workflow(task, drifted_args)
+
+
+@pytest.mark.parametrize("tracked", (False, True))
+def test_bound_external_markdown_keeps_body_and_rejects_malformed_audit(
+    tmp_path: Path, tracked: bool,
+) -> None:
+    import test_orchestrator_runtime as fixture
+    from test_repo_changes import _managed_slice_markdown
+    from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
+    from repo_changes import RepositoryChangeError
+    from workflow_state import init_workflow_state
+
+    repository = fixture._repository(tmp_path, "feature/semantic-boundary")
+    base = fixture._git(repository, "rev-parse", "HEAD")
+    paths = ("docs/work-plan.md", "docs/internal/task-review-12345678.md", "docs/ordinary.md")
+    for path in paths:
+        document = repository / path
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_text(_managed_slice_markdown(), encoding="utf-8")
+    if tracked:
+        fixture._git(repository, "add", *paths)
+        fixture._git(repository, "commit", "-m", "add test documents")
+    driver = ProductionWorkflowDriver(
+        repository_root=repository, state_file=repository / ".orchestrator/state.json",
+        agents={}, config=OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = init_workflow_state(
+        run_id="semantic-boundary", task_file=str(tmp_path / "task.md"),
+        branch="feature/semantic-boundary", branch_base=base,
+        first_slice_start_commit=base, slice_count=1,
+        work_plan_path=paths[0], audit_report_path=paths[1],
+    )
+    assert driver._collect_change_path_selection() == (tuple(sorted(paths[:2])), None)
+    before = driver.collect_changes(base)
+    for path in paths[:2]:
+        document = repository / path
+        document.write_text(_managed_slice_markdown("approved audit"), encoding="utf-8")
+    assert driver.collect_changes(base).fingerprint == before.fingerprint
+    for path in paths[:2]:
+        document = repository / path
+        document.write_text(_managed_slice_markdown().replace("semantic body", "changed body"), encoding="utf-8")
+        assert driver.collect_changes(base).fingerprint != before.fingerprint
+        document.write_text(_managed_slice_markdown(), encoding="utf-8")
+    (repository / paths[2]).write_text(_managed_slice_markdown("ordinary document edit"), encoding="utf-8")
+    assert driver.collect_changes(base).fingerprint != before.fingerprint
+    (repository / paths[0]).write_text("# Audit\n<!-- audit:findings:begin -->\nunclosed\n", encoding="utf-8")
+    with pytest.raises(RepositoryChangeError, match="canonicalize managed audit sections"):
+        driver.collect_changes(base)

@@ -878,7 +878,8 @@ def commit_slice(
                     *boundary.semantic_markdown_paths,
                     *authorization.approved_external_paths,
                 )
-                if path.startswith("docs/internal/") and path.endswith(".md")
+                if path in boundary.semantic_markdown_paths
+                or (path.startswith("docs/internal/") and path.endswith(".md"))
             }
         )
     )

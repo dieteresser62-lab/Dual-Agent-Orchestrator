@@ -473,6 +473,8 @@ def _run_upper(
         current_work_unit=work_unit,
         current_work_unit_id=1,
         run_id="b49-run",
+        work_plan_path=None,
+        audit_report_path=None,
     )
     active_state = None if config.get("no_state") else state
     paths = ("scope.py", "external.py") if config.get("external") else ("scope.py",)

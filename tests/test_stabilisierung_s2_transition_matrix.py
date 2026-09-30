@@ -720,7 +720,9 @@ def _comparison_inventory() -> dict[str, int]:
     result: dict[str, int] = {}
     for relative_path, class_name, function_name in COMPARISON_TARGETS:
         nodes = [
-            _function_node(relative_path, class_name, name)
+            _without_bound_markdown_selector_delta(
+                relative_path, _function_node(relative_path, class_name, name)
+            )
             for name in (
                 function_name,
                 *COMPARISON_HELPERS.get(
@@ -738,10 +740,42 @@ def _comparison_inventory() -> dict[str, int]:
     return result
 
 
+def _without_bound_markdown_selector_delta(relative_path: str, node: ast.AST) -> ast.AST:
+    # Round 10 changes only these path selectors. Require their exact new AST
+    # before comparing the remaining predicates with the unchanged S2 seals.
+    if relative_path != "src/workflow_git_commit.py":
+        return node
+    replacements = {
+        "_prepare_commit_context": (
+            "(path in (state.work_plan_path, state.audit_report_path) "
+            "or path.startswith('docs/internal/')) and path.endswith('.md')"
+        ),
+        "_prepare_git_operation": (
+            "path in boundary.semantic_markdown_paths "
+            "or (path.startswith('docs/internal/') and path.endswith('.md'))"
+        ),
+    }
+    expression = replacements.get(node.name)
+    if expression is None:
+        return node
+    expected = ast.dump(ast.parse(expression, mode="eval").body)
+    selectors = [
+        item for item in ast.walk(node) if isinstance(item, ast.comprehension)
+        and len(item.ifs) == 1 and ast.dump(item.ifs[0]) == expected
+    ]
+    assert len(selectors) == 1, node.name
+    selectors[0].ifs[0] = ast.parse(
+        "path.startswith('docs/internal/') and path.endswith('.md')", mode="eval"
+    ).body
+    return node
+
+
 def _body_digest_inventory() -> dict[str, str]:
     result: dict[str, str] = {}
     for relative_path, class_name, function_name in STRICT_BODY_TARGETS:
-        node = _function_node(relative_path, class_name, function_name)
+        node = _without_bound_markdown_selector_delta(
+            relative_path, _function_node(relative_path, class_name, function_name)
+        )
         label = ".".join(part for part in (class_name, function_name) if part)
         try:
             canonical = ast.dump(

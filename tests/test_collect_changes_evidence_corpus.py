@@ -841,8 +841,29 @@ def test_pre_b62_source_anchor_is_preserved_and_logical_collection_is_stable() -
     logical = _logical_collect_changes(
         ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
     )
+    expected = _pre_b62_method()
+    # Round 10 fixes the bound work-plan path restriction. Preserve the frozen
+    # source anchor and require precisely this functional delta, with every
+    # other part of the historical collection algorithm still unchanged.
+    old_filter = 'path.startswith("docs/internal/")'
+    filters = [
+        node
+        for node in ast.walk(expected)
+        if isinstance(node, ast.comprehension)
+        and any(ast.dump(term) == ast.dump(ast.parse(old_filter, mode="eval").body)
+                for condition in node.ifs
+                for term in ast.walk(condition))
+    ]
+    assert len(filters) == 1
+    condition = filters[0].ifs[0]
+    assert isinstance(condition, ast.BoolOp) and len(condition.values) == 3
+    assert ast.dump(condition.values[1]) == ast.dump(ast.parse(old_filter, mode="eval").body)
+    condition.values[1] = ast.parse(
+        "path in (self.active_state.work_plan_path, self.active_state.audit_report_path) "
+        "or path.startswith('docs/internal/')", mode="eval",
+    ).body
     assert ast.dump(logical, include_attributes=False) == ast.dump(
-        _pre_b62_method(), include_attributes=False
+        expected, include_attributes=False
     )
     assert "BRANCH_DISCOVERY" not in ast.unparse(logical)
     assert "FINAL_REVIEW" in ast.unparse(logical)
