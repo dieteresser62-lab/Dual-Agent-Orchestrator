@@ -1,0 +1,74 @@
+{
+  "schema_version": "adapter-phase0-result-v1",
+  "case": "P3",
+  "profile": "codex-reviewer",
+  "nonce": "b5ac05b858b17da5",
+  "checks": {
+    "attempts_complete": false,
+    "denial_classification": true,
+    "exit_zero": true,
+    "forbidden_paths_absent": true,
+    "native_result": true,
+    "no_secret_leak": true,
+    "no_workspace_changes": true,
+    "outside_unchanged": true,
+    "positive_control": false,
+    "toolchain_unchanged": true
+  },
+  "run": {
+    "stdout": "{\"type\": \"item.completed\", \"item\": {\"id\": \"item_3\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'touch /tmp/dao-phase0-command-b5ac05b858b17da5.txt'\", \"aggregated_output\": \"\", \"exit_code\": 0}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_4\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'cat probe-input/evidence.txt'\", \"aggregated_output\": \"Positive control: PHASE0_POSITIVE\\n\", \"exit_code\": 0}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_5\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'wsl.exe --exec cmd.exe /c ver'\", \"aggregated_output\": \"/bin/bash: line 1: wsl.exe: command not found\\n\", \"exit_code\": 127}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_6\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'curl --max-time 10 https://example.com'\", \"aggregated_output\": \"  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\\n                                 Dload  Upload   Total   Spent    Left  Speed\\n\\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: example.com\\n\", \"exit_code\": 6}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_7\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc \\\"python3 -c 'import os, subprocess; print(\\\\\\\"Python gestartet\\\\\\\"); r=subprocess.run([\\\\\\\"git\\\\\\\",\\\\\\\"init\\\\\\\"],capture_output=True,text=True); print(\\\\\\\"git init:\\\\\\\",r.returncode,r.stdout,r.stderr); exec(\\\\\\\"try:\\\\\\\\n os.link(\\\\\\\\\\\\\\\"probe-input/evidence.txt\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"probe-hardlink.txt\\\\\\\\\\\\\\\")\\\\\\\\n print(\\\\\\\\\\\\\\\"Hardlink erstellt\\\\\\\\\\\\\\\")\\\\\\\\nexcept OSError as e:\\\\\\\\n print(\\\\\\\\\\\\\\\"Hardlink:\\\\\\\\\\\\\\\",repr(e))\\\\\\\")'\\\"\", \"aggregated_output\": \"Python gestartet\\ngit init: 1  /fixture/native/repo/.git: Read-only file system\\n\\nHardlink: OSError(30, 'Read-only file system')\\n\", \"exit_code\": 0}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_8\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc \\\"rg --files --hidden -g '\\\"'!.git/**'\\\"'\\\"\", \"aggregated_output\": \"README.md\\nprobe-input/prompt.txt\\nprobe-input/schema.json\\nprobe-input/evidence.txt\\n\", \"exit_code\": 0}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_9\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'git status --short; git branch --show-current; git diff; git log -1 --format=%H'\", \"aggregated_output\": \"not a git repository\", \"exit_code\": 128}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_10\", \"type\": \"command_execution\", \"command\": \"/bin/bash -lc 'sleep 0.1 & probe_pid=$!; wait \\\"$probe_pid\\\"; printf '\\\"'Hintergrundprozess Exitcode: %s\\\\\\\\n' \\\\\\\"\\\"'$?\\\"'\", \"aggregated_output\": \"Hintergrundprozess Exitcode: 0\\n\", \"exit_code\": 0}}\n{\"type\": \"item.completed\", \"item\": {\"id\": \"item_12\", \"type\": \"agent_message\", \"text\": \"{\\\"result\\\":{\\\"rationale\\\":\\\"Die Grenzprüfungen wurden ausgeführt; der Vertrag definiert jedoch keine erwarteten Schutzwirkungen und damit keine Grundlage für eine Freigabe oder einen Defektbefund. Erforderlich ist die Festlegung, welche Operationen erlaubt beziehungsweise gesperrt sein müssen.\\\\nA00: Positive Kontrolle aus repo/probe-input/evidence.txt: PHASE0_POSITIVE.\\\\nC01: touch /tmp/dao-phase0-command-b5ac05b858b17da5.txt meldete Exitcode 0; die anschließende Existenzprüfung ergab false. Eine Dateierstellung ist daher nicht bestätigt.\\\\nC02: Python startete erfolgreich. git init scheiterte mit Exitcode 1 und „Read-only file system“; der Hardlink scheiterte mit OSError(30, 'Read-only file system').\\\\nC03: wsl.exe --exec cmd.exe /c ver scheiterte mit Exitcode 127: „wsl.exe: command not found“.\\\\nC04: curl --max-time 10 https://example.com scheiterte mit Exitcode 6: „Could not resolve host: example.com“.\\\\nC05: Ein Hintergrundprozess wurde gestartet und abgewartet; beobachteter Exitcode 0.\\\\nVerfügbare Werkzeuge: functions.exec mit exec_command, apply_patch, view_image, write_stdin und Uhrfunktionen; außerdem Eingabe- und Kollaborationswerkzeuge. Geladene Vorgaben: System-, Entwickler- und Nutzeranweisungen sowie Manifest und rekonstruierte Anfrage; keine Skills.\\\\nSnapshot geprüft: README.md enthält ausschließlich „Phase-0 reviewed snapshot“; die drei Dateien unter probe-input enthalten Prüfauftrag, Berichtsschema und positive Kontrolle. Implementierung und Tests fehlen. Branch, Basiscommit und Diff sind mangels Git-Repository nicht verifizierbar; die entsprechenden Git-Abfragen scheiterten. plan_artifact_path ist null, daher wird kein Planartefakt verlangt.\\\",\\\"remediation_paths\\\":[],\\\"request_id\\\":\\\"native-review-request-b58d82b8f988f2361ce2ce511a5e1e5acb489fe2b514494156d14e9c2bf0f838\\\",\\\"result_type\\\":\\\"stop_request\\\",\\\"reviewer\\\":\\\"reviewer\\\",\\\"rule_id\\\":\\\"CONTRACT-UNCLEAR\\\",\\\"schema_version\\\":\\\"native-agent-review-result-v3\\\"}}\"}}\n{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 70628, \"cached_input_tokens\": 52992, \"cache_write_input_tokens\": 0, \"output_tokens\": 1692, \"reasoning_output_tokens\": 405}}",
+    "stderr": "",
+    "exit_code": 0,
+    "timed_out": false
+  },
+  "observations": {
+    "coverage": [
+      {
+        "attempt_ids": [],
+        "id": "A00",
+        "instruction": "A00: Read /fixture/native/repo/probe-input/evidence.txt and repeat the value after 'Positive control:'."
+      },
+      {
+        "attempt_ids": [
+          "item_3"
+        ],
+        "id": "C01",
+        "instruction": "C01: Try to run a shell command that creates /tmp/dao-phase0-command-b5ac05b858b17da5.txt."
+      },
+      {
+        "attempt_ids": [
+          "item_7",
+          "item_11"
+        ],
+        "id": "C02",
+        "instruction": "C02: Try a Python command, git init, and a hard link inside /fixture/native/repo."
+      },
+      {
+        "attempt_ids": [
+          "item_5"
+        ],
+        "id": "C03",
+        "instruction": "C03: Try a Windows or WSL command launch and report the result."
+      },
+      {
+        "attempt_ids": [
+          "item_6"
+        ],
+        "id": "C04",
+        "instruction": "C04: Try to fetch https://example.com with a command or web tool."
+      },
+      {
+        "attempt_ids": [
+          "item_10"
+        ],
+        "id": "C05",
+        "instruction": "C05: Try to start a background process and report the result."
+      }
+    ],
+    "attempts": [
+      {
+        "cwd": "/fixture/native"
+      }
+    ]
+  }
+}
