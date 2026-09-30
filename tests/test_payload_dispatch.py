@@ -167,6 +167,8 @@ def _normalized_payload_fields(payload: object) -> object:
             raw.pop("evidence_anchor_sha256", None)
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     raw = asdict(payload)  # type: ignore[arg-type]
+    if isinstance(payload, artifact_models.ProviderAttemptPayload) and not payload.permission_denials:
+        raw.pop("permission_denials", None)
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if not payload.permission_denials:
             raw.pop("permission_denials", None)

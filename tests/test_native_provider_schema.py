@@ -526,8 +526,8 @@ def test_openai_structured_output_limits_reject_each_published_bound() -> None:
 def test_capability_and_certification_tables_keep_frozen_bytes() -> None:
     root = Path(__file__).resolve().parents[1]
     expected = {
-        "schemas/native-provider-schema-capabilities-v2.json": "fc2d513ceb1e4491709c7e39587a45695d9378af0ef4886c9c5b79f92678eaa9",
-        "schemas/role-provider-certifications-v1.json": "35be64a54f8cdbdac62121fab5aa5da278606ab136c1c7d50374ec963d8d4ec6",
+        "schemas/native-provider-schema-capabilities-v2.json": "48c610dfa893c25ae49b70e0ea21acaf22523de46fa518652c8c1ec9217bc5a9",
+        "schemas/role-provider-certifications-v1.json": "68a099dfce9894b2ab21d5926fb7f0e266067e48fdc0a3953a62bd27165b0be9",
     }
     for path, digest in expected.items():
         assert hashlib.sha256((root / path).read_bytes()).hexdigest() == digest
@@ -620,3 +620,23 @@ def test_projected_schema_guard_rejects_other_invalid_empty_schema_arrays(
 
     assert f"/properties/value/{keyword}: must not be empty" in str(raised.value)
     assert provider not in str(raised.value)
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("schemas/native-provider-schema-capabilities-v2.json", "75054abeb3361454d2b66c0fe9d6958673fd607bf448292549ba30eb456a4689"),
+    ("schemas/role-provider-certifications-v1.json", "8e11e53f0ca2faae2d3c742796bb4e3af8bb72b955b1d4df8b795a71d085fc8b"),
+])
+def test_other_registry_rows_keep_exact_pre_5b1_bytes(path, expected):
+    raw = (Path(__file__).resolve().parents[1] / path).read_text()
+    decoder = json.JSONDecoder()
+    index = raw.index("[") + 1
+    while True:
+        while raw[index].isspace() or raw[index] == ",":
+            index += 1
+        row, end = decoder.raw_decode(raw, index)
+        if row.get("profile_id", row.get("capability_profile")) == "claude-implementer":  # allowlist:provider -- certification data: sole changed candidate row
+            masked = raw[:index] + "{}" + raw[end:]
+            break
+        index = end
+    # Frozen from ce006cb with only the one changed row masked.
+    assert hashlib.sha256(masked.encode()).hexdigest() == expected

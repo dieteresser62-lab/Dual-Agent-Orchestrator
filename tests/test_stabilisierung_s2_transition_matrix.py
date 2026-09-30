@@ -561,7 +561,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/artifact_store.py:ArtifactStore._head_cache_matches': 3,
  'src/artifact_store.py:ArtifactStore._refresh_append_head_cache': 2,
  'src/artifact_bridge.py:ArtifactBridge.start_provider_attempt': 24,
- 'src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt': 10,
+ 'src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt': 11,  # Terminal denial evidence is also idempotency-bound.
  'src/artifact_bridge.py:ArtifactBridge.side_effect_result': 7,
  'src/final_review_preflight.py:run_final_review_preflight': 12,
  'src/workflow_audit_projection.py:_persisted_histories': 6,

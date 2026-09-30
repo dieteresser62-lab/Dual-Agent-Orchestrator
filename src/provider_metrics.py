@@ -32,6 +32,8 @@ def _redacted_excerpt(value: object, limit: int = 200) -> str:
     for name, secret in os.environ.items():
         if re.search(r"token|secret|password|credential|api.?key", name, re.I) and len(secret) >= 4:
             value = value.replace(secret, "[redacted]")
+    value = re.sub(r'(?i)("[^"\n]*(?:token|secret|password|credential|api[_-]?key)[^"\n]*"\s*:\s*)"(?:\\.|[^"\\])*"',
+                   r'\1"[redacted]"', value)
     value = re.sub(r"(?i)((?:bearer|basic)\s+)\S+", r"\1[redacted]", value)
     value = re.sub(r"(?i)((?:[\w-]*(?:token|secret|password|api[_-]?key)[\w-]*)\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)",
                    r"\1[redacted]", value)
@@ -71,4 +73,48 @@ def failure_metrics(envelope: dict, keys: tuple[str, ...]) -> dict[str, object]:
 def log_permission_denials(metrics: dict[str, object]) -> None:
     from logging import getLogger
     for denial in metrics.get("permission_denials", []):
-        getLogger(__name__).warning("[PERMISSION_DENIAL] %s", json.dumps(denial, ensure_ascii=False))
+        if "disposition" in denial:
+            getLogger(__name__).warning("[PERMISSION_DENIAL] %s disposition=%s",
+                                       json.dumps(denial, ensure_ascii=False), denial["disposition"])
+        else:
+            getLogger(__name__).warning("[PERMISSION_DENIAL] %s", json.dumps(denial, ensure_ascii=False))
+
+
+def compact_stream_event(event: dict, state: dict, provider_label: str = "provider", version_field: str = "version") -> str | None:
+    """Bound and redact the useful portions of a verbose JSON stream event."""
+    kind = event.get("type")
+    if kind == "system" and event.get("subtype") == "init":
+        if state.get("provider_init_seen"):
+            return None
+        state["provider_init_seen"] = True
+        return (provider_label + " model=" + _redacted_excerpt(event.get("model"), 80)
+                + " version=" + _redacted_excerpt(event.get(version_field), 40))
+    if kind == "system" and event.get("subtype") == "permission_denied":
+        summary = state.get("tool_calls", {}).get(event.get("tool_use_id"))
+        if summary is None:
+            summary = permission_denial_summaries([event])[0]
+        return "[PERMISSION_DENIAL] " + json.dumps(summary, ensure_ascii=False)
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if kind not in {"assistant", "user"} or not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if kind == "assistant" and block.get("type") == "tool_use":
+            if isinstance(block.get("id"), str):
+                state.setdefault("tool_calls", {})[block["id"]] = permission_denial_summaries([{
+                    "tool_name": block.get("name"), "tool_use_id": block["id"], "tool_input": block.get("input"),
+                }])[0]
+            parts.append("tool=" + _redacted_excerpt(block.get("name"), 64)
+                         + " input=" + _redacted_excerpt(json.dumps(block.get("input"), ensure_ascii=False), 200))
+        elif kind == "assistant" and block.get("type") == "text":
+            parts.append("text=" + _redacted_excerpt(block.get("text"), 200))
+        elif kind == "user" and block.get("type") == "tool_result" and block.get("is_error") is True:
+            value = block.get("content")
+            if isinstance(value, list):
+                value = " ".join(part.get("text", "") for part in value if isinstance(part, dict)
+                                 and isinstance(part.get("text"), str))
+            parts.append("tool_error=" + _redacted_excerpt(value, 200))
+    return " | ".join(parts[:4]) if parts else None

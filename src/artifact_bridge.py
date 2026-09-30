@@ -36,6 +36,7 @@ from artifact_models import (
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
+    AttemptPermissionDenial,
     RunProfilePayload,
     ProviderUsagePayload,
     RecordType,
@@ -1070,6 +1071,7 @@ class ArtifactBridge:
         duration_seconds: float,
         failure_kind: str | None,
         usage: ProviderUsagePayload | None,
+        permission_denials: tuple[AttemptPermissionDenial, ...] = (),
     ) -> ArtifactRecord:
         """Persist the sole terminal revision for a previously durable start."""
         chain = self.store.current_chain()
@@ -1100,6 +1102,7 @@ class ArtifactBridge:
                 or payload.phase != phase
                 or payload.failure_kind != failure_kind
                 or payload.usage != usage
+                or payload.permission_denials != permission_denials
                 or payload.logical_operation_id != started.logical_operation_id
                 or payload.attempt_number != started.attempt_number
             ):
@@ -1126,6 +1129,7 @@ class ArtifactBridge:
             slot=started.slot,
             profile_name=started.profile_name,
             binary_identity=started.binary_identity,
+            permission_denials=permission_denials,
         )
         record = self.append(
             payload,

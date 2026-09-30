@@ -573,12 +573,20 @@ def _compact_stream_text(
     adapter: AgentAdapter,
     channel: str,
     line: str,
-    state: dict[str, str | bool],
+    state: dict[str, object],
 ) -> str | None:
     """Render useful live progress without leaking provider JSON envelopes."""
     text = line.strip()
     if not text:
         return None
+
+    if channel == "stdout" and getattr(adapter, "live_stream_profile", "plain") == "claude-stream-json":  # allowlist:provider -- transport: implementer stream profile
+        from provider_metrics import compact_stream_event
+        try:
+            event = json.loads(text)
+        except ValueError:
+            return None
+        return compact_stream_event(event, state, adapter.name, getattr(adapter, "live_stream_version_field", "version")) if isinstance(event, dict) else None
 
     if channel == "stdout" and getattr(adapter, "live_stream_profile", "plain") == "json-events" and text.startswith("{"):
         try:
@@ -698,7 +706,7 @@ def _compact_usage_metadata(metadata: Mapping[str, object] | None) -> str:
 @dataclass(frozen=True)
 class ProviderAttemptLifecycle:
     start: Callable[[ProviderInputMeasurement, object | None], object]
-    terminal: Callable[[object, float, str | None, ProviderUsagePayload | None], None]
+    terminal: Callable[..., None]
     durable_response_path: Callable[[object], Path] | None = None
     failure_path: Callable[[Path], Path] | None = None
     monotonic_fn: Callable[[], float] = time.monotonic
@@ -735,11 +743,15 @@ class _ProviderAttemptInvocation:
         if self.handle is None or self.monotonic_started is None or self.terminalized:
             return
         self.terminalized = True
+        from artifact_models import AttemptPermissionDenial
+        denials = tuple(AttemptPermissionDenial(**item) for item in (metadata or {}).get("permission_denials", [])
+                       if isinstance(item, dict) and "disposition" in item)
         self.lifecycle.terminal(
             self.handle,
             max(0.0, self.lifecycle.monotonic_fn() - self.monotonic_started),
             failure_kind.value if failure_kind is not None else None,
             normalize_provider_usage(metadata),
+            **({"permission_denials": denials} if denials else {}),
         )
 
 
@@ -1392,7 +1404,7 @@ def _run_agent_process(
             stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
             stdout_chunks: list[str] = []
             stderr_chunks: list[str] = []
-            stream_state: dict[str, str | bool] = {
+            stream_state: dict[str, object] = {
                 "skip_prompt_echo": False, "last_emitted_line": "",
             }
             writer_errors: queue.Queue[BaseException] = queue.Queue()
@@ -1468,12 +1480,13 @@ def _run_agent_process(
                     continue
                 if getattr(adapter, "suppress_live_stream", False):
                     continue
-                if config.agent_live_stream_mode == "full":
+                if config.agent_live_stream_mode == "full" and getattr(adapter, "live_stream_profile", "plain") != "claude-stream-json":  # allowlist:provider -- transport: keep implementer stream redacted
                     logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
                 else:
                     rendered = _compact_stream_text(adapter, channel, line, stream_state)
                     if rendered is not None:
-                        logger.info("[%s:%s] %s", agent_key, channel, rendered)
+                        emit = logger.warning if rendered.startswith("[PERMISSION_DENIAL]") else logger.info
+                        emit("[%s:%s] %s", agent_key, channel, rendered)
             for thread in threads:
                 thread.join(timeout=0.2)
             if writer is not None:

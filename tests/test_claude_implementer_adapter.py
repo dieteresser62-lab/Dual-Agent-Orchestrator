@@ -24,6 +24,16 @@ from provider_input_budget import default_provider_input_budget_policy
 from test_native_implementer_request import _spec
 
 
+def _stream(envelope: dict) -> str:
+    return json.dumps({"type": "result", "subtype": "success", **envelope})
+
+
+def _scratch(tmp_path: Path) -> Path:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(mode=0o700)
+    return scratch
+
+
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
@@ -55,13 +65,13 @@ def test_native_implementer_settings_and_measurement_are_bound(tmp_path: Path, m
     try:
         settings = json.loads(prepared.command[prepared.command.index("--settings") + 1])
         assert settings == implementer_settings(
-            protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1"), root
+            protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1"), root, scratch=adapter._scratch
         )
         assert settings["sandbox"]["failIfUnavailable"] is True
         assert settings["disableAllHooks"] is True
         assert settings["sandbox"]["filesystem"]["denyWrite"]
         assert settings["permissions"]["blockReadsOutsideWorkingDirectories"] is True
-        assert set(adapter.env) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM"}
+        assert set(adapter.env) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR"}
         assert "DAO_DECOY_TOKEN" not in adapter.env
         first = hashlib.sha256(json.dumps(
             [(part.name, part.content) for part in prepared.components],
@@ -94,7 +104,7 @@ def test_implementer_command_rejects_broadened_flags(tmp_path: Path, replacement
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile(
                 "claude-implementer", command,  # allowlist:provider -- profile configuration: implementer fake
-                bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
+                bound_repository_root=adapter._repository_root, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
             )
     finally:
         adapter.cleanup()
@@ -126,7 +136,7 @@ def test_implementer_settings_reject_weakened_field(
     command[command.index("--settings") + 1] = json.dumps(changed, sort_keys=True, separators=(",", ":"))
     try:
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -142,13 +152,13 @@ def test_implementer_command_rejects_extra_flags(tmp_path: Path, extra: str) -> 
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile(
                 "claude-implementer", command,  # allowlist:provider -- profile configuration: implementer fake
-                bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
+                bound_repository_root=adapter._repository_root, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
             )
     finally:
         adapter.cleanup()
 
 
-def test_linked_worktree_gitdir_and_common_dir_are_protected() -> None:
+def test_linked_worktree_gitdir_and_common_dir_are_protected(tmp_path) -> None:
     root = Path(__file__).resolve().parents[1]
     paths = protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1")
     completed = subprocess.run(
@@ -158,7 +168,7 @@ def test_linked_worktree_gitdir_and_common_dir_are_protected() -> None:
     gitdir, common_dir = completed.stdout.splitlines()
     assert Path(gitdir).resolve() in paths
     assert Path(common_dir).resolve() in paths
-    settings = implementer_settings(paths, root)
+    settings = implementer_settings(paths, root, scratch=_scratch(tmp_path))
     deny_write = [Path(item) for item in settings["sandbox"]["filesystem"]["denyWrite"]]
     for path in (gitdir, common_dir):
         # A linked worktree's gitdir lies inside the common dir, which covers it.
@@ -176,7 +186,7 @@ def test_queue_symlink_alias_and_target_are_both_protected(tmp_path: Path) -> No
     paths = protected_implementer_paths(root, alias / "pending", root / "outbox", "run-1")
     assert (alias / "pending").absolute() in paths
     assert (outside / "pending").resolve() in paths
-    settings = implementer_settings(paths, root)
+    settings = implementer_settings(paths, root, scratch=_scratch(tmp_path))
     assert f"Edit(./queue-link/pending/**)" in settings["permissions"]["deny"]
     assert str(outside / "pending") in settings["sandbox"]["filesystem"]["denyWrite"]
 
@@ -239,7 +249,7 @@ def test_fake_process_uses_implementer_boundary_and_validates_plan(
         assert stdin_text == bundle.canonical_json
         assert bundle.canonical_json not in command_parts
         assert command_parts[command_parts.index("--system-prompt") + 1] == adapter.role_binding.policy
-        assert set(kwargs["env"]) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM"}
+        assert set(kwargs["env"]) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR"}
         seen.append(kwargs["execution_root"])
         result = {
             "schema_version": "native-agent-implementer-result-v3",
@@ -252,7 +262,7 @@ def test_fake_process_uses_implementer_boundary_and_validates_plan(
             }],
             "finding_dispositions": [],
         }
-        stdout = json.dumps({"is_error": False, "structured_output": {"result": result}})
+        stdout = _stream({"is_error": False, "structured_output": {"result": result}})
         return subprocess.CompletedProcess(command_parts, 0, stdout, "")
 
     monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_process)
@@ -320,7 +330,7 @@ def test_fake_envelope_preserves_dispositions_and_stop_result(tmp_path: Path, ki
                   ]}
     try:
         canonical = adapter.extract_output(
-            json.dumps({"is_error": False, "structured_output": {"result": result}}), "", {},
+            _stream({"is_error": False, "structured_output": {"result": result}}), "", {},
         )
         parsed = parse_bound_native_implementer_contract_result(json.loads(canonical), bundle.bound_context)
         assert parsed.stopped is (kind == "stop")
@@ -358,7 +368,7 @@ def test_interrupted_fake_process_retries_same_bound_request(
         }
         return subprocess.CompletedProcess(
             command_parts, 0,
-            json.dumps({"is_error": False, "structured_output": {"result": result}}), "",
+            _stream({"is_error": False, "structured_output": {"result": result}}), "",
         )
 
     monkeypatch.setattr(agent_runtime, "_run_agent_process", fake_process)
@@ -411,7 +421,7 @@ def test_cli_edit_rules_repeat_the_settings_deny_rules(tmp_path: Path) -> None:
         assert "Edit(./.orchestrator/**)" in cli_rules.split(",")
         command[command.index("--disallowedTools") + 1] = "Edit(./.git),Edit(./.git/**)"
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -436,7 +446,7 @@ def test_normalizer_checks_settings_semantics_even_when_bound(tmp_path: Path, ch
     command[command.index("--disallowedTools") + 1] = ",".join(deny)
     try:
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_settings_json=weakened)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=weakened)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -478,7 +488,7 @@ def test_normalizer_rejects_nested_protected_paths(tmp_path: Path) -> None:
     command[command.index("--disallowedTools") + 1] = ",".join(settings["permissions"]["deny"])
     try:
         with pytest.raises(NativeProviderSchemaError, match="nested"):
-            normalize_transport_profile("claude-implementer", command, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -499,10 +509,10 @@ def test_toolchain_settings_path_and_semantic_binding(tmp_path):
         settings_json = prepared.command[prepared.command.index("--settings") + 1]
         settings = json.loads(settings_json)
         assert settings["sandbox"]["filesystem"]["allowRead"] == [str(tools), str(no_bin)]
-        assert "allowWrite" not in settings["sandbox"]["filesystem"]
+        assert settings["sandbox"]["filesystem"]["allowWrite"] == [str(adapter._scratch)]
         assert adapter.env["PATH"] == str(tools / "bin") + ":/usr/local/bin:/usr/bin:/bin"
         assert normalize_transport_profile("claude-implementer", prepared.command,  # allowlist:provider -- profile configuration: toolchain coverage
-            bound_settings_json=settings_json, bound_repository_root=root,
+            bound_scratch=adapter._scratch, bound_settings_json=settings_json, bound_repository_root=root,
             bound_toolchain_read_roots=(str(tools), str(no_bin)))
     finally:
         adapter.cleanup()
@@ -527,7 +537,7 @@ def test_semantic_normalization_rejects_manipulated_allow_read(tmp_path, kind):
     try:
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile("claude-implementer", command,  # allowlist:provider -- profile configuration: manipulated read root
-                bound_settings_json=new_bound, bound_repository_root=root,
+                bound_scratch=adapter._scratch, bound_settings_json=new_bound, bound_repository_root=root,
                 bound_toolchain_read_roots=() if kind == "unbound" else (str(replacement),))
     finally:
         adapter.cleanup()
@@ -559,3 +569,210 @@ def test_toolchain_root_drift_fails_before_preparing_command(tmp_path):
     with pytest.raises(AgentOutputError, match="changed after profile binding"):
         implementer_settings(protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1"),
                              root, (str(tools),))
+
+
+def _valid_plan(bundle):
+    return {"schema_version": "native-agent-implementer-result-v3", "result_type": "plan_result",
+            "request_id": bundle.bound_context.request_id, "ready": True, "finding_dispositions": [],
+            "slice_plan": [{"slice_id": 1, "summary": "Complete the plan.", "scope_paths": ["docs/internal/plan.md"],
+                            "acceptance_criteria": [{"text": "The plan is ready.", "measured_against": "SOURCE"}]}]}
+
+
+def test_scratch_is_fresh_private_bound_and_cleaned_even_after_repeat(tmp_path):
+    root, adapter, bundle, prepared = _prepared(tmp_path)
+    first = adapter._scratch
+    runtime = adapter.invocation.runtime_dir
+    assert first.stat().st_mode & 0o777 == 0o700
+    assert not first.is_relative_to(root) and not first.is_relative_to(Path.home())
+    assert prepared.command[prepared.command.index("--add-dir") + 1] == str(first)
+    assert adapter.env["TMPDIR"] == str(first)
+    (first / "helper").write_text("temporary")
+    try:
+        second = adapter.prepare_native_provider_input(bundle)
+        assert adapter._scratch != first
+        assert not first.exists() and not runtime.exists()
+        assert second.components == prepared.components
+        assert str(first) not in "".join(part.content for part in prepared.components)
+        last = adapter._scratch
+    finally:
+        adapter.cleanup()
+    assert not last.exists()
+    adapter.cleanup()
+
+
+@pytest.mark.parametrize("location", ["repo", "home", "protected", "tool"])
+def test_scratch_creation_fails_closed_and_cleans_new_directory(tmp_path, monkeypatch, location):
+    import claude_implementer_adapter as adapter_module  # allowlist:provider -- transport: scratch fake
+    root = _repo(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    adapter = _adapter(root)
+    adapter.settings = replace(adapter.settings, toolchain_read_roots=(str(tools),))
+    original = adapter_module.tempfile.mkdtemp
+    parent = {"repo": root, "home": home, "protected": root / ".git", "tool": tools}[location]
+    created = []
+    def fake_mkdtemp(*args, **kwargs):
+        if kwargs.get("prefix") == "dao-implementer-scratch-":
+            value = original(prefix=kwargs["prefix"], dir=parent)
+            created.append(Path(value))
+            return value
+        return original(*args, **kwargs)
+    monkeypatch.setattr(adapter_module.tempfile, "mkdtemp", fake_mkdtemp)
+    bundle = build_native_implementer_request(_spec(), profile="claude-implementer")  # allowlist:provider -- profile configuration: scratch failure
+    with pytest.raises(ValueError, match="scratch"):
+        adapter.prepare_native_provider_input(bundle)
+    assert created and not created[0].exists()
+    assert adapter._scratch is None
+    assert adapter.invocation.runtime_dir is None or not adapter.invocation.runtime_dir.exists()
+
+
+@pytest.mark.parametrize("change", ["value", "position", "duplicate", "missing", "extra-write", "wrong-write", "no-write", "unbound"])
+def test_scratch_and_stream_command_normalization_rejects_drift(tmp_path, change):
+    root, adapter, _, prepared = _prepared(tmp_path)
+    command = list(prepared.command)
+    settings = json.loads(command[command.index("--settings") + 1])
+    scratch = adapter._scratch
+    if change == "value":
+        command[command.index("--add-dir") + 1] = "/tmp/foreign"
+    elif change == "position":
+        command[-4], command[-3] = command[-3], command[-4]
+    elif change == "duplicate":
+        command[-1:-1] = ["--add-dir", str(scratch)]
+    elif change == "missing":
+        command.remove("--verbose")
+    elif change == "extra-write":
+        settings["sandbox"]["filesystem"]["allowWrite"].append("/tmp")
+    elif change == "wrong-write":
+        settings["sandbox"]["filesystem"]["allowWrite"] = ["/tmp"]
+    elif change == "no-write":
+        del settings["sandbox"]["filesystem"]["allowWrite"]
+    else:
+        scratch = None
+    bound = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+    command[command.index("--settings") + 1] = bound
+    try:
+        with pytest.raises(NativeProviderSchemaError):
+            normalize_transport_profile("claude-implementer", command, bound_scratch=scratch,  # allowlist:provider -- profile configuration: scratch drift
+                                        bound_settings_json=bound, bound_repository_root=root)
+    finally:
+        adapter.cleanup()
+
+
+def test_stream_success_tolerates_smoke_denials_preserves_usage_and_validates_result(tmp_path, caplog):
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    denials = [
+        {"tool_name": "Write", "tool_use_id": "toolu_1", "tool_input": {"file_path": "/tmp/claude-1000/mut/mutate.mjs"}},  # allowlist:provider -- profile configuration: real event or smoke path fixture
+        {"tool_name": "Bash", "tool_use_id": "toolu_2", "tool_input": {"command": 'cp tests/mutate.mjs "$TMPDIR/mut/"'}},
+        {"tool_name": "Bash", "tool_use_id": "toolu_3", "tool_input": {"command": "node /tmp/claude-1000/mut/mutate.mjs"}},  # allowlist:provider -- profile configuration: real event or smoke path fixture
+    ]
+    stream = json.dumps({"type": "system", "subtype": "init", "model": "claude-opus-5-5",  # allowlist:provider -- transport: real event fixture
+                         "claude_code_version": "2.1.285"}) + '\n'  # allowlist:provider -- profile configuration: real event or smoke path fixture
+    for denial in denials:
+        stream += json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use",
+            "name": denial["tool_name"], "id": denial["tool_use_id"], "input": denial["tool_input"]}]}}) + '\n'
+        # Actual offline shape: no input in system/permission_denied.
+        stream += json.dumps({"type": "system", "subtype": "permission_denied",
+                              "tool_name": denial["tool_name"], "tool_use_id": denial["tool_use_id"],
+                              "decision_reason_type": "restricted", "decision_reason": "fake refusal"}) + '\n'
+    stream += _stream({"is_error": False, "permission_denials": denials,
+                       "usage": {"input_tokens": 42, "output_tokens": 7}, "modelUsage": {"fake-model": {}},
+                       "structured_output": {"result": _valid_plan(bundle)}})
+    try:
+        result = adapter.extract_output(stream, "", {})
+        assert parse_bound_native_implementer_contract_result(json.loads(result), bundle.bound_context).ready
+        assert adapter.metadata["usage"] == {"input_tokens": 42, "output_tokens": 7}
+        assert adapter.metadata["modelUsage"] == {"fake-model": {}}
+        assert len(adapter.metadata["permission_denials"]) == 3
+        assert all(item["disposition"] == "tolerated" for item in adapter.metadata["permission_denials"])
+        assert caplog.text.count("disposition=tolerated") == 3
+    finally:
+        adapter.cleanup()
+
+
+@pytest.mark.parametrize("case", ["missing", "duplicate", "trailing", "invalid-json", "array", "no-type", "error", "subtype", "foreign", "invalid-result", "missing-structured"])
+def test_stream_final_event_failures_are_closed(tmp_path, case):
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    envelope = {"is_error": False, "structured_output": {"result": _valid_plan(bundle)}}
+    stream = _stream(envelope)
+    if case == "missing":
+        stream = '{"type":"system","subtype":"init"}'
+    elif case == "duplicate":
+        stream += '\n' + stream
+    elif case == "trailing":
+        stream += '\n{"type":"assistant","message":{"content":[]}}'
+    elif case == "invalid-json":
+        stream = 'broken\n' + stream
+    elif case == "array":
+        stream = '[]\n' + stream
+    elif case == "no-type":
+        stream = json.dumps(envelope)
+    elif case == "error":
+        stream = _stream({**envelope, "is_error": True})
+    elif case == "subtype":
+        stream = _stream({**envelope, "subtype": "error_max_turns"})
+    elif case == "foreign":
+        envelope["structured_output"]["result"]["request_id"] = "foreign-request"
+        stream = _stream(envelope)
+    elif case == "invalid-result":
+        envelope["structured_output"]["result"]["unexpected"] = True
+        stream = _stream(envelope)
+    else:
+        stream = _stream({"is_error": False})
+    try:
+        with pytest.raises(AgentOutputError):
+            adapter.extract_output(stream, "", {})
+    finally:
+        adapter.cleanup()
+
+
+@pytest.mark.parametrize("final_denials", [False, True])
+def test_live_protected_denial_stops_even_when_omitted_from_final_array(tmp_path, final_denials):
+    from agent_adapters import AgentPermissionError
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    denial = {"tool_name": "Write", "tool_use_id": "toolu_x", "tool_input": {"file_path": "./.orchestrator/state.json"}}
+    events = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Write", "input": denial["tool_input"]}]}},
+              {"type": "system", "subtype": "permission_denied", "tool_name": "Write", "tool_use_id": "toolu_x"}]
+    stream = '\n'.join(json.dumps(event) for event in events) + '\n' + _stream({"is_error": False,
+        "permission_denials": [denial] if final_denials else [], "structured_output": {"result": _valid_plan(bundle)}})
+    try:
+        with pytest.raises(AgentPermissionError):
+            adapter.extract_output(stream, "", {})
+    finally:
+        adapter.cleanup()
+
+
+def test_violation_beyond_bounded_diagnostic_is_still_classified(tmp_path):
+    from agent_adapters import AgentPermissionError
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    denials = [{"tool_name": "Bash", "tool_use_id": "toolu_safe", "tool_input": {"command": "npm test"}}] * 16
+    denials.append({"tool_name": "Bash", "tool_use_id": "toolu_bad", "tool_input": {"command": "git add src/file.py"}})
+    try:
+        with pytest.raises(AgentPermissionError):
+            adapter.extract_output(_stream({"is_error": False, "permission_denials": denials,
+                                            "structured_output": {"result": _valid_plan(bundle)}}), "", {})
+    finally:
+        adapter.cleanup()
+
+
+@pytest.mark.parametrize("case", ["missing-input", "contradiction", "malformed-id", "duplicate-id"])
+def test_uncertain_live_denial_fails_closed(tmp_path, case):
+    from agent_adapters import AgentPermissionError
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    events = []
+    denied_input = {"file_path": ".orchestrator/state.json"}
+    if case in {"contradiction", "duplicate-id"}:
+        events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Write", "input": denied_input}]}})
+    if case == "duplicate-id":
+        events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Write", "input": {"file_path": "src/safe.py"}}]}})
+    events.append({"type": "system", "subtype": "permission_denied", "tool_name": "Write", "tool_use_id": [] if case == "malformed-id" else "toolu_x"})
+    final = [{"tool_name": "Write", "tool_use_id": "toolu_x", "tool_input": {"file_path": "src/safe.py"}}] if case in {"contradiction", "duplicate-id"} else []
+    stream = '\n'.join(json.dumps(event) for event in events) + '\n' + _stream({"is_error": False, "permission_denials": final,
+                                                                             "structured_output": {"result": _valid_plan(bundle)}})
+    try:
+        with pytest.raises(AgentPermissionError):
+            adapter.extract_output(stream, "", {})
+    finally:
+        adapter.cleanup()

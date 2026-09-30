@@ -1504,6 +1504,7 @@ class ProviderAttemptPayload:
     slot: str = ""
     profile_name: str = "scripted"
     binary_identity: ProviderIdentity | None = None
+    permission_denials: tuple[AttemptPermissionDenial, ...] = dataclass_field(default=(), kw_only=True)
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_ATTEMPT
 
     @property
@@ -1511,6 +1512,11 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
+        if (not isinstance(self.permission_denials, tuple) or len(self.permission_denials) > 16
+            or any(not isinstance(item, AttemptPermissionDenial) for item in self.permission_denials)
+            or (self.phase == "started" and self.permission_denials)
+            or (self.phase == "succeeded" and any(item.disposition != "tolerated" for item in self.permission_denials))):
+            raise ArtifactValidationError("provider attempt permission denials are invalid")
         slot = self.slot or ("final_reviewer" if self.operation == "reviewer_final_review" else self.role.value)
         object.__setattr__(self, "slot", slot)
         if self.binary_identity is None:
@@ -1974,6 +1980,16 @@ class PermissionDenialSummary:
             if (not isinstance(value, str) or not value or len(value) > maximum
                 or any(ord(char) < 32 or ord(char) == 127 for char in value)):
                 raise ArtifactValidationError("permission denial summary is invalid or unbounded")
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptPermissionDenial(PermissionDenialSummary):
+    disposition: str
+
+    def __post_init__(self) -> None:
+        PermissionDenialSummary.__post_init__(self)
+        if self.disposition not in {"tolerated", "violation"}:
+            raise ArtifactValidationError("permission denial disposition is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2497,6 +2513,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     ):
         raw.pop("native_implementer_rejection", None)
         raw.pop("native_implementer_retry_round", None)
+    if isinstance(payload, ProviderAttemptPayload) and not payload.permission_denials:
+        raw.pop("permission_denials", None)
     if isinstance(payload, InvocationFailurePayload):
         if not payload.permission_denials:
             raw.pop("permission_denials", None)
@@ -3041,6 +3059,7 @@ _PAYLOAD_READERS: dict[
             ProviderUsagePayload(**data["usage"]) if data["usage"] is not None else None,
             data["model"], data["effort"], data["slot"], data["profile_name"],
             ProviderIdentity.from_dict(data["binary_identity"]),
+            permission_denials=tuple(AttemptPermissionDenial(**item) for item in data.get("permission_denials", [])),
         ),
     RecordType.SIDE_EFFECT: lambda data: SideEffectPayload(
             data["effect_key"], data["effect_class"], data["work_unit_id"],

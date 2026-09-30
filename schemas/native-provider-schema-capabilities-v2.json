@@ -124,7 +124,7 @@
         "schema_transport": "json-schema-argument",
         "semantic_flags": [
           "-p",
-          "--output-format=json",
+          "--output-format=stream-json",
           "--model=<model>",
           "--effort=<effort>",
           "--no-session-persistence",
@@ -140,6 +140,8 @@
           "--settings=<canonical-protected-json>",
           "--json-schema=<schema>",
           "--system-prompt=<implementer-policy>",
+          "--verbose",
+          "--add-dir=<private-per-invocation>",
           "directive=<start-instruction>",
           "stdin=<bound-request>"
         ]

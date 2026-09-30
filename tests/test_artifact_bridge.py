@@ -882,3 +882,17 @@ def test_provider_attempt_finish_rejects_start_from_foreign_chain(
         )
 
     assert bridge.store.load_chain() == chain_before
+
+
+def test_attempt_denial_evidence_is_durable_and_idempotency_bound(tmp_path):
+    from artifact_models import AttemptPermissionDenial, ArtifactRecord
+    bridge = _bound_bridge(tmp_path, "run-1")
+    measurement = bridge.append(_measurement(), logical_id="measurement-1", idempotency_key="measurement:1", fingerprint_sha256=DIGEST)
+    started = bridge.start_provider_attempt(measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1", model="reviewer-model", effort="high")
+    denials = (AttemptPermissionDenial("Bash", "toolu_x", "npm test", "tolerated"),)
+    terminal = bridge.finish_provider_attempt(started, duration_seconds=1.0, failure_kind=None, usage=None, permission_denials=denials)
+    assert ArtifactRecord.from_dict(terminal.to_dict()).payload.permission_denials == denials
+    assert bridge.store.load_chain()[-1].payload.permission_denials == denials
+    assert bridge.finish_provider_attempt(started, duration_seconds=99.0, failure_kind=None, usage=None, permission_denials=denials) == terminal
+    with pytest.raises(ArtifactBridgeError, match="differs"):
+        bridge.finish_provider_attempt(started, duration_seconds=1.0, failure_kind=None, usage=None, permission_denials=())

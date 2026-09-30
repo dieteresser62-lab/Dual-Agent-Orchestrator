@@ -43,7 +43,7 @@ from artifact_models import (
     Role,
     BlobReference, ProviderContentPayload,
     ProviderInputMeasurementPayload, canonical_json,
-    ProviderAttemptPayload, ProviderUsagePayload,
+    ProviderAttemptPayload, ProviderUsagePayload, AttemptPermissionDenial,
     FinalReviewCompletedPayload,
     SideEffectPayload,
     ScopeExtensionPayload,
@@ -1015,6 +1015,7 @@ class ProductionWorkflowDriver:
         duration_seconds: float,
         failure_kind: str | None,
         usage: ProviderUsagePayload | None,
+        permission_denials: tuple[AttemptPermissionDenial, ...] = (),
     ) -> None:
         bridge = self._artifact_bridge
         if (
@@ -1032,6 +1033,7 @@ class ProductionWorkflowDriver:
             duration_seconds=duration_seconds,
             failure_kind=failure_kind,
             usage=usage,
+            permission_denials=permission_denials,
         )
         if response_path.is_file():
             result = sha256_bytes(response_path.read_bytes())

@@ -1,6 +1,39 @@
 """Validation shared by profile loading and sandbox transport normalization."""
 
 from pathlib import Path
+import stat
+
+
+# Paths relative to HOME; test both aliases and resolved locations.
+CREDENTIAL_LOCATIONS = (
+    ".ssh", ".gnupg", ".aws", ".azure", ".config", ".codex", ".claude",  # allowlist:provider -- profile configuration: credential path denylist
+    ".claude.json", ".gemini", ".docker", ".kube", ".netrc", ".git-credentials",  # allowlist:provider -- profile configuration: credential path denylist
+    ".password-store", ".local/share/keyrings", ".npmrc", ".pypirc",
+)
+
+
+def _overlaps(left: Path, right: Path) -> bool:
+    return left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def validate_private_scratch(
+    scratch: Path, repository_root: Path, protected_paths: tuple[Path, ...],
+    tool_roots: tuple[str, ...],
+) -> None:
+    """Require a private regular directory outside every authority root."""
+    if not scratch.is_absolute() or "," in str(scratch) or any(c.isspace() for c in str(scratch)):
+        raise ValueError("private scratch path is unsafe")
+    roots = (repository_root, Path.home(), *protected_paths, *(Path(p) for p in tool_roots))
+    try:
+        resolved = scratch.resolve(strict=True)
+        metadata = scratch.lstat()
+        if (resolved != scratch or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or any(_overlaps(candidate, root) for candidate in (scratch, resolved)
+                   for path in roots for root in (path.absolute(), path.resolve()))):
+            raise ValueError("private scratch overlaps an authority root or is not private")
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("private scratch cannot be resolved") from exc
 
 
 def validate_toolchain_read_roots(
@@ -31,6 +64,10 @@ def validate_toolchain_read_roots(
             or any(root.is_relative_to(path) or path.is_relative_to(root) for path in protected)
             or "," in str(root) or any(char.isspace() for char in str(root))):
             raise ValueError("toolchain_read_roots overlaps HOME, repository or protected paths")
+        credentials = tuple(personal / name for name in CREDENTIAL_LOCATIONS)
+        if any(_overlaps(candidate, location) for candidate in (lexical, root)
+               for path in credentials for location in (path, path.resolve())):
+            raise ValueError("toolchain_read_roots overlaps HOME credentials")
         if str(root) in result:
             raise ValueError("toolchain_read_roots contains duplicate resolved directories")
         result.append(str(root))

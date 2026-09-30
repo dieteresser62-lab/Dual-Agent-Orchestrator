@@ -304,7 +304,8 @@ def test_topology_plan_slice_final_review_and_resume(
                 return adapter.extract_output("", "", {})
             assert isinstance(adapter, NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: real implementer journey
             assert prepared_provider_input.command[prepared_provider_input.command.index("--settings") + 1]
-            envelope = {"is_error": False, "structured_output": {"result": json.loads(expected_implementer.canonical_json)}}
+            envelope = {"type": "result", "subtype": "success", "is_error": False,
+                        "structured_output": {"result": json.loads(expected_implementer.canonical_json)}}
             try:
                 return adapter.extract_output(json.dumps(envelope), "", {})
             finally:

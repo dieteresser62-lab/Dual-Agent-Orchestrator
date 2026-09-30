@@ -39,7 +39,7 @@ def test_denials_are_bounded_redacted_and_preserved_in_failure_data(adapter_type
                        "irrelevant_prompt": "never-store-me"},
     }, {"tool_name": "Edit", "tool_use_id": "toolu_456", "tool_input": {"file_path": "/protected/file"}}]}
     with pytest.raises(AgentPermissionError) as caught:
-        adapter.extract_output(json.dumps(envelope), "", {})
+        adapter.extract_output(json.dumps({"type": "result", "subtype": "success", **envelope}) if not adapter.reviewer else json.dumps(envelope), "", {})
     assert "[PERMISSION_DENIAL]" in caplog.text
     assert "toolu_123" in caplog.text and "npm test" in caplog.text
     assert "private-value" not in caplog.text
@@ -53,7 +53,8 @@ def test_denials_are_bounded_redacted_and_preserved_in_failure_data(adapter_type
     assert len(stored[0]["input_excerpt"]) <= 201
     assert stored[1]["input_excerpt"] == "/protected/file"
     assert "never-store-me" not in json.dumps(failure.provider_data)
-    assert stored == adapter.metadata["permission_denials"]
+    assert stored == [{key: value for key, value in item.items() if key != "disposition"}
+                      for item in adapter.metadata["permission_denials"]]
 
 
 def test_denial_summary_survives_authoritative_record_roundtrip_without_retry():
@@ -102,7 +103,7 @@ def test_diagnostic_command_does_not_reclassify_permission_failure(command):
     adapter = NativeClaudeImplementerAdapter(  # allowlist:provider -- transport: classification preservation
         AgentSettings("claude", "claude", "opus", None, "high"))  # allowlist:provider -- profile configuration: denied command
     with pytest.raises(AgentPermissionError) as caught:
-        adapter.extract_output(json.dumps({"is_error": False, "permission_denials": [
+        adapter.extract_output(json.dumps({"type": "result", "subtype": "success", "is_error": False, "permission_denials": [
             {"tool_name": "Bash", "tool_use_id": "toolu_x", "tool_input": {"command": command}}]}), "", {})
     assert classify_agent_failure(adapter.name, caught.value, invocation_id="unchanged-kind").kind.value == "permission"
 
@@ -112,7 +113,7 @@ def test_implementer_keeps_original_fail_closed_check_for_malformed_denials(deni
     adapter = NativeClaudeImplementerAdapter(  # allowlist:provider -- transport: preserve denial failure
         AgentSettings("claude", "claude", "opus", None, "high"))  # allowlist:provider -- profile configuration: malformed denial
     with pytest.raises(AgentPermissionError):
-        adapter.extract_output(json.dumps({"is_error": False, "permission_denials": denials}), "", {})
+        adapter.extract_output(json.dumps({"type": "result", "subtype": "success", "is_error": False, "permission_denials": denials}), "", {})
 
 
 @pytest.mark.parametrize("command", ['npm test --token secret-value', 'curl --password "secret-value"',
@@ -123,3 +124,97 @@ def test_denial_command_scrubs_literal_credentials_before_truncation(command):
                                          "tool_input": {"command": command}}])
     assert "secret-value" not in json.dumps(result)
     assert "[redacted]" in result[0]["input_excerpt"]
+
+
+def test_live_stream_real_fields_are_compact_redacted_and_hide_results(monkeypatch):
+    from agent_runtime import _compact_stream_text
+    monkeypatch.setenv("DAO_SECRET_TOKEN", "private-value")
+    adapter = NativeClaudeImplementerAdapter(  # allowlist:provider -- transport: stream formatting coverage
+        AgentSettings("claude", "claude", "opus", None, "high"))  # allowlist:provider -- profile configuration: stream fixture
+    state = {}
+    def render(event):
+        return _compact_stream_text(adapter, "stdout", json.dumps(event), state)
+    init = {"type": "system", "subtype": "init", "model": "claude-opus-5-5",  # allowlist:provider -- transport: actual model fixture
+            "claude_code_version": "2.1.285", "tools": ["Write", "Bash"], "permissionMode": "acceptEdits",  # allowlist:provider -- profile configuration: real event or smoke path fixture
+            "plugins": [], "cwd": "/tmp/fake-repo"}
+    assert render(init) == "claude model=claude-opus-5-5 version=2.1.285"  # allowlist:provider -- transport: compact init expectation
+    assert render(init) is None
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Bash",
+            "input": {"command": "TOKEN=private-value npm test " + "x" * 300}}]}}
+    text = render(tool)
+    assert "tool=Bash" in text and "npm test" in text and "private-value" not in text and len(text) < 250
+    live = render({"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_x"})
+    assert "[PERMISSION_DENIAL]" in live and "npm test" in live and "private-value" not in live
+    for content in ("error private-value", [{"type": "text", "text": "error private-value"}]):
+        error = render({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_x", "is_error": True, "content": content}]}})
+        assert "tool_error=" in error and "private-value" not in error
+    assert render({"type": "user", "message": {"content": [{"type": "tool_result", "content": "normal", "is_error": False}]}}) is None
+    assert "text=Working [redacted]" == render({"type": "assistant", "message": {"content": [{"type": "text", "text": "Working private-value"}]}})
+    assert render({"type": "result", "subtype": "success", "structured_output": {"secret": "private-value"}}) is None
+    assert _compact_stream_text(adapter, "stdout", 'broken', state) is None
+    assert _compact_stream_text(adapter, "stdout", '[]', state) is None
+
+
+def test_success_attempt_denials_reach_terminal_callback_and_roundtrip():
+    from dataclasses import replace
+    from agent_runtime import ProviderAttemptLifecycle, _ProviderAttemptInvocation
+    from artifact_models import ArtifactRecord, AttemptPermissionDenial, Role
+    from test_artifact_models import _attempt_for_pair, _record, CREATED_AT
+    captured = []
+    invocation = _ProviderAttemptInvocation(ProviderAttemptLifecycle(
+        start=lambda *args: "handle", terminal=lambda *args, **kwargs: captured.append((args, kwargs)), monotonic_fn=lambda: 1.0))
+    invocation.begin(None, None)
+    summary = {"tool_name": "Bash", "tool_use_id": "toolu_x", "input_excerpt": "npm test", "disposition": "tolerated"}
+    invocation.finish(None, {"permission_denials": [summary]})
+    invocation.finish(None, {"permission_denials": [summary]})
+    assert len(captured) == 1
+    denials = captured[0][1]["permission_denials"]
+    payload = replace(_attempt_for_pair("codex", Role.IMPLEMENTER), phase="succeeded",  # allowlist:provider -- certification data: generic attempt fixture
+                      ended_at=CREATED_AT, duration_seconds=1.0, permission_denials=denials)
+    record = _record(payload)
+    assert record.to_dict()["payload"]["permission_denials"] == [summary]
+    assert ArtifactRecord.from_dict(record.to_dict()).payload.permission_denials == (AttemptPermissionDenial(**summary),)
+    assert "permission_denials" not in _record(replace(payload, permission_denials=())).to_dict()["payload"]
+    from artifact_models import ArtifactValidationError
+    with pytest.raises(ArtifactValidationError):
+        replace(payload, phase="started")
+    with pytest.raises(ArtifactValidationError):
+        replace(payload, permission_denials=(AttemptPermissionDenial(**{**summary, "disposition": "violation"}),))
+
+
+@pytest.mark.parametrize("mode", ["compact", "full"])
+def test_fake_stream_logs_denial_immediately_as_warning_without_secrets(tmp_path, monkeypatch, caplog, mode):
+    import logging
+    import os
+    import sys
+    import agent_runtime
+    from agent_runtime import OrchestratorConfig
+    monkeypatch.setenv("DAO_SECRET_TOKEN", "private-value")
+    adapter = NativeClaudeImplementerAdapter(  # allowlist:provider -- transport: subprocess stream fake
+        AgentSettings("claude", "claude", "opus", None, "high"))  # allowlist:provider -- profile configuration: stream fake
+    events = [{"type": "system", "subtype": "init", "model": "claude-opus-5-5",  # allowlist:provider -- transport: fake actual model
+               "claude_code_version": "2.1.285"},  # allowlist:provider -- profile configuration: real event or smoke path fixture
+              {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Bash", "input": {"command": "TOKEN=private-value npm test"}}]}},
+              {"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_x"},
+              {"type": "result", "subtype": "success", "structured_output": {"hidden": "do-not-log"}}]
+    stream = '\n'.join(json.dumps(event) for event in events) + '\n'
+    caplog.set_level(logging.INFO)
+    # Python is the fake producer; no provider executable is started.
+    code = "import sys; sys.stdout.write(sys.argv[1]); sys.stdout.flush()"
+    result = agent_runtime._run_agent_process(adapter, [sys.executable, "-c", code, stream], None,
+        config=OrchestratorConfig(repo_root=tmp_path, agent_live_stream=True, agent_live_stream_mode=mode),
+        env=os.environ.copy(), execution_root=tmp_path, timeout_seconds=5, agent_key="implementer")
+    assert result.stdout == stream and result.returncode == 0
+    warnings = [record for record in caplog.records if "[PERMISSION_DENIAL]" in record.message]
+    assert len(warnings) == 1 and warnings[0].levelno == logging.WARNING
+    assert "npm test" in warnings[0].message
+    assert "private-value" not in caplog.text and "do-not-log" not in caplog.text
+    assert "model=claude-opus-5-5 version=2.1.285" in caplog.text  # allowlist:provider -- transport: fake init assertion
+
+
+def test_live_input_redacts_literal_json_credential_fields():
+    from provider_metrics import compact_stream_event
+    text = compact_stream_event({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Example",
+        "input": {"api_key": "unknown-secret-value", "password": "unknown-password-value", "ordinary": "visible"}}]}}, {})
+    assert "unknown-secret-value" not in text and "unknown-password-value" not in text
+    assert "visible" in text and "[redacted]" in text

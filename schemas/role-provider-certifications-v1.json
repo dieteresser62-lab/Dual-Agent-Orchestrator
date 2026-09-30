@@ -327,9 +327,9 @@
         "cli_version": "2.1.285 (Claude Code)",
         "version_policy": "forward"
       },
-      "capability_sha256": "be50c9d985a6e8af42478dbfb49de7130f14e35ee7264babcd602c149c63b75d",
+      "capability_sha256": "635b57f5f2ab0148f8d398af7036ee885a9a0ffad009bdf6ca533f030be48dda",
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
-      "rights_sha256": "d52c624a0e3972d9fe683b5b6c7d123881fa632c40f6615cfdbf96a6a1be5f78",
+      "rights_sha256": "e63dced92a33d74fa722a0162a1b6b3883b3d550d27fade798c2576589b414ce",
       "evidence": {
         "path": "docs/evidence/role-certification-candidates-v1.json",
         "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
@@ -342,7 +342,7 @@
         "schema_transport": "json-schema-argument",
         "semantic_flags": [
           "-p",
-          "--output-format=json",
+          "--output-format=stream-json",
           "--model=<model>",
           "--effort=<effort>",
           "--no-session-persistence",
@@ -358,6 +358,8 @@
           "--settings=<canonical-protected-json>",
           "--json-schema=<schema>",
           "--system-prompt=<implementer-policy>",
+          "--verbose",
+          "--add-dir=<private-per-invocation>",
           "directive=<start-instruction>",
           "stdin=<bound-request>"
         ]

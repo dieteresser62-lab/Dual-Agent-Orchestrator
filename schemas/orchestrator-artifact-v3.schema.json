@@ -3675,6 +3675,44 @@
         "binary_identity"
       ],
       "properties": {
+        "permission_denials": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tool_name",
+              "tool_use_id",
+              "input_excerpt",
+              "disposition"
+            ],
+            "properties": {
+              "tool_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65
+              },
+              "tool_use_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 101
+              },
+              "input_excerpt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 201
+              },
+              "disposition": {
+                "enum": [
+                  "tolerated",
+                  "violation"
+                ]
+              }
+            }
+          }
+        },
         "slot": {"enum": ["implementer", "reviewer", "final_reviewer"]},
         "profile_name": {"$ref": "#/$defs/non_empty"},
         "binary_identity": {"$ref": "#/$defs/provider_identity"},

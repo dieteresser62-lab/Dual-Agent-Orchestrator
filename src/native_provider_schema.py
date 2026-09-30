@@ -142,13 +142,14 @@ CODEX_REVIEW_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: 
     "default_permissions=dao-reviewer", "stdin=-",
 )
 CLAUDE_IMPLEMENTER_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: implementer CLI binding
-    "-p", "--output-format=json", "--model=<model>", "--effort=<effort>",
+    "-p", "--output-format=stream-json", "--model=<model>", "--effort=<effort>",
     "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config",
     "--restricted", "--safe-mode", "--prompt-suggestions=false",
     "--tools=Read,Edit,Write,Glob,Grep,Bash", "--permission-mode=acceptEdits",
     "--permission-prompts=none", "--disallowedTools=<protected-edit-rules>",
     "--settings=<canonical-protected-json>",
     "--json-schema=<schema>", "--system-prompt=<implementer-policy>",
+    "--verbose", "--add-dir=<private-per-invocation>",
     "directive=<start-instruction>", "stdin=<bound-request>",
 )
 CLAUDE_IMPLEMENTER_START_DIRECTIVE = (  # allowlist:provider -- profile configuration: implementer CLI binding
@@ -962,9 +963,10 @@ def normalize_transport_profile(
     bound_settings_json: str | None = None,
     bound_repository_root: Path | None = None,
     bound_toolchain_read_roots: tuple[str, ...] = (),
+    bound_scratch: Path | None = None,
 ) -> ProviderTransportProfile:
     if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
-        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots)  # allowlist:provider -- profile configuration: implementer transport
+        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
         if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
             raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
@@ -983,7 +985,7 @@ _CLAUDE_IMPLEMENTER_DENIED_ENV_VARS = (  # allowlist:provider -- profile configu
 )
 
 
-def _validate_claude_implementer_settings(settings: object, repository_root: Path | None = None, tool_roots: tuple[str, ...] = ()) -> tuple[str, ...]:  # allowlist:provider -- profile configuration: implementer settings
+def _validate_claude_implementer_settings(settings: object, repository_root: Path | None = None, tool_roots: tuple[str, ...] = (), scratch: Path | None = None) -> tuple[str, ...]:  # allowlist:provider -- profile configuration: implementer settings
     """Check every protective field instead of trusting the generator."""
     if not isinstance(settings, dict) or set(settings) != {"disableAllHooks", "permissions", "sandbox"}:
         raise NativeProviderSchemaError("Claude implementer settings keys differ")  # allowlist:provider -- profile configuration: implementer settings
@@ -1021,10 +1023,17 @@ def _validate_claude_implementer_settings(settings: object, repository_root: Pat
         raise NativeProviderSchemaError("Claude implementer sandbox settings differ")  # allowlist:provider -- profile configuration: implementer settings
     filesystem = sandbox["filesystem"]
     deny_write = filesystem.get("denyWrite") if isinstance(filesystem, dict) else None
-    if (not isinstance(filesystem, dict) or set(filesystem) not in ({"denyWrite"}, {"denyWrite", "allowRead"})
+    if (not isinstance(filesystem, dict) or set(filesystem) not in ({"denyWrite", "allowWrite"}, {"denyWrite", "allowWrite", "allowRead"})
         or not isinstance(deny_write, list) or len(deny_write) != len(paths)
         or any(not isinstance(item, str) or not Path(item).is_absolute() for item in deny_write)):
         raise NativeProviderSchemaError("Claude implementer sandbox write denials differ")  # allowlist:provider -- profile configuration: implementer settings
+    from toolchain_paths import validate_private_scratch
+    if scratch is None or repository_root is None or filesystem.get("allowWrite") != [str(scratch)]:
+        raise NativeProviderSchemaError("private scratch write binding differs")
+    try:
+        validate_private_scratch(scratch, repository_root, tuple(Path(p) for p in deny_write), tool_roots)
+    except ValueError as exc:
+        raise NativeProviderSchemaError(str(exc)) from exc
     if "allowRead" in filesystem or tool_roots:
         from toolchain_paths import validate_toolchain_read_roots
         if repository_root is None:
@@ -1040,15 +1049,15 @@ def _validate_claude_implementer_settings(settings: object, repository_root: Pat
 
 def _normalize_claude_implementer(  # allowlist:provider -- profile configuration: implementer transport
     command: Sequence[str], bound_settings_json: str | None,
-    repository_root: Path | None = None, tool_roots: tuple[str, ...] = (),
+    repository_root: Path | None = None, tool_roots: tuple[str, ...] = (), scratch: Path | None = None,
 ) -> ProviderTransportProfile:
     from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
-    if len(command) != 30 or Path(command[0]).name != "claude":  # allowlist:provider -- profile configuration: implementer CLI grammar
+    if len(command) != 33 or Path(command[0]).name != "claude":  # allowlist:provider -- profile configuration: implementer CLI grammar
         raise NativeProviderSchemaError("Claude implementer command length or binary differs")  # allowlist:provider -- profile configuration: implementer CLI grammar
     values = list(command[1:])
     fixed = {
-        0: "-p", 1: "--output-format", 2: "json", 3: "--model",
+        0: "-p", 1: "--output-format", 2: "stream-json", 3: "--model",
         5: "--effort", 7: "--no-session-persistence", 8: "--disable-slash-commands",
         9: "--strict-mcp-config", 10: "--restricted", 11: "--safe-mode",
         12: "--prompt-suggestions", 13: "false", 14: "--tools",
@@ -1056,22 +1065,24 @@ def _normalize_claude_implementer(  # allowlist:provider -- profile configuratio
         17: "acceptEdits", 18: "--permission-prompts", 19: "none",
         20: "--disallowedTools", 22: "--settings", 24: "--json-schema",
         26: "--system-prompt", 27: NATIVE_IMPLEMENTER_SYSTEM_POLICY,
+        28: "--verbose", 29: "--add-dir",
     }
     if any(values[index] != expected for index, expected in fixed.items()):
         raise NativeProviderSchemaError("Claude implementer command grammar differs")  # allowlist:provider -- profile configuration: implementer CLI grammar
     if (not values[4] or not values[6] or not values[25]
-        or bound_settings_json is None or values[23] != bound_settings_json):
+        or bound_settings_json is None or values[23] != bound_settings_json
+        or scratch is None or values[30] != str(scratch)):
         raise NativeProviderSchemaError("Claude implementer bound values differ")  # allowlist:provider -- profile configuration: implementer CLI grammar
     try:
         settings = json.loads(values[23])
         schema = json.loads(values[25])
     except (ValueError, TypeError) as exc:
         raise NativeProviderSchemaError("Claude implementer JSON arguments are invalid") from exc  # allowlist:provider -- profile configuration: implementer CLI grammar
-    deny = _validate_claude_implementer_settings(settings, repository_root, tool_roots)  # allowlist:provider -- profile configuration: implementer settings
+    deny = _validate_claude_implementer_settings(settings, repository_root, tool_roots, scratch)  # allowlist:provider -- profile configuration: implementer settings
     if values[21] != ",".join(deny):
         raise NativeProviderSchemaError("Claude implementer CLI deny rules differ from settings")  # allowlist:provider -- profile configuration: implementer CLI grammar
     if (canonical_schema_json(settings) != values[23] or not isinstance(schema, dict)
-        or values[28] != CLAUDE_IMPLEMENTER_START_DIRECTIVE):  # allowlist:provider -- profile configuration: implementer CLI grammar
+        or values[31] != CLAUDE_IMPLEMENTER_START_DIRECTIVE):  # allowlist:provider -- profile configuration: implementer CLI grammar
         raise NativeProviderSchemaError("Claude implementer JSON arguments differ")  # allowlist:provider -- profile configuration: implementer CLI grammar
     return ProviderTransportProfile(
         provider="claude", binary_name="claude", model=values[4],  # allowlist:provider -- profile configuration: implementer transport
