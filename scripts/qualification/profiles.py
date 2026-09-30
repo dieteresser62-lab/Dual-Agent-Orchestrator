@@ -70,3 +70,24 @@ REVIEW_ENVELOPES = {
     "antigravity": ReviewEnvelopeProfile("status", "SUCCESS", "error", "denied_actions", "json_schema"),
     "claude": ReviewEnvelopeProfile("is_error", False, "is_error", "permission_denials", None),  # allowlist:provider -- profile configuration: measured reference envelope
 }
+
+# Adapter profiles deliberately have no hand-maintained CLI flag list.
+BOUNDARY_REVIEWER = "codex-reviewer"  # allowlist:provider -- profile configuration: production-derived boundary
+BOUNDARY_IMPLEMENTER = "claude-implementer"  # allowlist:provider -- profile configuration: production-derived boundary
+
+
+@dataclass(frozen=True)
+class AdapterProtectionProfile:
+    name: str
+    capability: str
+    role: str
+    model: str
+    catalog: str
+
+
+ADAPTER_PROFILES = {
+    BOUNDARY_REVIEWER: AdapterProtectionProfile(
+        BOUNDARY_REVIEWER, "codex", "reviewer", "gpt-6.1-sol", "P"),  # allowlist:provider -- profile configuration: offline/live reviewer
+    BOUNDARY_IMPLEMENTER: AdapterProtectionProfile(
+        BOUNDARY_IMPLEMENTER, "claude", "implementer", "opus", "W"),  # allowlist:provider -- profile configuration: offline/live implementer
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import shutil
 import tempfile
@@ -181,6 +182,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         if self.role_binding.role is not AgentRoleName.IMPLEMENTER:
             raise TypeError("Claude implementer requires implementer role binding")  # allowlist:provider -- transport: implementer binding
         self._scratch: Path | None = None
+        self._placeholder_candidates: tuple[Path, ...] = ()
         self._repository_root: Path | None = None
         self._protected_paths: tuple[Path, ...] | None = None
 
@@ -209,6 +211,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         try:
             self.cleanup()
             self._new_runtime_dir()
+            self._record_sandbox_placeholders()
             self._scratch = Path(tempfile.mkdtemp(prefix="dao-implementer-scratch-", dir="/tmp"))
             self._scratch.chmod(0o700)
             validate_private_scratch(self._scratch, self._repository_root, self._protected_paths,
@@ -276,7 +279,35 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             self.cleanup()
             raise
 
+    def _record_sandbox_placeholders(self) -> None:
+        """Remember which Git worktree config files exist before the CLI starts.
+
+        The CLI sandbox protects ``config.worktree`` in each Git dir; when the
+        file is missing it creates an empty placeholder on the host and leaves
+        it behind. Only files absent before the call are candidates.
+        """
+        git_dirs = tuple(path for path in self._protected_paths or () if (path / "HEAD").is_file())
+        self._placeholder_candidates = tuple(
+            path / "config.worktree" for path in git_dirs
+            if not (path / "config.worktree").exists() and not (path / "config.worktree").is_symlink()
+        )
+
+    def remove_sandbox_placeholders(self) -> tuple[Path, ...]:
+        """Remove empty regular placeholders the sandbox created; keep anything else."""
+        removed = []
+        for candidate in self._placeholder_candidates:
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_size == 0:
+                candidate.unlink()
+                removed.append(candidate)
+        self._placeholder_candidates = ()
+        return tuple(removed)
+
     def cleanup(self) -> None:
+        self.remove_sandbox_placeholders()
         if self._scratch is not None:
             shutil.rmtree(self._scratch, ignore_errors=True)
             self._scratch = None

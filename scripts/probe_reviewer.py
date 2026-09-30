@@ -2485,6 +2485,11 @@ def main() -> int:
     canary.add_argument("--profile", type=Path, required=True)
     canary.add_argument("--output-dir", type=Path, required=True)
     canary.add_argument("--live", action="store_true")
+    boundary = sub.add_parser("boundary-check", help="account-free CLI boundary quicktest")
+    from scripts.qualification.profiles import ADAPTER_PROFILES
+    boundary.add_argument("--pair", choices=(*ADAPTER_PROFILES, "all"), required=True)
+    boundary.add_argument("--toolchain-root", type=Path, action="append", default=[])
+    boundary.add_argument("--out", type=Path)
     quick = sub.add_parser("quicktest")
     quick.add_argument("provider")
     quick.add_argument("--profile", type=Path, required=True)
@@ -2502,6 +2507,14 @@ def main() -> int:
     for command in (b, rp, pr, cr, f, q, canary, quick, e):
         command.add_argument("--protocol", type=Path)
     args = parser.parse_args()
+    if args.command == "boundary-check":
+        from scripts.qualification.offline_boundary import main as boundary_main
+        argv = ["--pair", args.pair]
+        for root in args.toolchain_root:
+            argv.extend(("--toolchain-root", str(root)))
+        if args.out:
+            argv.extend(("--out", str(args.out)))
+        return boundary_main(argv)
     if args.command == "validate-format":
         result = validate_format_response(args.case, strict_json(args.envelope.read_bytes()),
             exit_code=args.exit_code,

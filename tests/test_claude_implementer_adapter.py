@@ -776,3 +776,30 @@ def test_uncertain_live_denial_fails_closed(tmp_path, case):
             adapter.extract_output(stream, "", {})
     finally:
         adapter.cleanup()
+
+
+def test_sandbox_config_worktree_placeholder_is_removed_after_the_call(tmp_path: Path) -> None:
+    # Real smokes 2026-09-30: the CLI sandbox left an empty .git/config.worktree
+    # in every repository it protected.
+    root, adapter, _, _ = _prepared(tmp_path)
+    placeholder = root / ".git" / "config.worktree"
+    placeholder.touch()
+    adapter.cleanup()
+    assert not placeholder.exists()
+
+
+@pytest.mark.parametrize("kind", ["existing-before", "non-empty", "symlink"])
+def test_config_worktree_other_than_a_new_empty_placeholder_is_kept(tmp_path: Path, kind: str) -> None:
+    root = _repo(tmp_path)
+    placeholder = root / ".git" / "config.worktree"
+    if kind == "existing-before":
+        placeholder.touch()
+    adapter = _adapter(root)
+    bundle = build_native_implementer_request(_spec(), profile="claude-implementer")  # allowlist:provider -- profile configuration: implementer writer
+    adapter.prepare_native_provider_input(bundle)
+    if kind == "non-empty":
+        placeholder.write_text("[core]\n")
+    elif kind == "symlink":
+        placeholder.symlink_to(tmp_path / "elsewhere")
+    adapter.cleanup()
+    assert placeholder.exists() or placeholder.is_symlink()
