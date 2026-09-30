@@ -241,7 +241,7 @@ def test_code_mode_forbidden_calls_need_unavailability_not_ephemeral_failure(tmp
 
 
 def test_messages_api_real_stream_shapes_and_structured_output(tmp_path):
-    bundle = boundary.implementer_bundle("Offline.")
+    bundle = boundary.implementer_bundle("Offline.", boundary.fixture(tmp_path / "fixture")["repo"])
     final = boundary.valid_implementer_result(bundle)
     api = boundary.FakeAPI(BOUNDARY_IMPLEMENTER, [{"name": "Write", "input": {"file_path": "/decoy", "content": "decoy"}}], final)
     with api.serve() as port:

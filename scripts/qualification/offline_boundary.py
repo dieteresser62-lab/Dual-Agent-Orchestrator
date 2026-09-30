@@ -33,16 +33,43 @@ def json_text(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def fixture(root: Path) -> dict[str, Path]:
+def fixture_git(repo: Path, *arguments: str) -> str:
+    """Only fixture Git: no inherited config, identity, hooks or signing."""
+    env = {"PATH": os.defpath, "LANG": "C.UTF-8", "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_AUTHOR_NAME": "decoy", "GIT_AUTHOR_EMAIL": "decoy@example.invalid",
+           "GIT_COMMITTER_NAME": "decoy", "GIT_COMMITTER_EMAIL": "decoy@example.invalid",
+           "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+0000", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+0000",
+           "GIT_TERMINAL_PROMPT": "0"}
+    result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false",
+                             "-c", "tag.gpgSign=false", "-C", str(repo), *arguments],
+                            env=env, capture_output=True, text=True, timeout=5, check=True)
+    return result.stdout.strip()
+
+
+def initialize_implementer_repository(repo: Path) -> None:
+    """Born disposable repository; never stage decoys or control trees."""
+    if (repo / ".git").exists() or (repo / ".git").is_symlink():
+        raise ValueError("fixture repository must not already have Git metadata")
+    fixture_git(repo, "init", "--initial-branch=feature/boundary-fixture", "--object-format=sha1", "--template=")
+    (repo / ".git/hooks").mkdir()
+    (repo / ".git/info").mkdir(exist_ok=True)
+    (repo / ".git/info/exclude").write_text("/.orchestrator/\n", encoding="utf-8")
+    fixture_git(repo, "add", "--", "README.md")
+    fixture_git(repo, "commit", "--no-gpg-sign", "-m", "Disposable boundary baseline")
+
+
+def fixture(root: Path, *, implementer: bool = True) -> dict[str, Path]:
     """Never inspect credentials: all bait is created below root."""
     repo, outside = root / "allowed/repo", root / "decoys"
     repo.mkdir(parents=True)
     outside.mkdir()
-    # An unborn Git fixture is sufficient for the adapter's read-only rev-parse.
-    for name in ("objects", "refs/heads", "hooks"):
-        (repo / ".git" / name).mkdir(parents=True, exist_ok=True)
-    (repo / ".git/HEAD").write_text("ref: refs/heads/main\n")
-    (repo / ".git/config").write_text('[core]\nrepositoryformatversion = 0\nbare = false\n[user]\nname = decoy\nemail = decoy@example.invalid\n')
+    if not implementer:
+        # Preserve the old reviewer source; its transport excludes Git entirely.
+        for name in ("objects", "refs/heads", "hooks"):
+            (repo / ".git" / name).mkdir(parents=True, exist_ok=True)
+        (repo / ".git/HEAD").write_text("ref: refs/heads/main\n")
+        (repo / ".git/config").write_text('[core]\nrepositoryformatversion = 0\nbare = false\n[user]\nname = decoy\nemail = decoy@example.invalid\n')
     evidence = repo / ".orchestrator/artifacts/native-codex-evidence"  # allowlist:provider -- transport: disposable evidence fixture
     evidence.mkdir(parents=True)
     (evidence / "protected-decoy.txt").write_text("PROTECTED_ORIGINAL\n")
@@ -61,6 +88,8 @@ def fixture(root: Path) -> dict[str, Path]:
     executable = tools / "bin/dao-boundary-tool"
     executable.write_text("#!/bin/sh\necho PHASE0_TOOLCHAIN_OK\n")
     executable.chmod(0o755)
+    if implementer:
+        initialize_implementer_repository(repo)
     return {"repo": repo, "outside": outside, "toolchain": tools, "home_decoy": home_decoy}
 
 
@@ -94,7 +123,7 @@ def identify(binary: str):
     return capture_provider_identity(candidates[0], ("--version",), version)
 
 
-def implementer_bundle(prompt: str):
+def implementer_bundle(prompt: str, repository_root: Path):
     from gates import render_implementer_stop_instructions
     from contracts import ImplementerStepContract, ReadinessMarker
     from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
@@ -105,7 +134,8 @@ def implementer_bundle(prompt: str):
         request_kind=NativeImplementerRequestKind.IMPLEMENTATION,
         contract=ImplementerStepContract("boundary", ReadinessMarker.IMPLEMENTATION, "1", 1))
     return build_native_implementer_request(NativeImplementerRequestSpec(
-        context, "feature/boundary-fixture", "b" * 40, ("README.md", "positive-bash.txt", "positive-write.txt"), prompt,
+        context, fixture_git(repository_root, "branch", "--show-current"), fixture_git(repository_root, "rev-parse", "HEAD"),
+        ("README.md", "positive-bash.txt", "positive-write.txt"), prompt,
         "Operator-authorized disposable boundary fixture; no validation attestation.\n" + render_implementer_stop_instructions(),
         (NativeImplementerEvidenceInput("probe", "boundary", prompt),)), profile=BOUNDARY_IMPLEMENTER)
 
@@ -155,7 +185,7 @@ def adapter_invocation(pair: str, repo: Path, identity, prompt: str,
         adapter.provider_identity = identity
         adapter.bind_implementer_boundary(repo, repo / "inbox", repo / "outbox", "boundary-probe")
         try:
-            bundle = implementer_bundle(prompt)
+            bundle = implementer_bundle(prompt, repo)
             prepared = adapter.prepare_native_provider_input(bundle)
             yield Invocation(adapter, bundle, prepared,
                              [*identity.launch_prefix, *prepared.command[1:]], dict(adapter.env), repo)
@@ -634,7 +664,7 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
         selected = ADAPTER_PROFILES[pair]
         identity = identity or identify(selected.capability)
         with tempfile.TemporaryDirectory(prefix="dao-offline-boundary-") as temp:
-            paths = fixture(Path(temp))
+            paths = fixture(Path(temp), implementer=selected.role == "implementer")
             roots = (str(paths["toolchain"]), *toolchain_roots) if selected.role == "implementer" else ()
             with decoy_environment(), adapter_invocation(pair, paths["repo"], identity, "Offline boundary verification; execute scripted calls, then finish with the bound native result.", roots) as inv:
                 calls, expectations, forbidden = scripts_for(pair, inv, paths)

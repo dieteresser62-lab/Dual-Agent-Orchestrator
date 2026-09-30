@@ -358,8 +358,8 @@ def test_transported_stop_instructions_validate_with_both_adapters(tmp_path, pro
         adapter.cleanup()
 
 
-def test_product_requests_already_transport_stop_labels_and_phase0_now_does_too():
-    for bundle in (_codex_bundle(), boundary.implementer_bundle("Probe")):  # allowlist:provider -- profile configuration: provider-specific transport fixture
+def test_product_requests_already_transport_stop_labels_and_phase0_now_does_too(tmp_path):
+    for bundle in (_codex_bundle(), boundary.implementer_bundle("Probe", boundary.fixture(tmp_path / "fixture")["repo"])):  # allowlist:provider -- profile configuration: provider-specific transport fixture
         text = bundle.document["work_context"]
         for label in ("Missing prerequisite:", "Why it cannot be self-provided:", "Operator action:",
                       "Required paths:", "Why required for current Slice:"):

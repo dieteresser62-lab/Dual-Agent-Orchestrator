@@ -32,7 +32,7 @@ def boundary(tmp_path):
     ("Edit", {"file_path": "./.git/hooks/post-commit"}, "violation"),
     ("Write", {"file_path": "src/../.orchestrator/state.json"}, "violation"),
     ("NotebookEdit", {"notebook_path": "inbox/task.ipynb"}, "violation"),
-    ("Bash", {"command": "cat .git/config"}, "violation"),
+    ("Bash", {"command": "cat .git/config"}, "tolerated"),
     ("Bash", {"command": "echo text >./.orchestrator/state.json"}, "violation"),
     ("Bash", {"command": "rm -f outbox/result.md"}, "violation"),
     ("Bash", {"command": "git branch -d feature"}, "violation"),
@@ -155,3 +155,48 @@ def test_read_only_branch_forms(boundary, arguments, expected):
     root, paths, scratch = boundary
     command = f'echo "TMPDIR=$TMPDIR"; git -C {root} branch {arguments}'
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths, scratch) == expected
+
+
+@pytest.mark.parametrize("command,expected", [
+    ('echo "TMPDIR=$TMPDIR"; cd {repo} && git status --short && git branch --show-current && ls -la . .git/hooks 2>&1 | head -50; ls -la .orchestrator inbox outbox 2>&1', "tolerated"),
+    ('test -e "$HOME/.codex" && echo VISIBLE; echo "DAO_P0_ENV=${DAO_P0_ENV-<unset>}"; if [ -n "${ANTHROPIC_API_KEY+x}" ]; then echo PHASE0_API_KEY_VISIBLE; fi; echo "TMPDIR=$TMPDIR"; git -C {repo} branch --show-current', "tolerated"),  # allowlist:provider -- transport: reduced real environment-name probe
+    ("ls .git > .git/hooks/x", "violation"), ("cat x | tee .orchestrator/y", "violation"),
+    ("find .git -delete", "violation"), ('echo "$HOME"; git -C {repo} commit', "violation"),
+    ("cd .git && touch x", "violation"), ("echo x >> inbox/a", "violation"),
+    ('echo "$HOME"; git --no-pager -C {repo} --no-optional-locks status --short', "tolerated"),
+    ('node "$UNKNOWN"; git -C {repo} branch --show-current', "tolerated"),
+    ('node "$UNKNOWN"; git -C {repo} --no-pager push', "violation"),
+    ('echo "$(git push)"', "violation"), ('echo "$(git status --short)"', "tolerated"),
+    ('cat "$HOME/.git/config"', "violation"), ('ls ~/.orchestrator', "violation"),
+    ('echo ">" .git', "tolerated"), ('ls .git >/dev/null 2>&1', "tolerated"),
+    ('ls .git &>/dev/null', "tolerated"), ('cat .git/config\nls .orchestrator', "tolerated"),
+    ('ls .git\ntouch inbox/a', "violation"), ('tree .git -o .git/hooks/x', "violation"),
+    ('file -C .git/config', "violation"), ('git diff --output=.git/hooks/x', "violation"),
+    ('rg --pre="touch .git/hooks/x" .git', "violation"), ('ls .git; eval "pwd"', "violation"),
+    ('cat .git/config | sh -c "cat"', "violation"), ('ls .git; source ./setup', "violation"),
+    (r'find .git \( -name "*.py" \)', "tolerated"),
+    ("git --git-dir={repo}/.git branch -vv --format='%(refname)'", "tolerated"),
+    (r'echo \> .git', "tolerated"), ('ls .git # comment\ngit push', "violation"),
+    ('ls .git # > .git/hooks/x\npwd', "tolerated"),
+    ('tree .git -o.git/hooks/x', "violation"), ('tree -ao .git/hooks/x', "violation"),
+    ('echo ${VAR-<unset>}; ls .git', "tolerated"),
+])
+def test_s3_read_only_segments_and_boundary_counterexamples(boundary, command, expected):
+    root, paths, scratch = boundary
+    command = command.replace("{repo}", str(root))
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths, scratch) == expected
+
+
+@pytest.mark.parametrize("name", ["ls", "cat", "head", "tail", "stat", "wc", "file", "du", "tree", "echo", "printf",
+                                  "test -e", "[ -e", "pwd", "cd", "true", "realpath", "readlink", "grep pattern", "rg pattern",
+                                  "find -L"])
+def test_read_forms_may_name_protected_paths(boundary, name):
+    command = name + " .git" + (" ]" if name.startswith("[") else "")
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == "tolerated"
+
+
+@pytest.mark.parametrize("action", ["-exec touch x ;", "-execdir touch x ;", "-delete", "-ok touch x ;", "-okdir touch x ;",
+                                    "-fprint .git/hooks/x", "-fprint0 .git/hooks/x", "-fprintf .git/hooks/x %p", "-fls .git/hooks/x"])
+def test_find_write_and_execution_actions_are_not_read_forms(boundary, action):
+    command = "find .git " + action
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == "violation"

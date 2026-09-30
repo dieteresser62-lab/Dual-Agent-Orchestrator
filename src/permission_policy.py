@@ -33,6 +33,180 @@ def _read_only_branch(arguments: list[str]) -> bool:
     return True
 
 
+def _read_only_git(arguments: list[str]) -> bool:
+    while arguments:
+        if arguments[0] in {"--no-pager", "--paginate", "--literal-pathspecs", "--no-optional-locks", "--no-replace-objects"}:
+            arguments = arguments[1:]
+        elif arguments[0] in {"-C", "--git-dir", "--work-tree"} and len(arguments) >= 2:
+            arguments = arguments[2:]
+        elif arguments[0].startswith(("--git-dir=", "--work-tree=")):
+            arguments = arguments[1:]
+        else:
+            break
+    if not arguments or any(value == "--output" or value.startswith("--output=") for value in arguments):
+        return False
+    return (_read_only_branch(arguments[1:]) if arguments[0] == "branch" else arguments[0] in GIT_READS)
+
+
+def _shell_layout(command: str) -> str:
+    """Keep newlines as separators unless quoted; never evaluate shell text."""
+    result, quote, escaped = [], None, False
+    for char in command:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+        elif char in {"'", '"'}:
+            quote = None if quote == char else char if quote is None else quote
+        result.append(";" if char == "\n" and quote is None else char)
+    return "".join(result)
+
+
+def _read_tokens(command: str) -> list[tuple[str, bool]]:
+    """Distinguish shell operators from quoted/escaped literal arguments."""
+    tokens, word, quote, index = [], [], None, 0
+    def flush():
+        if word:
+            values = shlex.split("".join(word))
+            if len(values) != 1:
+                raise ValueError("ambiguous shell word")
+            tokens.append((values[0], False))
+            word.clear()
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'":
+            if index + 1 >= len(command):
+                raise ValueError("incomplete shell escape")
+            if command[index + 1] != "\n":
+                word.extend((char, command[index + 1]))
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = None if quote == char else char if quote is None else quote
+            word.append(char)
+        elif quote is not None:
+            word.append(char)
+        elif command[index:index + 2] == "${":
+            end, depth = index + 2, 1
+            while end < len(command) and depth:
+                depth += (command[end] == "{") - (command[end] == "}")
+                end += 1
+            if depth:
+                raise ValueError("incomplete parameter expansion")
+            word.append(command[index:end])
+            index = end
+            continue
+        elif char == "#" and not word:
+            index = command.find("\n", index)
+            if index == -1:
+                break
+            continue
+        elif char.isspace():
+            flush()
+            if char == "\n":
+                tokens.append((";", True))
+        elif char in ";&|()<>":
+            flush()
+            end = index + 1
+            while end < len(command) and command[end] in ";&|()<>":
+                end += 1
+            tokens.append((command[index:end], True))
+            index = end
+            continue
+        else:
+            word.append(char)
+        index += 1
+    flush()
+    return tokens
+
+
+def _read_only_shell(command: str) -> bool:
+    # Substitutions execute commands; parameter expansions alone do not.
+    active = re.sub(r"'[^']*'", "''", command)
+    if re.search(r"\$\(|`|[<>]\(", active) or "<<" in active:
+        return False
+    segments, segment = [], []
+    for token, operator in _read_tokens(command):
+        if operator and token in {";", "&&", "||", "|"}:
+            segments.append(segment)
+            segment = []
+        else:
+            segment.append((token, operator))
+    segments.append(segment)
+    commands = 0
+    for segment in segments:
+        words, index = [], 0
+        while index < len(segment):
+            raw, operator = segment[index]
+            fd = None
+            if raw.isdigit() and index + 1 < len(segment) and segment[index + 1] in {(value, True) for value in (">", ">>", "<", ">&", "<&")}:
+                fd, index = raw, index + 1
+                raw, operator = segment[index]
+            if operator and raw in {">", ">>", "<", ">&", "<&", "&>", "&>>"}:
+                if index + 1 >= len(segment):
+                    return False
+                target, target_operator = segment[index + 1]
+                if target_operator:
+                    return False
+                if not (raw in {">", ">>", "<", "&>", "&>>"} and target == "/dev/null" or raw == ">&" and fd == "2" and target == "1"):
+                    return False
+                index += 2
+                continue
+            if operator:
+                return False
+            word = raw
+            if ("$" in word or word.startswith("~")) and re.search(r"(?:^|/)(?:\.git|\.orchestrator|inbox|outbox)(?:/|$)", word):
+                return False
+            words.append(word)
+            index += 1
+        while words and words[0] in {"if", "then", "elif", "else", "!"}:
+            words = words[1:]
+        if not words or words == ["fi"]:
+            continue
+        commands += 1
+        name = Path(words[0]).name
+        if name == "git":
+            if not _read_only_git(words[1:]):
+                return False
+        elif name == "find":
+            if any(value in {"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fls"} or value.startswith("-fprint") for value in words[1:]):
+                return False
+        elif name in {"grep", "rg"}:
+            if any(value in {"--output", "--pre"} or value.startswith(("--output=", "--pre=")) for value in words[1:]):
+                return False
+        elif name == "tree":
+            if any(value.startswith("--output") or value.startswith("-") and not value.startswith("--") and "o" in value[1:] for value in words[1:]):
+                return False
+        elif name == "file":
+            if "--compile" in words[1:] or any(value.startswith("-") and not value.startswith("--") and "C" in value[1:] for value in words[1:]):
+                return False
+        elif name not in {"ls", "cat", "head", "tail", "stat", "wc", "file", "du", "tree", "echo", "printf",
+                          "test", "[", "pwd", "cd", "true", "realpath", "readlink"}:
+            return False
+    return bool(commands)
+
+
+def _opaque_git_reads(command: str) -> bool:
+    lexer = shlex.shlex(_shell_layout(command), posix=True, punctuation_chars=";&|()<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    words = list(lexer)
+    for index, word in enumerate(words):
+        if Path(word).name != "git":
+            continue
+        tail = words[index + 1:]
+        tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&", ")"}), len(tail))]
+        if not _read_only_git(tail):
+            return False
+    # Quoted command substitutions remain single lexer tokens.
+    for inner in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", command):
+        if not _opaque_git_reads(inner[0] or inner[1]):
+            return False
+    return True
+
+
 def _protected(value: str, root: Path, paths: tuple[Path, ...], *, ancestors: bool = False, resolve_symlinks: bool = True) -> bool:
     candidate = Path(value)
     if not candidate.is_absolute():
@@ -107,7 +281,7 @@ def classify_implementer_denial(
 
     Classification uses the complete unredacted input. Unknown tools and
     malformed inputs stay fail-closed; opaque shell text is a violation only
-    when it names a protected path or shows git or indirect execution.
+    when it names a protected path, non-reading git or indirect execution.
     """
     if not isinstance(denial, dict) or repository_root is None or not protected_paths:
         return "violation"
@@ -128,6 +302,11 @@ def classify_implementer_denial(
         command = data.get("command")
         if not isinstance(command, str) or not command.strip() or "\x00" in command:
             return "violation"
+        try:
+            if _read_only_shell(command):
+                return "tolerated"
+        except (ValueError, IndexError):
+            pass  # Continue through the conservative opaque/normal fallback.
         # Names at word starts, including redirection and quoted strings.
         if re.search(r"(?<![\w.-])(?:\./)?(?:\.git|\.orchestrator|inbox|outbox)(?:[/\s\"';]|$)", command):
             return "violation"
@@ -140,9 +319,11 @@ def classify_implementer_denial(
             # Opaque shell text (unresolved expansion, escapes, heredocs) names
             # no protected path here, and the sandbox still blocks every write
             # to one. Stop only when git or indirect execution is visible.
-            if re.search(r"(?<![\w.-])(?:git|eval|source)(?![\w-])", command) or re.search(
+            if re.search(r"(?<![\w.-])(?:eval|source)(?![\w-])", command) or re.search(
                 r"(?<![\w.-])(?:ba|z|fi|da)?sh\s+-\w*c", command,
             ):
+                return "violation"
+            if re.search(r"(?<![\w.-])git(?![\w-])", command) and not _opaque_git_reads(command):
                 return "violation"
             return "tolerated"
         if any(Path(word).name in {"eval", "sh", "bash", "zsh", "fish", "source"} for word in words):
@@ -163,14 +344,7 @@ def classify_implementer_denial(
                 continue
             tail = words[index + 1:]
             tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&"}), len(tail))]
-            while tail and tail[0] in {"--no-pager", "--paginate", "--literal-pathspecs"}:
-                tail = tail[1:]
-            if tail and tail[0] == "-C" and len(tail) >= 2:
-                tail = tail[2:]
-            operation = tail[0] if tail else None
-            if operation in GIT_WRITES or operation not in GIT_READS | {"branch"}:
-                return "violation"
-            if operation == "branch" and not _read_only_branch(tail[1:]):
+            if not _read_only_git(tail):
                 return "violation"
         return "tolerated"
     except (ValueError, OSError, RuntimeError, TypeError):
