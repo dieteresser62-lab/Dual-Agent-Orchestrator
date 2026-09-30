@@ -2442,7 +2442,7 @@ class WorkflowEngine:
         else:
             logger.info(
                 "Remediation paths are already authorized for Slice %02d; "
-                "re-prompting Codex once instead of requesting user approval: %s",
+                "re-prompting the implementer once instead of requesting user approval: %s",
                 expanded.current_slice_id,
                 remediation,
             )
@@ -2551,7 +2551,7 @@ class WorkflowEngine:
                 repair_key
             ):
                 logger.warning(
-                    "Plan contract is not handoff-ready; returning it to Codex once "
+                    "Plan contract is not handoff-ready; returning it to the implementer once "
                     "before reviewer invocation: %s",
                     detail,
                 )
@@ -3197,7 +3197,7 @@ class WorkflowEngine:
                     state = state.await_user_gate(
                         reason=GateReason.PLAN_APPROVAL,
                         detail=(
-                            "PLAN-APPROVAL | Claude approved the bound plan; explicit "
+                            "PLAN-APPROVAL | The reviewer approved the bound plan; explicit "
                             "user approval is required before execution"
                         ),
                         fingerprint=fingerprint,

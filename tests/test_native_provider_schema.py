@@ -253,10 +253,10 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     add_agent_arguments(parser)
     settings = resolve_agent_settings(parser.parse_args([]), {})
     setup_defaults = inspect.signature(_fresh_state).parameters
-    expected = {"codex": ("gpt-6.1-sol", "high"), "claude": ("opus", "high")}
+    expected = {"codex": ("sol", "high"), "claude": ("opus", "high")}
     for role, provider in (("implementer", "codex"), ("reviewer", "claude")):
         role_field = AgentRole(role).name.lower() + "_profile"
-        assert expected[provider][0] in MODEL_FAMILIES[provider].values()
+        assert expected[provider][0] in MODEL_FAMILIES[provider]
         assert (settings[role].model, settings[role].effort) == expected[provider]
         binding_field = next(field for field in dataclasses.fields(ProtocolBinding) if field.name == role_field)
         default = binding_field.default_factory()
@@ -265,7 +265,7 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
 
 
 def test_model_and_effort_are_recorded_but_do_not_bind_the_transport() -> None:
-    for model in MODEL_FAMILIES["codex"].values():
+    for model in MODEL_FAMILIES["codex"]:
         for effort in ("low", "xhigh"):
             profile = normalize_transport_profile(
                 "codex", _codex_command(model=model, effort=effort)
@@ -527,7 +527,7 @@ def test_capability_and_certification_tables_keep_frozen_bytes() -> None:
     root = Path(__file__).resolve().parents[1]
     expected = {
         "schemas/native-provider-schema-capabilities-v2.json": "fc2d513ceb1e4491709c7e39587a45695d9378af0ef4886c9c5b79f92678eaa9",
-        "schemas/role-provider-certifications-v1.json": "233065d3c8651035a5c7066f3b254ae6f49f7c64be8d0f01db5389aee7321392",
+        "schemas/role-provider-certifications-v1.json": "35be64a54f8cdbdac62121fab5aa5da278606ab136c1c7d50374ec963d8d4ec6",
     }
     for path, digest in expected.items():
         assert hashlib.sha256((root / path).read_bytes()).hexdigest() == digest

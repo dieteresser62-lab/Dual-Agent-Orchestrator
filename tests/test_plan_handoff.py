@@ -185,6 +185,7 @@ def test_render_implementation_task_binds_only_the_approved_plan() -> None:
 
     assert "APPROVED_PLAN_COMMIT: " + "a" * 40 in rendered
     assert "SLICE_PLAN: 1 | implement | src/core.py" in rendered
+    assert "bereits vom Reviewer geprüft" in rendered
 
 
 def test_implementation_task_sets_no_duty_on_the_slice_document() -> None:

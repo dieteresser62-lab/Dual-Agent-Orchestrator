@@ -12,7 +12,9 @@ from agent_adapters import (
     AgentOutputError, AgentPermissionError, CapabilitySpec,
     PROVIDER_FAILURE_METRIC_KEYS, _BaseAdapter,
 )
+from provider_metrics import failure_metrics, log_permission_denials
 from agent_config import AgentSettings
+from toolchain_paths import validate_toolchain_read_roots
 from agent_roles import AgentRoleName
 from native_implementer_contract import NativeImplementerContractError, canonical_native_implementer_json
 from native_implementer_request import NativeImplementerRequestBundle
@@ -108,9 +110,12 @@ def outermost_protected_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
     )
 
 
-def implementer_settings(paths: tuple[Path, ...], root: Path) -> dict[str, object]:
+def implementer_settings(paths: tuple[Path, ...], root: Path, tool_roots: tuple[str, ...] = ()) -> dict[str, object]:
     if not paths or any(not path.is_absolute() for path in paths):
         raise AgentOutputError("implementer protection paths are incomplete")
+    resolved_roots = validate_toolchain_read_roots(tool_roots, root, paths)
+    if resolved_roots != tool_roots:
+        raise AgentOutputError("toolchain read roots changed after profile binding")
     paths = outermost_protected_paths(paths)
     repository = root.resolve(strict=True)
     deny = []
@@ -129,7 +134,8 @@ def implementer_settings(paths: tuple[Path, ...], root: Path) -> dict[str, objec
             "allowUnsandboxedCommands": False,
             "autoAllowBashIfSandboxed": True,
             "excludedCommands": [],
-            "filesystem": {"denyWrite": [str(path) for path in paths]},
+            "filesystem": {"denyWrite": [str(path) for path in paths],
+                           **({"allowRead": list(tool_roots)} if tool_roots else {})},
             "network": {"allowedDomains": [], "strictAllowlist": True},
             # Documented list form. The CLI silently ignores the whole
             # --settings document when one entry has another shape.
@@ -196,10 +202,11 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                 "HOME": str(Path.home().resolve()),
                 "USER": os.environ.get("USER", ""),
                 "LOGNAME": os.environ.get("LOGNAME", ""),
-                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PATH": ":".join([*(str(Path(root) / "bin") for root in self.settings.toolchain_read_roots
+                                   if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"]),
                 "LANG": "C.UTF-8", "TERM": "dumb",
             }
-            settings_json = _canonical(implementer_settings(self._protected_paths, self._repository_root))
+            settings_json = _canonical(implementer_settings(self._protected_paths, self._repository_root, self.settings.toolchain_read_roots))
             for asset in bundle.evidence_assets:
                 target = self._repository_root.joinpath(*Path(asset.path).parts)
                 if not target.is_relative_to(self._repository_root / ".orchestrator" / "artifacts" / "native-codex-evidence"):  # allowlist:provider -- transport: established evidence namespace
@@ -232,7 +239,8 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                 "--system-prompt", policy, directive,
             ]
             profile = normalize_transport_profile(
-                "claude-implementer", command, bound_settings_json=settings_json,  # allowlist:provider -- transport: implementer normalization
+                "claude-implementer", command, bound_settings_json=settings_json, bound_repository_root=self._repository_root,  # allowlist:provider -- transport: implementer normalization
+                bound_toolchain_read_roots=self.settings.toolchain_read_roots,
             )
             assert_provider_capabilities("claude-implementer", (), profile=profile)  # allowlist:provider -- transport: implementer capability
             return PreparedProviderInput(
@@ -258,11 +266,16 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             raise AgentOutputError("Claude implementer returned invalid JSON") from exc  # allowlist:provider -- transport: implementer output
         if not isinstance(envelope, dict):
             raise AgentOutputError("Claude implementer envelope is invalid")  # allowlist:provider -- transport: implementer output
-        self.metadata = {key: envelope[key] for key in PROVIDER_FAILURE_METRIC_KEYS if key in envelope}
+        self.metadata = failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS)
+        safe_envelope = {**envelope, **self.metadata}
+        log_permission_denials(self.metadata)
         if envelope.get("is_error") is not False:
-            raise AgentOutputError("Claude implementer reported an error", provider_data=envelope)  # allowlist:provider -- transport: implementer output
+            raise AgentOutputError("Claude implementer reported an error", provider_data=safe_envelope)  # allowlist:provider -- transport: implementer output
         if envelope.get("permission_denials"):
-            raise AgentPermissionError("Claude implementer attempted a denied action")  # allowlist:provider -- transport: implementer output
+            raise AgentPermissionError("Claude implementer attempted a denied action: "  # allowlist:provider -- transport: implementer output
+                                       + json.dumps(self.metadata["permission_denials"], ensure_ascii=False),
+                                       provider_data=self.metadata,
+                                       technical_text="Claude implementer attempted a denied action")  # allowlist:provider -- transport: preserve failure classification
         structured = envelope.get("structured_output")
         if not isinstance(structured, dict) or set(structured) != {"result"} or not isinstance(structured["result"], dict):
             raise AgentOutputError("Claude implementer result envelope is invalid")  # allowlist:provider -- transport: implementer output

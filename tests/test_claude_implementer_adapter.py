@@ -481,3 +481,81 @@ def test_normalizer_rejects_nested_protected_paths(tmp_path: Path) -> None:
             normalize_transport_profile("claude-implementer", command, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
+
+
+def test_toolchain_settings_path_and_semantic_binding(tmp_path):
+    root = _repo(tmp_path)
+    tools = tmp_path / "node-v22"
+    (tools / "bin").mkdir(parents=True)
+    no_bin = tmp_path / "another-tool"
+    no_bin.mkdir()
+    adapter = NativeClaudeImplementerAdapter(  # allowlist:provider -- transport: toolchain coverage
+        AgentSettings("claude", "claude", "opus", 60, "high", toolchain_read_roots=(str(tools), str(no_bin)))  # allowlist:provider -- profile configuration: toolchain coverage
+    )
+    adapter.bind_implementer_boundary(root, root / "inbox", root / "outbox", "run-1")
+    bundle = build_native_implementer_request(_spec(), profile="claude-implementer")  # allowlist:provider -- profile configuration: toolchain coverage
+    prepared = adapter.prepare_native_provider_input(bundle)
+    try:
+        settings_json = prepared.command[prepared.command.index("--settings") + 1]
+        settings = json.loads(settings_json)
+        assert settings["sandbox"]["filesystem"]["allowRead"] == [str(tools), str(no_bin)]
+        assert "allowWrite" not in settings["sandbox"]["filesystem"]
+        assert adapter.env["PATH"] == str(tools / "bin") + ":/usr/local/bin:/usr/bin:/bin"
+        assert normalize_transport_profile("claude-implementer", prepared.command,  # allowlist:provider -- profile configuration: toolchain coverage
+            bound_settings_json=settings_json, bound_repository_root=root,
+            bound_toolchain_read_roots=(str(tools), str(no_bin)))
+    finally:
+        adapter.cleanup()
+
+
+@pytest.mark.parametrize("kind", ["home", "repo", "ancestor", "protected", "missing", "write", "unbound"])
+def test_semantic_normalization_rejects_manipulated_allow_read(tmp_path, kind):
+    root, adapter, _, prepared = _prepared(tmp_path)
+    safe = tmp_path / "safe-tools"
+    safe.mkdir()
+    bound = prepared.command[prepared.command.index("--settings") + 1]
+    changed = json.loads(bound)
+    replacement = {"home": Path.home(), "repo": root, "ancestor": root.parent,
+                   "protected": root / ".git", "missing": tmp_path / "missing",
+                   "write": safe, "unbound": safe}[kind]
+    changed["sandbox"]["filesystem"]["allowRead"] = [str(replacement)]
+    if kind == "write":
+        changed["sandbox"]["filesystem"]["allowWrite"] = [str(safe)]
+    new_bound = json.dumps(changed, sort_keys=True, separators=(",", ":"))
+    command = list(prepared.command)
+    command[command.index("--settings") + 1] = new_bound
+    try:
+        with pytest.raises(NativeProviderSchemaError):
+            normalize_transport_profile("claude-implementer", command,  # allowlist:provider -- profile configuration: manipulated read root
+                bound_settings_json=new_bound, bound_repository_root=root,
+                bound_toolchain_read_roots=() if kind == "unbound" else (str(replacement),))
+    finally:
+        adapter.cleanup()
+
+
+def test_tool_roots_cannot_overlap_external_queue_or_worktree_common_dir(tmp_path):
+    from toolchain_paths import validate_toolchain_read_roots
+    root = _repo(tmp_path)
+    external = tmp_path / "external-queue"
+    external.mkdir()
+    protected = protected_implementer_paths(root, external, root / "outbox", "run-1")
+    with pytest.raises(ValueError, match="protected paths"):
+        validate_toolchain_read_roots([str(external)], root, protected)
+    outside = tmp_path / "shared-git"
+    outside.mkdir()
+    with pytest.raises(ValueError, match="protected paths"):
+        validate_toolchain_read_roots([str(outside)], root, (*protected, outside / "worktrees"))
+
+
+
+def test_toolchain_root_drift_fails_before_preparing_command(tmp_path):
+    root = _repo(tmp_path)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    tools.rmdir()
+    tools.symlink_to(replacement, target_is_directory=True)
+    with pytest.raises(AgentOutputError, match="changed after profile binding"):
+        implementer_settings(protected_implementer_paths(root, root / "inbox", root / "outbox", "run-1"),
+                             root, (str(tools),))

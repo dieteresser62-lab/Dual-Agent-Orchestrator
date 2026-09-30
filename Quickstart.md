@@ -102,7 +102,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 
 Plan-, Teständerungs-, Slice-Commit- und Umfangs-Gates sind standardmäßig aus; eine angemeldete Umfangserweiterung genehmigt der Orchestrator selbst. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
-Der Implementer nutzt standardmäßig Codex mit Sol (`gpt-6.1-sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus; der Standard-Effort ist `high`. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich dies beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
+Der Implementer nutzt standardmäßig Codex mit Sol (`sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus; der Standard-Effort ist `high`. Codex löst die Familie beim Laufstart über den lokalen Katalog `codex debug models` auf und bindet das Ergebnis; Resume behält das Modell und prüft dessen Verfügbarkeit. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich dies beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
 
 Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
 

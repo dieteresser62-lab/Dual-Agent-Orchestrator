@@ -1025,7 +1025,7 @@ def parse_args(
         try:
             load_role_certifications().require_occupancy({
                 slot: args.slot_settings[slot.value].name for slot in AgentSlot
-            }, models={slot: args.slot_settings[slot.value].model for slot in AgentSlot})
+            }, models={slot: args.slot_settings[slot.value].model for slot in AgentSlot}, defer_model_binding=True)
         except CertificationError as exc:
             raise ConfigError(str(exc)) from exc
     args.agents_file_explicit = any(

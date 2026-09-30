@@ -69,6 +69,8 @@ def _fake_runner(versions: dict[str, str]):
         if args[-1] == "--version":
             target = args[-2] if len(args) > 2 else args[0]
             return 0, versions[str(Path(target).resolve())], ""
+        if args[-2:] == ["debug", "models"]:
+            return 0, '{"models":[{"slug":"gpt-6-sol"}]}', ""
         raise AssertionError(args)
     return run
 
@@ -150,7 +152,7 @@ def test_resume_rechecks_recorded_identity_without_provider_attempt(
         default = scripted_profile_binding(slot)
         slots[slot] = AgentSettings(default.provider, str(link), default.model, None, default.effort, default.max_budget_usd)
         profiles[slot] = replace(
-            default, binary=str(link), binary_identity=bound,
+            default, model="gpt-6-sol" if default.provider == "codex" else default.model, binary=str(link), binary_identity=bound,  # allowlist:provider -- profile configuration: persisted concrete model
             binary_identity_sha256=bound.digest,
         )
     state = init_workflow_state(
@@ -164,7 +166,7 @@ def test_resume_rechecks_recorded_identity_without_provider_attempt(
         ),
     )
 
-    def fake_registry(_slots):
+    def fake_registry(_slots, **kwargs):
         registry = {}
         for slot in _slots:
             adapter = FakeAdapter()
@@ -187,7 +189,7 @@ def test_resume_rechecks_recorded_identity_without_provider_attempt(
     elif mutation == "windows":
         monkeypatch.setattr(provider_identity, "_windows_mount_points", lambda: (tmp_path,))
 
-    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=())
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(("implementer", "model"),))
     if mutation == "unchanged":
         workflow_run_setup._apply_resumed_agent_profiles(args, state)
         assert args.slot_identities["final_reviewer"] == bound
@@ -196,7 +198,7 @@ def test_resume_rechecks_recorded_identity_without_provider_attempt(
         with pytest.raises(StateSchemaError, match=r"slot=implementer.*path=.*(drift|preflight failed)"):
             workflow_run_setup._apply_resumed_agent_profiles(args, state)
     assert calls if mutation != "windows" else not calls
-    assert all(command[-1] == "--version" or command[-2:] == ["exec", "--help"] for command in calls)
+    assert all(command[-1] == "--version" or command[-2:] in (["exec", "--help"], ["debug", "models"]) for command in calls)
 
 
 def test_two_installations_bind_first_real_script_and_report_both(

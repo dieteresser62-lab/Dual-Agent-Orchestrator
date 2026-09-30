@@ -668,7 +668,7 @@ def normalize_provider_usage(metadata: Mapping[str, object] | None) -> ProviderU
     normalized = ProviderUsagePayload(
         input_tokens=integer("input_tokens", "inputTokens", "promptTokenCount"),
         tool_input_tokens=integer("tool_input_tokens", "toolInputTokens", "toolUseInputTokens"),
-        cache_read_input_tokens=integer("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens"),
+        cache_read_input_tokens=integer("cache_read_input_tokens", "cached_input_tokens", "cacheReadInputTokens", "cache_read_tokens"),
         cache_creation_input_tokens=integer(
             "cache_creation_input_tokens", "cache_write_input_tokens",
             "cacheCreationInputTokens", "cacheWriteInputTokens",
@@ -912,6 +912,8 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
             text=True,
             timeout=timeout,
             check=False,
+            env={key: value for key, value in os.environ.items()
+                 if key in {"HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "TERM", "SYSTEMROOT"}},
         )
         return result.returncode, (result.stdout or ""), (result.stderr or "")
     except Exception as exc:
@@ -2609,6 +2611,9 @@ def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
     sanitized: dict[str, object] = {}
     for key, child in value.items():
         if key in PROVIDER_FAILURE_METRIC_KEYS:
+            if key == "permission_denials":
+                from provider_metrics import permission_denial_summaries
+                child = permission_denial_summaries(child)
             sanitized[str(key)] = child
             continue
         if key not in _PROVIDER_DIAGNOSTIC_KEYS:

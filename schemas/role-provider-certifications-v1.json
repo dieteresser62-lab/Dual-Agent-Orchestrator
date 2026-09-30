@@ -329,7 +329,7 @@
       },
       "capability_sha256": "be50c9d985a6e8af42478dbfb49de7130f14e35ee7264babcd602c149c63b75d",
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
-      "rights_sha256": "574f7feb3996416c14445f46528774f72b60de3592ab65ce3e7510b5a9dcb121",
+      "rights_sha256": "d52c624a0e3972d9fe683b5b6c7d123881fa632c40f6615cfdbf96a6a1be5f78",
       "evidence": {
         "path": "docs/evidence/role-certification-candidates-v1.json",
         "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"

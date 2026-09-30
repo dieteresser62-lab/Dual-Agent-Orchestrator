@@ -853,10 +853,14 @@ dieses Repositorys.
 
 | | Codex (Standard-Implementer) | Claude (Standard-Reviewer und Final-Reviewer) |
 |---|---|---|
-| Modell | `sol` (Standard, `gpt-6.1-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
+| Modell | `sol` (Standard), `terra`, `luna`, `astra` (Auflösung beim Laufstart) | `opus` (Standard), `sonnet`, `fable` |
 | Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |
 | Option | `--implementer-model`, `--implementer-effort` | `--reviewer-model`, `--reviewer-effort` |
 | Umgebung | `RUN_TASK_IMPLEMENTER_MODEL`, `RUN_TASK_IMPLEMENTER_EFFORT` | `RUN_TASK_REVIEWER_MODEL`, `RUN_TASK_REVIEWER_EFFORT` |
+
+Der Orchestrator liest für Codex beim Laufstart den lokalen Katalog mit `codex debug models` über das identitätsgebundene Binary in bereinigter Umgebung. Die Familie wird aus dem Slug abgeleitet; es gewinnt der kleinste `priority`-Wert unter `supported_in_api: true` und `visibility: "list"`. Leere oder mehrdeutige Auswahl hält den Start an. Volle Modell-IDs aus dem Katalog sind ebenfalls zulässig. Laufprofil und Log halten den aufgelösten Slug fest; Resume wählt nicht neu, sondern prüft nur, ob der gebundene Slug noch existiert.
+
+Claude-Implementer können zusätzliche schreibgeschützte Werkzeugverzeichnisse über `provider_options.claude.toolchain_read_roots = ["/absoluter/werkzeugpfad"]` nutzen, etwa eine konkrete Node-Installation unter `~/.nvm/versions/node/`. Höchstens acht existierende Verzeichnisse sind erlaubt; Symlinks werden aufgelöst und gebunden. HOME selbst, seine Vorfahren, Repository und Schutzpfade sowie Komma oder Leerraum im Pfad sind ausgeschlossen. `<wurzel>/bin` wird, wenn vorhanden, dem festen PATH vorangestellt; die Wurzeln werden ausschließlich als `sandbox.filesystem.allowRead` freigegeben. Reviewprofile dürfen die Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
 
 Die Claude-Aliase zeigen immer auf das neueste Modell ihrer Familie; bei Codex
 nennt der Orchestrator das neueste Modell je Familie ausdrücklich. Andere Werte

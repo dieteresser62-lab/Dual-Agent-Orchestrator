@@ -65,3 +65,72 @@ def test_no_orchestrator_environment_bypass_for_agy_paths() -> None:
         source = path.read_text(encoding="utf-8")
         assert "DAO_AGY_HOME" not in source, path
         assert "DAO_AGY_RUN_ROOT" not in source, path
+
+
+def _tool_config(tmp_path, roots, slot="implementer"):
+    import json
+    repository = tmp_path / "reviewed"
+    repository.mkdir(exist_ok=True)
+    path = repository / "orchestrator.toml"
+    path.write_text(f'[roles]\n{slot} = "toolprofile"\n'
+                    '[agent_profiles.toolprofile]\nprovider = "claude"\nmodel = "opus"\neffort = "high"\n'  # allowlist:provider -- profile configuration: tool roots
+                    '[agent_profiles.toolprofile.provider_options.claude]\n'  # allowlist:provider -- profile configuration: tool roots
+                    f'toolchain_read_roots = {json.dumps(roots)}\n')
+    return path
+
+
+def test_tool_roots_bind_resolved_home_subdirectory_and_digest(tmp_path, monkeypatch):
+    from dataclasses import replace
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    tool = home / ".nvm" / "versions" / "node" / "v22.23.2"
+    tool.mkdir(parents=True)
+    alias = tmp_path / "node-link"
+    alias.symlink_to(tool, target_is_directory=True)
+    config = load_repo_config(_tool_config(tmp_path, [str(alias)]))
+    profile = config.agent_profiles["toolprofile"]
+    assert profile.toolchain_read_roots == (str(tool),)
+    settings = AgentSettings(profile.provider, profile.binary, profile.model, None, "high", toolchain_read_roots=profile.toolchain_read_roots)
+    assert isolation_options_digest(settings)
+    assert isolation_options_digest(settings) != isolation_options_digest(replace(settings, toolchain_read_roots=()))
+
+
+@pytest.mark.parametrize("kind", ["relative", "missing", "file", "root", "home", "home-parent", "repo", "repo-parent", "repo-child", "comma", "space", "many", "duplicate"])
+def test_tool_roots_reject_unsafe_paths(tmp_path, monkeypatch, kind):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    repo = tmp_path / "reviewed"
+    repo.mkdir()
+    good = tmp_path / "tool"
+    good.mkdir()
+    file = tmp_path / "file"
+    file.write_text("x")
+    for name in ("a,b", "a b"):
+        (tmp_path / name).mkdir()
+    roots = {"relative": ["relative"], "missing": [str(tmp_path / "missing")], "file": [str(file)],
+             "root": ["/"], "home": [str(home)], "home-parent": [str(tmp_path)], "repo": [str(repo)],
+             "repo-parent": [str(tmp_path)], "repo-child": [str(repo / "sub")], "comma": [str(tmp_path / "a,b")],
+             "space": [str(tmp_path / "a b")], "many": [str(good)] * 9, "duplicate": [str(good)] * 2}[kind]
+    (repo / "sub").mkdir()
+    with pytest.raises(ConfigError, match="toolchain_read_roots"):
+        load_repo_config(_tool_config(tmp_path, roots))
+
+
+@pytest.mark.parametrize("slot", ["reviewer", "final_reviewer"])
+def test_review_profiles_reject_even_empty_tool_roots(tmp_path, slot):
+    with pytest.raises(ConfigError, match="implementer-only"):
+        load_repo_config(_tool_config(tmp_path, [], slot))
+
+
+
+def test_toolchain_symlink_in_repository_is_rejected_even_when_target_is_external(tmp_path):
+    repository = tmp_path / "reviewed"
+    repository.mkdir()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    alias = repository / "tool-alias"
+    alias.symlink_to(tools, target_is_directory=True)
+    with pytest.raises(ConfigError, match="repository"):
+        load_repo_config(_tool_config(tmp_path, [str(alias)]))

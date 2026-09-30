@@ -506,3 +506,39 @@ def test_strict_guard_rejects_an_untyped_literal_schema() -> None:
     }
     with pytest.raises(NativeProviderSchemaError, match="must declare a type"):
         assert_projected_provider_schema(schema, provider="codex-reviewer")  # allowlist:provider -- profile configuration: reviewer guard
+
+
+def test_reviewer_terminal_events_publish_usage_to_logs_and_attempt_lifecycle(tmp_path, monkeypatch, caplog):
+    import logging
+    import subprocess
+    import agent_runtime
+    from provider_input_budget import default_provider_input_budget_policy
+    adapter, repo, bundle = _prepared(tmp_path, _bundle(case="F1"))
+    result = json.loads(json.dumps(CASES["F1"]["envelope"]["structured_output"]["result"]))
+    result["request_id"] = bundle.bound_context.request_id
+    monkeypatch.setattr(agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_runtime, "_bound_launch_command", lambda current, command: list(command))
+    def process(current, command, stdin, **kwargs):
+        current.invocation.last_message_file.write_text(json.dumps({"result": result}))
+        return subprocess.CompletedProcess(command, 0, json.dumps({"type": "turn.completed", "usage": {
+            "input_tokens": 42, "cached_input_tokens": 30, "output_tokens": 7}}), "")
+    monkeypatch.setattr(agent_runtime, "_run_agent_process", process)
+    caplog.set_level(logging.INFO)
+    terminal = []
+    lifecycle = agent_runtime.ProviderAttemptLifecycle(start=lambda *args: "attempt",
+        terminal=lambda handle, elapsed, failure, usage: terminal.append((failure, usage)))
+    budget = default_provider_input_budget_policy((
+        ("implementer", "implementer", "claude"),  # allowlist:provider -- profile configuration: review usage topology
+        ("reviewer", "reviewer", "codex"),  # allowlist:provider -- profile configuration: review usage topology
+        ("final_reviewer", "reviewer", "codex"),  # allowlist:provider -- profile configuration: review usage topology
+    ))
+    output = agent_runtime.run_native_review_agent_checked(adapter=adapter, bundle=bundle, log_prefix="usage",
+        config=agent_runtime.OrchestratorConfig(repo_root=repo, provider_input_budget=budget), log_dir=tmp_path,
+        write_file=lambda path, text: path.write_text(text), shorten=lambda value, limit: value or "",
+        reviewer_manifest_paths=None, operation="reviewer_plan_review", binding_fingerprint="c" * 64,
+        pre_start_callback=None, provider_attempt_lifecycle=lifecycle)
+    assert output.result.approval is True
+    assert terminal[0][0] is None
+    assert (terminal[0][1].input_tokens, terminal[0][1].cache_read_input_tokens, terminal[0][1].output_tokens) == (42, 30, 7)
+    assert "[AGENT_USAGE]" in caplog.text and "[PROVIDER_COMPLETION]" in caplog.text
+    assert "cache_read_input_tokens=30" in caplog.text and "usage=unknown" not in caplog.text

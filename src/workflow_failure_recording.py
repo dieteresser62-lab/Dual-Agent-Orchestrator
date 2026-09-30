@@ -20,6 +20,7 @@ from agent_runtime import (
 )
 from artifact_models import (
     InvocationFailurePayload,
+    PermissionDenialSummary,
     Role,
     provider_text_evidence,
     technical_text_evidence,
@@ -524,6 +525,13 @@ def _invocation_retry_decision(
     )
 
 
+def _permission_denial_records(provider_data: Mapping[str, object] | None) -> tuple[PermissionDenialSummary, ...]:
+    from provider_metrics import permission_denial_summaries
+    return tuple(PermissionDenialSummary(**item) for item in permission_denial_summaries(
+        (provider_data or {}).get("permission_denials")
+    ))
+
+
 def _invocation_failure_documents(
     *,
     state: WorkflowState,
@@ -643,6 +651,7 @@ def _invocation_failure_documents(
         native_implementer_rejection=diagnostics.implementer_persisted_rejection,
         native_implementer_retry_round=decision.native_implementer_retry_round,
         rejected_response_shape=record.rejected_response_shape,
+        permission_denials=_permission_denial_records(error.provider_data),
     )
     return record, payload, decision_at
 

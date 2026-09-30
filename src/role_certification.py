@@ -339,10 +339,12 @@ class RoleProviderCertification:
 class CertificationTable:
     entries: tuple[RoleProviderCertification, ...]
 
-    def require(self, provider: str, role: AgentRoleName, slot: AgentSlot, *, model: str | None = None) -> RoleProviderCertification:
+    def require(self, provider: str, role: AgentRoleName, slot: AgentSlot, *, model: str | None = None, defer_model_binding: bool = False) -> RoleProviderCertification:
         for entry in self.entries:
             if entry.provider == provider and entry.role == role and entry.slot == slot:
-                if entry.model_family_pattern is not None and (
+                from agent_config import MODEL_FAMILIES
+                pending = defer_model_binding and provider == "codex" and model in MODEL_FAMILIES[provider]  # allowlist:provider -- profile configuration: runtime catalog alias
+                if not pending and entry.model_family_pattern is not None and (
                     not isinstance(model, str) or re.fullmatch(entry.model_family_pattern, model) is None
                 ):
                     raise CertificationError(
@@ -357,11 +359,11 @@ class CertificationTable:
             f"slot={slot.value} provider={provider} role={role.value}: missing qualification evidence",
         )
 
-    def require_occupancy(self, providers: dict[AgentSlot, str], *, models: dict[AgentSlot, str] | None = None) -> dict[AgentSlot, RoleProviderCertification]:
+    def require_occupancy(self, providers: dict[AgentSlot, str], *, models: dict[AgentSlot, str] | None = None, defer_model_binding: bool = False) -> dict[AgentSlot, RoleProviderCertification]:
         if set(providers) != set(AgentSlot):
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "slot occupancy is incomplete")
         selected = {
-            slot: self.require(providers[slot], role_for_slot(slot), slot, model=models[slot] if models is not None else None)
+            slot: self.require(providers[slot], role_for_slot(slot), slot, model=models[slot] if models is not None else None, defer_model_binding=defer_model_binding)
             for slot in AgentSlot
         }
         implementer = selected[AgentSlot.IMPLEMENTER].manufacturer

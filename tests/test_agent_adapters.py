@@ -154,11 +154,11 @@ def test_registry_uses_each_synthetically_admitted_slot_provider(monkeypatch: py
     observed = []
 
     class Admitted:
-        def require_occupancy(self, occupancy, *, models):
+        def require_occupancy(self, occupancy, *, models, defer_model_binding=False):
             assert occupancy == {slot: slots[slot.value].name for slot in AgentSlot}
             assert models == {slot: slots[slot.value].model for slot in AgentSlot}
 
-    def pair(provider, role, *, slot, settings, certifications):
+    def pair(provider, role, *, slot, settings, certifications, defer_model_binding=False):
         observed.append((slot.value, role.value, provider, settings.profile_name))
         assert isinstance(certifications, Admitted)
         return SimpleNamespace(settings=settings)

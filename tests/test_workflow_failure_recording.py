@@ -35,6 +35,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "contracts",
     "error_classification",
     "orchestrator_diagnostics",
+    "provider_metrics",
     "workflow_state",
 }
 EXPECTED_FAILURE_EDGES = {

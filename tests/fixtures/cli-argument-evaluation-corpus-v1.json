@@ -196,7 +196,8 @@
           "timeout_seconds": null,
           "max_budget_usd": null,
           "antigravity_home": null,
-          "antigravity_run_root": null
+          "antigravity_run_root": null,
+          "toolchain_read_roots": []
         },
         "review": {
           "__type__": "AgentProfileConfig",
@@ -207,7 +208,8 @@
           "timeout_seconds": null,
           "max_budget_usd": null,
           "antigravity_home": null,
-          "antigravity_run_root": null
+          "antigravity_run_root": null,
+          "toolchain_read_roots": []
         }
       }
     },
@@ -232,19 +234,21 @@
         "max_budget_usd": null,
         "profile_name": "review",
         "antigravity_home": null,
-        "antigravity_run_root": null
+        "antigravity_run_root": null,
+        "toolchain_read_roots": []
       },
       "implementer": {
         "__type__": "AgentSettings",
         "name": "codex",
         "binary": "codex",
-        "model": "gpt-6.1-sol",
+        "model": "sol",
         "timeout_seconds": null,
         "effort": "high",
         "max_budget_usd": null,
         "profile_name": "implementation",
         "antigravity_home": null,
-        "antigravity_run_root": null
+        "antigravity_run_root": null,
+        "toolchain_read_roots": []
       },
       "reviewer": {
         "__type__": "AgentSettings",
@@ -256,7 +260,8 @@
         "max_budget_usd": null,
         "profile_name": "review",
         "antigravity_home": null,
-        "antigravity_run_root": null
+        "antigravity_run_root": null,
+        "toolchain_read_roots": []
       }
     },
     "state_was_frozen": false,
@@ -708,7 +713,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "6a7b90ae67fccf55c7e299682c564a6bf46dcf9ac46260f5231bcc71c4c13e56",
+        "namespace_sha256": "620104fefac83848501e718b73895127a1f2fd5ef26b43e37b7125180c133597",
         "return_trace": [
           {
             "function": "quota_int",
@@ -791,7 +796,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "eb544f4ae3aa606fd01be58ca317c7fca1fd3092c0868f5873487a2ab04a6ab0",
+        "namespace_sha256": "fec31550fac9e251306028e65cad2387db447433c95409e966579fa8773f7107",
         "return_trace": [
           {
             "function": "quota_int",
@@ -865,7 +870,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "ca09b666498688680562116269e9442faf0ca135e0c58050abd065e98a193b93",
+        "namespace_sha256": "02648a9736cbea44e969a9dfde3fd1a645afdcee45ef412027a14fce8c52133a",
         "return_trace": [
           {
             "function": "quota_int",
@@ -946,7 +951,7 @@
       "outcome": {
         "kind": "success",
         "namespace_field_count": 74,
-        "namespace_sha256": "4b31e3a357a87235d88150ea9de04fd94c635ad532e89574a28902a65f6db854",
+        "namespace_sha256": "2f79f43c61eb1af8a2bce59ade013de5e8839db19b8b9dea5b07229b1d183ebe",
         "return_trace": [
           {
             "function": "quota_int",

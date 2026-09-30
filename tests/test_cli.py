@@ -706,7 +706,7 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
     assert claude.effort == "high"
     assert claude.max_budget_usd == 2.5
     assert set(args.slot_settings) == {"implementer", "reviewer", "final_reviewer"}
-    assert args.slot_settings["implementer"].model == "gpt-6-luna"
+    assert args.slot_settings["implementer"].model == "luna"
     assert args.slot_settings["implementer"].effort == "high"
 
 
@@ -718,7 +718,7 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.slot_settings["reviewer"].timeout_seconds is None
     assert args.slot_settings["implementer"].timeout_seconds is None
     assert args.slot_settings["reviewer"].max_budget_usd is None
-    assert args.slot_settings["implementer"].model == "gpt-6.1-sol"
+    assert args.slot_settings["implementer"].model == "sol"
     assert args.slot_settings["implementer"].effort == "high"
 
 
@@ -737,17 +737,16 @@ def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
 
 def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
     for argv, codex, claude in (
-        (["--implementer-model", "sol"], "gpt-6.1-sol", "opus"),
-        (["--implementer-model", "Terra"], "gpt-5.6-terra", "opus"),
+        (["--implementer-model", "sol"], "sol", "opus"),
+        (["--implementer-model", "Terra"], "terra", "opus"),
         (["--implementer-model", "gpt-6-luna", "--reviewer-model", "SONNET"], "gpt-6-luna", "sonnet"),
-        (["--implementer-model", "astra", "--reviewer-model", "fable"], "gpt-6-astra", "fable"),
+        (["--implementer-model", "astra", "--reviewer-model", "fable"], "astra", "fable"),
     ):
         settings = parse_args(argv, cwd=tmp_path, environ={}).slot_settings
         assert (settings["implementer"].model, settings["reviewer"].model) == (codex, claude)
 
     for argv, message in (
-        (["--implementer-model", "gpt-5.6-luna"], "codex model must be one of sol"),
-        (["--implementer-model", "gpt-5.5"], "codex model must be one of sol"),
+        (["--implementer-model", "invalid model!"], "model must be a family"),
         (["--reviewer-model", "haiku"], "claude model must be one of opus"),
     ):
         with pytest.raises(ConfigError, match=message):
@@ -1357,6 +1356,6 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`" in readme
     assert "`claude`, `opus`, ohne \u005aeitlimit, `high`" in readme
     assert "nicht Modell und Effort" in readme
-    assert "`gpt-6.1-sol`" in readme
+    assert "`codex debug models`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True

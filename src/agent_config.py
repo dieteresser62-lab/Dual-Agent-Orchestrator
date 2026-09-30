@@ -34,6 +34,7 @@ class AgentSettings:
     profile_name: str = "scripted"
     antigravity_home: str | None = None
     antigravity_run_root: str | None = None
+    toolchain_read_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class AgentProfileConfig:
     max_budget_usd: float | None = None
     antigravity_home: str | None = None
     antigravity_run_root: str | None = None
+    toolchain_read_roots: tuple[str, ...] = ()
 
 
 def default_antigravity_home() -> str:
@@ -88,6 +90,9 @@ def _antigravity_paths(
 
 def isolation_options_digest(settings: AgentSettings) -> str | None:
     """Bind only the selected paths, never OAuth or settings contents."""
+    if settings.toolchain_read_roots:
+        payload = json.dumps({"toolchain_read_roots": settings.toolchain_read_roots}, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     if settings.name != "antigravity":
         return None
     home = settings.antigravity_home or default_antigravity_home()
@@ -166,7 +171,7 @@ def parse_profile_tables(
         if not isinstance(options, dict) or set(options) - {"claude", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
         claude_options = options.get("claude", {})  # allowlist:provider -- profile configuration: provider option table
-        if not isinstance(claude_options, dict) or set(claude_options) - {"max_budget_usd"}:  # allowlist:provider -- profile configuration: provider option table
+        if not isinstance(claude_options, dict) or set(claude_options) - {"max_budget_usd", "toolchain_read_roots"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options.claude is invalid")  # allowlist:provider -- profile configuration: provider option table
         if claude_options and provider != "claude":  # allowlist:provider -- profile configuration: provider option validation
             raise AgentConfigError(f"agent_profiles.{name}: Claude options require provider claude")  # allowlist:provider -- profile configuration: provider option validation
@@ -186,11 +191,31 @@ def parse_profile_tables(
                 repository_root=repository,
                 label=f"agent_profiles.{name}.provider_options.antigravity",
             )
-        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root)
+        tool_roots = _profile_toolchain_roots(claude_options, repository, name)  # allowlist:provider -- profile configuration: implementer toolchain
+        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots)
     for slot, name in roles.items():
         if name not in profiles:
             raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
+        selected_options = (profiles_raw or {}).get(name, {}).get("provider_options", {}).get("claude", {})  # allowlist:provider -- profile configuration: implementer-only options
+        if (profiles[name].toolchain_read_roots or "toolchain_read_roots" in selected_options) and slot is not AgentSlot.IMPLEMENTER:
+            raise AgentConfigError(f"roles.{slot.value}: toolchain_read_roots is implementer-only")
     return roles, profiles
+
+
+def _profile_toolchain_roots(options: dict, repository: Path, name: str) -> tuple[str, ...]:
+    from toolchain_paths import validate_toolchain_read_roots
+
+    if "toolchain_read_roots" not in options:
+        return ()
+    protected = tuple(repository / path for path in (".git", ".orchestrator", "inbox", "outbox"))
+    from agent_adapters import AgentOutputError
+    try:
+        if (repository / ".git").exists():
+            from claude_implementer_adapter import protected_implementer_paths  # allowlist:provider -- profile configuration: toolchain protection roots
+            protected = protected_implementer_paths(repository, repository / "inbox", repository / "outbox", "profile-load")
+        return validate_toolchain_read_roots(options["toolchain_read_roots"], repository, protected)
+    except (ValueError, AgentOutputError) as exc:
+        raise AgentConfigError(f"agent_profiles.{name}: {exc}") from exc
 
 
 def current_pre_toml_occupancy() -> dict[AgentSlot, str]:
@@ -203,22 +228,13 @@ def current_provider_for_role(role: str) -> str:
     return current_pre_toml_occupancy()[AgentSlot(role)]
 
 
-# The selectable model families per provider; the first family is the default.
-# Implementer families name their newest model explicitly, while the reviewer
-# CLI resolves its aliases to the newest model itself.
+# Families remain aliases until the identity-bound runtime catalog is read.
 MODEL_FAMILIES = {
-    "codex": {
-        "sol": "gpt-6.1-sol",
-        "terra": "gpt-5.6-terra",
-        "luna": "gpt-6-luna",
-        "astra": "gpt-6-astra",
-    },
+    "codex": ("sol", "terra", "luna", "astra"),
     "claude": {"opus": "opus", "sonnet": "sonnet", "fable": "fable"},
     "antigravity": {"gemini-3.1-pro-high": "gemini-3.1-pro-high"},
 }
-_DEFAULT_MODELS = {
-    role: next(iter(families.values())) for role, families in MODEL_FAMILIES.items()
-}
+_DEFAULT_MODELS = {provider: next(iter(families)) for provider, families in MODEL_FAMILIES.items()}
 
 _DEFAULT_EFFORTS = {
     "codex": "high",
@@ -308,6 +324,12 @@ def _resolve(
 def _selectable_model(role: str, value: str) -> str:
     if role == "antigravity" and re.fullmatch(r"gemini-[a-z0-9.-]+", value):
         return value
+    if role == "codex":  # allowlist:provider -- profile configuration: catalog-resolved models
+        if value.lower() in MODEL_FAMILIES[role]:
+            return value.lower()
+        if re.fullmatch(r"[a-z0-9][a-z0-9.-]*", value):
+            return value
+        raise AgentConfigError("model must be a family or full catalog model ID")
     families = MODEL_FAMILIES[role]
     model = families.get(value.lower(), value)
     if model not in families.values():
@@ -368,6 +390,7 @@ def resolve_agent_settings(
             profile_name=roles[slot],
             antigravity_home=profile.antigravity_home,
             antigravity_run_root=profile.antigravity_run_root,
+            toolchain_read_roots=profile.toolchain_read_roots,
         )
     if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
         inherited = settings["reviewer"]
@@ -382,6 +405,7 @@ def resolve_agent_settings(
             profile_name=current.profile_name,
             antigravity_home=inherited.antigravity_home,
             antigravity_run_root=inherited.antigravity_run_root,
+            toolchain_read_roots=inherited.toolchain_read_roots,
         )
     return settings
 

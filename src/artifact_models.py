@@ -1963,6 +1963,20 @@ def technical_text_evidence(technical_text: str) -> tuple[str, str, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class PermissionDenialSummary:
+    tool_name: str
+    tool_use_id: str
+    input_excerpt: str
+
+    def __post_init__(self) -> None:
+        for name, maximum in (("tool_name", 65), ("tool_use_id", 101), ("input_excerpt", 201)):
+            value = getattr(self, name)
+            if (not isinstance(value, str) or not value or len(value) > maximum
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                raise ArtifactValidationError("permission denial summary is invalid or unbounded")
+
+
+@dataclass(frozen=True, slots=True)
 class InvocationFailurePayload:
     invocation_id: str
     idempotency_key: str
@@ -1998,6 +2012,7 @@ class InvocationFailurePayload:
     native_implementer_rejection: str | None = None
     native_implementer_retry_round: int | None = None
     rejected_response_shape: RejectedNativeResponseShape | None = None
+    permission_denials: tuple[PermissionDenialSummary, ...] = dataclass_field(default=(), kw_only=True)
     status: ClassVar[str] = "classified"
     record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
 
@@ -2037,6 +2052,9 @@ class InvocationFailurePayload:
         return self.native_response_feedback_document
 
     def __post_init__(self) -> None:
+        if (not isinstance(self.permission_denials, tuple) or len(self.permission_denials) > 16
+            or any(not isinstance(item, PermissionDenialSummary) for item in self.permission_denials)):
+            raise ArtifactValidationError("permission denials must be bounded typed summaries")
         _require_identifier(self.invocation_id, "invocation failure invocation_id")
         _require_text(self.idempotency_key, "invocation failure idempotency_key")
         if not isinstance(self.role, Role) or self.role in {
@@ -2480,6 +2498,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         raw.pop("native_implementer_rejection", None)
         raw.pop("native_implementer_retry_round", None)
     if isinstance(payload, InvocationFailurePayload):
+        if not payload.permission_denials:
+            raw.pop("permission_denials", None)
         if payload.rejected_response_shape is None:
             raw.pop("rejected_response_shape", None)
         else:
@@ -2987,6 +3007,7 @@ _PAYLOAD_READERS: dict[
                     data["rejected_response_shape"]
                 )
             ),
+            permission_denials=tuple(PermissionDenialSummary(**item) for item in data.get("permission_denials", [])),
         ),
     RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
         Role(data["role"]), data["repository_fingerprint"], data["retry_at"],

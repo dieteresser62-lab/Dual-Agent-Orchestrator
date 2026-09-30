@@ -92,6 +92,7 @@ _PAIR_BINDINGS: dict[tuple[str, AgentRoleName], RoleBinding] = {
             "network": "empty-strict-allowlist",
             "protected_paths": "git,gitdir,common-dir,orchestrator,records,checkpoints,queue,inbox,outbox,evidence",
             "filesystem_deny_write": "protected-paths",
+            "filesystem_allow_read": "optional-bound-read-only-toolchain-roots",
             "environment": "HOME,USER,LOGNAME,PATH,LANG,TERM",
             "credentials": "ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN",  # allowlist:provider -- certification data: implementer credentials
         }),

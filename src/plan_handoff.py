@@ -461,7 +461,7 @@ def render_implementation_task(
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
         f"ACCEPTANCE_REVIEW_NUMBER: {acceptance_review_number}\n\n"
-        "Der Arbeitsplan ist bereits von Claude geprüft und vom "
+        "Der Arbeitsplan ist bereits vom Reviewer geprüft und vom "
         "Orchestrator lokal commitgebunden freigegeben. Ein konfiguriertes manuelles "
         "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder prüfe ihn "  # allowlist:german -- Folgeauftrag
         "nicht erneut. Verwende ihn als schreibgeschützte fachliche Quelle.\n\n"

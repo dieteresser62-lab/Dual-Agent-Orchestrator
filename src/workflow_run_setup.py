@@ -360,6 +360,13 @@ def _fresh_state(
 
 
 
+def _bound_family_matches(provider: str, selected: str, recorded: str) -> bool:
+    import re
+    from agent_config import MODEL_FAMILIES
+    return (provider == "codex" and selected in MODEL_FAMILIES[provider]  # allowlist:provider -- profile configuration: resume family alias
+            and re.fullmatch(r"gpt-[0-9]+(?:\.[0-9]+)*-" + re.escape(selected), recorded) is not None)
+
+
 def _apply_resumed_agent_profiles(
     args: argparse.Namespace, state: WorkflowState
 ) -> None:
@@ -409,6 +416,8 @@ def _apply_resumed_agent_profiles(
             recorded_value = getattr(profile, profile_field)
             if field == "timeout":
                 selected = selected or 0
+            if field == "model" and _bound_family_matches(profile.provider, selected, recorded_value):
+                selected = recorded_value
             if (role, field) in explicit and selected != recorded_value:
                 raise StateSchemaError(
                     "AGENT-PROFILE-DIFF | explicit "
@@ -426,7 +435,7 @@ def _apply_resumed_agent_profiles(
         )
     identities = _capture_slot_identities(
         slots, scripted=bool(getattr(args, "scripted_provider_identity", False)),
-        strict_dns=bool(getattr(args, "strict_preflight", False)),
+        strict_dns=bool(getattr(args, "strict_preflight", False)), resume=True,
     )
     for role, profile in (
         ("implementer", binding.implementer_profile),
@@ -438,19 +447,21 @@ def _apply_resumed_agent_profiles(
                 f"AGENT-PROFILE-DIFF | slot={role} path={profile.binary_identity.entry_path}: "
                 "binary identity drift; restore the recorded binary or start a new run"
             )
+    if not bool(getattr(args, "scripted_provider_identity", False)):
+        _bind_slot_catalog_models(slots, identities, resume=True)
     args.slot_settings = slots
     args.slot_identities = identities
 
 
 def _capture_slot_identities(
-    slots: dict[str, object], *, scripted: bool = False, strict_dns: bool = False,
+    slots: dict[str, object], *, scripted: bool = False, strict_dns: bool = False, resume: bool = False,
 ):
     """Probe each selected binary before a RunProfile or resumed attempt is accepted."""
     from agent_adapters import build_slot_agent_registry
     from agent_runtime import verify_agent_capabilities
     from provider_identity import ProviderIdentity
 
-    registry = build_slot_agent_registry(slots)
+    registry = build_slot_agent_registry(slots, defer_model_binding=True)
     identities = {}
     for slot in AgentSlot:
         if scripted:
@@ -468,7 +479,20 @@ def _capture_slot_identities(
         if not isinstance(identity, ProviderIdentity) or identity.kind != "verified":
             raise StateSchemaError(f"slot={slot.value}: binary preflight returned no verified identity")
         identities[slot.value] = identity
+    if not scripted and not resume:
+        _bind_slot_catalog_models(slots, identities)
     return identities
+
+
+def _bind_slot_catalog_models(slots: dict, identities: dict, *, resume: bool = False) -> None:
+    from agent_runtime import run_local_command
+    from agent_adapters import build_slot_agent_registry
+    from model_catalog import bind_catalog_models
+    try:
+        bind_catalog_models(slots, identities, run_local_command, resume=resume)
+        build_slot_agent_registry(slots)  # Enforce model certification after resolution.
+    except (ValueError, CertificationError) as exc:
+        raise StateSchemaError(f"AGENT-PROFILE-DIFF | {exc}") from exc
 
 
 def _current_gate_approval(state: WorkflowState) -> GateDecisionRecord | None:

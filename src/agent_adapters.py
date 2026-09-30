@@ -10,6 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from provider_metrics import event_usage, failure_metrics, log_permission_denials
 from agent_config import AgentSettings, default_agent_settings
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
@@ -550,7 +551,7 @@ class NativeCodexAdapter(_BaseAdapter):
     def extract_output(
         self, stdout: str, stderr: str, extra_files: dict[str, str]
     ) -> str:
-        _ = stdout
+        self.metadata = event_usage(stdout)
         _ = stderr
         _ = extra_files
         if self.invocation.last_message_file is None or not self.invocation.last_message_file.is_file():
@@ -626,6 +627,8 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
                 "NativeClaudeReviewAdapter requires explicit Claude AgentSettings"
             )
         super().__init__(settings)
+        if settings.toolchain_read_roots:
+            raise ValueError("reviewer toolchain_read_roots is forbidden")
         self.review_harness = review_harness.resolve()
         self.role_binding = role_binding or binding_for_role(AgentRoleName.REVIEWER)
         if self.role_binding.role is not AgentRoleName.REVIEWER:
@@ -821,22 +824,23 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         _ = stderr
         _ = extra_files
         envelope = _json_object(stdout or "", self.name)
-        self.metadata = {
-            key: envelope[key]
-            for key in PROVIDER_FAILURE_METRIC_KEYS
-            if key in envelope
-        }
+        self.metadata = failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS)
+        safe_envelope = {**envelope, **self.metadata}
+        log_permission_denials(self.metadata)
         if envelope.get("is_error") is not False:
             detail = envelope.get("result") or envelope.get("error") or "native Claude error"
             raise AgentOutputError(
                 f"claude returned is_error=true: {detail}",
                 provider_text=str(detail),
-                provider_data=envelope,
+                provider_data=safe_envelope,
             )
         denials = envelope.get("permission_denials")
         if isinstance(denials, list) and denials:
             raise AgentPermissionError(
-                "claude attempted non-allowlisted tool calls in native review"
+                "claude attempted non-allowlisted tool calls in native review: "
+                + json.dumps(self.metadata["permission_denials"], ensure_ascii=False),
+                provider_data=self.metadata,
+                technical_text="claude attempted non-allowlisted tool calls in native review",  # allowlist:provider -- transport: preserve failure classification
             )
         structured_output = envelope.get("structured_output")
         if not isinstance(structured_output, dict):
@@ -919,6 +923,7 @@ def create_reviewer_qualification_adapter(
 def create_agent_pair(
     provider: str, role: AgentRoleName, *, slot: AgentSlot,
     settings: AgentSettings, certifications: CertificationTable | None = None,
+    defer_model_binding: bool = False,
 ) -> AgentAdapter:
     """Authorize a slot before constructing a fresh transport with its role binding."""
     if not isinstance(role, AgentRoleName) or not isinstance(slot, AgentSlot):
@@ -929,7 +934,7 @@ def create_agent_pair(
             f"slot={slot.value} provider={provider}: missing qualification evidence for role={role.value}",
         )
     table = certifications if certifications is not None else load_role_certifications()
-    certificate = table.require(provider, role, slot, model=settings.model)
+    certificate = table.require(provider, role, slot, model=settings.model, defer_model_binding=defer_model_binding)
     if settings.name != provider:
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for(provider, role)
@@ -960,6 +965,7 @@ def build_agent_registry(
 
 def build_slot_agent_registry(
     slots: dict[str, AgentSettings], *, certifications: CertificationTable | None = None,
+    defer_model_binding: bool = False,
 ) -> dict[str, AgentAdapter]:
     """Create the run's adapters solely from its resolved slot settings."""
     if set(slots) != {slot.value for slot in AgentSlot}:
@@ -968,11 +974,12 @@ def build_slot_agent_registry(
     table.require_occupancy(
         {slot: slots[slot.value].name for slot in AgentSlot},
         models={slot: slots[slot.value].model for slot in AgentSlot},
+        defer_model_binding=defer_model_binding,
     )
     registry = {
         slot.value: create_agent_pair(
             slots[slot.value].name, role_for_slot(slot), slot=slot,
-            settings=slots[slot.value], certifications=table,
+            settings=slots[slot.value], certifications=table, defer_model_binding=defer_model_binding,
         )
         for slot in AgentSlot
     }

@@ -40,6 +40,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_models",
     "git_service",
     "inbox_watcher",
+    "model_catalog",
     "provider_identity",
     "repo_changes",
     "role_certification",
@@ -50,6 +51,8 @@ EXPECTED_INTERNAL_IMPORTS = {
     "workflow_state",
 }
 EXPECTED_SETUP_FUNCTIONS = {
+    "_bind_slot_catalog_models",
+    "_bound_family_matches",
     "_capture_slot_identities",
     "_apply_resumed_agent_profiles",
     "_context",
@@ -63,6 +66,9 @@ EXPECTED_SETUP_FUNCTIONS = {
 EXPECTED_SETUP_EDGES = Counter(
     {
         ("_apply_resumed_agent_profiles", "_capture_slot_identities"): 1,
+        ("_apply_resumed_agent_profiles", "_bind_slot_catalog_models"): 1,
+        ("_apply_resumed_agent_profiles", "_bound_family_matches"): 1,
+        ("_capture_slot_identities", "_bind_slot_catalog_models"): 1,
         ("_context", "_plan_only_step_boundary"): 1,
     }
 )
@@ -665,3 +671,40 @@ def test_context_loads_at_most_twelve_thousand_shared_instruction_characters(
     assert "TAIL_SENTINEL" not in context.assignment
     assert "CLAUDE.md" not in context.assignment
     assert "CODEX.md" not in context.assignment
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_resume_toolchain_digest_is_bound_before_any_probe(tmp_path, monkeypatch, changed):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    selected = AgentSettings("claude", "claude", "opus", None, "high", toolchain_read_roots=(str(tools),))  # allowlist:provider -- profile configuration: implementer toolchain
+    profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
+    profiles["implementer"] = replace(profiles["implementer"], provider=selected.name, model=selected.model,
+                                     isolation_options_sha256=isolation_options_digest(selected))
+    state = init_workflow_state(run_id="tool-resume", task_file="/tmp/task.md", branch="feature/tools",
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3", **{slot + "_profile": value for slot, value in profiles.items()}))
+    class Certificates:
+        def require_occupancy(self, *args, **kwargs):
+            return None
+        def require(self, provider, role, slot, **kwargs):
+            profile = profiles[slot.value]
+            return SimpleNamespace(**{field: getattr(profile, field) for field in (
+                "manufacturer", "capability_sha256", "transport_sha256", "rights_sha256", "policy_sha256")}, digest=profile.certification_sha256)
+    monkeypatch.setattr(workflow_run_setup, "load_role_certifications", lambda: Certificates())
+    class ProbeReached(Exception):
+        pass
+    def probe(*args, **kwargs):
+        raise ProbeReached
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", probe)
+    slots = {slot: AgentSettings(value.provider, value.binary, value.model, None, value.effort) for slot, value in profiles.items()}
+    slots["implementer"] = replace(selected, toolchain_read_roots=(str(other),)) if changed else selected
+    args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
+    if changed:
+        with pytest.raises(StateSchemaError, match="isolation paths changed"):
+            workflow_run_setup._apply_resumed_agent_profiles(args, state)
+    else:
+        with pytest.raises(ProbeReached):
+            workflow_run_setup._apply_resumed_agent_profiles(args, state)

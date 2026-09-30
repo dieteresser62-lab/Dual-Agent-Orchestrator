@@ -342,7 +342,7 @@ def test_prepared_command_is_measured_and_timeout_consistent(
 
 def test_factory_uses_reviewer_role_and_promoted_slots() -> None:
     class FakeAdmitted:
-        def require(self, provider, role, slot, *, model):
+        def require(self, provider, role, slot, *, model, defer_model_binding=False):
             assert (provider, role, slot, model) == (
                 "antigravity", AgentRoleName.REVIEWER, AgentSlot.REVIEWER,
                 "gemini-3.1-pro-high",
