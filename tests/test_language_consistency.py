@@ -273,6 +273,97 @@ def test_root_roles_share_structured_artifact_authority_contract() -> None:
         assert "## Structured artifact authority" not in entry
         assert len(entry) < 1000
 
+
+def test_root_entries_assign_roles_from_profiles_and_preserve_certification() -> None:
+    shared = ROLE_FILES[0].read_text(encoding="utf-8")
+    for fragment in (
+        "## Role occupancy",
+        "default occupancy remains Codex / Claude / Claude",  # allowlist:provider -- documentation guard: shipped topology
+        "such as Claude / Codex / Codex",  # allowlist:provider -- documentation guard: conditional alternative topology
+        "every selected slot is `certified` or `experimental`",
+        "implementer manufacturer to differ from both review-slot manufacturers",
+        "Candidates do not start",
+        "no automatic provider switch",
+        "Implementers never approve their own work",
+        "reviewers never edit product code or attest validation",
+        "both direct canaries have passed",
+    ):
+        assert fragment in shared
+    for path in ROLE_FILES[1:]:
+        entry = path.read_text(encoding="utf-8")
+        for fragment in (
+            "# Role-neutral CLI entry", "can be implementer or reviewer",
+            "run-bound profile", "assigns the role", "As implementer",
+            "implementer contract", "native implementer JSON", "As reviewer or final reviewer",
+            "reviewer contract", "read-only", "native review JSON",
+            "manufacturer separation", "candidate start prohibition",
+            "default is Codex / Claude / Claude",  # allowlist:provider -- documentation guard: consistent entries
+        ):
+            assert fragment in entry, path.name
+    assert "does not automatically load `CLAUDE.md`" in ROLE_FILES[1].read_text()  # allowlist:provider -- documentation guard: safe-mode loading
+    for path in ROLE_FILES:
+        for retired in ("sole implementer", "stays implementer", "# Reviewer CLI entry", "# Implementer CLI entry"):
+            assert retired not in path.read_text(), path.name
+
+
+@pytest.mark.parametrize(("document", "required"), (
+    ("implementer-certification.md", (
+        "# Implementer-Zertifizierung: Claude Code",  # allowlist:provider -- documentation guard: German reference title
+        "--restricted --safe-mode", "Read,Edit,Write,Glob,Grep,Bash",
+        "--permission-prompts none", "--disallowedTools", "C4/K1",
+        "failIfUnavailable: true", "bubblewrap und socat", "0700",
+        "Positivliste", "Listenform", "toolchain_read_roots",
+        "äußersten Schutzpfade", "nur Grenzverstöße stoppen", "classify_implementer_denial",
+        "stream-json", "config.worktree", "nur neu entstandene, leere, reguläre Dateien",
+        "boundary-check", "offline_boundary.py", "W1–W8",
+        "mindestens 5 von 6", "0 absoluten Fehlern", "rule.sha256", "checksums.json",
+        "forbidden_write", "self_approval", "test_manipulation",
+        "cases/T3/finding.json", "keinen Finding-Statuswechsel", "SIGINT",
+        "QUOTA-RESUME-DIFF", "--orchestrator-root", "Candidate-Bypass",
+    )),
+    ("reviewer-certification.md", (
+        "# Reviewer-Zertifizierung", "ohne `--sandbox`", "--sandbox read-only",
+        "--ignore-user-config", "--ignore-rules", "project_doc_max_bytes=0",
+        'shell_environment_policy.inherit="core"', 'web_search="disabled"',
+        "Pflicht-Härtung", "Paketwurzel", "Codex 0.159.2",  # allowlist:provider -- documentation guard: measured CLI boundary
+        "~/.codex/tmp/arg0", "privat", "`tools`-Feld", "unsupported call",  # allowlist:provider -- documentation guard: restart-helper exception
+        "Strict-Writer", "additionalProperties: false", "Overlays", "Literalwerten",
+        "5.000", "120.000", "1.000", "15.000", "128/512",
+        "P1–P6", "quicktest", "nicht automatisch", "Protokoll v6",
+        'raters: ["agy", "steering"]', "AGY und Steuermann", "agy-command",
+        "run-agy", "negative", "Topologie-Lauf",
+    )),
+))
+def test_role_certification_references_document_binding_rules(document: str, required: tuple[str, ...]) -> None:
+    source = (ROOT / "docs/reference" / document).read_text()
+    for fragment in required:
+        assert fragment in source, f"{document}: {fragment}"
+    assert "/home/dieter/" not in source
+    prefix = "W" if document == "implementer-certification.md" else "P"
+    count = 8 if prefix == "W" else 6
+    for number in range(1, count + 1):
+        assert f"| {prefix}{number} |" in source
+    if prefix == "W":
+        for number in range(1, 7):
+            assert f"| T{number} |" in source
+
+
+@pytest.mark.parametrize("document", ("Quickstart.md", "docs/reference/einrichtung.md"))
+def test_free_role_setup_documents_candidate_gate_and_operational_checks(document: str) -> None:
+    source = (ROOT / document).read_text()
+    for fragment in (
+        "Claude / Codex / Codex", "candidate", "certified", "experimental",  # allowlist:provider -- documentation guard: conditional setup topology
+        "toolchain_read_roots", "socat und bubblewrap", "failIfUnavailable",
+        "boundary-check --pair all", "offline_boundary.py", "Neuzertifizierung",
+        "codex debug models", "lokalen Katalog", "wählt", "Laufprofil",  # allowlist:provider -- documentation guard: model binding
+        "--no-resume --force-overwrite-state", "QUOTA-RESUME-DIFF",
+        "--approve-gate", "--reject-gate", "Fingerprint", "Teilergebnisse",
+        "implementer-certification.md", "reviewer-certification.md",
+    ):
+        assert fragment in source, f"{document}: {fragment}"
+    assert "/home/dieter/" not in source
+
+
 def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
     shared = ROLE_FILES[0].read_text(encoding="utf-8")
     for fragment in (
@@ -1173,6 +1264,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
     new_provider_paths = relative.startswith("docs/evidence/antigravity/") or path.name == "orchestrator.toml" or relative in {
         "docs/reference/antigravity-reviewer.md",
         "docs/reference/reviewer-certification.md",
+        "docs/reference/implementer-certification.md",
         "scripts/probe_reviewer.py",
         "scripts/qualification/profiles.py",
         "scripts/qualification/blind.py",
@@ -1192,8 +1284,8 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "README.md",
         "Quickstart.md",
         "AGENTS.md",
-        "CLAUDE.md",  # allowlist:provider -- documentation guard: active root reviewer entry
-        "CODEX.md",  # allowlist:provider -- documentation guard: active root implementer entry
+        "CLAUDE.md",  # allowlist:provider -- documentation guard: active role-neutral entry
+        "CODEX.md",  # allowlist:provider -- documentation guard: active role-neutral entry
         "docs/reference/einrichtung.md",
         "src/native_provider_schema.py",
         "src/role_certification.py",
@@ -2276,14 +2368,28 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
     configs = 0
     commands = 0
     final_slot = False
+    alternative_examples = 0
+    toolchain = tmp_path / "node-root"
+    toolchain.mkdir()
+    repository = tmp_path / "repository"
+    repository.mkdir()
     for name in ("README.md", "Quickstart.md", "docs/reference/einrichtung.md", "docs/reference/antigravity-reviewer.md"):
         source = (ROOT / name).read_text(encoding="utf-8")
         for index, snippet in enumerate(_fenced_examples(source, "toml")):
             tomllib.loads(snippet)
-            config_path = tmp_path / f"{Path(name).stem}-{index}.toml"
+            # The public example requires an operator-supplied existing absolute root.
+            snippet = snippet.replace("/absolute/node-root", str(toolchain))
+            config_path = repository / f"{Path(name).stem}-{index}.toml"
             config_path.write_text(snippet, encoding="utf-8")
             config = load_repo_config(config_path)
             configs += 1
+            if "toolchain_read_roots" in snippet:
+                selected = [config.agent_profiles[config.roles[slot]] for slot in AgentSlot]
+                assert [profile.provider for profile in selected] == ["claude", "codex", "codex"]  # allowlist:provider -- documentation guard: actual alternative slot bindings
+                assert selected[0].toolchain_read_roots == (str(toolchain),)
+                assert all(not profile.toolchain_read_roots for profile in selected[1:])
+                assert [profile.model for profile in selected] == ["opus", "sol", "sol"]
+                alternative_examples += 1
             if "final_reviewer = \"final_review\"" in snippet:
                 assert config.roles[AgentSlot.FINAL_REVIEWER] == "final_review"
                 final_slot = True
@@ -2308,6 +2414,7 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
                 build_parser().parse_args(args)
                 commands += 1
     assert configs >= 5 and commands >= 10 and final_slot
+    assert alternative_examples == 2
 
 
 def test_active_document_links_and_anchors_resolve() -> None:
@@ -2315,6 +2422,7 @@ def test_active_document_links_and_anchors_resolve() -> None:
     paths = [ROOT / name for name in (
         "README.md", "Quickstart.md", "docs/reference/architecture-and-domain-concept.md",
         "docs/reference/ablauf-des-orchestrators.md", "docs/reference/einrichtung.md",
+        "docs/reference/reviewer-certification.md", "docs/reference/implementer-certification.md",
         "docs/internal/rollenneutralitaet-v3.md",
     )]
     for source in paths:

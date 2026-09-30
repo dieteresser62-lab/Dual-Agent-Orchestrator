@@ -80,8 +80,14 @@
 - Agents do not emit validation attestations. The orchestrator creates and binds deterministic validation evidence.
 - Plain-text result markers, Markdown fences, parser normalization, and LLM contract repair are unsupported. Missing or invalid native JSON is a fail-closed provider output error.
 
+## Role occupancy
+
+- The shipped default occupancy remains Codex / Claude / Claude for implementer / reviewer / final reviewer. The run-bound profile assigns the role; provider entry files do not.
+- Other occupancies, such as Claude / Codex / Codex, are selectable through explicit TOML profiles only when every selected slot is `certified` or `experimental` with valid bound evidence. Hard manufacturer separation requires the implementer manufacturer to differ from both review-slot manufacturers. Candidates do not start; no automatic provider switch occurs.
+- In either provider CLI, an implementer follows the implementer contract and a reviewer follows the reviewer contract above. Implementers never approve their own work; reviewers never edit product code or attest validation.
+
 ## Experimental Antigravity reviewer
 
-- The shipped reviewer and final reviewer remain Claude; Codex is the sole implementer. Antigravity is selectable per run only by explicit TOML slot binding after both direct canaries have passed and both slot certifications are `experimental`.
+- Antigravity is selectable per run only by explicit TOML slot binding after both direct canaries have passed and both slot certifications are `experimental`.
 - Both Antigravity slots are `experimental` since the two live canaries passed on 29 September 2026; a missing or tampered canary proof fails closed at start and resume. No automatic provider switch occurs.
 - This option is for private DIY use on WSL 2 / Ubuntu / ext4. Every Antigravity review sends the full snapshot, request, schema and evidence to Google. Positive timeout values and `0` require no separate approval.

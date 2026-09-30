@@ -345,11 +345,77 @@ gesetzt wird. Beide AGY-Slots sind seit den bestandenen direkten
 Live-Canaries vom 29.09.2026 `experimental`; die Auswahl gilt nur für
 private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Ein AGY-Aufruf sendet den
 vollständigen Snapshot, die Anfrage, das Schema und die Evidenz an Google.
-Codex bleibt Implementer, Claude bleibt Standardreviewer. Für eine Auswahl
+Die Standardbelegung bleibt Codex / Claude / Claude. Für eine Auswahl
 braucht das Ziel-TOML auch eine vollständige `[[provider_input_budget]]`-Tabelle
 für die tatsächlich besetzten Slots; siehe [AGY-Anleitung](antigravity-reviewer.md).
 Nach dem gescheiterten 128-Befunde-Fall gibt es keinen gemessenen endlichen
 Timeoutvorschlag. `timeout_seconds` darf jeden positiven Wert oder `0` haben.
+
+#### Andere Belegung: Claude / Codex / Codex
+
+Die Herstellertrennung ist hart: Der Implementer-Hersteller muss sich von
+beiden Reviewslot-Herstellern unterscheiden. Andere Belegungen sind per TOML
+wählbar, wenn jeder gewählte Slot mit gültiger Evidenz `certified` oder
+`experimental` ist. **Derzeit sind Claude/Implementer und beide Codex-Reviewslots
+`candidate`; dieses Beispiel startet erst nach ihrer vollständigen Freigabe.**
+Ein Adapter, Offline-Test oder Rauchlauf allein hebt die Sperre nicht auf.
+
+```toml
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "final_review"
+
+[agent_profiles.implementation]
+provider = "claude"
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.implementation.provider_options.claude]
+toolchain_read_roots = ["/absolute/node-root"]
+
+[agent_profiles.review]
+provider = "codex"
+model = "sol"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.final_review]
+provider = "codex"
+model = "sol"
+effort = "high"
+timeout_seconds = 0
+```
+
+Ersetzen Sie `/absolute/node-root` durch ein existierendes absolutes
+Werkzeugverzeichnis, zum Beispiel die konkrete Installation
+`~/.nvm/versions/node/<version>`; TOML expandiert `~` nicht. Entfernen Sie die
+Option, wenn keine zusätzliche Toolchain nötig ist. Der Adapter nimmt deren
+`bin` in PATH auf und gibt die Wurzel schreibgeschützt frei. HOME und
+Anmeldedaten-Verzeichnisse dürfen nicht freigegeben werden (Details in 4.3).
+Die Claude-Bash-Sandbox benötigt **socat und bubblewrap**; `failIfUnavailable`
+verhindert den ungeschützten Start bei fehlenden Voraussetzungen. Die Auswahl
+ist ausschließlich explizit; ein automatischer Anbieterwechsel findet nicht statt.
+Die vollständigen Schutz- und Messregeln stehen in der
+[Implementer-Zertifizierung](implementer-certification.md) und
+[Reviewer-Zertifizierung](reviewer-certification.md).
+
+Nach jedem CLI-Update führt der Operator den konto- und kontingentfreien
+Offline-Quicktest aus dem Orchestrator-Checkout aus. Er startet echte CLIs
+gegen lokale Fake-Server mit Attrappen und prüft die produktiv erzeugten
+Schutzbefehle; es gibt keinen Modellaufruf:
+
+```bash
+python3 scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
+```
+
+Für zusätzliche Werkzeugwurzeln lässt sich `--toolchain-root
+/absolute/node-root` ergänzen. Derselbe Einstieg ist
+`python3 scripts/qualification/offline_boundary.py --pair all`. Der Test
+ersetzt keine Phase-0-Live-Messung oder Zertifizierung; die Versionspolitik
+akzeptiert neue CLI-Versionen ohne Neuzertifizierung je Update, der
+Laufzeitschutz bleibt verpflichtend.
 
 ### 2.4 Den Agenten das Projekt erklären: `AGENTS.md`
 
@@ -498,6 +564,8 @@ run_task --watch --resume --approve-gate --gate-rationale "Pfade geprüft, passt
 run_task --watch --resume --reject-gate --gate-rationale "Pfade nicht freigegeben"
 ```
 
+Nach Teilergebnissen eines abgebrochenen Provideraufrufs verlangt
+`QUOTA-RESUME-DIFF` eine ausdrückliche Entscheidung über Fingerprint und Pfade.
 Bei `gate=quota_resume_diff` setzen Sie die unveränderte Aufgabendatei gezielt
 fort; im Watch-Modus wird `--task-file` ignoriert:
 
@@ -858,12 +926,12 @@ dieses Repositorys.
 | Option | `--implementer-model`, `--implementer-effort` | `--reviewer-model`, `--reviewer-effort` |
 | Umgebung | `RUN_TASK_IMPLEMENTER_MODEL`, `RUN_TASK_IMPLEMENTER_EFFORT` | `RUN_TASK_REVIEWER_MODEL`, `RUN_TASK_REVIEWER_EFFORT` |
 
-Der Orchestrator liest für Codex beim Laufstart den lokalen Katalog mit `codex debug models` über das identitätsgebundene Binary in bereinigter Umgebung. Die Familie wird aus dem Slug abgeleitet; es gewinnt der kleinste `priority`-Wert unter `supported_in_api: true` und `visibility: "list"`. Leere oder mehrdeutige Auswahl hält den Start an. Volle Modell-IDs aus dem Katalog sind ebenfalls zulässig. Laufprofil und Log halten den aufgelösten Slug fest; Resume wählt nicht neu, sondern prüft nur, ob der gebundene Slug noch existiert.
+Der Orchestrator liest für Codex einmal beim Laufstart je identitätsgebundenem Binary den lokalen Katalog mit `codex debug models` in bereinigter Umgebung. Die Familie wird aus dem Slug abgeleitet; es gewinnt der kleinste `priority`-Wert unter `supported_in_api: true` und `visibility: "list"`. Leere oder mehrdeutige Auswahl hält den Start an. Volle Modell-IDs aus dem Katalog sind ebenfalls zulässig. Laufprofil und Log halten den aufgelösten Slug fest; Resume fragt den lokalen Katalog zur Verfügbarkeitsprüfung erneut ab und wählt nicht neu. Fehlt der gebundene Slug, stoppt der Lauf mit einer klaren Meldung; es gibt keinen Modellwechsel. Das gilt auch für Codex in beiden Reviewslots.
 
-Claude-Implementer können zusätzliche schreibgeschützte Werkzeugverzeichnisse über `provider_options.claude.toolchain_read_roots = ["/absoluter/werkzeugpfad"]` nutzen, etwa eine konkrete Node-Installation unter `~/.nvm/versions/node/`. Höchstens acht existierende Verzeichnisse sind erlaubt; Symlinks werden aufgelöst und gebunden. HOME selbst, seine Vorfahren, Repository und Schutzpfade sowie Komma oder Leerraum im Pfad sind ausgeschlossen. `<wurzel>/bin` wird, wenn vorhanden, dem festen PATH vorangestellt; die Wurzeln werden ausschließlich als `sandbox.filesystem.allowRead` freigegeben. Reviewprofile dürfen die Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
+Claude-Implementer können zusätzliche schreibgeschützte Werkzeugverzeichnisse über `provider_options.claude.toolchain_read_roots = ["/absoluter/werkzeugpfad"]` nutzen, etwa eine konkrete Node-Installation unter `~/.nvm/versions/node/`. Höchstens acht existierende Verzeichnisse sind erlaubt; Symlinks werden aufgelöst und gebunden. HOME selbst, seine Vorfahren, Repository und Schutzpfade, Credential-Verzeichnisse (etwa `.ssh`, `.codex`, `.claude`, `.aws` und `.config`) einschließlich überlappender Wurzeln sowie Komma oder Leerraum im Pfad sind ausgeschlossen. `<wurzel>/bin` wird, wenn vorhanden, dem festen PATH vorangestellt; die Wurzeln werden ausschließlich als `sandbox.filesystem.allowRead` freigegeben. Reviewprofile dürfen die Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
 
 Die Claude-Aliase zeigen immer auf das neueste Modell ihrer Familie; bei Codex
-nennt der Orchestrator das neueste Modell je Familie ausdrücklich. Andere Werte
+bindet der Orchestrator das Modell mit dem besten Katalograng je Familie ausdrücklich. Andere Werte
 weist er ab, bevor ein Agent startet.
 
 Modell und Effort werden beim Start eines Laufs festgeschrieben. Eine Wache
@@ -890,7 +958,7 @@ geprüft.
 Dasselbe Register legt die geprüften CLI-Mindestversionen fest. Alle
 wohlgeformten neueren Versionen werden akzeptiert, auch neue Hauptversionen;
 ältere Versionen werden abgewiesen. Die effektiven Rechte und die Isolation
-des AGY-Reviewers werden weiterhin je Aufruf geprüft.
+aller ausgewählten Rollenpaare werden weiterhin je Aufruf geprüft. Nach CLI-Updates gehört der Offline-Quicktest aus 2.3 zur Operatorprüfung.
 
 ### 4.4 Formale Aufträge statt Ideen
 
@@ -906,6 +974,16 @@ run_task --task-file task.md
 
 Sobald eine Datei einen formalen Marker enthält, muss der ganze formale Vertrag
 stimmen; halb formale Mischformen werden abgewiesen.
+
+Ein bewusst getrennt gestarteter Implementierungs-Handoff ist ein neuer Lauf
+und braucht `--no-resume --force-overwrite-state`, damit der vorherige
+Planlauf nicht fortgesetzt wird:
+
+```bash
+run_task --no-resume --force-overwrite-state --task-file inbox/mein-vorhaben-implement.md
+```
+
+Im normalen Watch-Ablauf übernimmt die Wache den Handoff selbst.
 
 ### 4.5 Mehrere Projekte
 

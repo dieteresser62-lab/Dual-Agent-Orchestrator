@@ -22,7 +22,66 @@ claude --version
 
 Der Orchestrator läuft unter Linux oder WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md). Implementer (standardmäßig Codex), Reviewer und Final-Reviewer (standardmäßig Claude) werden über `[roles]` und `[agent_profiles]` in `orchestrator.toml` besetzt.
 
-Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** Reviewer-Option für private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Die beiden Live-Canaries sind seit dem 29.09.2026 bestanden; beide AGY-Slots sind `experimental`. Bei AGY wird der vollständige Review-Snapshot samt Anfrage und Evidenz an Google gesendet. Die [Antigravity-Anleitung](docs/reference/antigravity-reviewer.md) beschreibt Nachweise und Auswahl. Der Standard bleibt Claude, und Codex bleibt Implementer.
+Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** Reviewer-Option für private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Die beiden Live-Canaries sind seit dem 29.09.2026 bestanden; beide AGY-Slots sind `experimental`. Bei AGY wird der vollständige Review-Snapshot samt Anfrage und Evidenz an Google gesendet. Die [Antigravity-Anleitung](docs/reference/antigravity-reviewer.md) beschreibt Nachweise und Auswahl. Die Standardbelegung bleibt Codex / Claude / Claude.
+
+Andere Belegungen sind nur mit gültiger `certified`- oder `experimental`-
+Zertifizierung jedes Slots wählbar. Der Implementer-Hersteller muss sich von
+beiden Reviewslot-Herstellern unterscheiden. Beispiel für Claude / Codex / Codex:
+**Diese drei neuen Rollenpaare stehen derzeit auf `candidate` und starten erst
+nach vollständiger Freigabe.**
+
+```toml
+[roles]
+implementer = "implementation"
+reviewer = "review"
+final_reviewer = "final_review"
+
+[agent_profiles.implementation]
+provider = "claude"
+model = "opus"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.implementation.provider_options.claude]
+toolchain_read_roots = ["/absolute/node-root"]
+
+[agent_profiles.review]
+provider = "codex"
+model = "sol"
+effort = "high"
+timeout_seconds = 0
+
+[agent_profiles.final_review]
+provider = "codex"
+model = "sol"
+effort = "high"
+timeout_seconds = 0
+```
+
+`/absolute/node-root` ist ein Platzhalter für ein existierendes absolutes
+Verzeichnis, etwa `~/.nvm/versions/node/<version>`; `~` muss im TOML durch den
+absoluten Pfad ersetzt werden. Die Wurzel bleibt schreibgeschützt und ihr `bin`
+kommt in PATH; ohne zusätzliche Werkzeuge entfällt die Option. HOME und
+Credential-Verzeichnisse dürfen nicht freigegeben werden. Die Claude-Bash-
+Sandbox braucht **socat und bubblewrap** und startet mit `failIfUnavailable`
+bei fehlenden Voraussetzungen nicht. Details und Zertifizierungsnachweise:
+[Einrichtung](docs/reference/einrichtung.md),
+[Implementer-Zertifizierung](docs/reference/implementer-certification.md) und
+[Reviewer-Zertifizierung](docs/reference/reviewer-certification.md).
+
+Nach CLI-Updates führt der Operator aus dem Orchestrator-Checkout den
+konto- und kontingentfreien Offline-Quicktest aus; echte CLIs arbeiten dabei
+gegen lokale Fake-Server, ohne Modellaufruf:
+
+```bash
+python3 scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
+```
+
+Bei Bedarf ergänzt `--toolchain-root /absolute/node-root` die konkrete
+Toolchain. Alternativ gilt `python3 scripts/qualification/offline_boundary.py
+--pair all`. Neue CLI-Versionen brauchen nach der Operatorpolitik keine
+Neuzertifizierung je Update; der Quicktest ersetzt weder Live-Phase 0 noch
+die Pflichtprüfung der gebundenen Rechte je Aufruf.
 
 ## 2. Zielrepository prüfen
 
@@ -102,7 +161,7 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 
 Plan-, Teständerungs-, Slice-Commit- und Umfangs-Gates sind standardmäßig aus; eine angemeldete Umfangserweiterung genehmigt der Orchestrator selbst. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 
-Der Implementer nutzt standardmäßig Codex mit Sol (`sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus; der Standard-Effort ist `high`. Codex löst die Familie beim Laufstart über den lokalen Katalog `codex debug models` auf und bindet das Ergebnis; Resume behält das Modell und prüft dessen Verfügbarkeit. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich dies beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
+Der Implementer nutzt standardmäßig Codex mit Sol (`sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus; der Standard-Effort ist `high`. Codex löst die Familie einmal beim Laufstart je gebundenem Binary über den lokalen Katalog `codex debug models` auf und bindet das Modell mit dem besten Rang im Laufprofil und Log. Das gilt für jede Codex-Rolle; beide Reviewslots teilen bei gleicher Binäridentität die Startabfrage. Resume prüft den gebundenen Slug erneut im lokalen Katalog, wählt kein neues Modell und stoppt bei fehlender Verfügbarkeit. Für eine besonders schwierige oder eine einfache Aufgabe lässt sich dies beim Start wählen, etwa `run_task --watch --implementer-effort xhigh --reviewer-effort max`; die möglichen Werte nennt die [Einrichtung](docs/reference/einrichtung.md).
 
 Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
 
@@ -162,6 +221,20 @@ run_task --watch --resume \
   --approve-gate \
   --gate-rationale "Persistierten Gate-Grund und Fingerprint geprüft"
 ```
+
+Liegen nach einem abgebrochenen Provideraufruf Teilergebnisse im Repository,
+kann `QUOTA-RESUME-DIFF` anhalten. Prüfe Fingerprint und betroffene Pfade und
+entscheide ausdrücklich mit `--approve-gate` oder `--reject-gate`; ein einfacher
+Resume genügt dann nicht. Verwende die unveränderte Aufgabe im Einzelmodus,
+da der Watch-Modus `--task-file` ignoriert:
+
+```bash
+run_task --task-file task.md --resume --approve-gate --gate-rationale "Fingerprint und Teilergebnisse geprüft"
+```
+
+Zum Ablehnen ersetze `--approve-gate` durch `--reject-gate` mit einer passenden
+Begründung. Entferne Teilergebnisse nicht, um den gebundenen Fingerprint zu
+umgehen, und bearbeite keinen State manuell.
 
 Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Findings und Blocker verändern die konfigurierte Validierungsmatrix nicht — kein Befund kann sie erweitern oder anhalten.
 
