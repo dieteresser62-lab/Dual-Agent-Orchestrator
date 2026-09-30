@@ -13,7 +13,7 @@ import native_review_contract
 
 from agent_adapters import AgentOutputError, create_reviewer_qualification_adapter
 from agent_config import AgentSettings
-from model_catalog import hardened_reviewer_catalog
+from model_catalog import hardened_reviewer_catalog, reviewer_model_row_sha256
 from codex_review_adapter import NativeCodexReviewAdapter, codex_package_root  # allowlist:provider -- transport: reviewer adapter
 from contracts import (
     AgentRole, ApprovalMarker, FindingClass, FindingOrigin, FindingRecord,
@@ -168,6 +168,7 @@ def test_six_fake_review_format_cases_use_bound_writer(tmp_path: Path, case: str
             bound_package_root=codex_package_root(adapter.provider_identity.entry_path),  # allowlist:provider -- transport: identity-bound root
             bound_container=adapter.prepared_execution_root(),
             bound_runtime_dir=adapter.invocation.runtime_dir,
+            bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model),
         ).provider == "codex"  # allowlist:provider -- transport: reviewer normalizer
         check_schema(bundle.provider_response_schema)
         assert_projected_provider_schema(bundle.provider_response_schema, provider="codex-reviewer")  # allowlist:provider -- profile configuration: strict reviewer guard
@@ -323,6 +324,7 @@ def test_review_command_rejects_broader_or_unknown_flags(tmp_path: Path, mutatio
                 bound_package_root=codex_package_root(adapter.provider_identity.entry_path),  # allowlist:provider -- transport: identity-bound root
                 bound_container=adapter.prepared_execution_root(),
                 bound_runtime_dir=adapter.invocation.runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model),
             )
 
 
@@ -386,6 +388,7 @@ def test_profile_root_must_match_bound_package_identity(tmp_path: Path) -> None:
                 "codex-reviewer", command, bound_package_root=other,  # allowlist:provider -- transport: identity mismatch
                 bound_container=adapter.prepared_execution_root(),
                 bound_runtime_dir=adapter.invocation.runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model),
             )
         package = codex_package_root(adapter.provider_identity.entry_path)  # allowlist:provider -- transport: bound package root
         native = package / "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"  # allowlist:provider -- transport: installed npm layout
@@ -395,6 +398,7 @@ def test_profile_root_must_match_bound_package_identity(tmp_path: Path) -> None:
                 "codex-reviewer", command, bound_package_root=package,  # allowlist:provider -- transport: same package validator
                 bound_container=adapter.prepared_execution_root(),
                 bound_runtime_dir=adapter.invocation.runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model),
             )
 
 

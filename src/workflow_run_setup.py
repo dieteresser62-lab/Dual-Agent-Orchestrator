@@ -453,8 +453,13 @@ def _apply_resumed_agent_profiles(
         _bind_slot_catalog_models(slots, identities, resume=True)
     for role, profile in (("implementer", binding.implementer_profile), ("reviewer", binding.reviewer_profile),
                           ("final_reviewer", binding.final_reviewer_profile)):
-        if profile.isolation_options_sha256 != isolation_options_digest(slots[role]):
-            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} isolation paths or transport binding changed")
+        try:
+            current_isolation = isolation_options_digest(slots[role])
+        except (TypeError, ValueError) as exc:
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} reviewer model entry changed: invalid hardened catalog") from exc
+        if profile.isolation_options_sha256 != current_isolation:
+            reason = "reviewer model entry changed" if slots[role].reviewer_model_catalog_json else "isolation paths or transport binding changed"
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} {reason}")
     args.slot_settings = slots
     args.slot_identities = identities
 

@@ -15,7 +15,7 @@ from typing import Iterator
 from agent_adapters import AgentOutputError, CapabilitySpec, _BaseAdapter
 from provider_metrics import event_usage, stream_model_metrics
 from agent_config import AgentSettings
-from model_catalog import hardened_reviewer_catalog
+from model_catalog import hardened_reviewer_catalog, reviewer_model_row_sha256
 from agent_roles import AgentRoleName
 from native_provider_schema import (
     CODEX_REVIEW_DISABLED_FEATURES, NativeProviderSchemaError,  # allowlist:provider -- transport: reviewer CLI binding
@@ -153,8 +153,8 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
             raise AgentOutputError("Codex reviewer container changed before start")  # allowlist:provider -- transport: reviewer CLI binding
         path = self.invocation.runtime_dir / "model-catalog.json"
         try:
-            unchanged = not path.is_symlink() and path.read_text(encoding="utf-8") == self.settings.reviewer_model_catalog_json
-        except OSError as exc:
+            unchanged = not path.is_symlink() and reviewer_model_row_sha256(path.read_text(encoding="utf-8"), self.model) == reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model)
+        except (OSError, TypeError, ValueError) as exc:
             raise AgentOutputError("reviewer model catalog is unavailable before start") from exc
         if not unchanged:
             raise AgentOutputError("reviewer model catalog changed before start")
@@ -228,6 +228,7 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
             profile = normalize_transport_profile(
                 "codex-reviewer", command, bound_package_root=package_root,  # allowlist:provider -- profile configuration: reviewer profile
                 bound_container=workspace.container, bound_runtime_dir=runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(catalog_json, self.model),
             )
             assert_provider_capabilities("codex-reviewer", (), profile=profile)  # allowlist:provider -- profile configuration: reviewer profile
             transmitted = (

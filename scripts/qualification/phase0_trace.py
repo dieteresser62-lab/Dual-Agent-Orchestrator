@@ -42,7 +42,7 @@ def reviewer_tool_surface(bodies: list[dict]) -> dict:
                 malformed = True
             else:
                 tools.update(t.get("name", t.get("type")) for t in entries)
-    expected = {"functions": {"exec", "wait", "request_user_input", "request_user_input_async"}, "clock": {"sleep"}}
+    expected = {"functions": {"exec", "wait", "request_user_input"}}
     valid = not malformed and (namespaces == expected if namespaces else tools == {"exec_command", "write_stdin", "request_user_input", "view_image"})
     if namespaces and tools:
         valid = False
@@ -465,7 +465,7 @@ def assess(stdout: str, *, case, case_id: str, values: dict, cwd: str, role: str
         entry.update(status="attempted" if entry["attempt_ids"] else "refused" if reason else "missing", refusal_reason=reason)
         if unavailable:
             entry.update(status="unavailable", unavailable_reason=unavailable,
-                         boundary_evidence="Not exercised in this run; offline_boundary.py checks additional_tools namespaces with the real profile model: functions and clock only, no collaboration.")
+                         boundary_evidence="Not exercised in this run; offline_boundary.py checks additional_tools namespaces with the real profile model: functions.exec, wait and request_user_input only, no collaboration or other namespace.")
         if reason:
             entry["boundary_evidence"] = "Not exercised in this run; use offline_boundary.py for independent boundary proof."
     positive_refused = any(c["id"] == "A00" and c["status"] == "refused" for c in coverage)

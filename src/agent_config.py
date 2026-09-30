@@ -100,7 +100,10 @@ def _antigravity_paths(
 def isolation_options_digest(settings: AgentSettings) -> str | None:
     """Bind runtime catalog, fixed environment and paths; never credentials."""
     if settings.reviewer_model_catalog_json is not None or settings.fixed_environment:
-        payload = json.dumps({"reviewer_model_catalog": settings.reviewer_model_catalog_json,
+        from model_catalog import reviewer_model_row_sha256
+        catalog_binding = ({"reviewer_model_row_sha256": reviewer_model_row_sha256(settings.reviewer_model_catalog_json, settings.model)}
+                           if settings.reviewer_model_catalog_json is not None else {"reviewer_model_catalog": None})
+        payload = json.dumps({**catalog_binding,
                               "fixed_environment": settings.fixed_environment,
                               "toolchain_read_roots": settings.toolchain_read_roots}, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

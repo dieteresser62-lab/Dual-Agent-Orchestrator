@@ -188,6 +188,58 @@ def test_responses_api_real_event_shapes_and_body_only_logging():
     assert "secret-header-never-log" not in json.dumps(api.bodies)
 
 
+def test_code_mode_api_sends_freeform_exec_cell_and_collects_its_output():
+    call = {"name": "exec_command", "input": {"cmd": "cat /fixture/repo/README.md", "max_output_tokens": 1200}}
+    body = json.loads((Path(__file__).parent / "fixtures/phase0-traces/s2/reviewer-tools-hardened.json").read_text())
+    api = boundary.FakeAPI(BOUNDARY_REVIEWER, [call], {"done": True})
+    with api.serve() as port:
+        raw = post(port, "/v1/responses", body)
+        # Read the SSE event name structurally, rather than relying on spacing.
+        items = [event["item"] for line in raw.splitlines() if line.startswith("data: ")
+                 and (event := json.loads(line[6:])).get("type") == "response.output_item.done"]
+        assert len(items) == 1
+        item = items[0]
+        assert (item["type"], item["name"], item["namespace"]) == ("custom_tool_call", "exec", "functions")
+        assert item["input"] == 'try { const result = await tools.exec_command(' + boundary.json_text(call["input"]) + '); text(result.output); } catch (error) { text(String(error)); }'
+        assert "arguments" not in item
+        raw = post(port, "/v1/responses", {"input": [{"type": "custom_tool_call_output", "call_id": item["call_id"],
+                                                      "output": [{"type": "text", "text": "PHASE0_POSITIVE"}]}]})
+        assert '"output_text"' in raw and '"custom_tool_call"' not in raw
+    assert api.outputs() == {"probe_0": "PHASE0_POSITIVE"}
+    assert "secret-header-never-log" not in json.dumps(api.bodies)
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_code_mode_container_check_requires_observed_shell_output(tmp_path, missing):
+    paths = boundary.fixture(tmp_path / "fixture")
+    with boundary.adapter_invocation(BOUNDARY_REVIEWER, paths["repo"], identity(tmp_path / "binary", BOUNDARY_REVIEWER), "Probe.") as inv:
+        calls, expectations, forbidden = boundary.scripts_for(BOUNDARY_REVIEWER, inv, paths)
+        item = next(e for e in expectations if e["label"] == "container-readable")
+        api = boundary.FakeAPI(BOUNDARY_REVIEWER, calls, {})
+        body = json.loads((Path(__file__).parent / "fixtures/phase0-traces/s2/reviewer-tools-hardened.json").read_text())
+        body["input"].append({"type": "custom_tool_call_output", "call_id": item["id"],
+                              "output": "TypeError: tools.exec_command is not a function" if missing else "PHASE0_POSITIVE"})
+        api.bodies = [body]
+        checks = boundary.evaluate(api, [item], forbidden, inv, paths)
+        assert checks[0]["status"] == ("failed" if missing else "passed")
+        assert next(c for c in checks if c["check"] == "tool-surface")["status"] == "passed"
+
+
+@pytest.mark.parametrize("output,passed", [("ReferenceError: collaboration is not defined", True),
+                                          ("TypeError: tools.web_search is not a function", True),
+                                          ("unsupported call: spawn_agent: no rollout found", False),
+                                          ("created agent", False)])
+def test_code_mode_forbidden_calls_need_unavailability_not_ephemeral_failure(tmp_path, output, passed):
+    paths = boundary.fixture(tmp_path / "fixture")
+    with boundary.adapter_invocation(BOUNDARY_REVIEWER, paths["repo"], identity(tmp_path / "binary", BOUNDARY_REVIEWER), "Probe.") as inv:
+        calls, expectations, forbidden = boundary.scripts_for(BOUNDARY_REVIEWER, inv, paths)
+        item = next(e for e in expectations if e["label"] == "forbidden-tool:spawn_agent")
+        assert "collaboration.spawn_agent(" in boundary.FakeAPI.code_mode_source(item["call"])
+        api = boundary.FakeAPI(BOUNDARY_REVIEWER, calls, {})
+        api.bodies = [{"input": [{"type": "custom_tool_call_output", "call_id": item["id"], "output": output}]}]
+        assert boundary.evaluate(api, [item], forbidden, inv, paths)[0]["status"] == ("passed" if passed else "failed")
+
+
 def test_messages_api_real_stream_shapes_and_structured_output(tmp_path):
     bundle = boundary.implementer_bundle("Offline.")
     final = boundary.valid_implementer_result(bundle)

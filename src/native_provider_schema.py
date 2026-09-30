@@ -965,13 +965,14 @@ def normalize_transport_profile(
     bound_toolchain_read_roots: tuple[str, ...] = (),
     bound_scratch: Path | None = None,
     bound_environment: Mapping[str, str] | None = None,
+    bound_model_row_sha256: str | None = None,
 ) -> ProviderTransportProfile:
     if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
         return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch, bound_environment)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
         if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
             raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
-        return _normalize_codex_reviewer(command, bound_package_root, bound_container, bound_runtime_dir)  # allowlist:provider -- profile configuration: reviewer transport
+        return _normalize_codex_reviewer(command, bound_package_root, bound_container, bound_runtime_dir, bound_model_row_sha256)  # allowlist:provider -- profile configuration: reviewer transport
     if provider == "codex":
         return _normalize_codex(command)
     if provider == "claude":
@@ -1172,6 +1173,7 @@ def validate_codex_review_package_root(package_root: Path) -> None:  # allowlist
 def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: reviewer CLI binding
     command: Sequence[str], bound_package_root: Path,
     bound_container: Path, bound_runtime_dir: Path,
+    bound_model_row_sha256: str | None,
 ) -> ProviderTransportProfile:
     if not command or Path(command[0]).name != "codex":  # allowlist:provider -- profile configuration: reviewer CLI binding
         raise NativeProviderSchemaError("Codex reviewer binary differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
@@ -1207,11 +1209,11 @@ def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: r
     expected_catalog = bound_runtime_dir / "model-catalog.json"
     if config[5] != "model_catalog_json=" + json.dumps(str(expected_catalog)) or expected_catalog.is_symlink():
         raise NativeProviderSchemaError("reviewer model catalog path differs from runtime binding")
-    from model_catalog import hardened_reviewer_catalog
+    from model_catalog import reviewer_model_row_sha256
     try:
         catalog_text = expected_catalog.read_text(encoding="utf-8")
-        if hardened_reviewer_catalog(json.loads(catalog_text), values[2]) != catalog_text:
-            raise ValueError("catalog is not hardened")
+        if reviewer_model_row_sha256(catalog_text, values[2]) != bound_model_row_sha256:
+            raise ValueError("reviewer model entry changed or digest is unbound")
     except (OSError, TypeError, ValueError) as exc:
         raise NativeProviderSchemaError("reviewer model catalog is missing or unsafe") from exc
     if config[:3] != [

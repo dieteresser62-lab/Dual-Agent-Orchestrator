@@ -1,6 +1,7 @@
 """Resolve configured families from the identity-bound local CLI catalog."""
 
 import json
+import hashlib
 import re
 from dataclasses import replace
 
@@ -13,10 +14,25 @@ def hardened_reviewer_catalog(catalog: object, model: str) -> str:
     result = json.loads(json.dumps(catalog))
     rows = result["models"] if isinstance(result, dict) else result
     for row in rows:
-        for key in ("multi_agent_version", "multi_agent_reasoning_effort", "experimental_supported_tools",
-                    "supports_search_tool", "web_search_tool_type"):
+        for key in ("multi_agent_version", "multi_agent_reasoning_effort", "web_search_tool_type"):
             row.pop(key, None)
+        # Required CLI fields: neutralize opt-ins rather than deleting them.
+        row["experimental_supported_tools"] = []
+        row["supports_search_tool"] = False
+        # Preserve CLI execution formats and instruction/REPL policy metadata;
+        # independently check actual tool exposure in the offline request.
     return json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def reviewer_model_row_sha256(catalog_json: str, model: str) -> str:
+    """Bind only the selected hardened row, never cache metadata or other models."""
+    catalog = json.loads(catalog_json)
+    if hardened_reviewer_catalog(catalog, model) != catalog_json:
+        raise ValueError("reviewer model catalog is not hardened")
+    rows = catalog["models"] if isinstance(catalog, dict) else catalog
+    row = next(row for row in rows if row["slug"] == model)
+    canonical = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def select_catalog_model(requested: str, catalog: object, *, resume: bool = False) -> str:

@@ -9,7 +9,7 @@ import pytest
 
 from agent_adapters import AgentOutputError, NativeCodexAdapter  # allowlist:provider -- profile configuration: provider-specific transport fixture
 from agent_config import AgentSettings, isolation_options_digest
-from model_catalog import bind_catalog_models, hardened_reviewer_catalog
+from model_catalog import bind_catalog_models, hardened_reviewer_catalog, reviewer_model_row_sha256
 from native_implementer_contract import parse_bound_native_implementer_contract_result
 from native_implementer_request import build_native_implementer_request
 from native_provider_schema import NativeProviderSchemaError, normalize_transport_profile
@@ -50,7 +50,9 @@ def test_all_catalog_models_are_hardened_without_mutating_source():
     result = json.loads(hardened_reviewer_catalog(source, "gpt-6.1-sol"))
     assert source == original
     for row in result["models"]:
-        assert set(row) == {"slug", "tool_mode"}
+        assert set(row) == {"slug", "tool_mode", "experimental_supported_tools", "supports_search_tool"}
+        assert row["experimental_supported_tools"] == []
+        assert row["supports_search_tool"] is False
     assert hardened_reviewer_catalog(result, "gpt-6.1-sol") == hardened_reviewer_catalog(source, "gpt-6.1-sol")
 
 
@@ -77,7 +79,8 @@ def test_catalog_is_private_runtime_argument_and_bound_to_selected_model(tmp_pat
         with pytest.raises(NativeProviderSchemaError, match="catalog"):
             normalize_transport_profile("codex-reviewer", prepared.command,  # allowlist:provider -- profile configuration: private catalog grammar
                 bound_package_root=Path(adapter.provider_identity.entry_path).resolve().parents[1],
-                bound_container=adapter.prepared_execution_root(), bound_runtime_dir=adapter.invocation.runtime_dir)
+                bound_container=adapter.prepared_execution_root(), bound_runtime_dir=adapter.invocation.runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model))
 
 
 def test_changed_hardened_catalog_is_rejected_at_the_process_boundary(tmp_path):
@@ -92,6 +95,67 @@ def test_changed_hardened_catalog_is_rejected_at_the_process_boundary(tmp_path):
         with pytest.raises(AgentOutputError, match="catalog changed before start"):
             adapter.before_provider_process()
         assert adapter._started is False
+
+
+def test_catalog_preserves_required_shell_and_instruction_metadata():
+    source = catalog()
+    retained = {"apply_patch_tool_type": "freeform", "shell_type": "unified_exec", "tool_mode": "code_mode_only",
+                "include_skills_usage_instructions": False, "include_plugin_usage_instructions": False,
+                "include_apps_usage_instructions": False, "node_repl_auto_review_required": True,
+                "node_repl_disabled": False}
+    source["models"][0].update(retained)
+    row = json.loads(hardened_reviewer_catalog(source, "gpt-6.1-sol"))["models"][0]
+    assert {key: row[key] for key in retained} == retained
+
+
+@pytest.mark.parametrize("change", ["other-model", "cache-metadata", "bound-model", "unhardened", "symlink"])
+def test_catalog_file_is_hardened_and_bound_to_only_selected_row(tmp_path, change):
+    adapter, repo, bundle = reviewer_prepared(tmp_path)
+    with adapter.review_execution_boundary(repo, None):
+        prepared = adapter.prepare_native_provider_input(bundle)
+        adapter.seal_provider_input()
+        path = adapter.invocation.runtime_dir / "model-catalog.json"
+        source = json.loads(path.read_text())
+        # Keep a second model even if the minimal adapter fixture only had one.
+        source["models"].append({"slug": "unrelated-model", "description": "new"})
+        if change == "cache-metadata":
+            source.update(fetched_at="tomorrow", etag="new")
+        if change == "bound-model":
+            source["models"][0]["base_instructions"] = "different"
+        text = hardened_reviewer_catalog(source, adapter.model)
+        if change == "unhardened":
+            source = json.loads(text)
+            source["models"][0]["multi_agent_version"] = "v2"
+            text = json.dumps(source, sort_keys=True, separators=(",", ":"))
+        path.write_text(text)
+        if change == "symlink":
+            saved = path.with_suffix(".saved")
+            path.rename(saved)
+            path.symlink_to(saved)
+        def normalize():
+            return normalize_transport_profile("codex-reviewer", prepared.command,  # allowlist:provider -- profile configuration: selected model normalization
+                bound_package_root=Path(adapter.provider_identity.entry_path).resolve().parents[1],
+                bound_container=adapter.prepared_execution_root(), bound_runtime_dir=adapter.invocation.runtime_dir,
+                bound_model_row_sha256=reviewer_model_row_sha256(adapter.settings.reviewer_model_catalog_json, adapter.model))
+        if change in {"bound-model", "unhardened", "symlink"}:
+            with pytest.raises(NativeProviderSchemaError, match="catalog"):
+                normalize()
+            with pytest.raises(AgentOutputError, match="catalog"):
+                adapter.before_provider_process()
+        else:
+            normalize()
+            adapter.before_provider_process()
+            assert adapter._started
+
+
+def test_catalog_normalizer_rejects_unbound_row_digest(tmp_path):
+    adapter, repo, bundle = reviewer_prepared(tmp_path)
+    with adapter.review_execution_boundary(repo, None):
+        prepared = adapter.prepare_native_provider_input(bundle)
+        with pytest.raises(NativeProviderSchemaError, match="catalog"):
+            normalize_transport_profile("codex-reviewer", prepared.command,  # allowlist:provider -- profile configuration: unbound row digest
+                bound_package_root=Path(adapter.provider_identity.entry_path).resolve().parents[1],
+                bound_container=adapter.prepared_execution_root(), bound_runtime_dir=adapter.invocation.runtime_dir)
 
 
 @pytest.mark.parametrize("mutation", ["removed-opt-in", "safe-metadata"])
@@ -113,14 +177,23 @@ def test_real_additional_tools_namespaces(name, expected):
     body = json.loads((FIXTURES / name).read_text())
     result = phase0_trace.reviewer_tool_surface([body])
     assert result["status"] == expected
-    assert result["namespaces"]["clock"] == ["sleep"]
+    if expected == "passed":
+        assert result["namespaces"] == {"functions": ["exec", "request_user_input", "wait"]}
     assert ("collaboration" in result["namespaces"]) == (expected == "failed")
 
 
-@pytest.mark.parametrize("extra", ["web_search", "spawn_agent", "send_message"])
+@pytest.mark.parametrize("extra", ["web_search", "spawn_agent", "send_message", "request_user_input_async"])
 def test_extra_function_in_allowed_namespace_is_rejected(extra):
     body = json.loads((FIXTURES / "reviewer-tools-hardened.json").read_text())
     body["input"][0]["tools"][0]["tools"].append({"type": "function", "name": extra})
+    assert phase0_trace.reviewer_tool_surface([body])["status"] == "failed"
+
+
+@pytest.mark.parametrize("namespace", ["clock", "unexpected"])
+def test_extra_namespace_is_rejected_even_without_collaboration(namespace):
+    body = json.loads((FIXTURES / "reviewer-tools-hardened.json").read_text())
+    body["input"][0]["tools"].append({"type": "namespace", "name": namespace,
+                                     "tools": [{"type": "function", "name": "sleep"}]})
     assert phase0_trace.reviewer_tool_surface([body])["status"] == "failed"
 
 
@@ -293,7 +366,7 @@ def test_product_requests_already_transport_stop_labels_and_phase0_now_does_too(
             assert label in text
 
 
-@pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize("changed", ["none", "other-model", "cache-metadata", "bound-model", "unhardened"])
 def test_resume_rejects_catalog_digest_drift_before_dispatch(monkeypatch, changed):
     import workflow_run_setup
     from workflow_state import init_workflow_state, scripted_profile_binding, ProtocolBinding, ProtocolMode
@@ -318,17 +391,25 @@ def test_resume_rejects_catalog_digest_drift_before_dispatch(monkeypatch, change
     identities = {slot: row.binary_identity for slot, row in profiles.items()}
     monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *a, **k: identities)
     source = catalog()
-    if changed:
-        source["models"][0]["context_window"] = 200000
+    if changed == "bound-model":
+        source["models"][0]["base_instructions"] = "Different bound policy"
+    if changed == "other-model":
+        source["models"][1]["description"] = "Changed unrelated model"
+    if changed == "cache-metadata":
+        source.update(fetched_at="tomorrow", etag="new-cache-tag")
     def bind(slots, identities, *, resume):
         assert resume
         fake = SimpleNamespace(kind="verified", digest="same", entry_path="/fixture/provider", launch_prefix=("/fixture/provider",))
         bind_catalog_models(slots, {slot: fake for slot in slots}, lambda c: (0, json.dumps(source), ""), resume=True)
+        if changed == "unhardened":
+            tampered = json.loads(slots["reviewer"].reviewer_model_catalog_json)
+            tampered["models"][0]["multi_agent_version"] = "v2"
+            slots["reviewer"] = replace(slots["reviewer"], reviewer_model_catalog_json=json.dumps(tampered, sort_keys=True, separators=(",", ":")))
     monkeypatch.setattr(workflow_run_setup, "_bind_slot_catalog_models", bind)
     slots = {slot: AgentSettings(row.provider, row.binary, row.model, row.timeout_seconds, row.effort) for slot, row in profiles.items()}
     args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=False)
-    if changed:
-        with pytest.raises(StateSchemaError, match="transport binding changed"):
+    if changed in {"bound-model", "unhardened"}:
+        with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*reviewer model entry changed"):
             workflow_run_setup._apply_resumed_agent_profiles(args, state)
     else:
         workflow_run_setup._apply_resumed_agent_profiles(args, state)

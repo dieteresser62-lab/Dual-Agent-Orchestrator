@@ -247,8 +247,10 @@ class FakeAPI:
         for body in self.bodies:
             if self.pair == BOUNDARY_REVIEWER:
                 for item in body.get("input", []):
-                    if isinstance(item, dict) and item.get("type") == "function_call_output":
-                        found[item["call_id"]] = str(item.get("output", ""))
+                    if isinstance(item, dict) and item.get("type") in {"function_call_output", "custom_tool_call_output"}:
+                        output = item.get("output", "")
+                        found[item["call_id"]] = ("\n".join(block.get("text", "") for block in output if isinstance(block, dict))
+                                                  if isinstance(output, list) else str(output))
             else:
                 for item in body.get("messages", []):
                     content = item.get("content", [])
@@ -285,14 +287,28 @@ class FakeAPI:
             return message_events(blocks, body.get("model", "offline"), "tool_use" if blocks[0]["type"] == "tool_use" else "end_turn")
         outputs = self.outputs()
         pending = [(i, c) for i, c in enumerate(self.calls) if f"probe_{i}" not in outputs]
-        items = [{"type": "function_call", "id": f"fc_{i}", "call_id": f"probe_{i}",
-                  "name": c["name"], "arguments": json_text(c["input"])} for i, c in pending]
+        code_mode = any(isinstance(item, dict) and item.get("type") == "additional_tools"
+                        for request in self.bodies for item in request.get("input", []))
+        if code_mode:
+            items = [{"type": "custom_tool_call", "id": f"ctc_{i}", "call_id": f"probe_{i}",
+                      "name": "exec", "namespace": "functions", "input": self.code_mode_source(c)} for i, c in pending]
+        else:
+            items = [{"type": "function_call", "id": f"fc_{i}", "call_id": f"probe_{i}",
+                      "name": c["name"], "arguments": json_text(c["input"])} for i, c in pending]
         if not items:
             items = [{"type": "message", "role": "assistant", "id": "msg_final", "content": [{"type": "output_text", "text": json_text(self.final)}]}]
         return [{"type": "response.created", "response": {"id": "resp_offline"}},
                 *({"type": "response.output_item.done", "output_index": i, "item": item} for i, item in enumerate(items)),
                 {"type": "response.completed", "response": {"id": "resp_offline", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
                  "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}}]
+
+    @staticmethod
+    def code_mode_source(call):
+        """Use the freeform exec tool and its documented nested shell API."""
+        target = "collaboration.spawn_agent" if call["name"] in {"spawn_agent", "multi_agent"} else "tools." + call["name"]
+        value = "result.output" if call["name"] == "exec_command" else "result"
+        return ("try { const result = await " + target + "(" + json_text(call["input"]) + "); text(" + value +
+                "); } catch (error) { text(String(error)); }")
 
     @contextmanager
     def serve(self):
@@ -478,7 +494,8 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
             # The reviewer CLI (0.159.2) answers an absent tool with "unsupported call: <name>".
             passed = observed is not None and bool(re.search(
                 r"(?:unknown|unrecognized|unsupported|disabled|not found|not available|not supported|no such).*(?:tool|function|call)"
-                r"|(?:tool|function|call).*(?:unknown|unrecognized|unsupported|disabled|not found|not available|not supported|no such)", observed, re.I))
+                r"|(?:tool|function|call).*(?:unknown|unrecognized|unsupported|disabled|not found|not available|not supported|no such)"
+                r"|(?:ReferenceError:.*is not defined|TypeError:.*is not a function)", observed, re.I)) and "no rollout found" not in observed.lower()
         elif item["word"] is not None:
             passed = observed is not None and item["word"] in observed
         elif "file-write" in item["label"]:
@@ -509,7 +526,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
         surface = reviewer_tool_surface(api.bodies)
         checks.append({"check": "tool-surface", "status": "failed" if surface["status"] == "skipped" else surface["status"],
                        "evidence": {**surface, "model": inv.adapter.model,
-                                    "code_mode_behavior": "The JSON command stream omits collaboration calls; the exact additional_tools namespace check is the independent proof. No unverified code-mode call format is injected.",
+                                    "code_mode_behavior": "Code-mode requests receive functions.exec custom_tool_call cells using tools.exec_command; observed custom_tool_call_output proves the shell checks. Forbidden namespace calls must fail without 'no rollout found'.",
                                     "hardening": "Product adapter normalizes flags and the hardened model_catalog_json runtime file."}})
     else:
         for name in ("inbox", "outbox"):
