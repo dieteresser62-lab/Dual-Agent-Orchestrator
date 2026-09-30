@@ -20,11 +20,9 @@ from workflow_state import WorkflowStep
 def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Promote only test copies of candidate pairs with generic fake proofs."""
     import cli
-    import role_binding
     import role_certification
     import workflow_production
     import workflow_run_setup
-    from role_binding import binding_for_role
 
     root = Path(__file__).resolve().parents[1]
     table_path = "schemas/role-provider-certifications-v1.json"
@@ -45,7 +43,6 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, target)
-    monkeypatch.setitem(role_binding._PAIR_BINDINGS, ("claude", AgentRoleName.IMPLEMENTER), binding_for_role(AgentRoleName.IMPLEMENTER))  # allowlist:provider -- certification data: fake new pair
     table = json.loads((tmp_path / table_path).read_text(encoding="utf-8"))
 
     def digest(value: object) -> str:
@@ -186,37 +183,23 @@ def test_registered_fake_transports_are_accepted_per_provider(monkeypatch: pytes
     assert not agent_adapters.is_native_implementer_adapter(FakeReviewer())
 
 
-def test_generic_implementer_preparation_has_no_codex_boundary(  # allowlist:provider -- transport: boundary test
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_unknown_implementer_boundary_is_rejected_before_preparation() -> None:
     import agent_runtime
     from test_agent_adapters import _codex_bundle  # allowlist:provider -- transport: existing request fixture
-    from provider_input_budget import PreparedProviderInput, ProviderInputComponent
-
-    prepared = PreparedProviderInput(("fake",), None, (ProviderInputComponent("stdin_prompt", "prompt"),))
 
     class FakeImplementer:
         name = "claude"  # allowlist:provider -- transport: fake implementer
         execution_boundary_profile = "none"
 
         def prepare_native_provider_input(self, bundle):
-            assert bundle is request
-            return prepared
+            raise AssertionError("unknown boundary reached provider preparation")
 
     request = _codex_bundle()  # allowlist:provider -- transport: existing request fixture
 
-    def capture(adapter, prompt, **kwargs):
-        assert isinstance(adapter, FakeImplementer)
-        assert prompt == request.canonical_json
-        assert kwargs["prepared_provider_input"] is prepared
-        assert kwargs["execution_root_override"] is None
-        raise RuntimeError("captured generic preparation")
-
-    monkeypatch.setattr(agent_runtime, "run_agent", capture)
-    with pytest.raises(RuntimeError, match="captured generic preparation"):
+    with pytest.raises(ValueError, match="unknown implementer execution boundary"):
         agent_runtime.run_native_implementer_agent(
             FakeImplementer(), request,
-            config=agent_runtime.OrchestratorConfig(repo_root=tmp_path),
+            config=agent_runtime.OrchestratorConfig(),
             shorten=lambda text, _limit: text or "",
             operation="implementer_plan", binding_fingerprint="a" * 64,
         )
@@ -267,7 +250,7 @@ def test_topology_plan_slice_final_review_and_resume(
     implementer: str, reviewer: str,
 ) -> None:
     import test_orchestrator_runtime as fixture
-    from agent_adapters import NativeCodexAdapter, build_slot_agent_registry  # allowlist:provider -- transport: registered fake base classes
+    from agent_adapters import build_slot_agent_registry
     from artifact_store import ArtifactStore
     from artifact_models import FinalReviewCompletedPayload
     from orchestrator import ProductionWorkflowDriver, run_production_workflow
@@ -277,10 +260,8 @@ def test_topology_plan_slice_final_review_and_resume(
     if implementer == "claude":  # allowlist:provider -- profile configuration: target fake journey
         _fake_certifications(tmp_path / "qualification", monkeypatch)
 
-        class FakeImplementer(NativeCodexAdapter):  # allowlist:provider -- transport: fake implementer base
-            pass
-
-        monkeypatch.setitem(agent_adapters.NATIVE_IMPLEMENTER_TRANSPORTS, "claude", FakeImplementer)  # allowlist:provider -- transport: fake registration
+        from claude_implementer_adapter import NativeClaudeImplementerAdapter  # allowlist:provider -- transport: real implementer journey
+        assert agent_adapters._implementer_transports()["claude"] is NativeClaudeImplementerAdapter  # allowlist:provider -- transport: real implementer journey
 
     repository = fixture._repository(tmp_path, "feature/fake-topology")
     if reviewer != "claude" or implementer != "codex":  # allowlist:provider -- profile configuration: selected journey
@@ -302,6 +283,7 @@ def test_topology_plan_slice_final_review_and_resume(
     assert agent_adapters.is_native_review_adapter(registry["final_reviewer"])
     steps: list[WorkflowStep] = []
     expected_review = None
+    expected_implementer = None
     if implementer == "claude":  # allowlist:provider -- transport: reviewer fake process boundary
         import agent_runtime
         from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: real reviewer adapter
@@ -314,14 +296,21 @@ def test_topology_plan_slice_final_review_and_resume(
         entry = package / "bin/codex.js"  # allowlist:provider -- transport: fake identity entry
         entry.write_text("fake")
 
-        def fake_reviewer_process(adapter, prompt, *, prepared_provider_input, **_kwargs):
-            assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: real reviewer adapter
-            assert prepared_provider_input.stdin_text.startswith(adapter.role_binding.policy)
-            adapter.before_provider_process()
-            adapter.invocation.last_message_file.write_text(json.dumps({"result": json.loads(expected_review.canonical_json)}))
-            return adapter.extract_output("", "", {})
+        def fake_provider_process(adapter, prompt, *, prepared_provider_input, **_kwargs):
+            if isinstance(adapter, NativeCodexReviewAdapter):  # allowlist:provider -- transport: real reviewer adapter
+                assert prepared_provider_input.stdin_text.startswith(adapter.role_binding.policy)
+                adapter.before_provider_process()
+                adapter.invocation.last_message_file.write_text(json.dumps({"result": json.loads(expected_review.canonical_json)}))
+                return adapter.extract_output("", "", {})
+            assert isinstance(adapter, NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: real implementer journey
+            assert prepared_provider_input.command[prepared_provider_input.command.index("--settings") + 1]
+            envelope = {"is_error": False, "structured_output": {"result": json.loads(expected_implementer.canonical_json)}}
+            try:
+                return adapter.extract_output(json.dumps(envelope), "", {})
+            finally:
+                adapter.cleanup()
 
-        monkeypatch.setattr(agent_runtime, "run_agent", fake_reviewer_process)
+        monkeypatch.setattr(agent_runtime, "run_agent", fake_provider_process)
 
     def implement(_driver: ProductionWorkflowDriver, invocation: ImplementerInvocation):
         steps.append(invocation.step)
@@ -329,9 +318,22 @@ def test_topology_plan_slice_final_review_and_resume(
         target.parent.mkdir(parents=True, exist_ok=True)
         if invocation.step is WorkflowStep.IMPLEMENTER_PLAN:
             target.write_text("value = 0\n", encoding="utf-8")
-            return fixture._native_plan_output(invocation, summary="add implementation", scope_paths=("src/one.py",))
-        target.write_text("value = 1\n", encoding="utf-8")
-        return fixture._native_implementation_output(invocation)
+            expected = fixture._native_plan_output(invocation, summary="add implementation", scope_paths=("src/one.py",))
+        else:
+            target.write_text("value = 1\n", encoding="utf-8")
+            expected = fixture._native_implementation_output(invocation)
+        if implementer != "claude":  # allowlist:provider -- transport: baseline fake implementer
+            return expected
+        from agent_runtime import run_native_implementer_agent
+        adapter = _driver._adapter_for_slot("implementer")
+        assert isinstance(adapter, NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: real implementer journey
+        nonlocal expected_implementer
+        expected_implementer = expected
+        return run_native_implementer_agent(
+            adapter, invocation.native_request, config=_driver.config,
+            shorten=lambda value, _limit: value or "", operation=invocation.step.value,
+            binding_fingerprint=invocation.native_request.bound_context.context.current_fingerprint,
+        )
 
     def review(driver: ProductionWorkflowDriver, invocation: ReviewerInvocation):
         steps.append(invocation.step)

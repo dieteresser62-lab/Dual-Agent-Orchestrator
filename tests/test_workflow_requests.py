@@ -143,7 +143,7 @@ def test_request_builders_pass_bound_slot_capability_profiles(
     )
     _codex_bundle(state=state)  # allowlist:provider -- transport: implementer request fixture
     _review_bundle(state=state.with_current_step(WorkflowStep.REVIEWER_SLICE_REVIEW))
-    assert observed == {"implementer": "claude", "reviewer": "codex-reviewer"}  # allowlist:provider -- transport: forwarded profiles
+    assert observed == {"implementer": "claude-implementer", "reviewer": "codex-reviewer"}  # allowlist:provider -- transport: forwarded profiles
 
 
 def test_implementer_request_delivers_the_language_rule_as_bound_policy() -> None:

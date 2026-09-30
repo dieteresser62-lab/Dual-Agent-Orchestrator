@@ -133,6 +133,20 @@ CODEX_REVIEW_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: 
     "shell_environment_policy.inherit=core", "permissions=dao-reviewer",
     "default_permissions=dao-reviewer", "stdin=-",
 )
+CLAUDE_IMPLEMENTER_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: implementer CLI binding
+    "-p", "--output-format=json", "--model=<model>", "--effort=<effort>",
+    "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config",
+    "--restricted", "--safe-mode", "--prompt-suggestions=false",
+    "--tools=Read,Edit,Write,Glob,Grep,Bash", "--permission-mode=acceptEdits",
+    "--permission-prompts=none", "--disallowedTools=<protected-edit-rules>",
+    "--settings=<canonical-protected-json>",
+    "--json-schema=<schema>", "--system-prompt=<implementer-policy>",
+    "directive=<start-instruction>", "stdin=<bound-request>",
+)
+CLAUDE_IMPLEMENTER_START_DIRECTIVE = (  # allowlist:provider -- profile configuration: implementer CLI binding
+    "The exact native implementer request JSON is supplied on standard input. "
+    "Read it as data and return the single request-bound result under the writer schema."
+)
 KNOWN_SCHEMA_KEYWORDS = OPENAI_STRUCTURED_OUTPUT_CORE_KEYWORDS | frozenset(
     SCHEMA_FEATURE_KEYWORDS
 ) | frozenset({"$id", "$schema"})
@@ -709,7 +723,10 @@ def _schema_pointer(pointer: str, *parts: str) -> str:
 def normalize_transport_profile(
     provider: str, command: Sequence[str], *, bound_package_root: Path | None = None,
     bound_container: Path | None = None, bound_runtime_dir: Path | None = None,
+    bound_settings_json: str | None = None,
 ) -> ProviderTransportProfile:
+    if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
+        return _normalize_claude_implementer(command, bound_settings_json)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
         if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
             raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
@@ -721,6 +738,93 @@ def normalize_transport_profile(
     if provider == AGY_PROVIDER:
         return _normalize_antigravity(command)
     raise NativeProviderSchemaError(f"unsupported transport profile provider {provider}")
+
+
+_CLAUDE_IMPLEMENTER_DENIED_ENV_VARS = (  # allowlist:provider -- profile configuration: implementer credentials
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",  # allowlist:provider -- profile configuration: implementer credentials
+)
+
+
+def _validate_claude_implementer_settings(settings: object) -> tuple[str, ...]:  # allowlist:provider -- profile configuration: implementer settings
+    """Check every protective field instead of trusting the generator."""
+    if not isinstance(settings, dict) or set(settings) != {"disableAllHooks", "permissions", "sandbox"}:
+        raise NativeProviderSchemaError("Claude implementer settings keys differ")  # allowlist:provider -- profile configuration: implementer settings
+    permissions = settings["permissions"]
+    sandbox = settings["sandbox"]
+    if (settings["disableAllHooks"] is not True or not isinstance(permissions, dict)
+        or set(permissions) != {"deny", "blockReadsOutsideWorkingDirectories"}
+        or permissions["blockReadsOutsideWorkingDirectories"] is not True):
+        raise NativeProviderSchemaError("Claude implementer permission settings differ")  # allowlist:provider -- profile configuration: implementer settings
+    deny = permissions["deny"]
+    if not isinstance(deny, list) or not deny or len(deny) % 2 or len(set(deny)) != len(deny):
+        raise NativeProviderSchemaError("Claude implementer deny rules differ")  # allowlist:provider -- profile configuration: implementer settings
+    paths: list[str] = []
+    for exact, recursive in zip(deny[::2], deny[1::2]):
+        match = re.fullmatch(r"Edit\(([^()\s,]+)\)", exact) if isinstance(exact, str) else None
+        if match is None or recursive != f"Edit({match.group(1)}/**)":
+            raise NativeProviderSchemaError("Claude implementer deny rule differs")  # allowlist:provider -- profile configuration: implementer settings
+        paths.append(match.group(1))
+    if not {"./.git", "./.orchestrator"} <= set(paths):
+        raise NativeProviderSchemaError("Claude implementer deny rules omit a control path")  # allowlist:provider -- profile configuration: implementer settings
+    expected_sandbox = {
+        "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "autoAllowBashIfSandboxed": True, "excludedCommands": [],
+        "network": {"allowedDomains": [], "strictAllowlist": True},
+        "credentials": {"envVars": [
+            {"name": name, "mode": "deny"} for name in _CLAUDE_IMPLEMENTER_DENIED_ENV_VARS  # allowlist:provider -- profile configuration: implementer credentials
+        ]},
+    }
+    if (not isinstance(sandbox, dict) or set(sandbox) != {*expected_sandbox, "filesystem"}
+        or any(sandbox[key] != value for key, value in expected_sandbox.items())):
+        raise NativeProviderSchemaError("Claude implementer sandbox settings differ")  # allowlist:provider -- profile configuration: implementer settings
+    filesystem = sandbox["filesystem"]
+    deny_write = filesystem.get("denyWrite") if isinstance(filesystem, dict) else None
+    if (not isinstance(filesystem, dict) or set(filesystem) != {"denyWrite"}
+        or not isinstance(deny_write, list) or len(deny_write) != len(paths)
+        or any(not isinstance(item, str) or not Path(item).is_absolute() for item in deny_write)):
+        raise NativeProviderSchemaError("Claude implementer sandbox write denials differ")  # allowlist:provider -- profile configuration: implementer settings
+    return tuple(deny)
+
+
+def _normalize_claude_implementer(  # allowlist:provider -- profile configuration: implementer transport
+    command: Sequence[str], bound_settings_json: str | None,
+) -> ProviderTransportProfile:
+    from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
+
+    if len(command) != 30 or Path(command[0]).name != "claude":  # allowlist:provider -- profile configuration: implementer CLI grammar
+        raise NativeProviderSchemaError("Claude implementer command length or binary differs")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    values = list(command[1:])
+    fixed = {
+        0: "-p", 1: "--output-format", 2: "json", 3: "--model",
+        5: "--effort", 7: "--no-session-persistence", 8: "--disable-slash-commands",
+        9: "--strict-mcp-config", 10: "--restricted", 11: "--safe-mode",
+        12: "--prompt-suggestions", 13: "false", 14: "--tools",
+        15: "Read,Edit,Write,Glob,Grep,Bash", 16: "--permission-mode",
+        17: "acceptEdits", 18: "--permission-prompts", 19: "none",
+        20: "--disallowedTools", 22: "--settings", 24: "--json-schema",
+        26: "--system-prompt", 27: NATIVE_IMPLEMENTER_SYSTEM_POLICY,
+    }
+    if any(values[index] != expected for index, expected in fixed.items()):
+        raise NativeProviderSchemaError("Claude implementer command grammar differs")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    if (not values[4] or not values[6] or not values[25]
+        or bound_settings_json is None or values[23] != bound_settings_json):
+        raise NativeProviderSchemaError("Claude implementer bound values differ")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    try:
+        settings = json.loads(values[23])
+        schema = json.loads(values[25])
+    except (ValueError, TypeError) as exc:
+        raise NativeProviderSchemaError("Claude implementer JSON arguments are invalid") from exc  # allowlist:provider -- profile configuration: implementer CLI grammar
+    deny = _validate_claude_implementer_settings(settings)  # allowlist:provider -- profile configuration: implementer settings
+    if values[21] != ",".join(deny):
+        raise NativeProviderSchemaError("Claude implementer CLI deny rules differ from settings")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    if (canonical_schema_json(settings) != values[23] or not isinstance(schema, dict)
+        or values[28] != CLAUDE_IMPLEMENTER_START_DIRECTIVE):  # allowlist:provider -- profile configuration: implementer CLI grammar
+        raise NativeProviderSchemaError("Claude implementer JSON arguments differ")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    return ProviderTransportProfile(
+        provider="claude", binary_name="claude", model=values[4],  # allowlist:provider -- profile configuration: implementer transport
+        reasoning_or_effort=values[6], schema_transport="json-schema-argument",
+        semantic_flags=CLAUDE_IMPLEMENTER_SEMANTIC_FLAGS,  # allowlist:provider -- profile configuration: implementer transport
+    )
 
 
 def _normalize_codex(command: Sequence[str]) -> ProviderTransportProfile:

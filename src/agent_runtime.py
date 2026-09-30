@@ -521,6 +521,8 @@ class OrchestratorConfig:
     agent_live_stream_mode: str = "compact"
     agent_live_stream_channels: str = "both"
     repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
+    inbox_dir: Path | None = None
+    outbox_dir: Path | None = None
     strict_preflight: bool = False
     phase_progress_threshold_seconds: float = 30.0
     max_acceptance_reviews: int = 6
@@ -2044,17 +2046,24 @@ def run_native_implementer_agent(
     execution_boundary: NativeCodexExecutionBoundary | None = None,
 ) -> NativeAgentImplementerOutput:
     """Run a registered native implementer without marker parsing or repair."""
-    if getattr(adapter, "execution_boundary_profile", "typed-sandbox") == "typed-sandbox":
+    boundary_profile = getattr(adapter, "execution_boundary_profile", None)
+    if boundary_profile == "typed-sandbox":
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(
             config.repo_root
         )
         prepared = adapter.prepare_native_provider_input(bundle, boundary)
         execution_root = boundary.execution_root
-    else:
+    elif boundary_profile == "claude-write-boundary":  # allowlist:provider -- transport: implementer boundary
         if execution_boundary is not None:
             raise ValueError("execution boundary is not supported by this transport")
+        adapter.bind_implementer_boundary(
+            config.repo_root, config.inbox_dir, config.outbox_dir,
+            bundle.bound_context.context.run_id,
+        )
         prepared = adapter.prepare_native_provider_input(bundle)
-        execution_root = None
+        execution_root = config.repo_root.resolve()
+    else:
+        raise ValueError(f"unknown implementer execution boundary profile: {boundary_profile!r}")
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -2279,8 +2288,8 @@ def parse_quota_reset(
 ) -> QuotaReset | None:
     """Parse only unambiguous provider reset evidence, normalized to UTC."""
     if reset_profile is None:
-        from agent_adapters import NATIVE_IMPLEMENTER_TRANSPORTS, _review_transports
-        transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(agent_key) or _review_transports().get(agent_key)
+        from agent_adapters import _implementer_transports, _review_transports
+        transport = _implementer_transports().get(agent_key) or _review_transports().get(agent_key)
         if transport is None:
             raise ValueError("quota parser requires a registered transport")
         reset_profile = transport.quota_reset_profile
@@ -2625,9 +2634,9 @@ def is_structured_output_retry_exhaustion(
 
 
 def _registered_session_limit_profile(agent_key: str) -> str:
-    from agent_adapters import NATIVE_IMPLEMENTER_TRANSPORTS, _review_transports
+    from agent_adapters import _implementer_transports, _review_transports
 
-    transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(agent_key) or _review_transports().get(agent_key)
+    transport = _implementer_transports().get(agent_key) or _review_transports().get(agent_key)
     return getattr(transport, "session_limit_profile", "standard")
 
 

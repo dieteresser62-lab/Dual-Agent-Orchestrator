@@ -104,7 +104,7 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
     assert [entry.capability_profile for entry in table.entries] == [
         "codex", "antigravity", "claude", "antigravity", "claude",
-            "codex-reviewer", "codex-reviewer", "claude",  # allowlist:provider -- certification data: candidate profiles
+            "codex-reviewer", "codex-reviewer", "claude-implementer",  # allowlist:provider -- certification data: candidate profiles
     ]
     assert not hasattr(table.entries[0], "profile")
 
@@ -293,7 +293,7 @@ def test_generic_provider_canary_gates_candidate_experimental_and_certified(
     _copy_sources(tmp_path)
     capability_path = tmp_path / "schemas/native-provider-schema-capabilities-v2.json"
     capabilities = json.loads(capability_path.read_text())
-    profile = json.loads(json.dumps(capabilities["providers"][2]))
+    profile = json.loads(json.dumps(next(item for item in capabilities["providers"] if item["profile_id"] == "codex")))  # allowlist:provider -- certification data: fixture source profile
     profile["provider"] = profile["profile_id"] = "fiction"
     profile["transport_profile"]["provider"] = "fiction"
     profile["transport_profile"]["model"] = "sample-v1"

@@ -609,6 +609,8 @@ def run_production_workflow(
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
         repo_root=root,
+        inbox_dir=Path(getattr(args, "inbox_dir", "inbox")),
+        outbox_dir=Path(getattr(args, "outbox_dir", "outbox")),
         strict_preflight=bool(args.strict_preflight),
         max_acceptance_reviews=max_acceptance_reviews,
         provider_input_budget=args.repo_config.provider_input_budget,

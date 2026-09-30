@@ -103,11 +103,13 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
     assert [item["profile_id"] for item in capabilities["providers"]] == [
         "antigravity",
         "claude",
+        "claude-implementer",  # allowlist:provider -- profile configuration: implementer transport
         "codex",
         "codex-reviewer",  # allowlist:provider -- profile configuration: reviewer transport
     ]
     assert {item["profile_id"]: item["version_policy"] for item in capabilities["providers"]} == {
         "antigravity": "forward", "claude": "forward", "codex": "forward",
+        "claude-implementer": "forward",  # allowlist:provider -- profile configuration: implementer version policy
         "codex-reviewer": "forward",  # allowlist:provider -- profile configuration: reviewer version policy
     }
     assert {
@@ -200,12 +202,13 @@ def test_capability_profiles_are_identified_independently_of_provider(monkeypatc
     table = load_capability_table()
     duplicate = copy.deepcopy(provider_capability("claude"))
     duplicate["profile_id"] = "claude-later"
-    table["providers"].insert(2, duplicate)
+    table["providers"].append(duplicate)
+    table["providers"].sort(key=lambda item: item["profile_id"])
     path = tmp_path / "capabilities.json"
     path.write_text(json.dumps(table), encoding="utf-8")
     monkeypatch.setattr(native_provider_schema, "CAPABILITY_PATH", path)
     loaded = load_capability_table()
-    assert [row["provider"] for row in loaded["providers"]].count("claude") == 2
+    assert [row["provider"] for row in loaded["providers"]].count("claude") == 3
     digest = hashlib.sha256(json.dumps(duplicate, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert capability_profile_for_digest("claude", digest) == "claude-later"
 

@@ -72,6 +72,7 @@ PROVIDER_INPUT_COMPONENT_NAMES = frozenset(
         "packet_manifest",
         "system_policy",
         "response_schema",
+        "settings",
         "start_directive",
     }
 )

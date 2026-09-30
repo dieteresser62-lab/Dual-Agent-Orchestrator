@@ -868,6 +868,13 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
 NATIVE_IMPLEMENTER_TRANSPORTS: dict[str, type[AgentAdapter]] = {
     "codex": NativeCodexAdapter,
 }
+
+
+def _implementer_transports() -> dict[str, type[AgentAdapter]]:
+    from claude_implementer_adapter import NativeClaudeImplementerAdapter  # allowlist:provider -- transport: implementer registration
+
+    NATIVE_IMPLEMENTER_TRANSPORTS.setdefault("claude", NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: implementer registration
+    return NATIVE_IMPLEMENTER_TRANSPORTS
 NATIVE_REVIEW_TRANSPORTS: dict[str, type[AgentAdapter]] = {
     "claude": NativeClaudeReviewAdapter,
 }
@@ -884,7 +891,7 @@ def _review_transports() -> dict[str, type[AgentAdapter]]:
 
 def is_native_implementer_adapter(adapter: object) -> bool:
     """Accept only a transport registered for the adapter's provider."""
-    transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(getattr(adapter, "name", None))
+    transport = _implementer_transports().get(getattr(adapter, "name", None))
     return transport is not None and isinstance(adapter, transport)
 
 
@@ -927,7 +934,7 @@ def create_agent_pair(
         raise ValueError(f"slot={slot.value} provider={provider}: settings provider differs")
     binding = binding_for(provider, role)
     if role is AgentRoleName.IMPLEMENTER:
-        transport = NATIVE_IMPLEMENTER_TRANSPORTS.get(provider)
+        transport = _implementer_transports().get(provider)
         if transport is None:
             raise ValueError(
                 f"slot={slot.value} provider={provider}: missing transport/role rights binding"

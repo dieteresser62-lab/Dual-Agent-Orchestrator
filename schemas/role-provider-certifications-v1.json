@@ -324,12 +324,12 @@
       "manufacturer": "anthropic",
       "status": "candidate",
       "version_scope": {
-        "cli_version": "2.1.283 (Claude Code)",
+        "cli_version": "2.1.285 (Claude Code)",
         "version_policy": "forward"
       },
-      "capability_sha256": "1a00e39485bdc480c6ca82359b17fac91770caf84100ddedab2a2fb4bf0ab48f",
+      "capability_sha256": "be50c9d985a6e8af42478dbfb49de7130f14e35ee7264babcd602c149c63b75d",
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
-      "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+      "rights_sha256": "574f7feb3996416c14445f46528774f72b60de3592ab65ce3e7510b5a9dcb121",
       "evidence": {
         "path": "docs/evidence/role-certification-candidates-v1.json",
         "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
@@ -343,19 +343,26 @@
         "semantic_flags": [
           "-p",
           "--output-format=json",
-          "--tools=Read",
-          "--allowedTools=Read",
-          "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
-          "--permission-mode=dontAsk",
+          "--model=<model>",
+          "--effort=<effort>",
+          "--no-session-persistence",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
           "--restricted",
           "--safe-mode",
-          "--strict-mcp-config",
           "--prompt-suggestions=false",
-          "--no-session-persistence",
-          "--disable-slash-commands"
+          "--tools=Read,Edit,Write,Glob,Grep,Bash",
+          "--permission-mode=acceptEdits",
+          "--permission-prompts=none",
+          "--disallowedTools=<protected-edit-rules>",
+          "--settings=<canonical-protected-json>",
+          "--json-schema=<schema>",
+          "--system-prompt=<implementer-policy>",
+          "directive=<start-instruction>",
+          "stdin=<bound-request>"
         ]
       },
-      "capability_profile": "claude"
+      "capability_profile": "claude-implementer"
     }
   ]
 }

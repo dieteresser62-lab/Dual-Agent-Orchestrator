@@ -72,6 +72,30 @@ _PAIR_BINDINGS: dict[tuple[str, AgentRoleName], RoleBinding] = {
             "disabled_features": "apps,plugins,multi_agent,goals,browser_use,computer_use,image_generation,hooks,skill_search,tool_suggest,remote_plugin",
         }),
     ),
+    ("claude", AgentRoleName.IMPLEMENTER): RoleBinding(  # allowlist:provider -- certification data: sandboxed implementer binding
+        AgentRoleName.IMPLEMENTER,
+        _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER].contract,
+        _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER].policy,
+        MappingProxyType({
+            "tools": "Read,Edit,Write,Glob,Grep,Bash",
+            "permission_mode": "acceptEdits",
+            "permission_prompts": "none",
+            "file_tool_deny": "protected-paths-exact-and-recursive",
+            "cli_file_tool_deny": "same-rules-as-settings",
+            "block_reads_outside_working_directories": "true",
+            "restricted": "true",
+            "safe_mode": "true",
+            "sandbox": "enabled,failIfUnavailable,autoAllowBashIfSandboxed",
+            "hooks": "disabled",
+            "unsandboxed_commands": "false",
+            "excluded_commands": "empty",
+            "network": "empty-strict-allowlist",
+            "protected_paths": "git,gitdir,common-dir,orchestrator,records,checkpoints,queue,inbox,outbox,evidence",
+            "filesystem_deny_write": "protected-paths",
+            "environment": "HOME,USER,LOGNAME,PATH,LANG,TERM",
+            "credentials": "ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN",  # allowlist:provider -- certification data: implementer credentials
+        }),
+    ),
     ("claude", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],  # allowlist:provider -- certification data: measured reviewer binding
     ("antigravity", AgentRoleName.REVIEWER): _ROLE_BINDINGS[AgentRoleName.REVIEWER],
 }

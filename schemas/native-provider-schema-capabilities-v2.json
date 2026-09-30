@@ -112,6 +112,67 @@
       "profile_id": "claude"
     },
     {
+      "provider": "claude",
+      "binary_name": "claude",
+      "cli_version": "2.1.285 (Claude Code)",
+      "version_policy": "forward",
+      "transport_profile": {
+        "provider": "claude",
+        "binary_name": "claude",
+        "model": "opus",
+        "reasoning_or_effort": "high",
+        "schema_transport": "json-schema-argument",
+        "semantic_flags": [
+          "-p",
+          "--output-format=json",
+          "--model=<model>",
+          "--effort=<effort>",
+          "--no-session-persistence",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--restricted",
+          "--safe-mode",
+          "--prompt-suggestions=false",
+          "--tools=Read,Edit,Write,Glob,Grep,Bash",
+          "--permission-mode=acceptEdits",
+          "--permission-prompts=none",
+          "--disallowedTools=<protected-edit-rules>",
+          "--settings=<canonical-protected-json>",
+          "--json-schema=<schema>",
+          "--system-prompt=<implementer-policy>",
+          "directive=<start-instruction>",
+          "stdin=<bound-request>"
+        ]
+      },
+      "features": {
+        "closed_object": true,
+        "const_list": true,
+        "min_max_items": true,
+        "nested_any_of": true,
+        "nested_one_of": true,
+        "positional_tuple": false,
+        "unique_items": true,
+        "portable_pattern": true,
+        "optional_properties": true,
+        "null_type": true,
+        "all_of": true,
+        "not_schema": false,
+        "strict_writer": false,
+        "max_length": true,
+        "min_length": true,
+        "const_value": true,
+        "enum_values": true,
+        "refs": true,
+        "defs": true,
+        "numeric_constraints": true,
+        "format_keyword": true
+      },
+      "probe_evidence": {
+        "offline_write_boundary": "Operator offline fake Messages probe with Claude Code 2.1.285: restricted tool allowlist, protected Edit rules, fail-closed Bash sandbox, strict empty network allowlist, and environment allowlist. An end-to-end run of the generated command showed that a settings document with one invalid entry is dropped silently; the credentials list form and the repeated CLI Edit rules keep the boundary closed in that case. Shared Git directories in linked worktrees are a documented sandbox exception addressed by runtime deny rules."
+      },
+      "profile_id": "claude-implementer"
+    },
+    {
       "provider": "codex",
       "binary_name": "codex",
       "cli_version": "codex-cli 0.156.1",
