@@ -208,7 +208,7 @@ def current_provider_for_role(role: str) -> str:
 # CLI resolves its aliases to the newest model itself.
 MODEL_FAMILIES = {
     "codex": {
-        "sol": "gpt-6-sol",
+        "sol": "gpt-6.1-sol",
         "terra": "gpt-5.6-terra",
         "luna": "gpt-6-luna",
         "astra": "gpt-6-astra",

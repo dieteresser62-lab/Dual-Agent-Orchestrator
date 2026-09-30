@@ -718,7 +718,7 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.slot_settings["reviewer"].timeout_seconds is None
     assert args.slot_settings["implementer"].timeout_seconds is None
     assert args.slot_settings["reviewer"].max_budget_usd is None
-    assert args.slot_settings["implementer"].model == "gpt-6-sol"
+    assert args.slot_settings["implementer"].model == "gpt-6.1-sol"
     assert args.slot_settings["implementer"].effort == "high"
 
 
@@ -737,7 +737,7 @@ def test_provider_timeout_can_be_explicitly_disabled(tmp_path: Path) -> None:
 
 def test_models_are_limited_to_the_selectable_families(tmp_path: Path) -> None:
     for argv, codex, claude in (
-        (["--implementer-model", "sol"], "gpt-6-sol", "opus"),
+        (["--implementer-model", "sol"], "gpt-6.1-sol", "opus"),
         (["--implementer-model", "Terra"], "gpt-5.6-terra", "opus"),
         (["--implementer-model", "gpt-6-luna", "--reviewer-model", "SONNET"], "gpt-6-luna", "sonnet"),
         (["--implementer-model", "astra", "--reviewer-model", "fable"], "gpt-6-astra", "fable"),
@@ -1357,6 +1357,6 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| Reviewer (Claude) | `--reviewer-binary`, `--reviewer-model`" in readme
     assert "`claude`, `opus`, ohne \u005aeitlimit, `high`" in readme
     assert "nicht Modell und Effort" in readme
-    assert "`gpt-6-sol`" in readme
+    assert "`gpt-6.1-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True

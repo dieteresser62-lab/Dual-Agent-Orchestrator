@@ -253,7 +253,7 @@ def test_every_default_site_selects_sol_and_opus_at_high_effort() -> None:
     add_agent_arguments(parser)
     settings = resolve_agent_settings(parser.parse_args([]), {})
     setup_defaults = inspect.signature(_fresh_state).parameters
-    expected = {"codex": ("gpt-6-sol", "high"), "claude": ("opus", "high")}
+    expected = {"codex": ("gpt-6.1-sol", "high"), "claude": ("opus", "high")}
     for role, provider in (("implementer", "codex"), ("reviewer", "claude")):
         role_field = AgentRole(role).name.lower() + "_profile"
         assert expected[provider][0] in MODEL_FAMILIES[provider].values()

@@ -853,7 +853,7 @@ dieses Repositorys.
 
 | | Codex (Standard-Implementer) | Claude (Standard-Reviewer und Final-Reviewer) |
 |---|---|---|
-| Modell | `sol` (Standard, `gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
+| Modell | `sol` (Standard, `gpt-6.1-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`), `astra` (`gpt-6-astra`) | `opus` (Standard), `sonnet`, `fable` |
 | Effort | `low`, `medium`, `high` (Standard), `xhigh`, `max` | `low`, `medium`, `high` (Standard), `xhigh`, `max` |
 | Option | `--implementer-model`, `--implementer-effort` | `--reviewer-model`, `--reviewer-effort` |
 | Umgebung | `RUN_TASK_IMPLEMENTER_MODEL`, `RUN_TASK_IMPLEMENTER_EFFORT` | `RUN_TASK_REVIEWER_MODEL`, `RUN_TASK_REVIEWER_EFFORT` |

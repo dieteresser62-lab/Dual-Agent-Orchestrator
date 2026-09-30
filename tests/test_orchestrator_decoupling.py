@@ -50,7 +50,7 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     for provider, slots, model in (
         ("claude", ("implementer",), "opus"),  # allowlist:provider -- certification data: fake canary
-        ("codex", ("reviewer", "final_reviewer"), "gpt-6-sol"),  # allowlist:provider -- certification data: fake canary
+        ("codex", ("reviewer", "final_reviewer"), "gpt-6.1-sol"),  # allowlist:provider -- certification data: fake canary
     ):
         cases = {}
         for slot in slots:
@@ -113,7 +113,7 @@ def test_repo_defaults_and_explicit_budget_use_selected_occupancy(tmp_path: Path
     config.write_text(
         '[roles]\nimplementer = "writer"\nreviewer = "reader"\nfinal_reviewer = "reader"\n'
         '[agent_profiles.writer]\nprovider = "claude"\nmodel = "sonnet"\neffort = "high"\n'  # allowlist:provider -- profile configuration: selected implementer
-        '[agent_profiles.reader]\nprovider = "codex"\nmodel = "gpt-6-sol"\neffort = "high"\n',  # allowlist:provider -- profile configuration: selected reviewer
+        '[agent_profiles.reader]\nprovider = "codex"\nmodel = "gpt-6.1-sol"\neffort = "high"\n',  # allowlist:provider -- profile configuration: selected reviewer
         encoding="utf-8",
     )
     loaded = load_repo_config(config)
@@ -151,7 +151,7 @@ def test_colliding_topology_is_rejected_before_provider_start(
     implementer: str, reviewer: str, final_reviewer: str,
 ) -> None:
     _fake_certifications(tmp_path / "qualification", monkeypatch)
-    models = {"codex": "gpt-6-sol", "claude": "opus"}  # allowlist:provider -- profile configuration: fake models
+    models = {"codex": "gpt-6.1-sol", "claude": "opus"}  # allowlist:provider -- profile configuration: fake models
     names = {"implementer": implementer, "reviewer": reviewer, "final_reviewer": final_reviewer}
     config = tmp_path / "orchestrator.toml"
     config.write_text(
@@ -265,7 +265,7 @@ def test_topology_plan_slice_final_review_and_resume(
 
     repository = fixture._repository(tmp_path, "feature/fake-topology")
     if reviewer != "claude" or implementer != "codex":  # allowlist:provider -- profile configuration: selected journey
-        provider_model = {"codex": "gpt-6-sol", "claude": "opus", "antigravity": "gemini-3.1-pro-high"}  # allowlist:provider -- profile configuration: fake models
+        provider_model = {"codex": "gpt-6.1-sol", "claude": "opus", "antigravity": "gemini-3.1-pro-high"}  # allowlist:provider -- profile configuration: fake models
         (repository / "orchestrator.toml").write_text(
             '[roles]\nimplementer = "writer"\nreviewer = "reader"\nfinal_reviewer = "reader"\n'
             f'[agent_profiles.writer]\nprovider = "{implementer}"\nmodel = "{provider_model[implementer]}"\neffort = "high"\n'
