@@ -19,6 +19,8 @@ LEGACY_RUNTIME = {
 }
 LEGACY_BLIND_WORDS = ("antigravity", "agy", "claude", "codex", "gemini")  # allowlist:provider -- certification data: v5 self-identification scan
 
+BLIND_WORDS = (*LEGACY_BLIND_WORDS, "openai", "anthropic", "google", "gpt", "chatgpt", "sonnet", "opus")  # allowlist:provider -- certification data: v6 self-identification aliases
+
 
 @dataclass(frozen=True)
 class ProtectionProfile:
@@ -59,14 +61,16 @@ PROTECTION_PROFILES = {
 
 @dataclass(frozen=True)
 class ReviewEnvelopeProfile:
-    success_field: str
+    success_field: str | None
     success_value: object
     error_field: str
     denials_field: str
     schema_echo_field: str | None
+    last_message: bool = False
 
 
 REVIEW_ENVELOPES = {
+    "codex-reviewer": ReviewEnvelopeProfile(None, None, "error", "permission_denials", None, True),  # allowlist:provider -- profile configuration: last-message reviewer transport
     "antigravity": ReviewEnvelopeProfile("status", "SUCCESS", "error", "denied_actions", "json_schema"),
     "claude": ReviewEnvelopeProfile("is_error", False, "is_error", "permission_denials", None),  # allowlist:provider -- profile configuration: measured reference envelope
 }

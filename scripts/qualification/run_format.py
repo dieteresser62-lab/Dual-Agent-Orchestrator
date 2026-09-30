@@ -45,7 +45,7 @@ def run_format(*, case: str, provider: str, protocol_file: Path, profile_file: P
     raw = {}
     extract = adapter.extract_output
     def capture(stdout, stderr, extra):
-        raw.update(stdout=stdout, stderr=stderr, exit_code=extra.get("exit_code"))
+        probe.capture_review_output(adapter, raw, stdout, stderr, extra, capability)
         return extract(stdout, stderr, extra)
     adapter.extract_output = capture
     runner = invoke or run_native_review_agent

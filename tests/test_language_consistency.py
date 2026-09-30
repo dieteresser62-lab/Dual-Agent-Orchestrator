@@ -1175,6 +1175,9 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "docs/reference/reviewer-certification.md",
         "scripts/probe_reviewer.py",
         "scripts/qualification/profiles.py",
+        "scripts/qualification/blind.py",
+        "docs/evidence/codex/qualification-protocol-v6.json",  # allowlist:provider -- certification data: neutral rater protocol
+        "docs/evidence/codex/quality-rubric-v1.json",  # allowlist:provider -- certification data: neutral rater schema
         "scripts/qualification/run_probe.py",
         "tests/test_reviewer_probe.py",
         "tests/test_reviewer_qualification_tools.py",

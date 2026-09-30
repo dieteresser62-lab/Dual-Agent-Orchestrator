@@ -1,0 +1,164 @@
+{
+  "criteria": {
+    "defect_found": "Nur bei Defektfällen: ja genau dann, wenn ein Befund den defekten Mechanismus sachlich gleich factual_finding oder einer erlaubten Alternative trifft und den betroffenen Pfad nennt.",
+    "invented_critical": "Ja bei einem BLOCKER in einem sauberen Fall oder einem BLOCKER, der nicht den tatsächlichen Defekt des Falls trifft.",
+    "unfounded_findings": "Anzahl der unbegründeten Befunde. Jeder Befund in Q5 oder Q6 zählt als unbegründet. Ein Hinweis auf eine zu breite None-Filterung in render_review oder einen möglichen Verlust von Pflichtfeldern in Q6 ist unbegründet: Digest, kind, decision und complete können dort nie None sein."
+  },
+  "judgment_format": {
+    "clean_case": {
+      "id": "B002",
+      "invented_critical": false,
+      "reasons": {
+        "invented_critical": "Kein BLOCKER.",
+        "unfounded_findings": "Keine Befunde."
+      },
+      "unfounded_findings": 0
+    },
+    "defect_case": {
+      "defect_found": true,
+      "id": "B001",
+      "invented_critical": false,
+      "reasons": {
+        "defect_found": "Befund und Pfad ...",
+        "invented_critical": "Kein erfundener BLOCKER.",
+        "unfounded_findings": "Keine weiteren Befunde."
+      },
+      "unfounded_findings": 0
+    }
+  },
+  "protocol_version": "qualification-protocol-v6",
+  "rater_file_format": {
+    "judgments": "Genau eine Bewertung je neutraler Antwort-ID, im Paket sortiert.",
+    "packet_sha256": "64 Kleinbuchstaben-Hexzeichen",
+    "rater": "agy oder steering",
+    "schema_version": "quality-rating-v1"
+  },
+  "rater_prompt": "Du bewertest anonymisierte Reviewer-Antworten unabhängig. Lies das angehängte Blindpaket mit Ground Truth und diese Bewertungsregeln. Du kennst keine Provider-Zuordnung. Defekt gefunden: nur wenn ein Befund den beschriebenen defekten Mechanismus oder eine erlaubte Alternative sachlich trifft UND den betroffenen Pfad nennt; dieses Feld nur bei Defektfällen. Zähle alle unbegründeten Befunde. In Q5 und Q6 ist jeder Befund unbegründet. In Q6 ist auch die Behauptung einer zu breiten None-Filterung in render_review bzw. eines möglichen Verlusts von Pflichtfeldern unbegründet; Digest, kind, decision und complete können nie None sein. Ein erfundener kritischer Befund ist ein BLOCKER in einem sauberen Fall oder ein BLOCKER, der den wirklichen Defekt nicht trifft. Gib pro Kriterium eine kurze Begründung. Antworte ausschließlich mit einem JSON-Objekt ohne Markdown: {\"schema_version\":\"quality-rating-v1\",\"rater\":\"<deine Bewerterkennung>\",\"packet_sha256\":\"<packet_sha256 aus Paket>\",\"judgments\":[<genau eine Bewertung je ID gemäß judgment_format>]}. Die Datei rating_json_schema im Blindpaket ist die formale Ausgabestruktur. Jedes Urteil muss die exakten Felder des jeweiligen Defekt- oder Sauberfalls enthalten; zusätzliche Felder sind verboten. Führe keine Provider-Recherche durch.",
+  "rating_json_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "judgments": {
+        "items": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "defect_found": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "pattern": "^B[0-9]{3}$",
+                  "type": "string"
+                },
+                "invented_critical": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defect_found": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "invented_critical": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "unfounded_findings": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "defect_found",
+                    "unfounded_findings",
+                    "invented_critical"
+                  ],
+                  "type": "object"
+                },
+                "unfounded_findings": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "defect_found",
+                "unfounded_findings",
+                "invented_critical",
+                "reasons"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "pattern": "^B[0-9]{3}$",
+                  "type": "string"
+                },
+                "invented_critical": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "invented_critical": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "unfounded_findings": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "unfounded_findings",
+                    "invented_critical"
+                  ],
+                  "type": "object"
+                },
+                "unfounded_findings": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "unfounded_findings",
+                "invented_critical",
+                "reasons"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "maxItems": 12,
+        "type": "array"
+      },
+      "packet_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "rater": {
+        "enum": [
+          "agy",
+          "steering"
+        ]
+      },
+      "schema_version": {
+        "const": "quality-rating-v1"
+      }
+    },
+    "required": [
+      "schema_version",
+      "rater",
+      "packet_sha256",
+      "judgments"
+    ],
+    "type": "object"
+  },
+  "reason_rule": "Zu jedem der drei Kriterien eine kurze eigene Begründung; bei sauberen Fällen entfällt defect_found samt Begründung.",
+  "schema_version": "quality-rubric-v1"
+}

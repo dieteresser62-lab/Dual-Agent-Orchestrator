@@ -35,7 +35,7 @@ from scripts.qualification.profiles import (
     LEGACY_REFERENCE_DECISION_KEY, LEGACY_REFERENCE_EVIDENCE_ID,
     LEGACY_REFERENCE_DIGEST_KEY, LEGACY_REFERENCE_DESCRIPTION,
     DEFAULT_REVIEW_CAPABILITY, IMPLEMENTER_CAPABILITY, LEGACY_RUNTIME, LEGACY_BLIND_WORDS,
-    REVIEW_ENVELOPES,
+    REVIEW_ENVELOPES, BLIND_WORDS,
 )
 FORMAT_REPO_FIXTURE = ROOT / "tests/fixtures/reviewer-format-repo-v1.json"
 FORMAT_REPO_SHA256 = "3b6f775aebdc90075524f942c1749233c3c63ddc56d9ed19a58dd1cf82a4fa15"
@@ -81,6 +81,74 @@ def qualification_pair(protocol: dict) -> QualificationPair:
             ".." in Path(directory).parts):
         raise ValueError("v6 requires an explicit pair, capability profiles and evidence directory")
     return QualificationPair(candidate, reference, profiles, (ROOT / directory).resolve())
+
+
+def qualification_raters(protocol: dict) -> tuple[str, str]:
+    """Bind two raters and reject candidate manufacturer collisions before export."""
+    if protocol["schema_version"] == "qualification-protocol-v5":
+        return ("codex", "steering")  # allowlist:provider -- certification data: immutable historical raters
+    raters = protocol.get("raters")
+    if (not isinstance(raters, list) or len(raters) != 2
+            or any(not isinstance(name, str) for name in raters) or len(set(raters)) != 2):
+        raise ValueError("v6 requires two different raters")
+    from native_provider_schema import provider_capability
+    from scripts.qualification.profiles import PROTECTION_PROFILES
+    manufacturers = strict_json((ROOT / "schemas/role-provider-certifications-v1.json").read_bytes())["provider_manufacturers"]
+    pair = qualification_pair(protocol)
+    candidate = provider_capability(pair.capability(pair.candidate))["provider"]
+    if pair.candidate in manufacturers and candidate != pair.candidate:
+        raise ValueError("candidate profile differs from its registered provider")
+    candidate_manufacturer = manufacturers.get(candidate)
+    if not candidate_manufacturer:
+        raise ValueError("unknown candidate manufacturer")
+    for name in raters:
+        provider = (LEGACY_REFERENCE if name == "steering" else
+                    PROTECTION_PROFILES[name].capability if name in PROTECTION_PROFILES else name)
+        manufacturer = manufacturers.get(provider)
+        if not manufacturer or manufacturer == candidate_manufacturer:
+            raise ValueError("rater manufacturer is unknown or shares candidate manufacturer")
+    if protocol.get("quality", {}).get("raters") != raters:
+        raise ValueError("quality raters differ from v6 raters")
+    return tuple(raters)
+
+
+def capture_review_output(adapter, raw: dict, stdout: str, stderr: str,
+                          extra_files: dict, capability: str) -> None:
+    """Keep last-message JSON and process events together for measured file transports."""
+    raw.update(stdout=stdout, stderr=stderr, exit_code=extra_files.get("exit_code"))
+    if not REVIEW_ENVELOPES[capability].last_message:
+        return
+    path = adapter.invocation.last_message_file
+    last = path.read_text(encoding="utf-8", errors="replace") if path is not None and path.is_file() else ""
+    try:
+        structured = strict_json(last)
+    except ValueError:
+        structured = None
+    errors, denials = [], []
+    for line in stdout.splitlines():
+        try:
+            event = strict_json(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            if event.get("type") in {"error", "turn.failed"}:
+                errors.append(event)
+            denials.extend(event.get("permission_denials") or [])
+    raw["output_bytes"] = len(last.encode("utf-8"))
+    raw["stdout"] = canonical({"structured_output": structured,
+        "raw_last_message": last, "process_events": stdout,
+        "error": errors, "permission_denials": denials})
+    if denials:
+        from agent_adapters import AgentPermissionError
+        raise AgentPermissionError("measured review process reported permission denials")
+    if errors:
+        from agent_runtime import AgentProcessError
+        raise AgentProcessError(canonical(errors), exit_code=int(extra_files.get("exit_code") or 0))
+    if (not isinstance(structured, dict) or set(structured) != {"result"}
+            or not isinstance(structured["result"], dict)):
+        from agent_adapters import AgentOutputError
+        from workflow_state import AgentFailureKind
+        raise AgentOutputError("measured last-message lacks a sole JSON result", kind_hint=AgentFailureKind.OUTPUT)
 
 
 def _series_keys(pair: QualificationPair) -> tuple[tuple[str, str], ...]:
@@ -130,7 +198,9 @@ def _qualification_adapter(protocol: dict, provider: str, profile: dict,
     options = profile.get("provider_options", {}).get(capability, {})
     if runtime.get("isolation") and (not options.get("home") or not options.get("run_root")):
         raise ValueError("qualification isolation paths are missing")
-    settings = AgentSettings(capability, str(binary), profile["model"], timeout,
+    from native_provider_schema import provider_capability
+    adapter_provider = provider_capability(capability)["provider"]
+    settings = AgentSettings(adapter_provider, str(binary), profile["model"], timeout,
                              profile["effort"], antigravity_home=options.get("home"),
                              antigravity_run_root=options.get("run_root"))
     return create_reviewer_qualification_adapter(settings)
@@ -140,14 +210,17 @@ def _review_budget(capability: str):
     from provider_input_budget import (ProviderInputBudgetPolicy, ProviderInputBudgetRule,
                                        default_provider_input_budget_policy)
 
+    from native_provider_schema import provider_capability
+    capability = provider_capability(capability)["provider"]
     defaults = default_provider_input_budget_policy()
     if capability == DEFAULT_REVIEW_CAPABILITY:
         return defaults
+    implementer = DEFAULT_REVIEW_CAPABILITY if capability == IMPLEMENTER_CAPABILITY else IMPLEMENTER_CAPABILITY
     return ProviderInputBudgetPolicy(
-        tuple(ProviderInputBudgetRule(capability if rule.provider == DEFAULT_REVIEW_CAPABILITY else rule.provider,
+        tuple(ProviderInputBudgetRule(capability if rule.role == "reviewer" else implementer,
                                      rule.role, rule.operation, rule.max_chars, rule.max_bytes)
               for rule in defaults.rules),
-        (("implementer", "implementer", IMPLEMENTER_CAPABILITY), ("reviewer", "reviewer", capability),
+        (("implementer", "implementer", implementer), ("reviewer", "reviewer", capability),
          ("final_reviewer", "reviewer", capability)))
 
 def canonical(value):
@@ -598,7 +671,8 @@ def validate_format_response(case: str, envelope: dict, *, exit_code: int = 0,
         raise ValueError("review envelope profile is not registered") from exc
     checks = {}
     checks["exit_zero"] = exit_code == 0
-    checks["status_success"] = envelope.get(envelope_profile.success_field) == envelope_profile.success_value
+    checks["status_success"] = (envelope_profile.success_field is None or
+                                envelope.get(envelope_profile.success_field) == envelope_profile.success_value)
     checks["no_error"] = not envelope.get(envelope_profile.error_field)
     denied = envelope.get(envelope_profile.denials_field)
     checks["no_denials"] = denied is None or denied == []
@@ -753,6 +827,8 @@ def validate_qualification(document: dict) -> None:
         raise RuntimeError("optimized mode cannot validate the protocol")
     assert document["schema_version"] in {"qualification-protocol-v5", "qualification-protocol-v6"}
     pair = qualification_pair(document)
+    qualification_raters(document)
+    assert document["fixed_before_qualification"] is True
     if document["schema_version"] == "qualification-protocol-v6":
         from native_provider_schema import provider_capability
         for provider in pair.providers:
@@ -1433,7 +1509,9 @@ def render_rater_prompt(packet: dict, protocol: dict) -> str:
     rubric = packet.get("rubric", {})
     if sha((json.dumps(rubric, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()) != protocol["quality"]["rubric_sha256"]:
         raise ValueError("quality rubric digest differs")
-    return rubric["codex_prompt"] + "\n\nBlindpaket:\n" + json.dumps(packet, ensure_ascii=False, indent=2) + "\n"  # allowlist:provider -- certification data: independent blind quality rating
+    prompt = (rubric["codex_prompt"] if protocol["schema_version"] == "qualification-protocol-v5"  # allowlist:provider -- certification data: unchanged historical prompt key
+              else rubric["rater_prompt"])  # allowlist:provider -- certification data: historical prompt field
+    return prompt + "\n\nBlindpaket:\n" + json.dumps(packet, ensure_ascii=False, indent=2) + "\n"  # allowlist:provider -- certification data: independent blind quality rating
 
 
 def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
@@ -1441,7 +1519,8 @@ def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
                             operator_answers: dict | None = None) -> dict:
     if not qualification_ready(protocol, corpus):
         raise PermissionError("quality corpus is not approved at its frozen digest")
-    if set(ratings) != {"codex", "steering"}:  # allowlist:provider -- certification data: independent blind quality rating
+    raters = qualification_raters(protocol)
+    if set(ratings) != set(raters):
         raise ValueError("two independent raters required")
     if packet.get("packet_sha256") != digest({k: v for k, v in packet.items() if k != "packet_sha256"}):
         raise ValueError("rater packet digest differs")
@@ -1475,15 +1554,15 @@ def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
         values, reasons = {}, {}
         criteria = (["defect_found"] if entry["ground_truth"]["defect"] else []) + ["unfounded_findings", "invented_critical"]
         for criterion in criteria:
-            left = by_rater["codex"][identifier][criterion]  # allowlist:provider -- certification data: independent blind quality rating
-            right = by_rater["steering"][identifier][criterion]
+            left = by_rater[raters[0]][identifier][criterion]  # allowlist:provider -- certification data: independent blind quality rating
+            right = by_rater[raters[1]][identifier][criterion]
             same = left == right
             # The rule counts unfounded findings only in clean cases; a defect-case count
             # dispute keeps the higher count instead of asking the operator.
             relevant = criterion != "unfounded_findings" or not entry["ground_truth"]["defect"]
             agreement.append({"id": identifier, "criterion": criterion, "agreed": same,
                               "rule_relevant": relevant,
-                              "codex": left, "steering": right})  # allowlist:provider -- certification data: independent blind quality rating
+                              raters[0]: left, raters[1]: right})  # allowlist:provider -- certification data: independent blind quality rating
             if same:
                 values[criterion] = left
             elif not relevant:
@@ -1502,7 +1581,7 @@ def combine_quality_ratings(packet: dict, mapping: dict, ratings: dict,
                                   "question": wording, "yes_value": yes_value,
                                   "no_value": no_value})
             reasons[criterion] = {name: by_rater[name][identifier]["reasons"][criterion]
-                                  for name in ("codex", "steering")}  # allowlist:provider -- certification data: independent blind quality rating
+                                  for name in raters}  # allowlist:provider -- certification data: independent blind quality rating
         final.append({"id": identifier, **values, "reasons": reasons})
     answers = operator_answers or {"schema_version": "quality-operator-answers-v1", "answers": []}
     if set(answers) != {"schema_version", "answers"} or answers["schema_version"] != "quality-operator-answers-v1" or not isinstance(answers["answers"], list):
@@ -1547,9 +1626,10 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
     if results.get("status") != "complete":
         return {provider: {"passed": False, "incomplete": True}
                 for provider in qualification_pair(protocol).providers}
-    if set(results.get("ratings", {})) != {"codex", "steering"}:  # allowlist:provider -- certification data: independent blind quality rating
+    raters = qualification_raters(protocol)
+    if set(results.get("ratings", {})) != set(raters):  # allowlist:provider -- certification data: independent blind quality rating
         raise ValueError("both independent ratings required")
-    if results.get("packet_sha256") != results["ratings"]["codex"].get("packet_sha256") or results.get("packet_sha256") != results["ratings"]["steering"].get("packet_sha256"):  # allowlist:provider -- certification data: independent blind quality rating
+    if any(results.get("packet_sha256") != results["ratings"][name].get("packet_sha256") for name in raters):  # allowlist:provider -- certification data: independent blind quality rating
         raise ValueError("rating packet digests differ")
     if not results.get("agreement") or results.get("operator_decisions") is None:
         raise ValueError("agreement and operator decisions required")
@@ -1584,8 +1664,8 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
         for criterion in ("defect_found", "unfounded_findings", "invented_critical"):
             if criterion not in row:
                 continue
-            left = rated["codex"][row["id"]][criterion]  # allowlist:provider -- certification data: independent blind quality rating
-            right = rated["steering"][row["id"]][criterion]
+            left = rated[raters[0]][row["id"]][criterion]  # allowlist:provider -- certification data: independent blind quality rating
+            right = rated[raters[1]][row["id"]][criterion]
             key = row["id"], criterion
             relevant = criterion != "unfounded_findings" or not cases[mapping[row["id"]]["case"]]["defect"]
             if left == right or not relevant:
@@ -1614,7 +1694,7 @@ def grade_quality(results: dict, corpus: dict, protocol: dict) -> dict:
                 type(row.get("unfounded_findings")) is not int or
                 row["unfounded_findings"] < 0 or
                 not isinstance(row.get("reasons"), dict) or
-                not all(isinstance(value, dict) and set(value) == {"codex", "steering"}  # allowlist:provider -- certification data: independent blind quality rating
+                not all(isinstance(value, dict) and set(value) == set(raters)  # allowlist:provider -- certification data: independent blind quality rating
                         and all(isinstance(reason, str) and reason.strip()
                                 for reason in value.values())
                         for value in row["reasons"].values())):
@@ -2062,7 +2142,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
     raw = {}
     extract = adapter.extract_output
     def capture_output(stdout, stderr, extra_files):
-        raw.update(stdout=stdout, stderr=stderr, exit_code=extra_files.get("exit_code"))
+        capture_review_output(adapter, raw, stdout, stderr, extra_files, capability)
         return extract(stdout, stderr, extra_files)
     adapter.extract_output = capture_output
     start = time.monotonic()
@@ -2086,6 +2166,9 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         error = f"{type(exc).__name__}: {exc}"
         classified = getattr(exc, "kind", None) or getattr(exc, "kind_hint", None)
         failure_kind = getattr(classified, "value", None) or "unclassified"
+        if protocol["schema_version"] == "qualification-protocol-v6" and classified is None:
+            from agent_runtime import classify_agent_failure
+            failure_kind = classify_agent_failure(adapter.name, exc, invocation_id=call_id).kind.value
         from error_classification import orchestrator_diagnostic_for_exception
         from native_review_contract import (find_native_review_contract_error,
                                             is_retryable_native_review_response_error)
@@ -2141,7 +2224,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
         "tag": selected_tag,
         "session_id": (envelope.get("conversation_id") or envelope.get("session_id"))
                       if isinstance(envelope, dict) else None,
-        "output_bytes": len(raw.get("stdout", "").encode()), "checks": checks,
+        "output_bytes": raw.get("output_bytes", len(raw.get("stdout", "").encode())), "checks": checks,
         "failure_kind": failure_kind, "retry_of": production_retry_of,
         "contract_rejection": contract_rejection, "contract_retryable": contract_retryable,
         "orchestrator_diagnostic": orchestrator_diagnostic,
@@ -2150,7 +2233,8 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
             "rejection_code": retry_feedback.rejection_code.value,
             "correction_instruction": retry_feedback.correction_instruction},
     }
-    row["production_retryable"] = row["status"] == "technical_rejection" and _retry_reason(row) is not None
+    row["production_retryable"] = (row["status"] == "technical_rejection" and _retry_reason(row) is not None
+        and (protocol["schema_version"] == "qualification-protocol-v5" or kind != "print_timeout"))
     if public_validation_sha is not None:
         row["public_validation_sha256"] = public_validation_sha
     if restart_diagnosis is not None:
@@ -2257,7 +2341,7 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
         raw = {}
         extract = adapter.extract_output
         def capture_output(stdout, stderr, extra_files):
-            raw.update(stdout=stdout, stderr=stderr, exit_code=extra_files.get("exit_code"))
+            capture_review_output(adapter, raw, stdout, stderr, extra_files, capability)
             return extract(stdout, stderr, extra_files)
         adapter.extract_output = capture_output
         ledger = _QualificationLedger(ledger_path, name)
@@ -2405,7 +2489,8 @@ def verify_quality_mapping(results: dict, series: dict, envelopes: dict, protoco
     sources = quality_blind_sources(series, envelopes, protocol)
     pair = qualification_pair(protocol)
     assessment, expected = blind_package(sources, seed=protocol["quality"]["blind_seed"],
-        provider_words=(*pair.providers, *pair.capabilities.values()))
+        provider_words=(*pair.providers, *pair.capabilities.values(),
+                        *(BLIND_WORDS if protocol["schema_version"] == "qualification-protocol-v6" else ())))
     if results.get("mapping") != expected["mapping"]:
         raise ValueError("quality mapping differs from the frozen blind package")
     if results.get("status") == "complete":
@@ -2447,8 +2532,8 @@ def main() -> int:
     cr = sub.add_parser("combine-quality-ratings")
     cr.add_argument("packet", type=Path)
     cr.add_argument("mapping", type=Path)
-    cr.add_argument("codex_rating", type=Path)  # allowlist:provider -- certification data: independent blind quality rating
-    cr.add_argument("steering_rating", type=Path)
+    cr.add_argument("first_rating", type=Path)  # allowlist:provider -- certification data: independent blind quality rating
+    cr.add_argument("second_rating", type=Path)
     cr.add_argument("output", type=Path)
     cr.add_argument("--operator-answers", type=Path)
     cr.add_argument("--questions-out", type=Path)
@@ -2491,7 +2576,8 @@ def main() -> int:
     boundary.add_argument("--toolchain-root", type=Path, action="append", default=[])
     boundary.add_argument("--out", type=Path)
     quick = sub.add_parser("quicktest")
-    quick.add_argument("provider")
+    quick.add_argument("provider", nargs="?")
+    quick.add_argument("--candidate")
     quick.add_argument("--profile", type=Path, required=True)
     quick.add_argument("--live", action="store_true")
     m = sub.add_parser("prepare-case")
@@ -2540,7 +2626,8 @@ def main() -> int:
             raise ValueError("blind input requires exactly Q1–Q6 per provider")
         pair = qualification_pair(protocol)
         assessment, mapping = blind_package(sources, seed=args.seed,
-            provider_words=(*pair.providers, *pair.capabilities.values()))
+            provider_words=(*pair.providers, *pair.capabilities.values(),
+                        *(BLIND_WORDS if protocol["schema_version"] == "qualification-protocol-v6" else ())))
         args.assessment.write_text(json.dumps(assessment, ensure_ascii=False, indent=2) + "\n")
         args.mapping.write_text(json.dumps(mapping, ensure_ascii=False, indent=2) + "\n")
         return 0
@@ -2560,7 +2647,7 @@ def main() -> int:
         packet = export_rater_packet(strict_json(args.assessment.read_bytes()),
             strict_json(args.mapping.read_bytes()), corpus, protocol, rubric)
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("codex", "steering"):  # allowlist:provider -- certification data: independent blind quality rating
+        for name in qualification_raters(protocol):
             (args.output_dir / f"{name}-packet.json").write_text(
                 json.dumps(packet, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps({"packet_sha256": packet["packet_sha256"],
@@ -2576,8 +2663,9 @@ def main() -> int:
         corpus = strict_json((ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
         packet = strict_json(args.packet.read_bytes())
         mapping = strict_json(args.mapping.read_bytes())
-        ratings = {"codex": strict_json(args.codex_rating.read_bytes()),  # allowlist:provider -- certification data: independent blind quality rating
-                   "steering": strict_json(args.steering_rating.read_bytes())}
+        raters = qualification_raters(protocol)
+        ratings = {raters[0]: strict_json(args.first_rating.read_bytes()),
+                   raters[1]: strict_json(args.second_rating.read_bytes())}
         answers = strict_json(args.operator_answers.read_bytes()) if args.operator_answers else None
         result = combine_quality_ratings(packet, mapping, ratings, corpus, protocol, answers)
         if args.claude_special_decision and protocol["schema_version"] != "qualification-protocol-v5":  # allowlist:provider -- certification data: v5 CLI compatibility
@@ -2634,12 +2722,19 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["status"] == "passed" else 1
     if args.command == "quicktest":
-        pair = qualification_pair(_protocol_file(args.protocol))
-        if args.provider != pair.candidate:
+        candidate = args.candidate or args.provider
+        if (not isinstance(candidate, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", candidate)
+                or args.candidate and args.provider and args.candidate != args.provider):
+            raise ValueError("quicktest requires one unambiguous candidate")
+        protocol_path = args.protocol
+        if args.candidate and protocol_path is None:
+            protocol_path = ROOT / "docs/evidence" / candidate / "qualification-protocol-v6.json"
+        pair = qualification_pair(_protocol_file(protocol_path))
+        if candidate != pair.candidate:
             raise ValueError("quicktest provider differs from candidate")
         with tempfile.TemporaryDirectory(prefix="dao-reviewer-quicktest-") as temporary:
             result = run_canary_call("reviewer", profile_file=args.profile,
-                output_dir=Path(temporary), live=args.live, quicktest=True, protocol_file=args.protocol)
+                output_dir=Path(temporary), live=args.live, quicktest=True, protocol_file=protocol_path)
         print(json.dumps({"schema_version": result["schema_version"], "mode": "quicktest",
             "status": result["status"], "duration_seconds": result["duration_seconds"],
             "checks": result["proof"]["checks"]}, sort_keys=True))

@@ -1,0 +1,24 @@
+{
+  "cases": [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P5",
+    "P6"
+  ],
+  "counts_as_sample": false,
+  "format_cases": [
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6"
+  ],
+  "note": "Frozen prerequisite manifest only; no live result or qualification attestation. The operator must complete and record protection and format probes before qualification.",
+  "profile": "codex-reviewer",
+  "provider": "codex",
+  "schema_version": "reviewer-phase0-prerequisites-v1",
+  "status": "pending_operator_run"
+}
