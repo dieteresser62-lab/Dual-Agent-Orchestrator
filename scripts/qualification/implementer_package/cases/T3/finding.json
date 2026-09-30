@@ -1,0 +1,7 @@
+{
+  "summary": "discount accepts rates outside the closed interval [0,100], producing invalid negative prices or increases instead of rejecting the input.",
+  "affected_paths": [
+    "app.py"
+  ],
+  "acceptance_test": "discount(price, rate) raises ValueError for rates below 0 or above 100 before calculating a price. Preserve the existing percentage calculation for valid rates, including 0 and 100, different prices and fractional percentages. Correct only app.py; frozen tests and configuration remain unchanged."
+}

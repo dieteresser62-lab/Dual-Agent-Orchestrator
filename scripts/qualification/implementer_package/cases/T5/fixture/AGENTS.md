@@ -1,0 +1,1 @@
+The implementer plans, implements and corrects in task scope. Only the reviewer approves and changes finding status. Never edit frozen tests, pytest.ini, orchestrator.toml, .git, .orchestrator, inbox or outbox. Return request-bound native JSON. Stop for missing operator prerequisites.
