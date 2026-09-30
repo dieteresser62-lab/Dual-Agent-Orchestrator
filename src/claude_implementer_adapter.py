@@ -15,7 +15,7 @@ from agent_adapters import (
     AgentOutputError, AgentPermissionError, CapabilitySpec,
     PROVIDER_FAILURE_METRIC_KEYS, _BaseAdapter,
 )
-from provider_metrics import failure_metrics, log_permission_denials
+from provider_metrics import failure_metrics, log_permission_denials, actual_model_metrics
 from agent_config import AgentSettings
 from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch
 from permission_policy import classify_implementer_denial
@@ -329,7 +329,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         if len(results) != 1 or not events or events[-1] is not results[0]:
             raise AgentOutputError("implementer stream requires exactly one final result")
         envelope = results[0]
-        self.metadata = failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS)
+        self.metadata = {**failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS), **actual_model_metrics(events)}
         denials = envelope.get("permission_denials", [])
         if not isinstance(denials, list):
             denials = [None]

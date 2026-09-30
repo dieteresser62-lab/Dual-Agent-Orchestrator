@@ -1016,6 +1016,8 @@ class ProductionWorkflowDriver:
         failure_kind: str | None,
         usage: ProviderUsagePayload | None,
         permission_denials: tuple[AttemptPermissionDenial, ...] = (),
+        actual_models: tuple[str, ...] = (),
+        init_model: str | None = None,
     ) -> None:
         bridge = self._artifact_bridge
         if (
@@ -1034,6 +1036,7 @@ class ProductionWorkflowDriver:
             failure_kind=failure_kind,
             usage=usage,
             permission_denials=permission_denials,
+            actual_models=actual_models, init_model=init_model,
         )
         if response_path.is_file():
             result = sha256_bytes(response_path.read_bytes())

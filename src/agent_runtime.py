@@ -752,6 +752,8 @@ class _ProviderAttemptInvocation:
             failure_kind.value if failure_kind is not None else None,
             normalize_provider_usage(metadata),
             **({"permission_denials": denials} if denials else {}),
+            **({"actual_models": tuple(metadata["actual_models"])} if metadata and metadata.get("actual_models") else {}),
+            **({"init_model": metadata["init_model"]} if metadata and metadata.get("init_model") else {}),
         )
 
 

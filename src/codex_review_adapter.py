@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterator
 
 from agent_adapters import AgentOutputError, CapabilitySpec, _BaseAdapter
-from provider_metrics import event_usage
+from provider_metrics import event_usage, stream_model_metrics
 from agent_config import AgentSettings
 from agent_roles import AgentRoleName
 from native_provider_schema import (
@@ -233,7 +233,7 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
             raise AgentOutputError("Codex reviewer input differs from bound transport", technical_text=str(exc)) from exc  # allowlist:provider -- transport: reviewer CLI binding
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-        self.metadata = event_usage(stdout)
+        self.metadata = {**event_usage(stdout), **stream_model_metrics(stdout)}
         _ = stderr, extra_files
         path = self.invocation.last_message_file
         if path is None or not path.is_file():

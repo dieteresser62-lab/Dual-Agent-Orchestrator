@@ -14,14 +14,33 @@ GIT_WRITES = frozenset({
 GIT_READS = frozenset({"status", "diff", "show", "log", "ls-files", "rev-parse", "cat-file", "ls-tree", "check-ignore"})
 
 
-def _protected(value: str, root: Path, paths: tuple[Path, ...], *, ancestors: bool = False) -> bool:
+def _read_only_branch(arguments: list[str]) -> bool:
+    listing = "--list" in arguments
+    index = 0
+    flags = {"--show-current", "--list", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose"}
+    revisions = {"--contains", "--no-contains", "--merged", "--no-merged"}
+    while index < len(arguments):
+        value = arguments[index]
+        if value in revisions:
+            if index + 1 < len(arguments) and not arguments[index + 1].startswith("-"):
+                index += 1
+        elif value.startswith("--format=") or any(value.startswith(flag + "=") for flag in revisions):
+            pass
+        elif value not in flags:
+            if not listing or value.startswith("-"):
+                return False
+        index += 1
+    return True
+
+
+def _protected(value: str, root: Path, paths: tuple[Path, ...], *, ancestors: bool = False, resolve_symlinks: bool = True) -> bool:
     candidate = Path(value)
     if not candidate.is_absolute():
         candidate = root / candidate
     lexical = Path(os.path.abspath(candidate))
-    resolved = candidate.resolve(strict=False)
+    resolved = candidate.resolve(strict=False) if resolve_symlinks else lexical
     return any(location.is_relative_to(bound) or (ancestors and bound.is_relative_to(location)) for location in (lexical, resolved)
-               for path in paths for bound in (Path(os.path.abspath(path)), path.resolve(strict=False)))
+               for path in paths for bound in (Path(os.path.abspath(path)), path.resolve(strict=False) if resolve_symlinks else Path(os.path.abspath(path))))
 
 
 def _shell_words(command: str, scratch: Path | None) -> list[str]:
@@ -61,7 +80,7 @@ def _shell_words(command: str, scratch: Path | None) -> list[str]:
         bound = next((value for start, value in reversed(bindings.get(name, [])) if start < position), None)
         return bound if bound is not None else match.group(0)
 
-    for assignment in re.finditer(r'(?<![\w])([A-Za-z_]\w*)=("[^"\n]*"|[^\s;&]+)', layout):
+    for assignment in re.finditer(r'(?<![\w"\'])([A-Za-z_]\w*)=("[^"\n]*"|[^\s;&]+)', layout):
         value_start = assignment.start(2)
         value_end = assignment.end(2)
         # Apply expansion with original offsets so a later assignment never
@@ -82,7 +101,7 @@ def _shell_words(command: str, scratch: Path | None) -> list[str]:
 
 def classify_implementer_denial(
     denial: object, repository_root: Path | None, protected_paths: tuple[Path, ...] | None,
-    scratch: Path | None = None,
+    scratch: Path | None = None, *, resolve_symlinks: bool = True,
 ) -> str:
     """Return violation for a visible attempt on the boundary, else tolerated.
 
@@ -101,7 +120,7 @@ def classify_implementer_denial(
             value = data.get("notebook_path") if tool == "NotebookEdit" else data.get("file_path", data.get("path"))
             if not isinstance(value, str) or not value or "\x00" in value or "$" in value or "~" in value:
                 return "violation"
-            return "violation" if _protected(value, repository_root, protected_paths) else "tolerated"
+            return "violation" if _protected(value, repository_root, protected_paths, resolve_symlinks=resolve_symlinks) else "tolerated"
         if tool in {"Read", "Glob", "Grep"}:
             return "tolerated"
         if tool != "Bash":
@@ -128,15 +147,22 @@ def classify_implementer_denial(
             return "tolerated"
         if any(Path(word).name in {"eval", "sh", "bash", "zsh", "fish", "source"} for word in words):
             return "violation"
-        for word in words:
+        for index, word in enumerate(words):
+            # A read-only git -C repository query names an ancestor of protected
+            # trees, but does not modify that ancestor. Git writes are checked below.
+            if (index > 1 and words[index - 1] == "-C" and
+                any(Path(part).name == "git" for part in words[max(0, index - 4):index - 1]) and
+                Path(os.path.abspath(word)) == repository_root):
+                continue
             # Covers traversal, symlink aliases and paths after assignments or >.
             for value in re.split(r"[=<>;|&]", word):
-                if value and _protected(value, repository_root, protected_paths, ancestors=True):
+                if value and _protected(value, repository_root, protected_paths, ancestors=True, resolve_symlinks=resolve_symlinks):
                     return "violation"
         for index, word in enumerate(words):
             if Path(word).name != "git":
                 continue
             tail = words[index + 1:]
+            tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&"}), len(tail))]
             while tail and tail[0] in {"--no-pager", "--paginate", "--literal-pathspecs"}:
                 tail = tail[1:]
             if tail and tail[0] == "-C" and len(tail) >= 2:
@@ -144,14 +170,8 @@ def classify_implementer_denial(
             operation = tail[0] if tail else None
             if operation in GIT_WRITES or operation not in GIT_READS | {"branch"}:
                 return "violation"
-            if operation == "branch":
-                if any(part in {"-d", "-D", "-m", "-M", "--delete", "--move"} for part in tail):
-                    return "violation"
-                # Only explicit listing is provably read-only.
-                if not tail or tail[0] != "branch" or any(not part.startswith("-") for part in tail[1:]):
-                    return "violation"
-                if any(part not in {"--list", "-a", "--all", "-r", "--remotes", "-v", "-vv"} for part in tail[1:]):
-                    return "violation"
+            if operation == "branch" and not _read_only_branch(tail[1:]):
+                return "violation"
         return "tolerated"
     except (ValueError, OSError, RuntimeError, TypeError):
         return "violation"

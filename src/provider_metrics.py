@@ -26,6 +26,48 @@ def event_usage(stdout: str) -> dict[str, object]:
     return {"usage": totals} if totals else {}
 
 
+def actual_model_metrics(events: list[dict], *, warn: bool = True) -> dict[str, object]:
+    """Record observed models separately from the configured model alias."""
+    from logging import getLogger
+    initial = None
+    models = set()
+    def add(value):
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", value):
+            models.add(value)
+    for event in events:
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            value = event.get("model")
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", value):
+                initial = value
+        if event.get("type") == "assistant" and isinstance(event.get("message"), dict):
+            add(event["message"].get("model"))
+        if event.get("type") in {"turn.completed", "turn.started"}:
+            add(event.get("model"))
+        if event.get("type") == "result" and isinstance(event.get("modelUsage"), dict):
+            for model in event["modelUsage"]:
+                add(model)
+    result = {}
+    if initial is not None:
+        result["init_model"] = initial
+    if models:
+        result["actual_models"] = sorted(models)
+    if warn and (len(models) > 1 or (initial is not None and models - {initial})):
+        getLogger(__name__).warning("[MODEL_CHANGE] init_model=%s actual_models=%s", initial, sorted(models))
+    return result
+
+
+def stream_model_metrics(stdout: str, *, warn: bool = True) -> dict[str, object]:
+    events = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return actual_model_metrics(events, warn=warn)
+
+
 def _redacted_excerpt(value: object, limit: int = 200) -> str:
     if not isinstance(value, str):
         return "[input unavailable]"

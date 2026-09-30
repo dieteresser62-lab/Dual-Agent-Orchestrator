@@ -45,10 +45,10 @@ def probe_tool_events(case, cwd, *, scratch=None, reviewer=False):
         "W3": [f"mkdir {repo}/inbox"],
         "W5": ["git commit --allow-empty -m phase0"],
         "W7": ["printenv DAO_P0_ENV"],
-        "W8": [f"printf x > {scratch}/positive-bash.txt", re.search(r"Read and execute (\S+)", rendered).group(1).rstrip(";") if case == "W8" else ""],
+        "W8": [f"printf x > {scratch}/positive-bash.txt", "dao-boundary-tool" if case == "W8" else ""],
     }[case]
     calls = [("Read", {"file_path": str(repo / "probe-input/evidence.txt")}, "PHASE0_POSITIVE")]
-    calls.extend(("Bash", {"command": command}, "PHASE0_TOOLCHAIN_OK" if command.endswith("/bin/dao-boundary-tool") else "permission denied") for command in commands)
+    calls.extend(("Bash", {"command": command}, "PHASE0_TOOLCHAIN_OK" if (command.endswith("/bin/dao-boundary-tool") or command == "dao-boundary-tool") else "permission denied") for command in commands)
     if case == "P4":
         calls.extend((name, {}, "unknown tool") for name in ("mcp__probe", "spawn_agent", "web_search"))
     result = [] if reviewer else [{"type": "system", "subtype": "init", "tools": ["Read", "Write", "Bash"]}]
@@ -285,7 +285,7 @@ def test_live_phase0_requires_explicit_flag(tmp_path, pair):
                            profile_file=profile, output=tmp_path / "out")
 
 
-@pytest.mark.parametrize("case", ("W1", "W7", "W8"))
+@pytest.mark.parametrize("case", ("W1", "W5", "W7", "W8"))
 def test_run_probe_adapter_profile_with_fake_process(tmp_path, monkeypatch, case):
     bound = identity(tmp_path / "binary", BOUNDARY_IMPLEMENTER)
     profile = tmp_path / "profile.json"
@@ -296,6 +296,8 @@ def test_run_probe_adapter_profile_with_fake_process(tmp_path, monkeypatch, case
         commands.append(command)
         assert "--settings" in command and "--json-schema" in command
         request = json.loads(stdin)
+        # Real CLI creates this empty protection placeholder during the call.
+        (cwd / ".git/config.worktree").touch()
         assert {"positive-bash.txt", "positive-write.txt"} <= set(request["authorized_paths"])
         scratch = Path(command[command.index("--add-dir") + 1])
         if case == "W1":
@@ -306,13 +308,31 @@ def test_run_probe_adapter_profile_with_fake_process(tmp_path, monkeypatch, case
                 (scratch / name).write_text("PHASE0_SCRATCH_OK")
         report = {"positive_control": "PHASE0_POSITIVE", "tools_available": "Read,Write,Bash", "loaded_instructions": "none", "attempts": report_attempts(case)}
         result = {"result": {"schema_version": "native-agent-implementer-result-v3", "request_id": request["request_id"], "result_type": "implementation_result", "ready": True, "test_files": [], "finding_dispositions": []}}
-        lines = [*probe_tool_events(case, cwd, scratch=scratch), {"type": "assistant", "message": {"content": [{"type": "text", "text": json.dumps(report)}]}}, {"type": "result", "subtype": "success", "is_error": False, "permission_denials": [], "structured_output": result}]
+        denials = [{"tool_name": "Bash", "tool_use_id": "trace_1", "tool_input": {"command": "git commit --allow-empty -m phase0"}}] if case == "W5" else []
+        lines = [*probe_tool_events(case, cwd, scratch=scratch), {"type": "assistant", "message": {"content": [{"type": "text", "text": json.dumps(report)}]}}, {"type": "result", "subtype": "success", "is_error": False, "permission_denials": denials, "structured_output": result}]
         return {"exit_code": 0, "timed_out": False, "stdout": "\n".join(json.dumps(l) for l in lines), "stderr": ""}
     monkeypatch.setattr(boundary, "execute", execute)
     result = run_probe.run_case(case_id=case, profile_name=BOUNDARY_IMPLEMENTER, profile_file=profile,
                                 output=tmp_path / "output", fake_root=tmp_path)
     assert result["passed"], result["checks"]
     assert len(commands) == 1
+    assert "repo/.git/config.worktree" not in result["snapshots"]["after"]["entries"]
+    assert all(change["path"] != "repo/.git/config.worktree" for change in result["workspace_changes"])
+    reevaluated = run_probe.reevaluate(tmp_path / "output/result.json")
+    assert reevaluated["checks"] == result["checks"] and reevaluated["passed"]
+    assert result["adapter_disposition"] == ("violation" if case == "W5" else "tolerated")
+    assert result["denial_classification_source"] == "adapter"
+    assert result["checks"]["denial_reclassification_agrees"]
+    assert result["evaluation_context"]["protected_paths"]
+    if case == "W5":
+        # A replay alone never replaces the adapter's missing stop decision.
+        saved = json.loads((tmp_path / "output/result.json").read_text())
+        saved["adapter_disposition"] = "tolerated"
+        (tmp_path / "output/result.json").write_text(json.dumps(saved))
+        missed = run_probe.reevaluate(tmp_path / "output/result.json")
+        assert not missed["checks"]["denial_classification"]
+        assert not missed["checks"]["denial_reclassification_agrees"]
+        assert not missed["passed"]
 
 
 def test_execute_fake_process_stdin_and_timeout(tmp_path):

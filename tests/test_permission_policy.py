@@ -137,3 +137,21 @@ def test_opaque_scratch_work_without_boundary_hints_is_tolerated(boundary, comma
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == "tolerated"
     root, paths, _ = boundary
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths) == "tolerated"
+
+
+@pytest.mark.parametrize("arguments,expected", [
+    ("", "tolerated"), ("--show-current", "tolerated"),
+    ("--list 'feature/*' main", "tolerated"), ("--contains HEAD", "tolerated"),
+    ("--merged", "tolerated"), ("--merged HEAD", "tolerated"),
+    ("--no-merged HEAD -vv -a", "tolerated"), ("-v -r --format='%(refname)'", "tolerated"),
+    ("--contains=HEAD --list 'feature/*'", "tolerated"),
+    ("new-branch", "violation"), ("--show-current new-branch", "violation"),
+    ("--contains HEAD new-branch", "violation"), ("--list -D feature", "violation"),
+    ("--merged HEAD --force new-branch", "violation"), ("-l new-branch", "violation"),
+    ("--edit-description", "violation"), ("--copy original new", "violation"),
+    ("--list feature; git commit --allow-empty -m phase0", "violation"),
+])
+def test_read_only_branch_forms(boundary, arguments, expected):
+    root, paths, scratch = boundary
+    command = f'echo "TMPDIR=$TMPDIR"; git -C {root} branch {arguments}'
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths, scratch) == expected

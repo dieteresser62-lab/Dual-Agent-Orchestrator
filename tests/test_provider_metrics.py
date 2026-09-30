@@ -218,3 +218,58 @@ def test_live_input_redacts_literal_json_credential_fields():
         "input": {"api_key": "unknown-secret-value", "password": "unknown-password-value", "ordinary": "visible"}}]}}, {})
     assert "unknown-secret-value" not in text and "unknown-password-value" not in text
     assert "visible" in text and "[redacted]" in text
+
+
+@pytest.mark.parametrize("actual,changed", [("initial-model", False), ("replacement-model", True)])
+def test_observed_models_warn_only_on_drift(actual, changed, caplog):
+    from provider_metrics import actual_model_metrics
+    events = [{"type": "system", "subtype": "init", "model": "initial-model"},
+              {"type": "assistant", "message": {"model": actual}},
+              {"type": "result", "modelUsage": {actual: {}}}]
+    assert actual_model_metrics(events) == {"init_model": "initial-model", "actual_models": [actual]}
+    assert ("[MODEL_CHANGE]" in caplog.text) == changed
+    assert actual_model_metrics([{"type": "turn.completed", "usage": {}}]) == {}
+    assert actual_model_metrics([{"type": "turn.completed", "model": actual}]) == {"actual_models": [actual]}
+
+
+def test_real_model_switch_reaches_adapter_metadata_and_warns(tmp_path, caplog):
+    from pathlib import Path
+    from test_claude_implementer_adapter import _prepared, _valid_plan  # allowlist:provider -- transport: reduced live stream fixture
+    recording = json.loads((Path(__file__).parent / "fixtures/phase0-traces/s1/claude-W4.json").read_text())  # allowlist:provider -- transport: reduced live stream fixture
+    events = [json.loads(line) for line in recording["run"]["stdout"].splitlines()]
+    _, adapter, bundle, _ = _prepared(tmp_path)
+    events[-1]["structured_output"] = {"result": _valid_plan(bundle)}
+    try:
+        result = json.loads(adapter.extract_output("\n".join(json.dumps(e) for e in events), "", {}))
+        assert result["request_id"] == bundle.bound_context.request_id
+        assert len(adapter.metadata["actual_models"]) == 2
+        assert adapter.metadata["init_model"] in adapter.metadata["actual_models"]
+        assert "[MODEL_CHANGE]" in caplog.text
+    finally:
+        adapter.cleanup()
+
+
+def test_model_metadata_reaches_attempt_callback_and_record_roundtrip():
+    from dataclasses import replace
+    from agent_runtime import ProviderAttemptLifecycle, _ProviderAttemptInvocation
+    from artifact_models import ArtifactRecord, ArtifactValidationError, Role
+    from test_artifact_models import _attempt_for_pair, _record, CREATED_AT
+    captured = []
+    invocation = _ProviderAttemptInvocation(ProviderAttemptLifecycle(
+        start=lambda *args: "handle", terminal=lambda *args, **kw: captured.append(kw), monotonic_fn=lambda: 1.0))
+    invocation.begin(None, None)
+    invocation.finish(None, {"init_model": "model-a", "actual_models": ["model-a", "model-b"]})
+    telemetry = captured[0]
+    assert telemetry == {"init_model": "model-a", "actual_models": ("model-a", "model-b")}
+    started = _attempt_for_pair("codex", Role.IMPLEMENTER)  # allowlist:provider -- certification data: generic attempt fixture
+    terminal = replace(started, phase="succeeded", ended_at=CREATED_AT, duration_seconds=1, **telemetry)
+    document = _record(terminal).to_dict()
+    assert document["payload"]["actual_models"] == ["model-a", "model-b"]
+    assert ArtifactRecord.from_dict(document).to_dict() == document
+    historical = _record(started).to_dict()
+    assert "actual_models" not in historical["payload"] and "init_model" not in historical["payload"]
+    assert ArtifactRecord.from_dict(historical).to_dict() == historical
+    with pytest.raises(ArtifactValidationError):
+        replace(started, **telemetry)
+    with pytest.raises(ArtifactValidationError):
+        replace(terminal, actual_models=("model-b", "model-a"))

@@ -896,3 +896,17 @@ def test_attempt_denial_evidence_is_durable_and_idempotency_bound(tmp_path):
     assert bridge.finish_provider_attempt(started, duration_seconds=99.0, failure_kind=None, usage=None, permission_denials=denials) == terminal
     with pytest.raises(ArtifactBridgeError, match="differs"):
         bridge.finish_provider_attempt(started, duration_seconds=1.0, failure_kind=None, usage=None, permission_denials=())
+
+
+def test_attempt_actual_models_survive_replay_and_bind_idempotency(tmp_path):
+    bridge = _bound_bridge(tmp_path, "run-1")
+    measurement = bridge.append(_measurement(), logical_id="measurement-1", idempotency_key="measurement:1", fingerprint_sha256=DIGEST)
+    started = bridge.start_provider_attempt(measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1", model="reviewer-model", effort="high")
+    telemetry = {"init_model": "model-a", "actual_models": ("model-a", "model-b")}
+    terminal = bridge.finish_provider_attempt(started, duration_seconds=1, failure_kind=None, usage=None, **telemetry)
+    assert terminal.payload.model == "reviewer-model"
+    assert bridge.store.load_chain()[-1].payload.actual_models == ("model-a", "model-b")
+    replay_artifacts(bridge.store.load_chain(), bridge.store.run_id)
+    assert bridge.finish_provider_attempt(started, duration_seconds=2, failure_kind=None, usage=None, **telemetry) == terminal
+    with pytest.raises(ArtifactBridgeError, match="differs"):
+        bridge.finish_provider_attempt(started, duration_seconds=1, failure_kind=None, usage=None, init_model="model-a", actual_models=("model-a",))
