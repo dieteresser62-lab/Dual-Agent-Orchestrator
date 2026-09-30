@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import stat
 import subprocess
@@ -21,6 +22,7 @@ from toolchain_paths import validate_toolchain_read_roots, validate_private_scra
 from permission_policy import classify_implementer_denial
 from provider_metrics import permission_denial_summaries
 from agent_roles import AgentRoleName
+from workflow_state import AgentFailureKind
 from native_implementer_contract import NativeImplementerContractError, canonical_native_implementer_json
 from native_implementer_request import NativeImplementerRequestBundle
 from native_provider_schema import (
@@ -183,6 +185,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             raise TypeError("Claude implementer requires implementer role binding")  # allowlist:provider -- transport: implementer binding
         self._scratch: Path | None = None
         self._placeholder_candidates: tuple[Path, ...] = ()
+        self._directory_placeholders: tuple[Path, ...] = ()
         self._repository_root: Path | None = None
         self._protected_paths: tuple[Path, ...] | None = None
 
@@ -223,6 +226,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                 "PATH": ":".join([*(str(Path(root) / "bin") for root in self.settings.toolchain_read_roots
                                    if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"]),
                 "LANG": "C.UTF-8", "TERM": "dumb", "TMPDIR": str(self._scratch),
+                "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "1",  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
             }
             settings_json = _canonical(implementer_settings(self._protected_paths, self._repository_root, self.settings.toolchain_read_roots, scratch=self._scratch))
             for asset in bundle.evidence_assets:
@@ -259,6 +263,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             profile = normalize_transport_profile(
                 "claude-implementer", command, bound_settings_json=settings_json, bound_repository_root=self._repository_root,  # allowlist:provider -- transport: implementer normalization
                 bound_toolchain_read_roots=self.settings.toolchain_read_roots, bound_scratch=self._scratch,
+                bound_environment=self.env,
             )
             assert_provider_capabilities("claude-implementer", (), profile=profile)  # allowlist:provider -- transport: implementer capability
             measured_settings = json.loads(settings_json)
@@ -291,6 +296,13 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             path / "config.worktree" for path in git_dirs
             if not (path / "config.worktree").exists() and not (path / "config.worktree").is_symlink()
         )
+        self._directory_placeholders = tuple(
+            path for path in (self._repository_root / ".claude/.cc-writes", self._repository_root / ".claude")  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
+            if not path.exists() and not path.is_symlink()
+        )
+        for path in (self._repository_root / ".claude/.cc-writes", self._repository_root / ".claude"):  # allowlist:provider -- profile configuration: sandbox placeholder names
+            if path not in self._directory_placeholders:
+                logging.getLogger(__name__).info("Sandbox placeholder retained: %s (present before invocation)", path)
 
     def remove_sandbox_placeholders(self) -> tuple[Path, ...]:
         """Remove empty regular placeholders the sandbox created; keep anything else."""
@@ -304,6 +316,17 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                 candidate.unlink()
                 removed.append(candidate)
         self._placeholder_candidates = ()
+        for candidate in self._directory_placeholders:
+            try:
+                if candidate.parent.is_symlink() or candidate.is_symlink() or not candidate.is_dir():
+                    if candidate.exists() or candidate.is_symlink():
+                        logging.getLogger(__name__).warning("Sandbox placeholder retained: %s (not a plain directory)", candidate)
+                    continue
+                candidate.rmdir()
+                removed.append(candidate)
+            except OSError as exc:
+                logging.getLogger(__name__).warning("Sandbox placeholder retained: %s (%s)", candidate, exc)
+        self._directory_placeholders = ()
         return tuple(removed)
 
     def cleanup(self) -> None:
@@ -329,7 +352,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         if len(results) != 1 or not events or events[-1] is not results[0]:
             raise AgentOutputError("implementer stream requires exactly one final result")
         envelope = results[0]
-        self.metadata = {**failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS), **actual_model_metrics(events)}
+        self.metadata = {**failure_metrics(envelope, PROVIDER_FAILURE_METRIC_KEYS), **actual_model_metrics(events, warn=False)}
         denials = envelope.get("permission_denials", [])
         if not isinstance(denials, list):
             denials = [None]
@@ -378,8 +401,22 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                                        provider_data=self.metadata,
                                        technical_text="implementer attempted a denied protected action")
         safe_envelope = {**envelope, **self.metadata}
-        if envelope.get("is_error") is not False or envelope.get("subtype") != "success":
-            raise AgentOutputError("implementer reported an error", provider_data=safe_envelope)
+        fallbacks = [event for event in events if event.get("type") == "system" and event.get("subtype") == "model_refusal_fallback"]
+        initial = self.metadata.get("init_model")
+        models = self.metadata.get("actual_models", [])
+        if fallbacks or len(models) > 1 or (initial is not None and any(model != initial for model in models)):
+            detail = "model switch observed: " + str(initial) + " -> " + ", ".join(models)
+            if fallbacks:
+                detail += " (model_refusal_fallback: " + str(fallbacks[0].get("original_model")) + " -> " + str(fallbacks[0].get("fallback_model")) + ")"
+            raise AgentOutputError(detail, provider_data=safe_envelope, technical_text=detail, kind_hint=AgentFailureKind.OUTPUT)
+        errors = envelope.get("errors", [])
+        refusal = (envelope.get("stop_reason") == "refusal" or
+                   any(isinstance(event.get("message"), dict) and event["message"].get("stop_reason") == "refusal" for event in events) or
+                   (isinstance(errors, list) and any(isinstance(error, str) and "refus" in error.lower() for error in errors)))
+        if refusal or envelope.get("is_error") is not False or envelope.get("subtype") != "success":
+            raise AgentOutputError("implementer reported an error", provider_data=safe_envelope,
+                                   technical_text="implementer provider refusal" if refusal else None,
+                                   kind_hint=AgentFailureKind.OUTPUT if refusal else None)
         structured = envelope.get("structured_output")
         if not isinstance(structured, dict) or set(structured) != {"result"} or not isinstance(structured["result"], dict):
             raise AgentOutputError("Claude implementer result envelope is invalid")  # allowlist:provider -- transport: implementer output

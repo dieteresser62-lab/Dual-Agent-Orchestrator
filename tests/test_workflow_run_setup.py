@@ -679,7 +679,7 @@ def test_resume_toolchain_digest_is_bound_before_any_probe(tmp_path, monkeypatch
     tools.mkdir()
     other = tmp_path / "other"
     other.mkdir()
-    selected = AgentSettings("claude", "claude", "opus", None, "high", toolchain_read_roots=(str(tools),))  # allowlist:provider -- profile configuration: implementer toolchain
+    selected = AgentSettings("claude", "claude", "opus", None, "high", toolchain_read_roots=(str(tools),), fixed_environment=(("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "1"),))  # allowlist:provider -- profile configuration: implementer toolchain
     profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
     profiles["implementer"] = replace(profiles["implementer"], provider=selected.name, model=selected.model,
                                      isolation_options_sha256=isolation_options_digest(selected))

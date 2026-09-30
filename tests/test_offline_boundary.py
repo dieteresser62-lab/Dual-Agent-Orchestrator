@@ -17,6 +17,15 @@ from provider_identity import ProviderIdentity
 from agent_adapters import AgentOutputError
 
 
+@pytest.fixture(autouse=True)
+def fake_local_catalog(monkeypatch):
+    import agent_runtime
+    def catalog(command):
+        assert command[-2:] == ["debug", "models"]
+        return 0, json.dumps({"models": [{"slug": model} for model in ("gpt-6.1-sol", "gpt-6-sol", "fake")]}), ""
+    monkeypatch.setattr(agent_runtime, "run_local_command", catalog)
+
+
 def report_attempts(case):
     catalog = IMPLEMENTER_CASES if case.startswith("W") else CASES
     return [{"id": text.split(":", 1)[0], "result": "observed"} for text in catalog[case].attempts]
@@ -401,7 +410,7 @@ def reviewer_outputs(calls):
     return outputs
 
 
-@pytest.mark.parametrize("mutation", ("none", "no-tools", "empty-tools", "missing-result", "leaked-env", "changed-tool-surface", "tool-effect", "tool-enabled"))
+@pytest.mark.parametrize("mutation", ("none", "no-tools", "empty-tools", "missing-result", "leaked-env", "changed-tool-surface", "tool-effect", "tool-enabled", "code-mode", "code-mode-collaboration"))
 def test_offline_reviewer_report_checks_behavior_and_host_effects(tmp_path, monkeypatch, mutation):
     bound = identity(tmp_path / "binary", BOUNDARY_REVIEWER)
     def execute(command, *, env, cwd, stdin, timeout):
@@ -425,13 +434,18 @@ def test_offline_reviewer_report_checks_behavior_and_host_effects(tmp_path, monk
             api.bodies[0].pop("tools")
         elif mutation == "empty-tools":
             api.bodies[0]["tools"] = []
+        elif mutation.startswith("code-mode"):
+            fixture_name = "reviewer-tools-collaboration.json" if mutation.endswith("collaboration") else "reviewer-tools-hardened.json"
+            body = json.loads((Path(__file__).parent / "fixtures/phase0-traces/s2" / fixture_name).read_text())
+            body["input"].extend(outputs)
+            api.bodies = [body]
         return {"exit_code": 0, "timed_out": False, "stdout": "", "stderr": ""}
     monkeypatch.setattr(boundary, "execute", execute)
     report = boundary.run_pair(BOUNDARY_REVIEWER, out=tmp_path / "out", identity=bound)
-    assert report["passed"] == (mutation in {"none", "no-tools"}), report["checks"]
+    assert report["passed"] == (mutation in {"none", "code-mode"}), report["checks"]
     if mutation == "no-tools":
         check = next(c for c in report["checks"] if c["check"] == "tool-surface")
-        assert check["status"] == "skipped" and "normalize_transport_profile" in check["evidence"]["hardening"]
+        assert check["status"] == "failed" and "model_catalog_json" in check["evidence"]["hardening"]
         assert all(c["status"] == "passed" for c in report["checks"] if c["check"].startswith("forbidden-tool:"))
     assert json.loads((tmp_path / "out/report.json").read_text()) == report
 

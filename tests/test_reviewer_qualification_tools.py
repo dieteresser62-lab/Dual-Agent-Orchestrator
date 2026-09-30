@@ -428,7 +428,8 @@ def test_codex_measurement_last_message_runs_real_adapter_with_fake_process(tmp_
     if outcome == "timeout-case":
         profile.write_text(profile.read_text().replace("timeout_seconds = 600", "timeout_seconds = 1"))
     adapter = create_reviewer_qualification_adapter(AgentSettings("codex", str(binary), "gpt-6.1-sol", 1 if outcome == "timeout-case" else 600, "high"))  # allowlist:provider -- profile configuration: native candidate fake identity
-    adapter.provider_identity = SimpleNamespace(entry_path=str(entry), kind="verified")
+    adapter.provider_identity = SimpleNamespace(entry_path=str(entry), kind="verified", digest="fake", launch_prefix=(str(binary),))
+    monkeypatch.setattr(agent_runtime, "run_local_command", lambda c: (0, json.dumps({"models": [{"slug": "gpt-6.1-sol"}]}), ""))
     assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: registration assertion
     factory = probe._qualification_adapter
     def prepared(*args, **kwargs):

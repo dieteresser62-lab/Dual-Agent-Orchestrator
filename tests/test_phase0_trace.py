@@ -33,7 +33,7 @@ def test_real_streams_pass_without_mandatory_self_report(recording):
     if recording["role"] == "reviewer":
         assert self_report["positive_control"] == "PHASE0_POSITIVE"
         assert result["tool_surface"]["status"] == "skipped"
-        assert "no request tools field" in result["tool_surface"]["reason"]
+        assert "additional_tools is absent" in result["tool_surface"]["reason"]
     else:
         assert self_report == {}
         assert result["tool_surface"]["status"] == "passed"

@@ -206,6 +206,20 @@ def _qualification_adapter(protocol: dict, provider: str, profile: dict,
     return create_reviewer_qualification_adapter(settings)
 
 
+def _bind_qualification_catalog(adapter, capability: str) -> None:
+    """Use the local identity-bound catalog before preparing the new reviewer."""
+    from scripts.qualification.profiles import BOUNDARY_REVIEWER
+    if capability != BOUNDARY_REVIEWER:
+        return
+    from agent_runtime import verify_agent_capabilities, run_local_command
+    from model_catalog import bind_catalog_models
+    verify_agent_capabilities(adapter)
+    slots = {"reviewer": adapter.settings}
+    bind_catalog_models(slots, {"reviewer": adapter.provider_identity}, run_local_command)
+    adapter.settings = slots["reviewer"]
+    adapter.model = adapter.settings.model
+
+
 def _review_budget(capability: str):
     from provider_input_budget import (ProviderInputBudgetPolicy, ProviderInputBudgetRule,
                                        default_provider_input_budget_policy)
@@ -2127,6 +2141,7 @@ def run_qualification_call(*, kind: str, case_id: str, provider: str, series_id:
                 if row["call_id"] == production_retry_of)
             retry_feedback = _contract_retry_feedback(spec, previous_row, previous_raw)
             spec = replace(spec, retry_feedback=retry_feedback)
+    _bind_qualification_catalog(adapter, capability)
     bundle = build_native_review_request(spec, profile=capability)
     _preflight_series_position(
         strict_json((output_dir / "qualification-series-v1.json").read_bytes())["attempts"]
@@ -2337,6 +2352,7 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
                            else "Previously validated reference slice review from quality Q3: ")
             evidence = NativeReviewEvidenceInput(label, "review_evidence", description + canonical(prior))
             spec = replace(spec, evidence=tuple(sorted((*spec.evidence, evidence), key=lambda item: item.evidence_id)))
+        _bind_qualification_catalog(adapter, capability)
         bundle = build_native_review_request(spec, profile=capability)
         raw = {}
         extract = adapter.extract_output

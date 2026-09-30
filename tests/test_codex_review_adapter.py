@@ -13,6 +13,7 @@ import native_review_contract
 
 from agent_adapters import AgentOutputError, create_reviewer_qualification_adapter
 from agent_config import AgentSettings
+from model_catalog import hardened_reviewer_catalog
 from codex_review_adapter import NativeCodexReviewAdapter, codex_package_root  # allowlist:provider -- transport: reviewer adapter
 from contracts import (
     AgentRole, ApprovalMarker, FindingClass, FindingOrigin, FindingRecord,
@@ -40,7 +41,7 @@ CASES = json.loads((Path(__file__).parent / "fixtures/reviewer-format-s6-v1.json
 
 
 def _settings() -> AgentSettings:
-    return AgentSettings("codex", "codex", "gpt-6-sol", 600, "medium")  # allowlist:provider -- profile configuration: fake reviewer
+    return AgentSettings("codex", "codex", "gpt-6-sol", 600, "medium", reviewer_model_catalog_json=hardened_reviewer_catalog({"models": [{"slug": "gpt-6-sol"}]}, "gpt-6-sol"))  # allowlist:provider -- profile configuration: fake reviewer
 
 
 def _bundle(*, final: bool = False, maximum: int = 128, convergence: bool = False,

@@ -112,6 +112,14 @@ class OperatorPrerequisiteDetails:
     operator_action: str
 
 
+def render_implementer_stop_instructions() -> str:
+    """Transport the validator's built-in rules without changing frozen role policy."""
+    return ("For stop_result set rule_id, a non-empty rationale, and remediation_paths "
+            "(canonical repository-relative paths, sorted and unique; [] when none). "
+            "Use these rule-specific requirements; literal labels must start their own lines:\n" +
+            "\n".join(f"{rule.id}: {rule.description}" for rule in BUILTIN_STOP_RULES))
+
+
 @dataclass(frozen=True)
 class ScopeExtensionDetails:
     required_paths: tuple[str, ...]

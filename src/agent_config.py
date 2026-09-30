@@ -7,7 +7,7 @@ import math
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, InitVar
 from pathlib import Path
 from typing import Mapping
 
@@ -35,6 +35,15 @@ class AgentSettings:
     antigravity_home: str | None = None
     antigravity_run_root: str | None = None
     toolchain_read_roots: tuple[str, ...] = ()
+    reviewer_model_catalog_json: InitVar[str | None] = None
+    fixed_environment: InitVar[tuple[tuple[str, str], ...]] = ()
+
+    def __post_init__(self, reviewer_model_catalog_json, fixed_environment) -> None:
+        # Runtime bindings are not public configuration or CLI Namespace fields.
+        # InitVar keeps the frozen configuration projection byte-compatible;
+        # replace() preserves their initialized values for each runtime slot.
+        object.__setattr__(self, "reviewer_model_catalog_json", reviewer_model_catalog_json)
+        object.__setattr__(self, "fixed_environment", fixed_environment)
 
 
 @dataclass(frozen=True)
@@ -89,7 +98,12 @@ def _antigravity_paths(
 
 
 def isolation_options_digest(settings: AgentSettings) -> str | None:
-    """Bind only the selected paths, never OAuth or settings contents."""
+    """Bind runtime catalog, fixed environment and paths; never credentials."""
+    if settings.reviewer_model_catalog_json is not None or settings.fixed_environment:
+        payload = json.dumps({"reviewer_model_catalog": settings.reviewer_model_catalog_json,
+                              "fixed_environment": settings.fixed_environment,
+                              "toolchain_read_roots": settings.toolchain_read_roots}, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     if settings.toolchain_read_roots:
         payload = json.dumps({"toolchain_read_roots": settings.toolchain_read_roots}, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

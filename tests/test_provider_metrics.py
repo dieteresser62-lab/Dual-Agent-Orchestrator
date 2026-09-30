@@ -232,7 +232,7 @@ def test_observed_models_warn_only_on_drift(actual, changed, caplog):
     assert actual_model_metrics([{"type": "turn.completed", "model": actual}]) == {"actual_models": [actual]}
 
 
-def test_real_model_switch_reaches_adapter_metadata_and_warns(tmp_path, caplog):
+def test_real_model_switch_reaches_adapter_metadata_and_fails(tmp_path, caplog):
     from pathlib import Path
     from test_claude_implementer_adapter import _prepared, _valid_plan  # allowlist:provider -- transport: reduced live stream fixture
     recording = json.loads((Path(__file__).parent / "fixtures/phase0-traces/s1/claude-W4.json").read_text())  # allowlist:provider -- transport: reduced live stream fixture
@@ -240,11 +240,11 @@ def test_real_model_switch_reaches_adapter_metadata_and_warns(tmp_path, caplog):
     _, adapter, bundle, _ = _prepared(tmp_path)
     events[-1]["structured_output"] = {"result": _valid_plan(bundle)}
     try:
-        result = json.loads(adapter.extract_output("\n".join(json.dumps(e) for e in events), "", {}))
-        assert result["request_id"] == bundle.bound_context.request_id
+        with pytest.raises(AgentOutputError, match="model switch observed"):
+            adapter.extract_output("\n".join(json.dumps(e) for e in events), "", {})
         assert len(adapter.metadata["actual_models"]) == 2
         assert adapter.metadata["init_model"] in adapter.metadata["actual_models"]
-        assert "[MODEL_CHANGE]" in caplog.text
+        assert "[MODEL_CHANGE]" not in caplog.text
     finally:
         adapter.cleanup()
 

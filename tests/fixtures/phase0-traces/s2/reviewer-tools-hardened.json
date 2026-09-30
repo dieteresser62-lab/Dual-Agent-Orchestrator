@@ -1,0 +1,43 @@
+{
+  "model": "gpt-6.1-sol",
+  "input": [
+    {
+      "type": "additional_tools",
+      "role": "developer",
+      "tools": [
+        {
+          "type": "namespace",
+          "name": "functions",
+          "tools": [
+            {
+              "type": "custom",
+              "name": "exec"
+            },
+            {
+              "type": "function",
+              "name": "wait"
+            },
+            {
+              "type": "function",
+              "name": "request_user_input"
+            },
+            {
+              "type": "function",
+              "name": "request_user_input_async"
+            }
+          ]
+        },
+        {
+          "type": "namespace",
+          "name": "clock",
+          "tools": [
+            {
+              "type": "function",
+              "name": "sleep"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

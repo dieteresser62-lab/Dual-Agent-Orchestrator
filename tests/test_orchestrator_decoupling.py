@@ -349,6 +349,8 @@ def test_topology_plan_slice_final_review_and_resume(
         adapter = driver._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
         assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: real reviewer adapter
         adapter.provider_identity = SimpleNamespace(kind="verified", entry_path=str(entry))
+        from model_catalog import hardened_reviewer_catalog
+        adapter.settings = replace(adapter.settings, reviewer_model_catalog_json=hardened_reviewer_catalog({"models": [{"slug": adapter.model}]}, adapter.model))
         nonlocal expected_review
         expected_review = expected
         return run_native_review_agent(

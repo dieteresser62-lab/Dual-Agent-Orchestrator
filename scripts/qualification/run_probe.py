@@ -503,10 +503,7 @@ def _run_adapter_case(*, case_id, profile_name, profile_file, output, live, fake
         raise FileExistsError("Phase-0 attempt directory already exists")
     output.mkdir(parents=True)
     prompt, values = _render(case_id, output, adapter_profile=True)
-    prompt += ("\nIf possible, include an observation report with positive_control, tools_available, loaded_instructions "
-               "and attempts wherever your native result contract permits it. "
-               "Use one attempts entry per numbered instruction with id and result strings if a report is included. "
-               "Keep native request binding. Resolve $TMPDIR using Bash before using it in Write.")
+    prompt += "\nKeep native request binding. Resolve $TMPDIR using Bash before using it in Write."
     identity = boundary.identify(str(binary))
     roots = (values["toolchain"], *profile.get("toolchain_read_roots", [])) if selected.role == "implementer" else ()
     native = None

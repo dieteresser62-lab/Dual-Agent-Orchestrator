@@ -71,7 +71,7 @@ def test_native_implementer_settings_and_measurement_are_bound(tmp_path: Path, m
         assert settings["disableAllHooks"] is True
         assert settings["sandbox"]["filesystem"]["denyWrite"]
         assert settings["permissions"]["blockReadsOutsideWorkingDirectories"] is True
-        assert set(adapter.env) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR"}
+        assert set(adapter.env) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR", "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"}  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
         assert "DAO_DECOY_TOKEN" not in adapter.env
         first = hashlib.sha256(json.dumps(
             [(part.name, part.content) for part in prepared.components],
@@ -104,7 +104,7 @@ def test_implementer_command_rejects_broadened_flags(tmp_path: Path, replacement
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile(
                 "claude-implementer", command,  # allowlist:provider -- profile configuration: implementer fake
-                bound_repository_root=adapter._repository_root, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
+                bound_repository_root=adapter._repository_root, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
             )
     finally:
         adapter.cleanup()
@@ -136,7 +136,7 @@ def test_implementer_settings_reject_weakened_field(
     command[command.index("--settings") + 1] = json.dumps(changed, sort_keys=True, separators=(",", ":"))
     try:
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -152,7 +152,7 @@ def test_implementer_command_rejects_extra_flags(tmp_path: Path, extra: str) -> 
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile(
                 "claude-implementer", command,  # allowlist:provider -- profile configuration: implementer fake
-                bound_repository_root=adapter._repository_root, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
+                bound_repository_root=adapter._repository_root, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
             )
     finally:
         adapter.cleanup()
@@ -249,7 +249,7 @@ def test_fake_process_uses_implementer_boundary_and_validates_plan(
         assert stdin_text == bundle.canonical_json
         assert bundle.canonical_json not in command_parts
         assert command_parts[command_parts.index("--system-prompt") + 1] == adapter.role_binding.policy
-        assert set(kwargs["env"]) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR"}
+        assert set(kwargs["env"]) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM", "TMPDIR", "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"}  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
         seen.append(kwargs["execution_root"])
         result = {
             "schema_version": "native-agent-implementer-result-v3",
@@ -421,7 +421,7 @@ def test_cli_edit_rules_repeat_the_settings_deny_rules(tmp_path: Path) -> None:
         assert "Edit(./.orchestrator/**)" in cli_rules.split(",")
         command[command.index("--disallowedTools") + 1] = "Edit(./.git),Edit(./.git/**)"
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=bound)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -446,7 +446,7 @@ def test_normalizer_checks_settings_semantics_even_when_bound(tmp_path: Path, ch
     command[command.index("--disallowedTools") + 1] = ",".join(deny)
     try:
         with pytest.raises(NativeProviderSchemaError):
-            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=weakened)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=weakened)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -488,7 +488,7 @@ def test_normalizer_rejects_nested_protected_paths(tmp_path: Path) -> None:
     command[command.index("--disallowedTools") + 1] = ",".join(settings["permissions"]["deny"])
     try:
         with pytest.raises(NativeProviderSchemaError, match="nested"):
-            normalize_transport_profile("claude-implementer", command, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
+            normalize_transport_profile("claude-implementer", command, bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_repository_root=adapter._repository_root, bound_settings_json=nested)  # allowlist:provider -- profile configuration: implementer fake
     finally:
         adapter.cleanup()
 
@@ -512,7 +512,7 @@ def test_toolchain_settings_path_and_semantic_binding(tmp_path):
         assert settings["sandbox"]["filesystem"]["allowWrite"] == [str(adapter._scratch)]
         assert adapter.env["PATH"] == str(tools / "bin") + ":/usr/local/bin:/usr/bin:/bin"
         assert normalize_transport_profile("claude-implementer", prepared.command,  # allowlist:provider -- profile configuration: toolchain coverage
-            bound_scratch=adapter._scratch, bound_settings_json=settings_json, bound_repository_root=root,
+            bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_settings_json=settings_json, bound_repository_root=root,
             bound_toolchain_read_roots=(str(tools), str(no_bin)))
     finally:
         adapter.cleanup()
@@ -537,7 +537,7 @@ def test_semantic_normalization_rejects_manipulated_allow_read(tmp_path, kind):
     try:
         with pytest.raises(NativeProviderSchemaError):
             normalize_transport_profile("claude-implementer", command,  # allowlist:provider -- profile configuration: manipulated read root
-                bound_scratch=adapter._scratch, bound_settings_json=new_bound, bound_repository_root=root,
+                bound_environment=adapter.env, bound_scratch=adapter._scratch, bound_settings_json=new_bound, bound_repository_root=root,
                 bound_toolchain_read_roots=() if kind == "unbound" else (str(replacement),))
     finally:
         adapter.cleanup()
@@ -678,13 +678,13 @@ def test_stream_success_tolerates_smoke_denials_preserves_usage_and_validates_re
                               "tool_name": denial["tool_name"], "tool_use_id": denial["tool_use_id"],
                               "decision_reason_type": "restricted", "decision_reason": "fake refusal"}) + '\n'
     stream += _stream({"is_error": False, "permission_denials": denials,
-                       "usage": {"input_tokens": 42, "output_tokens": 7}, "modelUsage": {"fake-model": {}},
+                       "usage": {"input_tokens": 42, "output_tokens": 7}, "modelUsage": {"claude-opus-5-5": {}},  # allowlist:provider -- profile configuration: consistent model telemetry fixture
                        "structured_output": {"result": _valid_plan(bundle)}})
     try:
         result = adapter.extract_output(stream, "", {})
         assert parse_bound_native_implementer_contract_result(json.loads(result), bundle.bound_context).ready
         assert adapter.metadata["usage"] == {"input_tokens": 42, "output_tokens": 7}
-        assert adapter.metadata["modelUsage"] == {"fake-model": {}}
+        assert adapter.metadata["modelUsage"] == {"claude-opus-5-5": {}}  # allowlist:provider -- profile configuration: model fidelity fixture
         assert len(adapter.metadata["permission_denials"]) == 3
         assert all(item["disposition"] == "tolerated" for item in adapter.metadata["permission_denials"])
         assert caplog.text.count("disposition=tolerated") == 3

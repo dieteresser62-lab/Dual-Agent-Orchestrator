@@ -7,6 +7,18 @@ from dataclasses import replace
 from agent_config import MODEL_FAMILIES
 
 
+def hardened_reviewer_catalog(catalog: object, model: str) -> str:
+    """Keep model capabilities but remove every opt-in extra tool surface."""
+    select_catalog_model(model, catalog, resume=True)
+    result = json.loads(json.dumps(catalog))
+    rows = result["models"] if isinstance(result, dict) else result
+    for row in rows:
+        for key in ("multi_agent_version", "multi_agent_reasoning_effort", "experimental_supported_tools",
+                    "supports_search_tool", "web_search_tool_type"):
+            row.pop(key, None)
+    return json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def select_catalog_model(requested: str, catalog: object, *, resume: bool = False) -> str:
     rows = catalog.get("models") if isinstance(catalog, dict) else catalog
     if not isinstance(rows, list):
@@ -56,7 +68,8 @@ def bind_catalog_models(slots: dict, identities: dict, run_command, *, resume: b
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"slot={slot} model catalog returned invalid JSON") from exc
         model = select_catalog_model(settings.model, catalogs[identity.digest], resume=resume)
-        updates[slot] = replace(settings, model=model)
+        catalog_json = hardened_reviewer_catalog(catalogs[identity.digest], model) if slot in {"reviewer", "final_reviewer"} else None
+        updates[slot] = replace(settings, model=model, reviewer_model_catalog_json=catalog_json)
         getLogger(__name__).info("Model bound: slot=%s model=%s%s", slot, settings.model,
                                 "→" + model if settings.model != model else "")
     slots.update(updates)

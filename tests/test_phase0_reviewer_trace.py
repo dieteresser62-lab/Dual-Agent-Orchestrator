@@ -52,8 +52,8 @@ def test_p4_unavailable_sections_supply_independent_boundary_evidence():
     for row in result["coverage"][1:]:
         assert row["unavailable_reason"].startswith(row["id"])
         assert "offline_boundary.py" in row["boundary_evidence"]
-        assert "no tools field" in row["boundary_evidence"]
-        assert "unsupported call" in row["boundary_evidence"]
+        assert "additional_tools namespaces" in row["boundary_evidence"]
+        assert "no collaboration" in row["boundary_evidence"]
         assert not row["attempt_ids"]
 
 

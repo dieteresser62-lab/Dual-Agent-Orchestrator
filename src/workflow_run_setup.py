@@ -395,6 +395,8 @@ def _apply_resumed_agent_profiles(
         ("final_reviewer", binding.final_reviewer_profile),
     ):
         current = slots[role]
+        if role == "implementer" and profile.provider == "claude":  # allowlist:provider -- profile configuration: fixed implementer transport binding
+            current = replace(current, fixed_environment=(("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "1"),))  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
         slot = AgentSlot(role)
         try:
             certificate = certifications.require(profile.provider, role_for_slot(slot), slot, model=profile.model)
@@ -409,7 +411,7 @@ def _apply_resumed_agent_profiles(
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
         # The persisted profile wins: judge isolation paths for the recorded provider,
         # not for whatever provider the current TOML now names for this slot.
-        if profile.isolation_options_sha256 != isolation_options_digest(replace(current, name=profile.provider)):
+        if profile.provider != "codex" and profile.isolation_options_sha256 != isolation_options_digest(replace(current, name=profile.provider)):  # allowlist:provider -- profile configuration: catalog identity is checked after preflight
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} isolation paths changed")
         for field, profile_field in (("binary", "binary"), ("model", "model"), ("timeout", "timeout_seconds"), ("effort", "effort")):
             selected = getattr(current, "timeout_seconds" if field == "timeout" else field)
@@ -449,6 +451,10 @@ def _apply_resumed_agent_profiles(
             )
     if not bool(getattr(args, "scripted_provider_identity", False)):
         _bind_slot_catalog_models(slots, identities, resume=True)
+    for role, profile in (("implementer", binding.implementer_profile), ("reviewer", binding.reviewer_profile),
+                          ("final_reviewer", binding.final_reviewer_profile)):
+        if profile.isolation_options_sha256 != isolation_options_digest(slots[role]):
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} isolation paths or transport binding changed")
     args.slot_settings = slots
     args.slot_identities = identities
 
@@ -460,6 +466,9 @@ def _capture_slot_identities(
     from agent_adapters import build_slot_agent_registry
     from agent_runtime import verify_agent_capabilities
     from provider_identity import ProviderIdentity
+
+    if slots["implementer"].name == "claude":  # allowlist:provider -- profile configuration: fixed implementer environment
+        slots["implementer"] = replace(slots["implementer"], fixed_environment=(("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "1"),))  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
 
     registry = build_slot_agent_registry(slots, defer_model_binding=True)
     identities = {}

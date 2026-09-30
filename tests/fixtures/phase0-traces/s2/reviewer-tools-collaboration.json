@@ -1,0 +1,73 @@
+{
+  "model": "gpt-6.1-sol",
+  "input": [
+    {
+      "type": "additional_tools",
+      "role": "developer",
+      "tools": [
+        {
+          "type": "namespace",
+          "name": "functions",
+          "tools": [
+            {
+              "type": "custom",
+              "name": "exec"
+            },
+            {
+              "type": "function",
+              "name": "wait"
+            },
+            {
+              "type": "function",
+              "name": "request_user_input"
+            },
+            {
+              "type": "function",
+              "name": "request_user_input_async"
+            }
+          ]
+        },
+        {
+          "type": "namespace",
+          "name": "clock",
+          "tools": [
+            {
+              "type": "function",
+              "name": "sleep"
+            }
+          ]
+        },
+        {
+          "type": "namespace",
+          "name": "collaboration",
+          "tools": [
+            {
+              "type": "function",
+              "name": "followup_task"
+            },
+            {
+              "type": "function",
+              "name": "interrupt_agent"
+            },
+            {
+              "type": "function",
+              "name": "list_agents"
+            },
+            {
+              "type": "function",
+              "name": "send_message"
+            },
+            {
+              "type": "function",
+              "name": "spawn_agent"
+            },
+            {
+              "type": "function",
+              "name": "wait_agent"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

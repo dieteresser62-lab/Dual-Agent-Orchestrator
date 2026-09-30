@@ -15,6 +15,7 @@ from typing import Iterator
 from agent_adapters import AgentOutputError, CapabilitySpec, _BaseAdapter
 from provider_metrics import event_usage, stream_model_metrics
 from agent_config import AgentSettings
+from model_catalog import hardened_reviewer_catalog
 from agent_roles import AgentRoleName
 from native_provider_schema import (
     CODEX_REVIEW_DISABLED_FEATURES, NativeProviderSchemaError,  # allowlist:provider -- transport: reviewer CLI binding
@@ -150,6 +151,13 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
             raise AgentOutputError("Codex reviewer container is not sealed")  # allowlist:provider -- transport: reviewer CLI binding
         if _tree_fingerprint(self._workspace.container) != self._sealed:
             raise AgentOutputError("Codex reviewer container changed before start")  # allowlist:provider -- transport: reviewer CLI binding
+        path = self.invocation.runtime_dir / "model-catalog.json"
+        try:
+            unchanged = not path.is_symlink() and path.read_text(encoding="utf-8") == self.settings.reviewer_model_catalog_json
+        except OSError as exc:
+            raise AgentOutputError("reviewer model catalog is unavailable before start") from exc
+        if not unchanged:
+            raise AgentOutputError("reviewer model catalog changed before start")
         self._started = True
 
     def prepared_execution_root(self) -> Path:
@@ -178,6 +186,15 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
         package_root = codex_package_root(self.provider_identity.entry_path)  # allowlist:provider -- transport: reviewer CLI binding
         runtime_dir = self._new_runtime_dir()
         try:
+            try:
+                catalog_json = hardened_reviewer_catalog(json.loads(self.settings.reviewer_model_catalog_json), self.model)
+            except (TypeError, ValueError) as exc:
+                raise AgentOutputError("reviewer model catalog is missing or invalid", technical_text=str(exc)) from exc
+            if catalog_json != self.settings.reviewer_model_catalog_json:
+                raise AgentOutputError("reviewer model catalog differs from hardened run binding")
+            catalog_path = runtime_dir / "model-catalog.json"
+            catalog_path.write_text(catalog_json, encoding="utf-8")
+            catalog_path.chmod(0o600)
             input_dir = workspace.container / "input"
             reviewer_input = build_reviewer_input(
                 bundle, input_dir, chunk_chars=REVIEW_PACKET_CHUNK_CHARS,
@@ -205,6 +222,7 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
                 "-c", 'shell_environment_policy.inherit="core"',
                 "-c", codex_review_permission_config(package_root),  # allowlist:provider -- transport: reviewer CLI binding
                 "-c", 'default_permissions="dao-reviewer"',
+                "-c", "model_catalog_json=" + json.dumps(str(catalog_path)),
                 "-",
             ]
             profile = normalize_transport_profile(

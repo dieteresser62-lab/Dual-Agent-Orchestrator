@@ -964,9 +964,10 @@ def normalize_transport_profile(
     bound_repository_root: Path | None = None,
     bound_toolchain_read_roots: tuple[str, ...] = (),
     bound_scratch: Path | None = None,
+    bound_environment: Mapping[str, str] | None = None,
 ) -> ProviderTransportProfile:
     if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
-        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch)  # allowlist:provider -- profile configuration: implementer transport
+        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch, bound_environment)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
         if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
             raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
@@ -1050,6 +1051,7 @@ def _validate_claude_implementer_settings(settings: object, repository_root: Pat
 def _normalize_claude_implementer(  # allowlist:provider -- profile configuration: implementer transport
     command: Sequence[str], bound_settings_json: str | None,
     repository_root: Path | None = None, tool_roots: tuple[str, ...] = (), scratch: Path | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> ProviderTransportProfile:
     from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
@@ -1084,6 +1086,8 @@ def _normalize_claude_implementer(  # allowlist:provider -- profile configuratio
     if (canonical_schema_json(settings) != values[23] or not isinstance(schema, dict)
         or values[31] != CLAUDE_IMPLEMENTER_START_DIRECTIVE):  # allowlist:provider -- profile configuration: implementer CLI grammar
         raise NativeProviderSchemaError("Claude implementer JSON arguments differ")  # allowlist:provider -- profile configuration: implementer CLI grammar
+    if environment is None or environment.get("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK") != "1":  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
+        raise NativeProviderSchemaError("implementer refusal fallback environment differs")
     return ProviderTransportProfile(
         provider="claude", binary_name="claude", model=values[4],  # allowlist:provider -- profile configuration: implementer transport
         reasoning_or_effort=values[6], schema_transport="json-schema-argument",
@@ -1175,7 +1179,7 @@ def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: r
     if any(flag.startswith(("--sandbox", "--dangerously-", "--add-dir")) or flag == "--full-auto" for flag in values):
         raise NativeProviderSchemaError("Codex reviewer command broadens permissions")  # allowlist:provider -- profile configuration: reviewer CLI binding
     # Exact ordered grammar rejects duplicate flags, unknown settings and wider roots.
-    if len(values) != 51:
+    if len(values) != 53:
         raise NativeProviderSchemaError("Codex reviewer command length differs")  # allowlist:provider -- profile configuration: reviewer CLI binding
     expected_fixed = [
         "exec", "--model", values[2], "--config", values[4],
@@ -1197,9 +1201,19 @@ def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: r
     disabled = [item for feature in CODEX_REVIEW_DISABLED_FEATURES for item in ("--disable", feature)]  # allowlist:provider -- profile configuration: reviewer CLI binding
     if values[18:40] != disabled:
         raise NativeProviderSchemaError("Codex reviewer disabled features differ")  # allowlist:provider -- profile configuration: reviewer CLI binding
-    if values[40:50:2] != ["-c"] * 5 or values[50] != "-":
+    if values[40:52:2] != ["-c"] * 6 or values[52] != "-":
         raise NativeProviderSchemaError("Codex reviewer config flags differ")  # allowlist:provider -- profile configuration: reviewer CLI binding
-    config = values[41:50:2]
+    config = values[41:52:2]
+    expected_catalog = bound_runtime_dir / "model-catalog.json"
+    if config[5] != "model_catalog_json=" + json.dumps(str(expected_catalog)) or expected_catalog.is_symlink():
+        raise NativeProviderSchemaError("reviewer model catalog path differs from runtime binding")
+    from model_catalog import hardened_reviewer_catalog
+    try:
+        catalog_text = expected_catalog.read_text(encoding="utf-8")
+        if hardened_reviewer_catalog(json.loads(catalog_text), values[2]) != catalog_text:
+            raise ValueError("catalog is not hardened")
+    except (OSError, TypeError, ValueError) as exc:
+        raise NativeProviderSchemaError("reviewer model catalog is missing or unsafe") from exc
     if config[:3] != [
         'web_search="disabled"', "project_doc_max_bytes=0",
         'shell_environment_policy.inherit="core"',

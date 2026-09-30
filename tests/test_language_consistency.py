@@ -326,7 +326,7 @@ def test_root_entries_assign_roles_from_profiles_and_preserve_certification() ->
         "--ignore-user-config", "--ignore-rules", "project_doc_max_bytes=0",
         'shell_environment_policy.inherit="core"', 'web_search="disabled"',
         "Pflicht-Härtung", "Paketwurzel", "Codex 0.159.2",  # allowlist:provider -- documentation guard: measured CLI boundary
-        "~/.codex/tmp/arg0", "privat", "`tools`-Feld", "unsupported call",  # allowlist:provider -- documentation guard: restart-helper exception
+        "~/.codex/tmp/arg0", "privat", "`tools`-Feld", "additional_tools", "model_catalog_json", "no rollout found",  # allowlist:provider -- documentation guard: restart-helper exception
         "Strict-Writer", "additionalProperties: false", "Overlays", "Literalwerten",
         "5.000", "120.000", "1.000", "15.000", "128/512",
         "P1–P6", "quicktest", "nicht automatisch", "Protokoll v6",
