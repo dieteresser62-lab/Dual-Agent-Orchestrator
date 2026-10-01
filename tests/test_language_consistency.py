@@ -1298,6 +1298,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "docs/reference/antigravity-reviewer.md",
         "docs/reference/reviewer-certification.md",
         "docs/reference/implementer-certification.md",
+        "docs/reference/whitepaper-evidenz.md",  # Published provider evidence; retired-protocol checks still apply.
         "scripts/probe_reviewer.py",
         "scripts/qualification/profiles.py",
         "scripts/qualification/blind.py",
