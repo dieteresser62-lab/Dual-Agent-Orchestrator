@@ -16,9 +16,9 @@
         "cli_version": "codex-cli 0.156.1",
         "version_policy": "forward"
       },
-      "capability_sha256": "19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+      "capability_sha256": "dcb81596ea8a6c8952a631cf5b063cf0ddd09fb300ec88872bd830a93e927156",
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
-      "rights_sha256": "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+      "rights_sha256": "35a883f6726abf65cc7ab5ffb7f8241f63d6f7f910c14835b8b91165f2266f33",
       "evidence": {
         "path": "docs/evidence/role-certification-v1.json",
         "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
@@ -35,11 +35,32 @@
           "--ephemeral",
           "--color=never",
           "--json",
+          "--output-schema=<runtime-file>",
           "--output-last-message=<runtime-file>",
+          "-C=<repository>",
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--disable=apps",
+          "--disable=plugins",
+          "--disable=multi_agent",
+          "--disable=goals",
+          "--disable=browser_use",
+          "--disable=computer_use",
+          "--disable=image_generation",
+          "--disable=hooks",
+          "--disable=skill_search",
+          "--disable=tool_suggest",
+          "--disable=remote_plugin",
+          "web_search=disabled",
+          "shell_environment_policy.inherit=core",
+          "permissions=dao-implementer",
+          "default_permissions=dao-implementer",
+          "model_catalog_json=<bound-hardened-catalog>",
+          "project_docs=enabled",
           "stdin=-"
         ]
       },
-      "capability_profile": "codex"
+      "capability_profile": "codex-implementer"
     },
     {
       "slot": "reviewer",

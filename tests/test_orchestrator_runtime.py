@@ -1019,7 +1019,7 @@ def _interrupted_implementer_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str,
 ) -> ProtocolBinding:
     protocol = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3")
-    if profile == "codex":  # allowlist:provider -- profile configuration: baseline interruption
+    if profile == "codex-implementer":  # allowlist:provider -- profile configuration: hardened interruption
         return protocol
     from test_orchestrator_decoupling import _fake_certifications
     from agent_roles import AgentSlot, role_for_slot
@@ -1045,7 +1045,7 @@ def _interrupted_implementer_protocol(
 
 
 @pytest.mark.parametrize("profile", (
-    "codex", "claude-implementer",  # allowlist:provider -- profile configuration: interruption profiles
+    "codex-implementer", "claude-implementer",  # allowlist:provider -- profile configuration: interruption profiles
 ))
 @pytest.mark.parametrize(
     ("step", "partial_edit"),
@@ -2593,7 +2593,8 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
     assets = tmp_path / "assets"
     execution.mkdir()
     assets.mkdir()
-    adapter = NativeCodexAdapter(args.slot_settings["implementer"])
+    from test_codex_implementer_adapter import bind_fake_codex  # allowlist:provider -- transport: D1 marked fake implementer binding
+    adapter = bind_fake_codex(NativeCodexAdapter(args.slot_settings["implementer"]), tmp_path / "binary")  # allowlist:provider -- transport: D1 marked fake implementer binding
     prepared = adapter.prepare_native_provider_input(
         bundle,
         NativeCodexExecutionBoundary.canary(

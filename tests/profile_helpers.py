@@ -46,6 +46,17 @@ def historical_reviewer_state_profile(
     )
 
 
+def historical_implementer_state_profile(model: str, effort: str) -> AgentProfileBinding:
+    """Pre-D1 qualification for frozen historical records, never for new runs."""
+    return replace(
+        scripted_profile_binding("implementer"), model=model, effort=effort,
+        capability_sha256="19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+        transport_sha256="97479378d347198221372b5e1adce013f4187fd8811178225fe60564c1047c02",
+        rights_sha256="a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+        certification_sha256="c6a73bbf605176717a77c4e69fd849591aa1037afc329d88af33c26f92e18182",
+    )
+
+
 def historical_reviewer_role_profile(
     model: str, effort: str, *, slot: str = "reviewer",
 ) -> RoleProfilePayload:

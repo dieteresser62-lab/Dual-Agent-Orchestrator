@@ -9,7 +9,6 @@ import os
 import stat
 import subprocess
 import shutil
-import tempfile
 import re
 import uuid
 from pathlib import Path
@@ -19,8 +18,9 @@ from agent_adapters import (
     PROVIDER_FAILURE_METRIC_KEYS, _BaseAdapter,
 )
 from provider_metrics import failure_metrics, log_permission_denials, actual_model_metrics
+from protected_tree import ProtectedTreeGuard
 from agent_config import AgentSettings
-from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch, AGENT_CONFIG_LOCATIONS
+from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch, create_private_scratch, AGENT_CONFIG_LOCATIONS
 from permission_policy import explain_implementer_denial
 from provider_metrics import permission_denial_summaries, redact_permission_input
 from agent_roles import AgentRoleName
@@ -159,7 +159,8 @@ def implementer_settings(paths: tuple[Path, ...], root: Path, tool_roots: tuple[
     }
 
 
-class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- transport: implementer registration
+class NativeClaudeImplementerAdapter(ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: implementer registration
+    _protection_error = AgentPermissionError
     execution_boundary_profile = "claude-write-boundary"  # allowlist:provider -- transport: implementer boundary
     live_stream_profile = "claude-stream-json"  # allowlist:provider -- transport: implementer live stream
     live_stream_version_field = "claude_code_version"  # allowlist:provider -- profile configuration: init version field
@@ -237,29 +238,6 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             stream.write("\n")
         return path
 
-    def before_provider_process(self) -> None:
-        from protected_tree import fingerprint
-        self._fingerprint_excluded = {self._process_evidence_path} if self._process_evidence_path is not None else set()
-        # Only files actually opened by the parent logger may change while
-        # stream messages are emitted. Records/head/checkpoints are not exempt.
-        for logger in (logging.getLogger(), logging.getLogger(__name__)):
-            for handler in logger.handlers:
-                if isinstance(handler, logging.FileHandler):
-                    self._fingerprint_excluded.add(Path(handler.baseFilename))
-        self._protected_before = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
-
-    def after_provider_process(self) -> None:
-        if self._protected_before is None: return
-        from protected_tree import fingerprint, differences
-        self.remove_sandbox_placeholders()
-        after = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
-        changed = differences(self._protected_before, after)
-        self._protected_before = None
-        if changed:
-            self.metadata["protected_tree_changes"] = changed
-            raise AgentPermissionError("implementer changed protected trees: " + ", ".join(changed),
-                                       provider_data=self.metadata)
-
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         raise RuntimeError("native Claude implementer requires a bound request")  # allowlist:provider -- transport: implementer binding
 
@@ -274,8 +252,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             self.cleanup()
             self._new_runtime_dir()
             self._record_sandbox_placeholders()
-            self._scratch = Path(tempfile.mkdtemp(prefix="dao-implementer-scratch-", dir="/tmp"))
-            self._scratch.chmod(0o700)
+            self._scratch = create_private_scratch()
             validate_private_scratch(self._scratch, self._repository_root, self._protected_paths,
                                      self.settings.toolchain_read_roots)
             self.env = {

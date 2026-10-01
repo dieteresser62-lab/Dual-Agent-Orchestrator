@@ -12,9 +12,18 @@ import pytest
 
 from scripts.qualification import offline_boundary as boundary, run_probe
 from scripts.qualification.phase0_catalog import CASES, IMPLEMENTER_CASES
-from scripts.qualification.profiles import ADAPTER_PROFILES, BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER
+from scripts.qualification.profiles import ADAPTER_PROFILES, BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER, BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: D1 implementer isolation binding
 from provider_identity import ProviderIdentity
 from agent_adapters import AgentOutputError
+
+
+@pytest.fixture(autouse=True)
+def confined_host_tmp_targets(tmp_path, monkeypatch):
+    before = set(Path("/tmp").glob("dao-boundary-*"))
+    original = boundary.tmp_write_target
+    monkeypatch.setattr(boundary, "tmp_write_target", lambda paths: tmp_path / original(paths).name)
+    yield
+    assert set(Path("/tmp").glob("dao-boundary-*")) <= before, "offline tests leaked host temporary controls"
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +87,7 @@ def probe_tool_events(case, cwd, *, scratch=None, reviewer=False):
 
 
 def identity(tmp_path, pair):
-    if pair == BOUNDARY_REVIEWER:
+    if pair in boundary.CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
         package = tmp_path / "node_modules/@openai/codex"  # allowlist:provider -- transport: fake npm package
         entry = package / "bin/codex.js"  # allowlist:provider -- transport: fake npm entry
         native = package / "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"  # allowlist:provider -- transport: fake installed package
@@ -100,13 +109,13 @@ def identity(tmp_path, pair):
 def test_product_command_differs_only_by_endpoint_overrides(tmp_path, pair, monkeypatch):
     paths = boundary.fixture(tmp_path / "fixture")
     bound = identity(tmp_path / "binary", pair)
-    roots = (str(paths["toolchain"]),) if pair == BOUNDARY_IMPLEMENTER else ()
+    roots = (str(paths["toolchain"]),) if ADAPTER_PROFILES[pair].role == "implementer" else ()
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "real-must-not-inherit")  # allowlist:provider -- transport: credential environment or existence-only Home check
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "real-must-not-inherit")
     with boundary.adapter_invocation(pair, paths["repo"], bound, "Check temporary decoys.", roots) as inv:
         assert inv.command == [*bound.launch_prefix, *inv.prepared.command[1:]]
         offline, env = boundary.offline_overrides(inv, pair, 12345)
-        if pair == BOUNDARY_REVIEWER:
+        if pair in boundary.CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
             assert offline[:-5] == inv.command[:-1]
             assert offline[-5:] == ["-c", 'model_providers.dao_offline={name="dao_offline",base_url="http://127.0.0.1:12345/v1",wire_api="responses"}', "-c", 'model_provider="dao_offline"', "-"]
             assert "--sandbox" not in offline
@@ -279,8 +288,10 @@ def synthesize(api, expectations, *, positive_writes=True):
             target = Path(item["call"]["input"]["file_path"])
             target.write_text("PHASE0_WRITE_OK\n")
             observed = "written"
+        if kind == "host-positive-write" and positive_writes:
+            Path(item["target"]).write_text("PHASE0_WRITE_OK")
         outputs.append({"type": "tool_result", "tool_use_id": item["id"], "content": observed})
-    if api.pair == BOUNDARY_REVIEWER:
+    if api.pair in boundary.CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
         api.bodies = [{"input": [{"type": "function_call_output", "call_id": item["tool_use_id"], "output": item["content"]} for item in outputs],
                        "tools": [{"name": name} for name in ("exec_command", "write_stdin", "request_user_input", "view_image")]}]
     else:
@@ -290,7 +301,7 @@ def synthesize(api, expectations, *, positive_writes=True):
 @pytest.mark.parametrize("pair", ADAPTER_PROFILES)
 def test_script_evaluation_detects_missing_results_and_escapes(tmp_path, pair):
     paths = boundary.fixture(tmp_path / "fixture")
-    roots = (str(paths["toolchain"]),) if pair == BOUNDARY_IMPLEMENTER else ()
+    roots = (str(paths["toolchain"]),) if ADAPTER_PROFILES[pair].role == "implementer" else ()
     with boundary.adapter_invocation(pair, paths["repo"], identity(tmp_path / "binary", pair), "Probe.", roots) as inv:
         calls, expectations, forbidden = boundary.scripts_for(pair, inv, paths)
         api = boundary.FakeAPI(pair, calls, {})
@@ -342,7 +353,7 @@ def test_live_phase0_requires_explicit_flag(tmp_path, pair):
     profile = tmp_path / "profile.json"
     profile.write_text('{}')
     with pytest.raises(PermissionError, match="--live"):
-        run_probe.run_case(case_id="W1" if pair == BOUNDARY_IMPLEMENTER else "P1", profile_name=pair,
+        run_probe.run_case(case_id="W1" if ADAPTER_PROFILES[pair].role == "implementer" else "P1", profile_name=pair,
                            profile_file=profile, output=tmp_path / "out")
 
 
@@ -457,7 +468,7 @@ def reviewer_outputs(calls):
             word = "DNS_BLOCKED"
         elif "test -r" in cmd:
             word = "OUTSIDE_HIDDEN"
-        elif "/tmp/dao-boundary-" in cmd:
+        elif "dao-boundary-" in cmd:
             word = "WRITE_ESCAPED"
         else:
             word = "WRITE_BLOCKED"
@@ -839,7 +850,125 @@ def test_all_pairs_share_short_mode_budget(tmp_path, monkeypatch):
         return {"pair": pair, "passed": True, "checks": []}
     monkeypatch.setattr(boundary, "run_pair", run_pair)
     assert boundary.main(["--pair", "all", "--out", str(tmp_path)]) == 0
-    assert len(deadlines) == 2 and deadlines[0] == deadlines[1]
+    assert len(deadlines) == len(ADAPTER_PROFILES) == 3 and len(set(deadlines)) == 1
     report = boundary.checks_passed([{"status": "passed"}, {"status": "skipped"}])
     assert report is True
     assert boundary.checks_passed([{"status": "skipped"}, {"status": "failed"}]) is False
+
+
+@pytest.mark.parametrize("failure", [None, "environment", "network", "surface", "protected", "positive", "result", "toolchain", "tmp-host", "tmp-host-error", "tmp-host-timeout"])
+def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, failure):  # allowlist:provider -- transport: D1 offline implementer fake
+    pair = BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: D1 offline implementer fake
+    bound = identity(tmp_path / "binary", pair)
+    assert b"dao-probe-fake-v1" in Path(bound.entry_path).read_bytes()
+    tool_root = tmp_path / "operator-node"
+    (tool_root / "bin").mkdir(parents=True)
+    node = tool_root / "bin/node"
+    node.write_text("#!/bin/sh\n# dao-probe-fake-v1\nprintf 'v22.23.2\\n'\n")
+    node.chmod(0o700)
+    apis = []
+    original_api, original_scripts = boundary.FakeAPI, boundary.scripts_for
+    observations = []
+    def api_factory(*args):
+        api = original_api(*args)
+        apis.append(api)
+        return api
+    def scripts(*args):
+        value = original_scripts(*args)
+        observations.append(value)
+        return value
+    def execute(command, *, env, cwd, stdin, timeout):
+        assert "DAO_DECOY_TOKEN" not in env
+        assert "--ignore-user-config" in command and "--sandbox" not in command
+        api = apis[-1]
+        if api.calls:
+            expectations = observations[-1][1]
+            synthesize(api, expectations)
+            body = api.bodies[0]
+            if failure == "environment":
+                item = next(e for e in expectations if e["label"] == "environment-hidden")
+                next(o for o in body["input"] if o["call_id"] == item["id"])["output"] += "\nDAO_DECOY_TOKEN"
+            if failure == "network":
+                item = next(e for e in expectations if e["label"] == "network-dns")
+                next(o for o in body["input"] if o["call_id"] == item["id"])["output"] = "DNS_VISIBLE"
+            tool_item = next(e for e in expectations if e["label"] == "operator-toolchain-1")
+            assert str(node) in tool_item["call"]["input"]["cmd"]
+            assert "--version" in tool_item["call"]["input"]["cmd"]
+            if failure == "toolchain":
+                next(o for o in body["input"] if o["call_id"] == tool_item["id"])["output"] = "permission denied"
+            if failure == "surface": body["tools"].append({"name": "spawn_agent"})
+            if failure == "protected": (cwd / ".git/config").write_text("changed")
+            if failure == "positive": (cwd / "positive-bash.txt").unlink()
+            tmp_item = next(e for e in expectations if e["label"] == "tmp-host-file-unchanged")
+            if failure in {"tmp-host", "tmp-host-error", "tmp-host-timeout"}:
+                Path(tmp_item["target"]).write_text("escaped")
+                if failure == "tmp-host-error":
+                    raise RuntimeError("marked fake failed after the host write")
+                if failure == "tmp-host-timeout":
+                    return {"exit_code": -9, "timed_out": True, "stdout": "", "stderr": ""}
+        result = api.final
+        if failure == "result": result["result"]["request_id"] = "foreign"
+        Path(command[command.index("--output-last-message") + 1]).write_text(json.dumps(result))
+        return {"exit_code": 0, "timed_out": False, "stdout": "", "stderr": ""}
+    monkeypatch.setattr(boundary, "FakeAPI", api_factory)
+    monkeypatch.setattr(boundary, "scripts_for", scripts)
+    monkeypatch.setattr(boundary, "execute", execute)
+    report = boundary.run_pair(pair, out=tmp_path / "out", identity=bound, toolchain_roots=(str(tool_root),))
+    assert report["passed"] is (failure is None), report["checks"]
+    tmp_item = next(e for e in observations[0][1] if e["label"] == "tmp-host-file-unchanged")
+    assert not Path(tmp_item["target"]).exists()
+    if failure == "tmp-host":
+        assert next(c for c in report["checks"] if c["check"] == "tmp-host-file-unchanged")["status"] == "failed"
+    if failure is None:
+        assert {check["check"] for check in report["checks"]} >= {"tool-surface", "protected-trees-unchanged", "parent-decoy-filtered", "native-end-to-end", "repo-bash-write", "scratch-bash-write", "tmp-host-file-unchanged"}
+
+
+@pytest.mark.parametrize("pair", (BOUNDARY_REVIEWER, BOUNDARY_CODEX_IMPLEMENTER))  # allowlist:provider -- transport: shared private temporary policy
+@pytest.mark.parametrize("output", ("WRITE_ESCAPED", "WRITE_BLOCKED"))
+@pytest.mark.parametrize("host_changed", (False, True))
+def test_private_tmp_write_requires_unchanged_host(tmp_path, pair, output, host_changed):
+    paths = boundary.fixture(tmp_path / "fixture")
+    roots = (str(paths["toolchain"]),) if ADAPTER_PROFILES[pair].role == "implementer" else ()
+    with boundary.adapter_invocation(pair, paths["repo"], identity(tmp_path / "binary", pair), "Probe.", roots) as inv:
+        calls, expectations, _ = boundary.scripts_for(pair, inv, paths)
+        item = next(e for e in expectations if e["label"] == "tmp-host-file-unchanged")
+        target = Path(item["target"])
+        assert target.is_relative_to(tmp_path)
+        if host_changed:
+            target.write_text("escaped")
+        api = boundary.FakeAPI(pair, calls, {})
+        synthesize(api, [item])
+        api.bodies[0]["input"][0]["output"] = output
+        check = boundary.evaluate(api, [item], [], inv, paths)[0]
+        assert check["status"] == ("failed" if host_changed else "passed")
+        assert check["evidence"]["host_unchanged"] is (not host_changed)
+        assert check["evidence"]["private_tmp_write_accepted"] is True
+        assert check["evidence"]["output"] == output
+
+
+def test_existing_host_tmp_control_is_neither_used_nor_removed(tmp_path, monkeypatch):
+    target = tmp_path / "existing-host-control.txt"
+    target.write_text("PREEXISTING_CONTROL")
+    monkeypatch.setattr(boundary, "tmp_write_target", lambda paths: target)
+    monkeypatch.setattr(boundary, "execute", lambda *args, **kwargs: pytest.fail("provider started"))
+    report = boundary.run_pair(BOUNDARY_REVIEWER, out=tmp_path / "out", identity=identity(tmp_path / "binary", BOUNDARY_REVIEWER))
+    assert not report["passed"]
+    assert "host temporary probe target already exists" in next(c for c in report["checks"] if c["check"] == "execution")["evidence"]
+    assert target.read_text() == "PREEXISTING_CONTROL"
+
+
+def test_codex_implementer_probe_does_not_inherit_other_provider_credentials(tmp_path, monkeypatch):  # allowlist:provider -- transport: qualification environment isolation
+    pair = BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: qualification environment isolation
+    bound = identity(tmp_path / "binary", pair)
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"binary": bound.entry_path, "model": "gpt-6.1-sol"}))
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "DAO_DECOY_TOKEN"):  # allowlist:provider -- transport: decoy credentials only
+        monkeypatch.setenv(name, "decoy-only")
+    monkeypatch.setattr(boundary, "identify", lambda binary: bound)
+    class Observed(Exception): pass
+    def execute(command, *, env, **kwargs):
+        assert not set(env) & {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "DAO_DECOY_TOKEN"}  # allowlist:provider -- transport: decoy credentials only
+        raise Observed
+    monkeypatch.setattr(boundary, "execute", execute)
+    with pytest.raises(Observed):
+        run_probe.run_case(case_id="W1", profile_name=pair, profile_file=profile, output=tmp_path / "out", fake_root=tmp_path)

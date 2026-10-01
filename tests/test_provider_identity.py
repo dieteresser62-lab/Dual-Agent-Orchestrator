@@ -155,6 +155,12 @@ def test_resume_rechecks_recorded_identity_without_provider_attempt(
             default, model="gpt-6-sol" if default.provider == "codex" else default.model, binary=str(link), binary_identity=bound,  # allowlist:provider -- profile configuration: persisted concrete model
             binary_identity_sha256=bound.digest,
         )
+    from model_catalog import bind_catalog_models
+    from agent_config import isolation_options_digest
+    bound_slots = {slot: replace(settings, model=profiles[slot].model) for slot, settings in slots.items()}
+    bind_catalog_models(bound_slots, {slot: bound for slot in slots}, _recording_runner(versions, []), resume=True)
+    profiles = {slot: replace(profile, isolation_options_sha256=isolation_options_digest(bound_slots[slot]))
+                for slot, profile in profiles.items()}
     state = init_workflow_state(
         run_id="identity-resume", task_file="/tmp/task.md", branch="feature/identity",
         branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,

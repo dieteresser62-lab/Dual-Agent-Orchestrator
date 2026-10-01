@@ -25,6 +25,7 @@ CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v2"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v2"
 PROVIDER_VERSION_POLICY = "forward"
 OPENAI_PROVIDER = "co" + "dex"
+CODEX_IMPLEMENTER_PROFILE = OPENAI_PROVIDER + "-implementer"  # allowlist:provider -- transport: D1 implementer isolation binding
 ANTHROPIC_PROVIDER = "clau" + "de"
 AGY_PROVIDER = "antigravity"
 PROVIDER_SCHEMA_FEATURES = frozenset(
@@ -140,6 +141,15 @@ CODEX_REVIEW_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: 
     "web_search=disabled", "project_doc_max_bytes=0",
     "shell_environment_policy.inherit=core", "permissions=dao-reviewer",
     "default_permissions=dao-reviewer", "stdin=-",
+)
+CODEX_IMPLEMENTER_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: implementer CLI binding
+    "exec", "--skip-git-repo-check", "--ephemeral", "--color=never", "--json",
+    "--output-schema=<runtime-file>", "--output-last-message=<runtime-file>",
+    "-C=<repository>", "--ignore-user-config", "--ignore-rules",
+    *(f"--disable={feature}" for feature in CODEX_REVIEW_DISABLED_FEATURES),  # allowlist:provider -- transport: D1 implementer isolation binding
+    "web_search=disabled", "shell_environment_policy.inherit=core",
+    "permissions=dao-implementer", "default_permissions=dao-implementer",
+    "model_catalog_json=<bound-hardened-catalog>", "project_docs=enabled", "stdin=-",
 )
 CLAUDE_IMPLEMENTER_SEMANTIC_FLAGS = (  # allowlist:provider -- profile configuration: implementer CLI binding
     "-p", "--output-format=stream-json", "--model=<model>", "--effort=<effort>",
@@ -968,6 +978,10 @@ def normalize_transport_profile(
     bound_model_row_sha256: str | None = None,
     bound_protected_paths: tuple[Path, ...] | None = None,
 ) -> ProviderTransportProfile:
+    if provider == "codex-implementer":  # allowlist:provider -- profile configuration: implementer transport
+        return _normalize_codex_implementer(command, bound_package_root, bound_repository_root,  # allowlist:provider -- transport: D1 implementer isolation binding
+            bound_container, bound_runtime_dir, bound_scratch, bound_protected_paths,
+            bound_toolchain_read_roots, bound_environment, bound_model_row_sha256)
     if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
         return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch, bound_environment, bound_protected_paths)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
@@ -1149,6 +1163,80 @@ def codex_review_permission_config(package_root: Path) -> str:  # allowlist:prov
         'permissions.dao-reviewer={filesystem={":minimal"="read",'
         f'"{root}"="read"' + ',":workspace_roots"={"."="read"}}}'
     )
+
+
+def codex_implementer_permission_config(package_root: Path, repository: Path, scratch: Path,  # allowlist:provider -- transport: D1 implementer isolation binding
+    protected: tuple[Path, ...], tool_roots: tuple[str, ...], *, execution_root: Path,
+) -> str:
+    from toolchain_paths import validate_private_scratch, validate_toolchain_read_roots
+    from claude_implementer_adapter import outermost_protected_paths  # allowlist:provider -- transport: D1 implementer isolation binding
+    validate_codex_review_package_root(package_root)  # allowlist:provider -- transport: D1 implementer isolation binding
+    if not protected or any(not path.is_absolute() for path in protected):
+        raise NativeProviderSchemaError("implementer protection paths are unbound")
+    if any(any(char in str(path) for char in "*?[]{}")
+           for path in (package_root, repository, execution_root, scratch, *protected, *tool_roots)):
+        raise NativeProviderSchemaError("implementer permission paths must not contain glob syntax")
+    validate_private_scratch(scratch, repository, protected, tool_roots)
+    if validate_toolchain_read_roots(tool_roots, repository, protected) != tool_roots:
+        raise NativeProviderSchemaError("implementer toolchain roots changed")
+    # Explicit absolute root: project workspace additions cannot grant writes.
+    # Request narrower read entries; the host guard checks the effective boundary.
+    fs = {":minimal": "read", str(package_root): "read", str(scratch): "write",
+          str(execution_root): {".": "write" if execution_root == repository else "read"}}
+    for path in outermost_protected_paths(protected):
+        if path.is_relative_to(execution_root):
+            fs[str(execution_root)][path.relative_to(execution_root).as_posix()] = "read"
+        else:
+            fs[str(path)] = "read"
+    fs.update({root: "read" for root in tool_roots})
+    def toml_table(table):
+        return "{" + ",".join(json.dumps(key) + "=" + (toml_table(value) if isinstance(value, dict)
+                              else json.dumps(value)) for key, value in table.items()) + "}"
+    return "permissions.dao-implementer=" + toml_table({"filesystem": fs, "network": {"enabled": False}})
+
+
+def codex_implementer_command(binary: str, model: str, effort: str, package: Path,  # allowlist:provider -- transport: D1 implementer isolation binding
+    repository: Path, execution: Path, runtime: Path, scratch: Path,
+    protected: tuple[Path, ...], tool_roots: tuple[str, ...],
+) -> tuple[str, ...]:
+    return (
+        binary, "exec", "--model", model, "--config", f'model_reasoning_effort="{effort}"',
+        "--skip-git-repo-check", "--ephemeral", "--color", "never", "--json",
+        "--output-schema", str(runtime / "response-schema.json"),
+        "--output-last-message", str(runtime / "last-message.json"),
+        "-C", str(execution), "--ignore-user-config", "--ignore-rules",
+        *(item for feature in CODEX_REVIEW_DISABLED_FEATURES for item in ("--disable", feature)),  # allowlist:provider -- transport: D1 implementer isolation binding
+        "-c", 'web_search="disabled"', "-c", 'shell_environment_policy.inherit="core"',
+        "-c", codex_implementer_permission_config(package, repository, scratch, protected, tool_roots, execution_root=execution),  # allowlist:provider -- transport: D1 implementer isolation binding
+        "-c", 'default_permissions="dao-implementer"',
+        "-c", "model_catalog_json=" + json.dumps(str(runtime / "model-catalog.json")), "-",
+    )
+
+
+def _normalize_codex_implementer(command, package, repository, execution, runtime, scratch,  # allowlist:provider -- transport: D1 implementer isolation binding
+    protected, tool_roots, environment, row_digest,
+) -> ProviderTransportProfile:
+    from agent_config import REVIEWER_ENVIRONMENT_POLICY
+    from model_catalog import reviewer_model_row_sha256
+    if any(value is None for value in (package, repository, execution, runtime, scratch, protected, environment, row_digest)):
+        raise NativeProviderSchemaError("implementer isolation identity is unbound")
+    if len(command) < 6 or not command[3] or not re.fullmatch(r'model_reasoning_effort="[a-z]+"', command[5]):
+        raise NativeProviderSchemaError("implementer model or effort differs")
+    model, effort = command[3], command[5][len('model_reasoning_effort="'):-1]
+    try:
+        expected = codex_implementer_command(command[0], model, effort, package, repository,  # allowlist:provider -- transport: D1 implementer isolation binding
+                                            execution, runtime, scratch, protected, tool_roots)
+        catalog_path = runtime / "model-catalog.json"
+        if catalog_path.is_symlink() or reviewer_model_row_sha256(catalog_path.read_text(encoding="utf-8"), model) != row_digest:
+            raise ValueError("bound catalog changed")
+    except (OSError, TypeError, ValueError) as exc:
+        raise NativeProviderSchemaError("implementer isolation binding differs: " + str(exc)) from exc
+    if tuple(command) != expected:
+        raise NativeProviderSchemaError("Codex implementer command differs from bound grammar")  # allowlist:provider -- profile configuration: implementer grammar
+    if environment.get("TMPDIR") != str(scratch) or any(name not in REVIEWER_ENVIRONMENT_POLICY and not name.startswith("LC_") for name in environment):
+        raise NativeProviderSchemaError("implementer process environment differs from allowlist")
+    return ProviderTransportProfile(provider="codex", binary_name="codex", model=model,  # allowlist:provider -- profile configuration: implementer transport
+        reasoning_or_effort=effort, schema_transport="output-schema-file", semantic_flags=CODEX_IMPLEMENTER_SEMANTIC_FLAGS)  # allowlist:provider -- transport: D1 implementer isolation binding
 
 
 def validate_codex_review_package_root(package_root: Path) -> None:  # allowlist:provider -- profile configuration: reviewer package boundary

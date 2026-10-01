@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import sys
@@ -10,6 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from protected_tree import ProtectedTreeGuard
 from provider_metrics import event_usage, failure_metrics, log_permission_denials
 from agent_config import AgentSettings, default_agent_settings
 from agent_roles import AgentRoleName, AgentSlot, role_for_slot
@@ -256,6 +258,10 @@ class NativeReviewAdapter(AgentAdapter, Protocol):
 
 
 class NativeImplementerAdapter(AgentAdapter, Protocol):
+    def bind_implementer_boundary(
+        self, repository_root: Path, inbox_dir: Path | None, outbox_dir: Path | None, run_id: str,
+    ) -> None: ...
+
     def prepare_native_provider_input(
         self, bundle: NativeImplementerRequestBundle,
     ) -> PreparedProviderInput: ...
@@ -394,12 +400,15 @@ class _BaseAdapter:
         self.invocation.runtime_dir = None
 
 
-class NativeCodexAdapter(_BaseAdapter):
+class NativeCodexAdapter(ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: D1 implementer isolation binding
     """Codex transport whose last message is one schema-bound JSON object."""
 
+    _protection_error = AgentPermissionError
     live_stream_profile = "json-events"
     quota_reset_profile = "dated-local"
     execution_boundary_profile = "typed-sandbox"
+    inherit_process_environment = False
+    set_pwd = False
     required_hosts = ("chatgpt.com", "api.openai.com")
     capability = CapabilitySpec(
         version_args=("--version",),
@@ -407,7 +416,7 @@ class NativeCodexAdapter(_BaseAdapter):
         supported_version_patterns=(exact_cli_version_pattern("codex"),),
         required_help_flags=(
             "--model",
-            "--sandbox",
+            "--ignore-user-config", "--ignore-rules", "--disable", "--config",
             "--ephemeral",
             "--json",
             "--output-last-message",
@@ -420,9 +429,51 @@ class NativeCodexAdapter(_BaseAdapter):
         *, role_binding: RoleBinding | None = None,
     ) -> None:
         super().__init__(settings or default_agent_settings()["implementer"])
-        self.role_binding = role_binding or binding_for_role(AgentRoleName.IMPLEMENTER)
+        self.role_binding = role_binding or binding_for("codex", AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: hardened implementer rights
         if self.role_binding.role is not AgentRoleName.IMPLEMENTER:
             raise TypeError("native Codex adapter requires implementer role binding")
+        self._repository_root = None
+        self._protected_paths = None
+        self._scratch = None
+        self._protected_before = None
+        self._process_evidence_path = None
+
+    def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id) -> None:
+        from claude_implementer_adapter import protected_implementer_paths  # allowlist:provider -- transport: D1 implementer isolation binding
+        self._repository_root = repository_root.resolve(strict=True)
+        self._protected_paths = protected_implementer_paths(self._repository_root, inbox_dir, outbox_dir, run_id)
+
+    def bind_process_evidence(self, path: Path) -> None:
+        self._process_evidence_path = path
+
+    def before_provider_process(self) -> None:
+        from model_catalog import reviewer_model_row_sha256
+        from toolchain_paths import validate_private_scratch, validate_toolchain_read_roots
+        try:
+            validate_private_scratch(self._scratch, self._repository_root, self._protected_paths, self.settings.toolchain_read_roots)
+            if validate_toolchain_read_roots(self.settings.toolchain_read_roots, self._repository_root, self._protected_paths) != self.settings.toolchain_read_roots:
+                raise ValueError("toolchain roots changed")
+            from agent_config import REVIEWER_ENVIRONMENT_POLICY
+            if self.env.get("TMPDIR") != str(self._scratch) or any(name not in REVIEWER_ENVIRONMENT_POLICY and not name.startswith("LC_") for name in self.env):
+                raise ValueError("process environment changed")
+            path = self.invocation.runtime_dir / "model-catalog.json"
+            if path.is_symlink() or reviewer_model_row_sha256(path.read_text(encoding="utf-8"), self.model) != reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model):
+                raise ValueError("catalog changed")
+        except (OSError, TypeError, ValueError) as exc:
+            raise AgentOutputError("implementer isolation changed before start", technical_text=str(exc)) from exc
+        super().before_provider_process()
+
+    def remove_sandbox_placeholders(self) -> tuple[Path, ...]:
+        # Codex has no authorized host-placeholder cleanup contract.
+        return ()
+
+    def cleanup(self) -> None:
+        self._protected_before = None
+        self._process_evidence_path = None
+        if self._scratch is not None:
+            shutil.rmtree(self._scratch, ignore_errors=True)
+            self._scratch = None
+        super().cleanup()
 
     def _provider_input_components(
         self, prompt: str, command: list[str]
@@ -484,12 +535,42 @@ class NativeCodexAdapter(_BaseAdapter):
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(
             PROJECT_ROOT
         )
-        if (
-            boundary.mode is NativeCodexExecutionMode.PRODUCTION
-            and boundary.sandbox_mode != self.role_binding.permissions["sandbox"]
-        ):
+        if dict(self.role_binding.permissions) != dict(binding_for("codex", AgentRoleName.IMPLEMENTER).permissions):  # allowlist:provider -- certification data: hardened implementer rights
             raise AgentOutputError("native Codex production boundary differs from role rights")
+        if bundle.capability_profile != "codex-implementer":  # allowlist:provider -- profile configuration: request transport binding
+            raise AgentOutputError("Codex implementer writer profile differs")  # allowlist:provider -- profile configuration: request transport binding
+        if boundary.mode is NativeCodexExecutionMode.PRODUCTION:  # allowlist:provider -- transport: D1 implementer isolation binding
+            if self._repository_root != boundary.repository_root or self._protected_paths is None:
+                raise AgentOutputError("Codex implementer boundary is unbound")  # allowlist:provider -- transport: fail closed
+        else:
+            # Read-only canaries execute in a disposable directory, never the source.
+            self._repository_root = boundary.repository_root
+            self._protected_paths = tuple(boundary.repository_root / name for name in (".git", ".orchestrator", "inbox", "outbox"))
+        if self.provider_identity is None or self.provider_identity.kind != "verified":
+            raise AgentOutputError("Codex implementer has no bound provider identity")  # allowlist:provider -- transport: fail closed
+        from codex_review_adapter import codex_package_root  # allowlist:provider -- transport: D1 implementer isolation binding
+        from model_catalog import reviewer_model_row_sha256
+        from toolchain_paths import create_private_scratch, validate_private_scratch
+        from native_provider_schema import codex_implementer_command  # allowlist:provider -- transport: D1 implementer isolation binding
+        package_root = codex_package_root(self.provider_identity.entry_path)  # allowlist:provider -- transport: D1 implementer isolation binding
+        self.cleanup()
         runtime_dir = self._new_runtime_dir()
+        self._scratch = create_private_scratch()
+        validate_private_scratch(self._scratch, self._repository_root, self._protected_paths, self.settings.toolchain_read_roots)
+        from agent_config import REVIEWER_ENVIRONMENT_POLICY
+        self.env = {name: value for name, value in os.environ.items()
+                    if name in REVIEWER_ENVIRONMENT_POLICY or name.startswith("LC_")}
+        self.env.setdefault("HOME", str(Path.home()))
+        self.env["PATH"] = ":".join([*(str(Path(root) / "bin") for root in self.settings.toolchain_read_roots
+                                      if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"])
+        self.env["TMPDIR"] = str(self._scratch)
+        try:
+            row_digest = reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model)
+        except (TypeError, ValueError) as exc:
+            raise AgentOutputError("implementer model catalog is missing or invalid", technical_text=str(exc)) from exc
+        catalog_path = runtime_dir / "model-catalog.json"
+        catalog_path.write_text(self.settings.reviewer_model_catalog_json, encoding="utf-8")
+        catalog_path.chmod(0o600)
         self.invocation.last_message_file = runtime_dir / "last-message.json"
         self.invocation.response_schema_file = runtime_dir / "response-schema.json"
         response_schema_json = bundle.provider_response_schema_json
@@ -506,29 +587,17 @@ class NativeCodexAdapter(_BaseAdapter):
             else:
                 target.write_text(asset.content, encoding="utf-8")
         self.invocation.request_id = bundle.bound_context.request_id
-        command = (
-            self.cli_binary,
-            "exec",
-            "--model",
-            self.model,
-            "--config",
-            f'model_reasoning_effort="{self.effort}"',
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--sandbox",
-            boundary.sandbox_mode,
-            "--color",
-            "never",
-            "--json",
-            "--output-schema",
-            str(self.invocation.response_schema_file),
-            "--output-last-message",
-            str(self.invocation.last_message_file),
-            "-",
-        )
         try:
-            profile = normalize_transport_profile("codex", command)
-            assert_provider_capabilities("codex", (), profile=profile)
+            command = codex_implementer_command(self.cli_binary, self.model, self.effort, package_root,  # allowlist:provider -- transport: D1 implementer isolation binding
+                self._repository_root, boundary.execution_root, runtime_dir, self._scratch,
+                self._protected_paths, self.settings.toolchain_read_roots)
+            profile = normalize_transport_profile("codex-implementer", command,  # allowlist:provider -- profile configuration: hardened implementer transport
+                bound_package_root=package_root, bound_repository_root=self._repository_root,
+                bound_container=boundary.execution_root, bound_runtime_dir=runtime_dir,
+                bound_scratch=self._scratch, bound_protected_paths=self._protected_paths,
+                bound_toolchain_read_roots=self.settings.toolchain_read_roots, bound_environment=self.env,
+                bound_model_row_sha256=row_digest)
+            assert_provider_capabilities("codex-implementer", (), profile=profile)  # allowlist:provider -- profile configuration: hardened implementer transport
         except NativeProviderSchemaError as exc:
             raise AgentOutputError(
                 "native Codex transport differs from its probed schema capability",
@@ -552,6 +621,7 @@ class NativeCodexAdapter(_BaseAdapter):
     def extract_output(
         self, stdout: str, stderr: str, extra_files: dict[str, str]
     ) -> str:
+        self.after_provider_process()
         self.metadata = event_usage(stdout)
         _ = stderr
         _ = extra_files

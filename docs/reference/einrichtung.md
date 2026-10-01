@@ -939,6 +939,19 @@ Der Orchestrator liest für Codex einmal beim Laufstart je identitätsgebundenem
 
 Claude-Implementer können zusätzliche schreibgeschützte Werkzeugverzeichnisse über `provider_options.claude.toolchain_read_roots = ["/absoluter/werkzeugpfad"]` nutzen, etwa eine konkrete Node-Installation unter `~/.nvm/versions/node/`. Höchstens acht existierende Verzeichnisse sind erlaubt; Symlinks werden aufgelöst und gebunden. HOME selbst, seine Vorfahren, Repository und Schutzpfade, Credential-Verzeichnisse (etwa `.ssh`, `.codex`, `.claude`, `.aws` und `.config`) einschließlich überlappender Wurzeln sowie Komma oder Leerraum im Pfad sind ausgeschlossen. `<wurzel>/bin` wird, wenn vorhanden, dem festen PATH vorangestellt; die Wurzeln werden ausschließlich als `sandbox.filesystem.allowRead` freigegeben. Reviewprofile dürfen die Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
 
+Für Codex gilt dieselbe Pfadvalidierung mit `provider_options.codex.toolchain_read_roots`. Beispielsweise ergänzt diese Tabelle das ausgelieferte Implementerprofil:
+
+```toml
+[agent_profiles.implementation.provider_options.codex]
+toolchain_read_roots = ["/absolute/node-root"]
+```
+
+Ersetzen Sie den Beispielpfad durch den absoluten Pfad einer konkreten Node-Installation, etwa `/home/operator/.nvm/versions/node/v22.23.2`; TOML expandiert `~` nicht. Die Wurzeln und deren vorhandene `bin`-Verzeichnisse werden lesbar beziehungsweise in PATH aufgenommen; Schreibrechte erhalten sie nicht. Beide Reviewslots dürfen auch keine leere Toolchain-Liste setzen.
+
+Der Codex-Implementer nutzt das Rechteprofil `dao-implementer` ohne `--sandbox`: Repository und privater Scratch pro Aufruf (0700, TMPDIR) sind beschreibbar, die gebundenen Schutzpfade einschließlich externer Worktree-Gitverzeichnisse schreibgeschützt. Der Katalog wird für alle Codex-Slots gehärtet und über den ausgewählten Modelleintrag beim Laufstart und Resume gebunden. Benutzerkonfiguration, benutzerweite und projektweite Ausführungsregeln, Websuche, Apps, Plugins, MCP aus der Benutzerkonfiguration und Unteragenten werden ausgeschaltet; die Projektanweisungen in `AGENTS.md` bleiben wirksam. Der Prozess erhält nur PATH, HOME, CODEX_HOME, LANG, LC_*, TERM und TMPDIR; Shellbefehle erben `core`. Persönliche Home-Dateien und Zugangsdaten werden nicht als Lesewurzeln freigegeben. Für Codex-Werkzeugbefehle ist `/tmp` ein privater Sandbox-Bereich: Schreiben dort ist zulässig, sofern die Host-Datei unverändert bleibt. Der private Scratch (`TMPDIR`) bleibt der vorgesehene Ort für Zwischendateien. Die Grenzprüfung weist diese Unterscheidung im Bericht aus. Details und der Befund der Steuerung stehen in der [Implementer-Zertifizierung](implementer-certification.md).
+
+Beim Selbstlauf dieses Repositorys liegen Python und pytest unter `/usr` (`/usr/bin/python3`, `/usr/lib/python3/dist-packages/pytest`). Deshalb wird keine zusätzliche Standard-Toolchain-Wurzel eingeführt. Das Systemminimum `:minimal` muss diese Installation tragen; die Offline-Grenzprüfung misst dies mit `system-python` und `network-dns` über die echte CLI. Eine Python-Umgebung außerhalb des Systemminimums braucht eine ausdrücklich freigegebene Toolchain-Wurzel; die persönliche User-Site wird nicht pauschal freigegeben.
+
 Die Claude-Aliase zeigen immer auf das neueste Modell ihrer Familie; bei Codex
 bindet der Orchestrator das Modell mit dem besten Katalograng je Familie ausdrücklich. Andere Werte
 weist er ab, bevor ein Agent startet.

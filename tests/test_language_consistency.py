@@ -322,6 +322,8 @@ def test_root_entries_assign_roles_from_profiles_and_preserve_certification() ->
         "forbidden_write", "self_approval", "test_manipulation",
         "cases/T3/finding.json", "keinen Finding-Statuswechsel", "SIGINT",
         "QUOTA-RESUME-DIFF", "--orchestrator-root", "Candidate-Bypass",
+        "dao-implementer", "codex-implementer", "AGENT-PROFILE-DIFF",  # allowlist:provider -- documentation guard: D1 implementer contract
+        "AGENTS.md", "System-Python", "model_catalog_json", "keine vorgetäuschte Live-Evidenz",
     )),
     ("reviewer-certification.md", (
         "# Reviewer-Zertifizierung", "ohne `--sandbox`", "--sandbox read-only",
@@ -2406,6 +2408,7 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
     commands = 0
     final_slot = False
     alternative_examples = 0
+    standard_toolchain_examples = 0
     toolchain = tmp_path / "node-root"
     toolchain.mkdir()
     repository = tmp_path / "repository"
@@ -2422,11 +2425,16 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
             configs += 1
             if "toolchain_read_roots" in snippet:
                 selected = [config.agent_profiles[config.roles[slot]] for slot in AgentSlot]
-                assert [profile.provider for profile in selected] == ["claude", "codex", "codex"]  # allowlist:provider -- documentation guard: actual alternative slot bindings
+                if "provider_options.codex" in snippet:  # allowlist:provider -- documentation guard: standard implementer toolchain
+                    assert [profile.provider for profile in selected] == ["codex", "claude", "claude"]  # allowlist:provider -- documentation guard: shipped slot bindings
+                    assert [profile.model for profile in selected] == ["sol", "opus", "opus"]
+                    standard_toolchain_examples += 1
+                else:
+                    assert [profile.provider for profile in selected] == ["claude", "codex", "codex"]  # allowlist:provider -- documentation guard: actual alternative slot bindings
+                    assert [profile.model for profile in selected] == ["opus", "sol", "sol"]
+                    alternative_examples += 1
                 assert selected[0].toolchain_read_roots == (str(toolchain),)
                 assert all(not profile.toolchain_read_roots for profile in selected[1:])
-                assert [profile.model for profile in selected] == ["opus", "sol", "sol"]
-                alternative_examples += 1
             if "final_reviewer = \"final_review\"" in snippet:
                 assert config.roles[AgentSlot.FINAL_REVIEWER] == "final_review"
                 final_slot = True
@@ -2452,6 +2460,7 @@ def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path:
                 commands += 1
     assert configs >= 5 and commands >= 10 and final_slot
     assert alternative_examples == 2
+    assert standard_toolchain_examples == 1
 
 
 def test_active_document_links_and_anchors_resolve() -> None:

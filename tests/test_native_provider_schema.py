@@ -35,6 +35,20 @@ from workflow_state import ProtocolBinding
 from scripts.qualification.profiles import BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER
 
 
+def _before_d1_hardening(raw: str) -> str:
+    """Freeze unrelated rows; D1's authorized row has its own boundary tests."""
+    document = json.loads(raw)
+    if "providers" in document:
+        document["providers"] = [row for row in document["providers"] if row["profile_id"] != "codex-implementer"]  # allowlist:provider -- certification data: exclude authorized new profile from historical guard
+    else:
+        row = next(row for row in document["certifications"] if row["slot"] == "implementer" and row["provider"] == "codex")  # allowlist:provider -- certification data: restore historical certified row for byte guard
+        row.update(capability_profile="codex",  # allowlist:provider -- certification data: historical profile
+            capability_sha256="19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
+            rights_sha256="a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8")
+        row["probe_profile"]["semantic_flags"] = ["exec", "--skip-git-repo-check", "--ephemeral", "--color=never", "--json", "--output-last-message=<runtime-file>", "stdin=-"]
+    return json.dumps(document, indent=2) + "\n"
+
+
 def _before_experimental_promotion(raw: str) -> str:
     """Keep the original byte guards, excluding authorized promotion/redaction.
 
@@ -145,11 +159,13 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         "claude",
         "claude-implementer",  # allowlist:provider -- profile configuration: implementer transport
         "codex",
+        "codex-implementer",  # allowlist:provider -- profile configuration: hardened implementer
         "codex-reviewer",  # allowlist:provider -- profile configuration: reviewer transport
     ]
     assert {item["profile_id"]: item["version_policy"] for item in capabilities["providers"]} == {
         "antigravity": "forward", "claude": "forward", "codex": "forward",
         "claude-implementer": "forward",  # allowlist:provider -- profile configuration: implementer version policy
+        "codex-implementer": "forward",  # allowlist:provider -- profile configuration: hardened implementer version policy
         "codex-reviewer": "forward",  # allowlist:provider -- profile configuration: reviewer version policy
     }
     assert {
@@ -571,7 +587,7 @@ def test_capability_and_certification_tables_keep_frozen_bytes() -> None:
         "schemas/role-provider-certifications-v1.json": "68a099dfce9894b2ab21d5926fb7f0e266067e48fdc0a3953a62bd27165b0be9",
     }
     for path, digest in expected.items():
-        content = (root / path).read_bytes()
+        content = _before_d1_hardening((root / path).read_text()).encode()
         if path.endswith('role-provider-certifications-v1.json'):
             content = _before_experimental_promotion(content.decode()).encode()
         assert hashlib.sha256(content).hexdigest() == digest
@@ -671,7 +687,7 @@ def test_projected_schema_guard_rejects_other_invalid_empty_schema_arrays(
     ("schemas/role-provider-certifications-v1.json", "8e11e53f0ca2faae2d3c742796bb4e3af8bb72b955b1d4df8b795a71d085fc8b"),
 ])
 def test_other_registry_rows_keep_exact_pre_5b1_bytes(path, expected):
-    raw = (Path(__file__).resolve().parents[1] / path).read_text()
+    raw = _before_d1_hardening((Path(__file__).resolve().parents[1] / path).read_text())
     if path.endswith('role-provider-certifications-v1.json'):
         raw = _before_experimental_promotion(raw)
     decoder = json.JSONDecoder()

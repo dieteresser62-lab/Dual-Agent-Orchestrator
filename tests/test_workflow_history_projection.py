@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile, historical_reviewer_role_profile, historical_reviewer_state_profile
+from profile_helpers import bound_role_profile, bound_state_profile, bound_run_profile, historical_implementer_state_profile, historical_reviewer_role_profile, historical_reviewer_state_profile
 
 import ast
 import base64
@@ -352,7 +352,7 @@ def _journey(
     )
     bridge.append(
         bound_run_profile(
-            bound_role_profile("gpt-5.6-sol", "medium"),
+            RoleProfilePayload(**historical_implementer_state_profile("gpt-5.6-sol", "medium").__dict__),
             historical_reviewer_role_profile("opus", "max"),
             final_reviewer=historical_reviewer_role_profile("opus", "max", slot="final_reviewer"),
         ),
@@ -1027,7 +1027,7 @@ def _independent_mirror_snapshots(
     binding = ProtocolBinding(
         ProtocolMode.STRUCTURED_V2,
         "3",
-        implementer_profile=bound_state_profile("gpt-5.6-sol", "medium"),
+        implementer_profile=historical_implementer_state_profile("gpt-5.6-sol", "medium"),
         reviewer_profile=historical_reviewer_state_profile("opus", "max"),
         final_reviewer_profile=historical_reviewer_state_profile("opus", "max", slot="final_reviewer"),
     )

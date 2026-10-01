@@ -32,6 +32,7 @@ from contracts import (
     ValidationStatus,
 )
 from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
+from test_codex_implementer_adapter import bind_fake_codex  # allowlist:provider -- transport: D1 implementer isolation binding
 from native_implementer_request import NativeImplementerEvidenceInput, NativeImplementerRequestSpec, build_native_implementer_request
 from native_review_contract import NativeReviewContext, NativeReviewErrorCode
 from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, NativeReviewRetryFeedback, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
@@ -86,14 +87,18 @@ def _codex_bundle(*, assignment: str = "Create the plan."):
 
 
 def test_implementer_preparation_failure_removes_runtime_directory(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     adapter = NativeCodexAdapter(_settings("codex"))  # allowlist:provider -- transport: exercise the concrete adapter
+    bind_fake_codex(adapter, tmp_path / "binary")  # allowlist:provider -- transport: D1 implementer isolation binding
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    boundary = NativeCodexExecutionBoundary.canary(repository, execution_root=tmp_path, evidence_asset_root=tmp_path)  # allowlist:provider -- transport: D1 implementer isolation binding
     def fail_capabilities(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("capability check failed")
     monkeypatch.setattr(agent_adapters, "assert_provider_capabilities", fail_capabilities)
     with pytest.raises(RuntimeError, match="capability check failed"):
-        adapter.prepare_native_provider_input(_codex_bundle())  # allowlist:provider -- transport: bound request fixture
+        adapter.prepare_native_provider_input(_codex_bundle(), boundary)  # allowlist:provider -- transport: bound request fixture
     assert adapter.invocation.runtime_dir is None or not adapter.invocation.runtime_dir.exists()
 
 
@@ -246,9 +251,9 @@ def test_cleanup_preserves_usage_until_checked_attempt_finalization() -> None:
     ),
 ])
 def test_transport_command_environment_and_components_match_start_head(
-    provider: str, expected_command: str, expected_components: str,
+    provider: str, expected_command: str, expected_components: str, tmp_path: Path,
 ) -> None:
-    # Fix 137 changes Claude's bound request and writer bytes; Codex stays unchanged.
+    # Preserve unchanged writer bytes; D1 intentionally hardens the implementer transport.
     # Random runtime directory names are replaced before hashing.
     adapter = (
         NativeCodexAdapter(_settings(provider))
@@ -256,18 +261,30 @@ def test_transport_command_environment_and_components_match_start_head(
         else NativeClaudeReviewAdapter(_settings(provider))
     )
     bundle = _codex_bundle() if provider == "codex" else _review_bundle()
+    boundary = None
+    if provider == "codex":  # allowlist:provider -- transport: D1 implementer isolation binding
+        bind_fake_codex(adapter, tmp_path / "binary")  # allowlist:provider -- transport: D1 implementer isolation binding
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        execution = tmp_path / "execution"
+        execution.mkdir()
+        boundary = NativeCodexExecutionBoundary.canary(repository, execution_root=execution, evidence_asset_root=execution)  # allowlist:provider -- transport: D1 implementer isolation binding
     def digest(value: object) -> str:
         return hashlib.sha256(
             json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
     try:
-        prepared = adapter.prepare_native_provider_input(bundle)
+        prepared = adapter.prepare_native_provider_input(bundle, boundary) if boundary else adapter.prepare_native_provider_input(bundle)
         runtime = str(adapter.invocation.runtime_dir)
-        assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
-        assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
-            "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
-        )
+        if boundary:
+            assert "--ignore-user-config" in prepared.command and "--sandbox" not in prepared.command
+            assert not adapter.inherit_process_environment
+        else:
+            assert digest([part.replace(runtime, "@RUNTIME@") for part in prepared.command]) == expected_command
+            assert digest({key: value.replace(runtime, "@RUNTIME@") for key, value in adapter.env.items()}) == (
+                "cb472d5c3134db72a36a47e4de94515b0578bd8ddd358b273fae02fd2e1ca63b"
+            )
         # The historical digest used /tmp as the parent of the random runtime name.
         runtime_parent = str(adapter.invocation.runtime_dir.parent)
         assert digest([
@@ -282,13 +299,13 @@ def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
     codex = NativeCodexAdapter(_settings("codex"))
     claude = NativeClaudeReviewAdapter(_settings("claude"))
     for adapter in (codex, claude):  # allowlist:provider -- transport: regression assertion for existing defaults
-        assert adapter.inherit_process_environment is True
+        assert adapter.inherit_process_environment is (adapter is claude)  # allowlist:provider -- transport: D1 implementer isolation binding
         assert adapter.environment_passthrough == ()
         assert adapter.stdin_closed_when_unused is False
         assert adapter.suppress_live_stream is False
         assert adapter.requires_attempt_ledger is False
         assert adapter.sanitize_reviewer_environment is True
-        assert adapter.set_pwd is True
+        assert adapter.set_pwd is (adapter is claude)  # allowlist:provider -- transport: D1 implementer isolation binding
         assert adapter.prepared_execution_root() is None
     assert NativeCodexAdapter.reviewer is False
     assert NativeClaudeReviewAdapter.reviewer is True
@@ -300,7 +317,7 @@ def test_native_adapter_api_and_mro_are_closed(tmp_path: Path) -> None:
 
 
 def test_native_implementer_prepares_schema_request_and_assets(tmp_path: Path) -> None:
-    adapter = NativeCodexAdapter(_settings("codex"))
+    adapter = bind_fake_codex(NativeCodexAdapter(_settings("codex")), tmp_path / "binary")  # allowlist:provider -- transport: D1 implementer isolation binding
     bundle = _codex_bundle()
     repository = tmp_path / "repository"
     execution = tmp_path / "execution"
@@ -316,7 +333,8 @@ def test_native_implementer_prepares_schema_request_and_assets(tmp_path: Path) -
     prepared = adapter.prepare_native_provider_input(bundle, boundary)
     assert prepared.stdin_text == bundle.canonical_json
     assert "--output-schema" in prepared.command
-    assert prepared.command[prepared.command.index("--sandbox") + 1] == "read-only"
+    assert "--sandbox" not in prepared.command
+    assert str(execution) + '"={"."="read"}' in next(c for c in prepared.command if c.startswith("permissions.dao-implementer="))
     assert {item.name for item in prepared.components} >= {"stdin_prompt", "response_schema"}
     assert NATIVE_IMPLEMENTER_SYSTEM_POLICY in prepared.stdin_text
     assert GERMAN_DOCUMENT_LANGUAGE_RULE in prepared.stdin_text
@@ -328,7 +346,7 @@ def test_native_implementer_transports_assignment_without_inlining_root_roles(
     tmp_path: Path,
 ) -> None:
     assignment = "S6-TRANSPORT-SENTINEL: create the declared work-plan artifact."
-    adapter = NativeCodexAdapter(_settings("codex"))
+    adapter = bind_fake_codex(NativeCodexAdapter(_settings("codex")), tmp_path / "binary")  # allowlist:provider -- transport: D1 implementer isolation binding
     bundle = _codex_bundle(assignment=assignment)
     repository = tmp_path / "repository"
     execution = tmp_path / "execution"
@@ -360,7 +378,7 @@ def test_native_implementer_transports_assignment_without_inlining_root_roles(
 
 
 def test_native_implementer_extracts_only_bound_result(tmp_path: Path) -> None:
-    adapter = NativeCodexAdapter(_settings("codex"))
+    adapter = bind_fake_codex(NativeCodexAdapter(_settings("codex")), tmp_path / "binary")  # allowlist:provider -- transport: D1 implementer isolation binding
     bundle = _codex_bundle()
     repository = tmp_path / "repository"
     execution = tmp_path / "execution"

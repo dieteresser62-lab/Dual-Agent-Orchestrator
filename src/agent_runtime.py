@@ -2081,6 +2081,9 @@ def run_native_implementer_agent(
         boundary = execution_boundary or NativeCodexExecutionBoundary.production(
             config.repo_root
         )
+        if boundary.mode.value == "production":
+            adapter.bind_implementer_boundary(config.repo_root, config.inbox_dir, config.outbox_dir,
+                                             bundle.bound_context.context.run_id)
         prepared = adapter.prepare_native_provider_input(bundle, boundary)
         execution_root = boundary.execution_root
     elif boundary_profile == "claude-write-boundary":  # allowlist:provider -- transport: implementer boundary

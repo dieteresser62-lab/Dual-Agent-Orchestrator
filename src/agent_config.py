@@ -188,9 +188,14 @@ def parse_profile_tables(
             raise AgentConfigError(f"agent_profiles.{name}.timeout_seconds must be a non-negative integer")
         timeout = _process_timeout(timeout_raw, f"agent_profiles.{name}.timeout_seconds")
         options = raw.get("provider_options", {})
-        if not isinstance(options, dict) or set(options) - {"claude", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
+        if not isinstance(options, dict) or set(options) - {"claude", "codex", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
         claude_options = options.get("claude", {})  # allowlist:provider -- profile configuration: provider option table
+        codex_options = options.get("codex", {})  # allowlist:provider -- profile configuration: implementer toolchain
+        if not isinstance(codex_options, dict) or set(codex_options) - {"toolchain_read_roots"}:  # allowlist:provider -- transport: D1 implementer isolation binding
+            raise AgentConfigError(f"agent_profiles.{name}.provider_options.codex is invalid")  # allowlist:provider -- profile configuration: implementer toolchain
+        if "codex" in options and provider != "codex":  # allowlist:provider -- profile configuration: implementer toolchain
+            raise AgentConfigError(f"agent_profiles.{name}: Codex options require provider codex")  # allowlist:provider -- profile configuration: implementer toolchain
         if not isinstance(claude_options, dict) or set(claude_options) - {"max_budget_usd", "toolchain_read_roots"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options.claude is invalid")  # allowlist:provider -- profile configuration: provider option table
         if claude_options and provider != "claude":  # allowlist:provider -- profile configuration: provider option validation
@@ -211,12 +216,12 @@ def parse_profile_tables(
                 repository_root=repository,
                 label=f"agent_profiles.{name}.provider_options.antigravity",
             )
-        tool_roots = _profile_toolchain_roots(claude_options, repository, name)  # allowlist:provider -- profile configuration: implementer toolchain
+        tool_roots = _profile_toolchain_roots(codex_options if provider == "codex" else claude_options, repository, name)  # allowlist:provider -- profile configuration: implementer toolchain
         profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots)
     for slot, name in roles.items():
         if name not in profiles:
             raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
-        selected_options = (profiles_raw or {}).get(name, {}).get("provider_options", {}).get("claude", {})  # allowlist:provider -- profile configuration: implementer-only options
+        selected_options = (profiles_raw or {}).get(name, {}).get("provider_options", {}).get(profiles[name].provider, {})
         if (profiles[name].toolchain_read_roots or "toolchain_read_roots" in selected_options) and slot is not AgentSlot.IMPLEMENTER:
             raise AgentConfigError(f"roles.{slot.value}: toolchain_read_roots is implementer-only")
     return roles, profiles

@@ -408,7 +408,7 @@ def _apply_resumed_agent_profiles(
             or profile.rights_sha256 != certificate.rights_sha256
             or profile.policy_sha256 != certificate.policy_sha256
             or profile.certification_sha256 != certificate.digest):
-            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed")
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} qualification digest changed; restore the matching orchestrator release or start a new run")
         # The persisted profile wins: judge isolation paths for the recorded provider,
         # not for whatever provider the current TOML now names for this slot.
         if profile.provider != "codex" and profile.isolation_options_sha256 != isolation_options_digest(replace(current, name=profile.provider)):  # allowlist:provider -- profile configuration: catalog identity is checked after preflight
@@ -456,9 +456,9 @@ def _apply_resumed_agent_profiles(
         try:
             current_isolation = isolation_options_digest(slots[role])
         except (TypeError, ValueError) as exc:
-            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} reviewer model entry changed: invalid hardened catalog") from exc
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} model entry changed: invalid hardened catalog") from exc
         if profile.isolation_options_sha256 != current_isolation:
-            reason = "reviewer model entry changed" if slots[role].reviewer_model_catalog_json else "isolation paths or transport binding changed"
+            reason = "model entry changed" if slots[role].reviewer_model_catalog_json else "isolation paths or transport binding changed"
             raise StateSchemaError(f"AGENT-PROFILE-DIFF | slot={role} {reason}")
     args.slot_settings = slots
     args.slot_identities = identities

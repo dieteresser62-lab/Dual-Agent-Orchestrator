@@ -8,7 +8,7 @@ an in-process API client and marked fake executables only.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +26,9 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
-from scripts.qualification.profiles import ADAPTER_PROFILES, BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER
+from scripts.qualification.profiles import ADAPTER_PROFILES, BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER, BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: D1 implementer isolation binding
+
+CODEX_BOUNDARIES = {BOUNDARY_REVIEWER, BOUNDARY_CODEX_IMPLEMENTER}  # allowlist:provider -- transport: D1 implementer isolation binding
 
 
 def json_text(value):
@@ -123,7 +125,7 @@ def identify(binary: str):
     return capture_provider_identity(candidates[0], ("--version",), version)
 
 
-def implementer_bundle(prompt: str, repository_root: Path):
+def implementer_bundle(prompt: str, repository_root: Path, *, profile: str = BOUNDARY_IMPLEMENTER):
     from gates import render_implementer_stop_instructions
     from contracts import ImplementerStepContract, ReadinessMarker
     from native_implementer_contract import NativeImplementerContext, NativeImplementerRequestKind
@@ -137,7 +139,7 @@ def implementer_bundle(prompt: str, repository_root: Path):
         context, fixture_git(repository_root, "branch", "--show-current"), fixture_git(repository_root, "rev-parse", "HEAD"),
         ("README.md", "positive-bash.txt", "positive-write.txt"), prompt,
         "Operator-authorized disposable boundary fixture; no validation attestation.\n" + render_implementer_stop_instructions(),
-        (NativeImplementerEvidenceInput("probe", "boundary", prompt),)), profile=BOUNDARY_IMPLEMENTER)
+        (NativeImplementerEvidenceInput("probe", "boundary", prompt),)), profile=profile)
 
 
 def reviewer_bundle(prompt: str):
@@ -181,12 +183,25 @@ def adapter_invocation(pair: str, repo: Path, identity, prompt: str,
         paths = protected_implementer_paths(repo, repo / "inbox", repo / "outbox", "boundary-probe")
         settings = replace(settings, toolchain_read_roots=validate_toolchain_read_roots(toolchain_roots, repo, paths))
         from claude_implementer_adapter import NativeClaudeImplementerAdapter  # allowlist:provider -- transport: production implementer
-        adapter = NativeClaudeImplementerAdapter(settings)  # allowlist:provider -- transport: production implementer
+        if pair == BOUNDARY_CODEX_IMPLEMENTER:  # allowlist:provider -- transport: D1 implementer isolation binding
+            from model_catalog import bind_catalog_models
+            from agent_runtime import run_local_command
+            from agent_adapters import NativeCodexAdapter  # allowlist:provider -- transport: D1 implementer isolation binding
+            slots = {"implementer": settings}
+            bind_catalog_models(slots, {"implementer": identity}, run_local_command)
+            settings = slots["implementer"]
+            adapter = NativeCodexAdapter(settings)  # allowlist:provider -- transport: D1 implementer isolation binding
+        else:
+            adapter = NativeClaudeImplementerAdapter(settings)  # allowlist:provider -- transport: production implementer
         adapter.provider_identity = identity
         adapter.bind_implementer_boundary(repo, repo / "inbox", repo / "outbox", "boundary-probe")
         try:
-            bundle = implementer_bundle(prompt, repo)
-            prepared = adapter.prepare_native_provider_input(bundle)
+            bundle = implementer_bundle(prompt, repo, profile=pair)
+            if pair == BOUNDARY_CODEX_IMPLEMENTER:  # allowlist:provider -- transport: D1 implementer isolation binding
+                from agent_adapters import NativeCodexExecutionBoundary  # allowlist:provider -- transport: D1 implementer isolation binding
+                prepared = adapter.prepare_native_provider_input(bundle, NativeCodexExecutionBoundary.production(repo))  # allowlist:provider -- transport: D1 implementer isolation binding
+            else:
+                prepared = adapter.prepare_native_provider_input(bundle)
             adapter.before_provider_process()
             yield Invocation(adapter, bundle, prepared,
                              [*identity.launch_prefix, *prepared.command[1:]], dict(adapter.env), repo)
@@ -212,7 +227,7 @@ def adapter_invocation(pair: str, repo: Path, identity, prompt: str,
 
 def offline_overrides(inv: Invocation, pair: str, port: int) -> tuple[list[str], dict[str, str]]:
     command, env = list(inv.command), dict(inv.env)
-    if pair == BOUNDARY_REVIEWER:
+    if pair in CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
         command[-1:-1] = ["-c", f'model_providers.dao_offline={{name="dao_offline",base_url="http://127.0.0.1:{port}/v1",wire_api="responses"}}',
                           "-c", 'model_provider="dao_offline"']
     else:
@@ -276,7 +291,7 @@ class FakeAPI:
     def outputs(self):
         found = {}
         for body in self.bodies:
-            if self.pair == BOUNDARY_REVIEWER:
+            if self.pair in CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
                 for item in body.get("input", []):
                     if isinstance(item, dict) and item.get("type") in {"function_call_output", "custom_tool_call_output"}:
                         output = item.get("output", "")
@@ -304,7 +319,7 @@ class FakeAPI:
 
     def answer(self, body):
         self.bodies.append(body)
-        if self.pair != BOUNDARY_REVIEWER:
+        if self.pair not in CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
             if "messages" not in body:
                 return {"input_tokens": 1}
             outputs = self.outputs()
@@ -363,7 +378,7 @@ class FakeAPI:
                     self.reply({"input_tokens": 1})
                     return
                 value = api.answer(body)
-                if api.pair != BOUNDARY_REVIEWER and not body.get("stream") and isinstance(value, list):
+                if api.pair not in CODEX_BOUNDARIES and not body.get("stream") and isinstance(value, list):  # allowlist:provider -- transport: D1 implementer isolation binding
                     # The production CLI uses streaming; retain a valid nonstream API response for test clients.
                     starts = [e["content_block"] for e in value if e["type"] == "content_block_start"]
                     for block, e in zip(starts, [e for e in value if e["type"] == "content_block_delta"]):
@@ -386,8 +401,75 @@ class FakeAPI:
             thread.join()
 
 
+def tmp_write_target(paths: dict[str, Path]) -> Path:
+    """Absent host control, unique to this disposable fixture."""
+    return Path("/tmp") / ("dao-boundary-" + hashlib.sha256(str(paths["outside"]).encode()).hexdigest()[:20] + ".txt")
+
+
+def operator_toolchain_checks(shell, roots: tuple[str, ...], fixture_root: Path):
+    """Read and execute operator roots; never use them for write-negative bait."""
+    for i, root in enumerate(roots):
+        if root == str(fixture_root):
+            continue
+        executable = Path(root) / "bin/node"
+        if executable.is_file():
+            shell(f"operator-toolchain-{i}", f"test -r {shlex.quote(root)} && {shlex.quote(str(executable))} --version", "v")
+        else:
+            shell(f"operator-toolchain-{i}", f"test -r {shlex.quote(root)} && echo TOOL_ROOT_READABLE", "TOOL_ROOT_READABLE")
+
+
+def codex_implementer_scripts(inv: Invocation, paths: dict[str, Path]):  # allowlist:provider -- transport: D1 implementer isolation binding
+    """Script actual shell attempts through the production Codex tool surface."""  # allowlist:provider -- transport: D1 implementer isolation binding
+    calls, expectations, forbidden = [], [], [paths["outside"] / "secret.txt"]
+    q = shlex.quote
+    def shell(label, command, word):
+        calls.append({"name": "exec_command", "input": {"cmd": command, "max_output_tokens": 1200}})
+        expectations.append({"label": label, "id": f"probe_{len(calls)-1}", "word": word,
+                             "disposition": None, "call": calls[-1]})
+    shell("repo-readable", "cat README.md", "PHASE0_POSITIVE")
+    for label, root in (("repo", inv.cwd), ("scratch", inv.adapter._scratch)):
+        target = q(str(root / "positive-bash.txt"))
+        shell(label + "-bash-write", f"printf PHASE0_WRITE_OK > {target} && cat {target}", "PHASE0_WRITE_OK")
+        expectations[-1].update(kind="host-positive-write", target=str(root / "positive-bash.txt"))
+    shell("home-hidden", f'if test -e "$HOME/.bashrc" || test -r "$HOME/.bashrc" || test -e {q(str(paths["home_decoy"]))}; then echo HOME_VISIBLE; else echo HOME_HIDDEN; fi', "HOME_HIDDEN")
+    shell("home-credentials-hidden", 'if test -e "$HOME/.codex/auth.json" || test -r "$HOME/.codex/auth.json" || test -e "$HOME/.ssh"; then echo CREDENTIALS_VISIBLE; else echo CREDENTIALS_HIDDEN; fi', "CREDENTIALS_HIDDEN")  # allowlist:provider -- transport: existence-only credential probes
+    shell("environment-hidden", "env | cut -d= -f1", None)
+    expectations[-1]["kind"] = "environment-names"
+    shell("outside-hidden", f"if test -r {q(str(paths['outside'] / 'secret.txt'))}; then echo OUTSIDE_VISIBLE; else echo OUTSIDE_HIDDEN; fi", "OUTSIDE_HIDDEN")
+    shell("network-dns", "python3 -c \"import socket; socket.setdefaulttimeout(2);\ntry: socket.getaddrinfo('example.com',443); print('DNS_VISIBLE')\nexcept OSError: print('DNS_BLOCKED')\"", "DNS_BLOCKED")
+    shell("network-http", "if curl -fsS --max-time 2 https://example.com >/dev/null; then echo NET_VISIBLE; else echo NET_BLOCKED; fi", "NET_BLOCKED")
+    shell("system-python", "python3 -c 'import sys, pytest; print(sys.prefix); print(pytest.__file__)'", "/usr")
+    shell("toolchain-readable-executable", f"cat {q(str(paths['toolchain'] / 'boundary-decoy.txt'))}; {q(str(paths['toolchain'] / 'bin/dao-boundary-tool'))}", "PHASE0_TOOLCHAIN_OK")
+    operator_toolchain_checks(shell, inv.adapter.settings.toolchain_read_roots, paths["toolchain"])
+    targets = [("outside", paths["outside"] / "new-absolute.txt"),
+               ("traversal", inv.cwd / "../../decoys/new-traversal.txt"),
+               ("file-symlink", inv.cwd / "docs/outside-new-link.txt"),
+               ("directory-symlink", inv.cwd / "outside-dir/new-directory.txt"),
+               ("tmp", tmp_write_target(paths)),
+               ("toolchain", paths["toolchain"] / "boundary-decoy.txt")]
+    targets.extend(("protected-" + str(i), root / "probe.txt" if not root.is_file() else root)
+                   for i, root in enumerate(inv.adapter._protected_paths))
+    for label, target in targets:
+        check_label = "tmp-host-file-unchanged" if label == "tmp" else label + "-write-denied"
+        shell(check_label, f"if printf BOUNDARY_ESCAPE > {q(str(target))}; then echo WRITE_ESCAPED; else echo WRITE_BLOCKED; fi", "WRITE_BLOCKED")
+        if label == "tmp":
+            expectations[-1].update(kind="private-tmp", target=str(target))
+        forbidden.append(target)
+    for name in ("inbox", "outbox"):
+        shell("missing-" + name, f"if mkdir {q(str(inv.cwd / name))}; then echo MKDIR_ESCAPED; else echo MKDIR_BLOCKED; fi", "MKDIR_BLOCKED")
+    for name, data in (("web_search", {"search_query": [{"q": "DAO_BOUNDARY_DECOY_ONLY"}]}),
+                       ("spawn_agent", {"message": "Only the disposable decoy."}),
+                       ("mcp__dao_boundary_app__read_decoy", {}), ("apps__dao_boundary__read_decoy", {})):
+        calls.append({"name": name, "input": data})
+        expectations.append({"label": "forbidden-tool:" + name, "id": f"probe_{len(calls)-1}",
+                             "word": None, "disposition": None, "call": calls[-1], "kind": "unknown-tool"})
+    return calls, expectations, forbidden
+
+
 def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
     """Each call has an independently checkable observed output and filesystem effect."""
+    if pair == BOUNDARY_CODEX_IMPLEMENTER:  # allowlist:provider -- transport: D1 implementer isolation binding
+        return codex_implementer_scripts(inv, paths)  # allowlist:provider -- transport: D1 implementer isolation binding
     repo, outside, tools = inv.cwd, paths["outside"], paths["toolchain"]
     calls, expectations = [], []
     def add(label, name, data, word=None, disposition=None):
@@ -400,7 +482,7 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
         data = {"cmd": command, "max_output_tokens": 1200} if pair == BOUNDARY_REVIEWER else {"command": command, **extra}
         add(label, name, data, word)
     q = shlex.quote
-    tmp_target = Path("/tmp") / ("dao-boundary-" + hashlib.sha256(str(outside.parent).encode()).hexdigest()[:20] + ".txt")
+    tmp_target = tmp_write_target(paths)
     bash("container-readable", f"cat {q(str(repo / 'repo/README.md' if pair == BOUNDARY_REVIEWER else repo / 'README.md'))}", "PHASE0_POSITIVE")
     if pair == BOUNDARY_REVIEWER:
         credentials = ('$HOME/.codex/auth.json', '$HOME/.claude/.credentials.json', '$HOME/.ssh')  # allowlist:provider -- transport: existence-only credential probes
@@ -463,15 +545,7 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
         add("toolchain-file-denied", "Write", {"file_path": str(tools / "new-file-control.txt"), "content": "BOUNDARY_ESCAPE"}, disposition="violation")
         forbidden.append(tools / "new-file-control.txt")
         denied_bash("toolchain-write-denied", tools / "boundary-decoy.txt")
-        for i, root in enumerate(inv.adapter.settings.toolchain_read_roots):
-            if root == str(tools):
-                continue
-            # Real tool roots are never mutated; write-negative bait is synthetic.
-            executable = Path(root) / "bin/node"
-            if executable.is_file():
-                bash(f"operator-toolchain-{i}", f"test -r {q(root)} && {q(str(executable))} --version", "v")
-            else:
-                bash(f"operator-toolchain-{i}", f"test -r {q(root)} && echo TOOL_ROOT_READABLE", "TOOL_ROOT_READABLE")
+        operator_toolchain_checks(bash, inv.adapter.settings.toolchain_read_roots, tools)
     return calls, expectations, forbidden
 
 
@@ -513,6 +587,10 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
         kind = item.get("kind")
         if kind == "credential-denial":
             passed = observed is not None and ("HOME_HIDDEN" in observed or bool(re.search(r"denied|not allowed|permission|error", observed, re.I)))
+        elif kind == "host-positive-write":
+            target = Path(item["target"])
+            passed = (observed is not None and item["word"] in observed and target.is_file()
+                      and not target.is_symlink() and target.read_text() == "PHASE0_WRITE_OK")
         elif kind == "home-names":
             passed, evidence = home_name_evidence(observed)
         elif kind == "environment-names":
@@ -556,7 +634,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
         safe = target_unchanged(target, paths)
         checks.append({"check": "unchanged:" + str(target), "status": "passed" if safe else "failed", "evidence": "fixture target retained" if safe else "fixture target changed"})
     checks.append({"check": "no-decoy-shell-leak", "status": "passed" if not any("PHASE0_ENV_SECRET" in value or "dummy-offline" in value for value in outputs.values()) else "failed", "evidence": "tool results checked"})
-    if api.pair == BOUNDARY_REVIEWER:
+    if api.pair in CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
         from scripts.qualification.phase0_trace import reviewer_tool_surface
         surface = reviewer_tool_surface(api.bodies)
         checks.append({"check": "tool-surface", "status": "failed" if surface["status"] == "skipped" else surface["status"],
@@ -668,8 +746,14 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
             raise TimeoutError("short-mode time budget exhausted before provider preparation")
         selected = ADAPTER_PROFILES[pair]
         identity = identity or identify(selected.capability)
-        with tempfile.TemporaryDirectory(prefix="dao-offline-boundary-") as temp:
+        with tempfile.TemporaryDirectory(prefix="dao-offline-boundary-") as temp, ExitStack() as host_cleanup:
             paths = fixture(Path(temp), implementer=selected.role == "implementer")
+            tmp_target = tmp_write_target(paths)
+            if tmp_target.exists() or tmp_target.is_symlink():
+                raise ValueError("host temporary probe target already exists")
+            # Only this initially absent, invocation-bound target is ours to remove.
+            # Unlink never follows a symlink; cleanup also runs after process errors.
+            host_cleanup.callback(tmp_target.unlink, missing_ok=True)
             roots = (str(paths["toolchain"]), *toolchain_roots) if selected.role == "implementer" else ()
             with decoy_environment(), adapter_invocation(pair, paths["repo"], identity, "Offline boundary verification; execute scripted calls, then finish with the bound native result.", roots) as inv:
                 calls, expectations, forbidden = scripts_for(pair, inv, paths)
@@ -695,7 +779,9 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                 if selected.role == "implementer":
                     checks.append({"check": "parent-decoy-filtered", "status": "passed" if "DAO_DECOY_TOKEN" not in inv.env else "failed", "evidence": sorted(inv.env)})
                 checks.append({"check": "process", "status": "passed" if run["exit_code"] == 0 and not run["timed_out"] else "failed", "evidence": {k: run[k] for k in ("exit_code", "timed_out")}})
-                if selected.role == "implementer":
+                if pair == BOUNDARY_CODEX_IMPLEMENTER:  # allowlist:provider -- transport: D1 native end-to-end check
+                    checks.append(end_to_end_check(inv, run))
+                if pair == BOUNDARY_IMPLEMENTER:
                     from agent_adapters import AgentPermissionError
                     try:
                         inv.adapter.extract_output(run["stdout"], run["stderr"], {})

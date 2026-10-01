@@ -21,7 +21,7 @@ from native_implementer_contract import (
     NativeImplementerRequestKind,
     native_implementer_provider_response_schema,
 )
-from native_provider_schema import OPENAI_PROVIDER
+from native_provider_schema import OPENAI_PROVIDER, CODEX_IMPLEMENTER_PROFILE  # allowlist:provider -- transport: D1 implementer isolation binding
 from path_policy import is_canonical_repository_relative_path
 from schema_patterns import has_visible_text
 from schema_validation import (
@@ -217,7 +217,7 @@ class NativeImplementerRequestBundle:
     bound_context: BoundNativeImplementerContext
     provider_response_schema_json: str
     evidence_assets: tuple[NativeImplementerEvidenceAsset, ...] = ()
-    capability_profile: str = OPENAI_PROVIDER
+    capability_profile: str = CODEX_IMPLEMENTER_PROFILE  # allowlist:provider -- transport: D1 implementer isolation binding
 
     def __post_init__(self) -> None:
         try:
@@ -383,7 +383,7 @@ def validate_native_implementer_provider_response(
 def build_native_implementer_request(
     spec: NativeImplementerRequestSpec,
     *,
-    profile: str = OPENAI_PROVIDER,
+    profile: str = CODEX_IMPLEMENTER_PROFILE,  # allowlist:provider -- transport: D1 implementer isolation binding
     inline_evidence_chars: int = DEFAULT_INLINE_EVIDENCE_CHARS,
 ) -> NativeImplementerRequestBundle:
     if inline_evidence_chars < 1:

@@ -372,7 +372,8 @@ def test_resume_rejects_catalog_digest_drift_before_dispatch(monkeypatch, change
     from workflow_state import init_workflow_state, scripted_profile_binding, ProtocolBinding, ProtocolMode
     from state_io import StateSchemaError
     profiles = {slot: scripted_profile_binding(slot) for slot in ("implementer", "reviewer", "final_reviewer")}
-    profiles["implementer"] = replace(profiles["implementer"], model="gpt-6.1-sol")
+    profiles["implementer"] = replace(profiles["implementer"], model="gpt-6.1-sol",
+        isolation_options_sha256=isolation_options_digest(AgentSettings("codex", "codex", "gpt-6.1-sol", 60, "medium", reviewer_model_catalog_json=hardened_reviewer_catalog(catalog(), "gpt-6.1-sol"))))  # allowlist:provider -- profile configuration: hardened implementer resume
     settings = AgentSettings("codex", "codex", "gpt-6.1-sol", 60, "medium",  # allowlist:provider -- profile configuration: resume reviewer identity
                              reviewer_model_catalog_json=hardened_reviewer_catalog(catalog(), "gpt-6.1-sol"))
     profiles["reviewer"] = replace(profiles["reviewer"], provider=settings.name, binary=settings.binary, model=settings.model,
@@ -409,7 +410,7 @@ def test_resume_rejects_catalog_digest_drift_before_dispatch(monkeypatch, change
     slots = {slot: AgentSettings(row.provider, row.binary, row.model, row.timeout_seconds, row.effort) for slot, row in profiles.items()}
     args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=False)
     if changed in {"bound-model", "unhardened"}:
-        with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*reviewer model entry changed"):
+        with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*model entry changed"):
             workflow_run_setup._apply_resumed_agent_profiles(args, state)
     else:
         workflow_run_setup._apply_resumed_agent_profiles(args, state)

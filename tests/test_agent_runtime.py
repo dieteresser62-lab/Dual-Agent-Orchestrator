@@ -309,6 +309,9 @@ def test_run_native_implementer_agent_parses_bound_result_without_text_contract(
         name = "codex"
         execution_boundary_profile = "typed-sandbox"
 
+        def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id):
+            self.boundary = (repository_root, inbox_dir, outbox_dir, run_id)
+
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
             self, request_bundle, execution_boundary
         ):
@@ -374,6 +377,9 @@ def test_native_implementer_exposes_schema_valid_bytes_before_domain_rejection(
         name = "codex"
         execution_boundary_profile = "typed-sandbox"
 
+        def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id):
+            self.boundary = (repository_root, inbox_dir, outbox_dir, run_id)
+
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
             self, request_bundle, execution_boundary
         ):
@@ -433,6 +439,9 @@ def test_native_implementer_writer_invalid_bytes_never_reach_validated_callback(
     class FakeNativeImplementer:
         name = "codex"
         execution_boundary_profile = "typed-sandbox"
+
+        def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id):
+            self.boundary = (repository_root, inbox_dir, outbox_dir, run_id)
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
             self, request_bundle, execution_boundary
@@ -501,6 +510,9 @@ def test_native_implementer_runtime_forwards_canary_execution_root(
     class FakeNativeImplementer:
         name = "codex"
         execution_boundary_profile = "typed-sandbox"
+
+        def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id):
+            self.boundary = (repository_root, inbox_dir, outbox_dir, run_id)
 
         def prepare_native_provider_input(  # type: ignore[no-untyped-def]
             self, request_bundle, execution_boundary

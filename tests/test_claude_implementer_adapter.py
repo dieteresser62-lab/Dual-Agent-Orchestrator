@@ -720,7 +720,7 @@ def test_scratch_is_fresh_private_bound_and_cleaned_even_after_repeat(tmp_path):
 
 @pytest.mark.parametrize("location", ["repo", "home", "protected", "tool"])
 def test_scratch_creation_fails_closed_and_cleans_new_directory(tmp_path, monkeypatch, location):
-    import claude_implementer_adapter as adapter_module  # allowlist:provider -- transport: scratch fake
+    import toolchain_paths as adapter_module
     root = _repo(tmp_path)
     home = tmp_path / "home"
     home.mkdir()

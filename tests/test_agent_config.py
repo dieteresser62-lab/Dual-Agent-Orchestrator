@@ -67,19 +67,21 @@ def test_no_orchestrator_environment_bypass_for_agy_paths() -> None:
         assert "DAO_AGY_RUN_ROOT" not in source, path
 
 
-def _tool_config(tmp_path, roots, slot="implementer"):
+def _tool_config(tmp_path, roots, slot="implementer", provider="claude"):  # allowlist:provider -- profile configuration: provider-specific toolchain table
     import json
     repository = tmp_path / "reviewed"
     repository.mkdir(exist_ok=True)
     path = repository / "orchestrator.toml"
+    model = "opus" if provider == "claude" else "sol"  # allowlist:provider -- profile configuration: provider-specific model
     path.write_text(f'[roles]\n{slot} = "toolprofile"\n'
-                    '[agent_profiles.toolprofile]\nprovider = "claude"\nmodel = "opus"\neffort = "high"\n'  # allowlist:provider -- profile configuration: tool roots
-                    '[agent_profiles.toolprofile.provider_options.claude]\n'  # allowlist:provider -- profile configuration: tool roots
+                    f'[agent_profiles.toolprofile]\nprovider = "{provider}"\nmodel = "{model}"\neffort = "high"\n'
+                    f'[agent_profiles.toolprofile.provider_options.{provider}]\n'
                     f'toolchain_read_roots = {json.dumps(roots)}\n')
     return path
 
 
-def test_tool_roots_bind_resolved_home_subdirectory_and_digest(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["claude", "codex"])  # allowlist:provider -- profile configuration: shared implementer toolchain contract
+def test_tool_roots_bind_resolved_home_subdirectory_and_digest(tmp_path, monkeypatch, provider):
     from dataclasses import replace
     home = tmp_path / "home"
     home.mkdir()
@@ -88,7 +90,7 @@ def test_tool_roots_bind_resolved_home_subdirectory_and_digest(tmp_path, monkeyp
     tool.mkdir(parents=True)
     alias = tmp_path / "node-link"
     alias.symlink_to(tool, target_is_directory=True)
-    config = load_repo_config(_tool_config(tmp_path, [str(alias)]))
+    config = load_repo_config(_tool_config(tmp_path, [str(alias)], provider=provider))
     profile = config.agent_profiles["toolprofile"]
     assert profile.toolchain_read_roots == (str(tool),)
     settings = AgentSettings(profile.provider, profile.binary, profile.model, None, "high", toolchain_read_roots=profile.toolchain_read_roots)
@@ -97,7 +99,8 @@ def test_tool_roots_bind_resolved_home_subdirectory_and_digest(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("kind", ["relative", "missing", "file", "root", "home", "home-parent", "repo", "repo-parent", "repo-child", "comma", "space", "many", "duplicate"])
-def test_tool_roots_reject_unsafe_paths(tmp_path, monkeypatch, kind):
+@pytest.mark.parametrize("provider", ["claude", "codex"])  # allowlist:provider -- profile configuration: shared implementer toolchain contract
+def test_tool_roots_reject_unsafe_paths(tmp_path, monkeypatch, kind, provider):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
@@ -115,17 +118,19 @@ def test_tool_roots_reject_unsafe_paths(tmp_path, monkeypatch, kind):
              "space": [str(tmp_path / "a b")], "many": [str(good)] * 9, "duplicate": [str(good)] * 2}[kind]
     (repo / "sub").mkdir()
     with pytest.raises(ConfigError, match="toolchain_read_roots"):
-        load_repo_config(_tool_config(tmp_path, roots))
+        load_repo_config(_tool_config(tmp_path, roots, provider=provider))
 
 
 @pytest.mark.parametrize("slot", ["reviewer", "final_reviewer"])
-def test_review_profiles_reject_even_empty_tool_roots(tmp_path, slot):
+@pytest.mark.parametrize("provider", ["claude", "codex"])  # allowlist:provider -- profile configuration: shared implementer toolchain contract
+def test_review_profiles_reject_even_empty_tool_roots(tmp_path, slot, provider):
     with pytest.raises(ConfigError, match="implementer-only"):
-        load_repo_config(_tool_config(tmp_path, [], slot))
+        load_repo_config(_tool_config(tmp_path, [], slot, provider=provider))
 
 
 
-def test_toolchain_symlink_in_repository_is_rejected_even_when_target_is_external(tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])  # allowlist:provider -- profile configuration: shared implementer toolchain contract
+def test_toolchain_symlink_in_repository_is_rejected_even_when_target_is_external(tmp_path, provider):
     repository = tmp_path / "reviewed"
     repository.mkdir()
     tools = tmp_path / "tools"
@@ -133,4 +138,4 @@ def test_toolchain_symlink_in_repository_is_rejected_even_when_target_is_externa
     alias = repository / "tool-alias"
     alias.symlink_to(tools, target_is_directory=True)
     with pytest.raises(ConfigError, match="repository"):
-        load_repo_config(_tool_config(tmp_path, [str(alias)]))
+        load_repo_config(_tool_config(tmp_path, [str(alias)], provider=provider))

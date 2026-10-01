@@ -122,7 +122,7 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
     assert table.entries[0].probe_profile["model"] == "gpt-6-sol"
     assert table.entries[0].probe_profile["reasoning_or_effort"] == "medium"
     assert [entry.capability_profile for entry in table.entries] == [
-        "codex", "antigravity", "claude", "antigravity", "claude",
+        "codex-implementer", "antigravity", "claude", "antigravity", "claude",  # allowlist:provider -- certification data: hardened implementer profile
             "codex-reviewer", "codex-reviewer", "claude-implementer",  # allowlist:provider -- certification data: candidate profiles
     ]
     assert not hasattr(table.entries[0], "profile")
@@ -132,7 +132,8 @@ def test_reviewer_qualification_binds_restricted_transport_without_changing_code
     table = load_role_certifications()
     implementer, reviewer, final = (table.entries[i] for i in (0, 2, 4))
     assert len(implementer.capability_sha256) == 64
-    assert implementer.rights_sha256 == "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8"
+    assert implementer.rights_sha256 == binding_for("codex", AgentRoleName.IMPLEMENTER).rights_sha256  # allowlist:provider -- certification data: hardened boundary
+    assert implementer.rights_sha256 != "a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8"
     for entry in (reviewer, final):
         assert entry.probe_profile["semantic_flags"].count("--restricted") == 1
         assert "--setting-sources=user" not in entry.probe_profile["semantic_flags"]
@@ -318,7 +319,7 @@ def test_new_candidate_pairs_are_blocked_at_start_and_resume(
     }))
     with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*missing qualification evidence"):
         _apply_resumed_agent_profiles(Namespace(slot_settings=settings), persisted)
-    assert binding_for("codex", AgentRoleName.IMPLEMENTER) is binding_for_role(AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: baseline binding
+    assert binding_for("codex", AgentRoleName.IMPLEMENTER) is not binding_for_role(AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: baseline binding
     assert binding_for("claude", AgentRoleName.REVIEWER) is binding_for_role(AgentRoleName.REVIEWER)  # allowlist:provider -- certification data: baseline binding
     assert binding_for(selected[AgentSlot.REVIEWER], AgentRoleName.REVIEWER).permissions["profile"] == "dao-reviewer"
 
@@ -542,7 +543,8 @@ def test_factory_checks_pair_and_slot_before_instantiating(monkeypatch: pytest.M
     assert isinstance(implementer, NativeCodexAdapter)
     assert isinstance(reviewer, NativeClaudeReviewAdapter)
     assert final is not reviewer and isinstance(final, NativeClaudeReviewAdapter)
-    assert implementer.role_binding.permissions["sandbox"] == "workspace-write"
+    assert implementer.role_binding.permissions["profile"] == "dao-implementer"
+    assert implementer.role_binding.permissions["sandbox_flag"] == "absent"
     assert reviewer.role_binding.permissions["allowed_tools"] == "Read"
     assert reviewer.role_binding.policy == binding_for_role(AgentRoleName.REVIEWER).policy
     assert implementer.role_binding.policy != reviewer.role_binding.policy

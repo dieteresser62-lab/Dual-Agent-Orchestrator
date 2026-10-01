@@ -93,7 +93,7 @@ def bind_catalog_models(slots: dict, identities: dict, run_command, *, resume: b
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"slot={slot} model catalog returned invalid JSON") from exc
         model = select_catalog_model(settings.model, catalogs[identity.digest], resume=resume)
-        catalog_json = hardened_reviewer_catalog(catalogs[identity.digest], model) if slot in {"reviewer", "final_reviewer"} else None
+        catalog_json = hardened_reviewer_catalog(catalogs[identity.digest], model)
         updates[slot] = replace(settings, model=model, reviewer_model_catalog_json=catalog_json)
         getLogger(__name__).info("Model bound: slot=%s model=%s%s", slot, settings.model,
                                 "→" + model if settings.model != model else "")

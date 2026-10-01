@@ -548,9 +548,10 @@ def _run_adapter_case(*, case_id, profile_name, profile_file, output, live, fake
         if selected.role == "reviewer":
             env["DAO_P0_ENV"] = "PHASE0_ENV_SECRET"
         # Authentication is process-only; the production settings hide these from Bash.
-        for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):  # allowlist:provider -- transport: credential environment or existence-only Home check
-            if name in os.environ:
-                env[name] = os.environ[name]
+        if selected.capability == "claude":  # allowlist:provider -- transport: authentication is provider-local
+            for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):  # allowlist:provider -- transport: credential environment or existence-only Home check
+                if name in os.environ:
+                    env[name] = os.environ[name]
         run = boundary.execute(inv.command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text,
                                timeout=profile.get("timeout_seconds", 600))
         getattr(inv.adapter, "remove_sandbox_placeholders", lambda: ())()

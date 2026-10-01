@@ -78,6 +78,7 @@ REVIEW_ENVELOPES = {
 # Adapter profiles deliberately have no hand-maintained CLI flag list.
 BOUNDARY_REVIEWER = "codex-reviewer"  # allowlist:provider -- profile configuration: production-derived boundary
 BOUNDARY_IMPLEMENTER = "claude-implementer"  # allowlist:provider -- profile configuration: production-derived boundary
+BOUNDARY_CODEX_IMPLEMENTER = "codex-implementer"  # allowlist:provider -- profile configuration: production-derived boundary
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,8 @@ class AdapterProtectionProfile:
 
 
 ADAPTER_PROFILES = {
+    BOUNDARY_CODEX_IMPLEMENTER: AdapterProtectionProfile(  # allowlist:provider -- transport: D1 implementer isolation binding
+        BOUNDARY_CODEX_IMPLEMENTER, "codex", "implementer", "gpt-6.1-sol", "W"),  # allowlist:provider -- profile configuration: hardened implementer boundary
     BOUNDARY_REVIEWER: AdapterProtectionProfile(
         BOUNDARY_REVIEWER, "codex", "reviewer", "gpt-6.1-sol", "P"),  # allowlist:provider -- profile configuration: offline/live reviewer
     BOUNDARY_IMPLEMENTER: AdapterProtectionProfile(

@@ -2,6 +2,14 @@
 
 from pathlib import Path
 import stat
+import tempfile
+
+
+def create_private_scratch() -> Path:
+    """Fresh per-call scratch; never inherit a provider-selected TMPDIR."""
+    scratch = Path(tempfile.mkdtemp(prefix="dao-implementer-scratch-", dir="/tmp"))
+    scratch.chmod(0o700)
+    return scratch
 
 
 # Paths relative to HOME; test both aliases and resolved locations.

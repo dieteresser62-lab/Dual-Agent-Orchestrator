@@ -55,7 +55,23 @@ _ROLE_BINDINGS = {
 # This registry names only the measured legacy pairs. New pairs require their
 # own explicit rights and policy binding before they can be admitted.
 _PAIR_BINDINGS: dict[tuple[str, AgentRoleName], RoleBinding] = {
-    ("codex", AgentRoleName.IMPLEMENTER): _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER],  # allowlist:provider -- certification data: measured implementer binding
+    ("codex", AgentRoleName.IMPLEMENTER): RoleBinding(  # allowlist:provider -- certification data: hardened implementer binding
+        AgentRoleName.IMPLEMENTER,
+        _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER].contract,
+        _ROLE_BINDINGS[AgentRoleName.IMPLEMENTER].policy,
+        MappingProxyType({
+            "profile": "dao-implementer", "sandbox_flag": "absent",
+            "read_roots": ":minimal,<codex-package-root>,repository,scratch,optional-bound-toolchain-roots",  # allowlist:provider -- certification data: symbolic rights
+            "write_roots": "repository,private-per-invocation-scratch",
+            "protected_paths": "git,gitdir,common-dir,orchestrator,records,checkpoints,queue,inbox,outbox,evidence,agent-config",
+            "protected_write": "scoped-read-entries-and-fingerprint-postcheck",
+            "network": "disabled", "user_config": "ignored", "exec_rules": "ignored",
+            "project_docs": "enabled", "shell_environment": "core",
+            "environment": "PATH,HOME,CODEX_HOME,LANG,LC_*,TERM,TMPDIR",  # allowlist:provider -- transport: D1 implementer isolation binding
+            "model_catalog": "hardened-selected-row-bound",
+            "disabled_features": "apps,plugins,multi_agent,goals,browser_use,computer_use,image_generation,hooks,skill_search,tool_suggest,remote_plugin",
+        }),
+    ),
     ("codex", AgentRoleName.REVIEWER): RoleBinding(  # allowlist:provider -- certification data: isolated reviewer binding
         AgentRoleName.REVIEWER,
         _ROLE_BINDINGS[AgentRoleName.REVIEWER].contract,
