@@ -4954,7 +4954,8 @@ def test_transport_failure_budget_halts_independently(caplog) -> None:
 
 
 @pytest.mark.parametrize('exhaust', [False, True])
-def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog, exhaust):
+@pytest.mark.parametrize('maximum_delay, expected_delay', [(None, 30), (5, 5)])
+def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog, exhaust, maximum_delay, expected_delay):
     now = [datetime(2026, 10, 1, 13, 26, tzinfo=timezone.utc)]
     overloads = [classify_agent_failure(current_provider_for_role('reviewer'), AgentProcessError('Selected model is at capacity. Please try a different model.', exit_code=1),
         invocation_id=f'overloaded-{index}', received_at=now[0]) for index in range(3)]
@@ -4966,8 +4967,10 @@ def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog,
     def sleep(seconds):
         delays.append(seconds)
         now[0] += timedelta(seconds=seconds)
-    context = replace(_context(), max_transport_failures=3,
-        transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=0))
+    policy = TransientRetryPolicy(maximum_auto_resumes=0)
+    if maximum_delay is not None:
+        policy = replace(policy, maximum_delay_seconds=maximum_delay)
+    context = replace(_context(), max_transport_failures=3, transient_retry_policy=policy)
     caplog.set_level('INFO', logger='workflow')
     result = WorkflowEngine(driver, now_fn=lambda: now[0], sleep_fn=sleep).run_current_work_unit(_slice_state(), context)
     assert result.completed is not exhaust
@@ -4979,11 +4982,39 @@ def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog,
         assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
         assert [item.automatic_resume for item in driver.failure_payloads] == [True, True, False]
         assert 'exhausted_budget=max_transport_failures transport_failures=3/3' in caplog.text
-        assert delays == [2, 4]
+        assert delays == [expected_delay, expected_delay]
+        assert [item.retry_delay_seconds for item in driver.failure_payloads] == [expected_delay, expected_delay, 0]
     else:
         assert all(item.automatic_resume for item in driver.failure_payloads)
         assert 'transport_failures=2/3' in caplog.text
-        assert delays[-1] == 4
+        assert delays == [5, expected_delay]
+
+
+def test_network_retry_retains_normal_transient_backoff():
+    now = [datetime(2026, 10, 1, 13, 26, tzinfo=timezone.utc)]
+    failures = [
+        _invocation_failure(AgentRole.REVIEWER, AgentFailureKind.NETWORK,
+            f'network-{index}', received_at=now[0])
+        for index in range(3)
+    ]
+    driver = FakeDriver(
+        snapshots=[_changes('1', 'src/early.py', TEST_FILE)],
+        codex_outputs=[_codex_ready()],  # allowlist:provider -- transport: existing default implementer fake fixture
+        reviewer_outputs=[_review_approval(AgentRole.REVIEWER)],
+        reviewer_failures=[*failures, None],
+    )
+    delays = []
+
+    def sleep(seconds):
+        delays.append(seconds)
+        now[0] += timedelta(seconds=seconds)
+
+    context = replace(_context(), transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=3))
+    result = WorkflowEngine(driver, now_fn=lambda: now[0], sleep_fn=sleep).run_current_work_unit(_slice_state(), context)
+    assert result.completed
+    assert len(driver.reviewer_calls) == 4
+    assert delays == [5, 10, 20]
+    assert [item.retry_delay_seconds for item in driver.failure_payloads] == delays
 
 
 def test_contract_rejection_budget_halts_independently(caplog) -> None:

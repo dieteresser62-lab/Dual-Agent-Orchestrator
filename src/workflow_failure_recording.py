@@ -15,7 +15,6 @@ from typing import Any, Callable, Mapping
 
 from agent_runtime import (
     AgentInvocationError,
-    compute_retry_backoff_seconds,
     is_structured_output_retry_exhaustion,
     normalize_provider_usage,
 )
@@ -484,8 +483,7 @@ def _invocation_retry_decision(
         transient_policy.initial_delay_seconds * (2**prior_budget_failures),
     )
     if error.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED:
-        transient_delay = min(transient_policy.maximum_delay_seconds,
-                              compute_retry_backoff_seconds(error.technical_text, prior_budget_failures + 1))
+        transient_delay = transient_policy.maximum_delay_seconds
     resume_at = (
         quota_resume_at
         if error.kind is AgentFailureKind.QUOTA

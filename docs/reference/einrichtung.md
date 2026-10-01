@@ -540,7 +540,7 @@ ist.
 
 ### 2.9 Wenn er anhält
 
-Das Protokoll nennt am Ende einen Exitcode und einen Grund. Eindeutige Provider-Überlastung (etwa „model is at capacity“ oder HTTP 503/529) wird ohne Modellwechsel mit Backoff über `max_transport_failures` wiederholt; nach Ausschöpfen des Budgets hält der Lauf resumefähig mit „provider overloaded“ an.
+Das Protokoll nennt am Ende einen Exitcode und einen Grund. Eindeutige Provider-Überlastung (etwa „model is at capacity“ oder HTTP 503/529) wird ohne Modellwechsel über `max_transport_failures` wiederholt und wartet je Versuch `maximum_delay_seconds` (Standard 30 s); nach Ausschöpfen des Budgets hält der Lauf resumefähig mit „provider overloaded“ an.
 
 | Exitcode | Bedeutung | Was Sie tun |
 |---:|---|---|
