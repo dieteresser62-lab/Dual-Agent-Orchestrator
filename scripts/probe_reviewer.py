@@ -872,8 +872,12 @@ def validate_qualification(document: dict) -> None:
     assert document["quality_rule"]["invented_critical_max"] == 0
     assert "Ganze betroffene Serie wiederholen" in document["restart_rule"]
     assert set(document["slots"]) == {"reviewer", "final_reviewer"}
-    assert document["phase0_sha256"] == sha(
-        (pair.evidence_directory / "phase-0-v1.json").read_bytes())
+    from role_certification import read_qualification_evidence
+    phase0_path = pair.evidence_directory / "phase-0-v1.json"
+    if phase0_path.is_relative_to(ROOT):
+        read_qualification_evidence(ROOT, str(phase0_path.relative_to(ROOT)), document["phase0_sha256"])
+    else:
+        assert sha(phase0_path.read_bytes()) == document["phase0_sha256"]
     assert document["quality"]["corpus_sha256"] == sha(
         (ROOT / "tests/fixtures/reviewer-quality-corpus-v1.json").read_bytes())
     assert document["quality"]["rubric_sha256"] == sha(

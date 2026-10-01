@@ -1,0 +1,2713 @@
+{
+ "files": [
+  {
+   "changes": [],
+   "derived_sha256": "6d1e20e8b11d52e3d3f8d8e26e64b06b5d3dd7c18d90645b01c14bffb8c912d2",
+   "outcomes_sha256": "21a7cc664fda67194e827283aa07bda0681caaa33065a36d9556e95efd02eb85",
+   "path": "canary-v1.json",
+   "source_id": "historical-qualification-canary-v1.json",
+   "source_sha256": "6d1e20e8b11d52e3d3f8d8e26e64b06b5d3dd7c18d90645b01c14bffb8c912d2"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "33ce921c70ed9c66a535471bfc66d47446db960eecb43e46e275026ec0671a6c",
+   "outcomes_sha256": "037bf6146e6454031719a2a7da246bceede8e4c217ff4c627e09bd2da1086dc2",
+   "path": "isolation-v1.json",
+   "source_id": "historical-qualification-isolation-v1.json",
+   "source_sha256": "33ce921c70ed9c66a535471bfc66d47446db960eecb43e46e275026ec0671a6c"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/binary/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/quota/daily_quota",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/quota/daily_subscription_limit",
+     "rules": [
+      "account"
+     ]
+    }
+   ],
+   "derived_sha256": "81852fecf10552e30246589dc99ea926fb82fd20ebc50bc2129b05c22a2464be",
+   "outcomes_sha256": "90bff36588415556f98c4cd45e909ea2dedb598a5d7e378d1026cd201fc409c3",
+   "path": "phase-0-v1.json",
+   "source_id": "historical-qualification-phase-0-v1.json",
+   "source_sha256": "51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/binary/path",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "fa46008476816a5eccebe64ed34321e06ec9e4dce9ef1352fca096dce5c78d76",
+   "outcomes_sha256": "9e81caaafd9b50fe9be1ce9a5ea1208b3acaea17f1ed171f7cc7f3ffdae06975",
+   "path": "poc-reference-v1.json",
+   "source_id": "historical-qualification-poc-reference-v1.json",
+   "source_sha256": "b2b55390e3fdcf0ca75118f9fbd47c6ae10677e1ffc128bb1c6a25eca6b1628b"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "552864ac16678449e0542d69528e26a6d723a224e8f9c2b555f089ff4c58d26b",
+   "outcomes_sha256": "5492fa8c833172ab9864da40db85831bc25d4f96b795bd702dcdb0ac3d21c8d2",
+   "path": "qualification-protocol-v1.json",
+   "source_id": "historical-qualification-qualification-protocol-v1.json",
+   "source_sha256": "552864ac16678449e0542d69528e26a6d723a224e8f9c2b555f089ff4c58d26b"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "eec62a336bfb562a255349cf18c87c72e76d107d67ddf7da1e1b124b796e1e95",
+   "outcomes_sha256": "5492fa8c833172ab9864da40db85831bc25d4f96b795bd702dcdb0ac3d21c8d2",
+   "path": "qualification-protocol-v2.json",
+   "source_id": "historical-qualification-qualification-protocol-v2.json",
+   "source_sha256": "eec62a336bfb562a255349cf18c87c72e76d107d67ddf7da1e1b124b796e1e95"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "3ceebb07569254812093681d692c4f56b400b345b4ff8b4bcd29c8ee97406f12",
+   "outcomes_sha256": "51da1810365978f3f9e73fa58ee9f044f876aa616e56c347dff77967e6f8121a",
+   "path": "qualification-protocol-v3.json",
+   "source_id": "historical-qualification-qualification-protocol-v3.json",
+   "source_sha256": "3ceebb07569254812093681d692c4f56b400b345b4ff8b4bcd29c8ee97406f12"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "ea842c09175dddc30ab191d29cb14e992edcfe80aba3586b553007d8409414ee",
+   "outcomes_sha256": "6694e2301e82b79fdcf24f873d1578f0a55b2cbdbc8fc7c0419d3763efc7df32",
+   "path": "qualification-protocol-v4.json",
+   "source_id": "historical-qualification-qualification-protocol-v4.json",
+   "source_sha256": "ea842c09175dddc30ab191d29cb14e992edcfe80aba3586b553007d8409414ee"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "e421988505eba7666b275459b7ecd2cd3e63e12569650262187abaa255176f35",
+   "outcomes_sha256": "40f83a1dc3b12f45d63306a12fcfb5a64a89ea4f4507e438ca2bb6b58fa05aed",
+   "path": "qualification-protocol-v5.json",
+   "source_id": "historical-qualification-qualification-protocol-v5.json",
+   "source_sha256": "e421988505eba7666b275459b7ecd2cd3e63e12569650262187abaa255176f35"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/0/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/1/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/2/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/3/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/4/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/5/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/6/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/7/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/8/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/9/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/10/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/11/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/12/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/13/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/14/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/15/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/16/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/17/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/18/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/19/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/20/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/21/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/22/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/23/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/24/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/25/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/26/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/27/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/28/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/29/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/30/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/31/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/32/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/33/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/34/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/35/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/36/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/37/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/38/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/39/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/40/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/41/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/42/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/43/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/44/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/45/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/46/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/five_hour_reset_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/five_hour_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/weekly_all_models_used_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/47/quota/weekly_reset",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/48/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/49/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/50/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/51/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/52/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/53/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/five_hour_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/five_hour_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/gemini_models_weekly_remaining_percent",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/source",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/54/quota/weekly_refresh_in",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/55/quota/five_hour_window",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/55/quota/gemini_models_weekly_remaining_percent_estimate",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/55/quota/note",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/55/quota/observed_local",
+     "rules": [
+      "account"
+     ]
+    },
+    {
+     "field_type": "removed-field",
+     "path": "/attempts/55/quota/source",
+     "rules": [
+      "account"
+     ]
+    }
+   ],
+   "derived_sha256": "cab920f596da8d530826a9b809ab325565cba98ac075902a52e0267536eaae7c",
+   "outcomes_sha256": "06312e4407b67c573479421cbbf32bd181acdbf2e4a9c45bfd20690eeb2e5ae8",
+   "path": "qualification-series-v1.json",
+   "source_id": "historical-qualification-qualification-series-v1.json",
+   "source_sha256": "f65db7d185e0f3cb85d7d12590365577ca90ee7f35a9f1d17ec93f1c0e2a6a64"
+  }
+ ],
+ "generated_files": [],
+ "notes": {
+  "binding_sources": {
+   "capability-v1.json": "9320b542d1c17831a7c7a6dc1e6a167091b8df502862db9bc72b47d8ad3f60a6"
+  },
+  "quota_policy": {
+   "removed": "Qualification quota observations are not graded; retain the required empty object/null metric.",
+   "retained": "Phase-0 CLI usage counters and subscription_quota_measured=false are operational evidence required by validate_phase0, not account balances."
+  }
+ },
+ "rules": {
+  "account": "Remove account, organization, subscription and quota fields, including embedded JSON streams; retain operational random session/event IDs.",
+  "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "email": "Replace email addresses by <email>.",
+  "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
+  "hostname": "Replace runtime host names at token boundaries by <host>.",
+  "report-reference": "Use bundle-relative report paths instead of private absolute paths.",
+  "temporary": "Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.",
+  "username": "Replace runtime account names at token boundaries by <user>."
+ },
+ "schema_version": "redaction-manifest-v1",
+ "source_commitments": "Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts."
+}

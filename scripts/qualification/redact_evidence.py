@@ -35,7 +35,7 @@ RULES = {
 }
 SHA = re.compile(r'[0-9a-f]{64}\Z')
 PLACEHOLDERS = re.compile(r'<(?:HOME|user|host|email|TMP|VAR_TMP)>')
-ACCOUNT_KEYS = re.compile(r'^(?:rate_limit_info|utilization|overage.*|isUsingOverage|rateLimitType|(?:organization|organisation|org|account|user|subscription)[_-]?(?:id|uuid))$', re.I)
+ACCOUNT_KEYS = re.compile(r'^(?:rate_limit_info|utilization|overage.*|isUsingOverage|rateLimitType|five_hour_.*|(?:gemini_models_)?weekly_.*|daily_quota|daily_subscription_limit|(?:organization|organisation|org|account|user|subscription)[_-]?(?:id|uuid))$', re.I)
 
 
 def encoded(document):
@@ -58,6 +58,70 @@ def pointer(parts):
     return '/' + '/'.join(str(part).replace('~', '~0').replace('/', '~1') for part in parts)
 
 
+def preserved_json(content, public, *, rename=lambda key: key):
+    """Replace changed JSON values/delete fields without reformatting neighbors."""
+    text = content.decode('utf-8')
+    decoder = json.JSONDecoder()
+
+    def skip(position):
+        while position < len(text) and text[position].isspace():
+            position += 1
+        return position
+
+    def rewrite(position, value):
+        original, end = decoder.raw_decode(text, position)
+        if original == value:
+            return text[position:end], end
+        if isinstance(original, dict) and isinstance(value, dict):
+            cursor = position + 1
+            members = []
+            seen = set()
+            last_end = cursor
+            while text[skip(cursor)] != '}':
+                key_start = skip(cursor)
+                key, key_end = decoder.raw_decode(text, key_start)
+                value_start = skip(skip(key_end) + 1)
+                _, value_end = decoder.raw_decode(text, value_start)
+                public_key = rename(key)
+                if public_key in value:
+                    replacement, _ = rewrite(value_start, value[public_key])
+                    label = (text[key_start:key_end] if public_key == key
+                             else json.dumps(public_key, ensure_ascii=False))
+                    members.append(text[cursor:key_start] + label + text[key_end:value_start] + replacement)
+                    seen.add(public_key)
+                last_end = value_end
+                cursor = skip(value_end)
+                if text[cursor] == '}':
+                    break
+                cursor += 1
+            if seen != set(value):
+                raise ValueError('format-preserving export cannot add object fields')
+            return '{' + ','.join(members) + text[last_end:end], end
+        if isinstance(original, list) and isinstance(value, list):
+            if len(original) != len(value):
+                raise ValueError('format-preserving export cannot change array length')
+            cursor = position + 1
+            result = '['
+            for child in value:
+                start = skip(cursor)
+                replacement, child_end = rewrite(start, child)
+                result += text[cursor:start] + replacement
+                cursor = skip(child_end)
+                result += text[child_end:cursor]
+                if text[cursor] == ',':
+                    result += ','
+                    cursor += 1
+            return result + text[cursor:end], end
+        return json.dumps(value, ensure_ascii='\\u' in text[position:end]), end
+
+    start = skip(0)
+    replacement, end = rewrite(start, public)
+    output = (text[:start] + replacement + text[end:]).encode('utf-8')
+    if json.loads(output) != public:
+        raise ValueError('format-preserving export changed the document')
+    return output
+
+
 class Redactor:
     def __init__(self, home, usernames, hostnames):
         self.rules = [('email', re.compile(r'(?<![\w./\\<>])[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*(?![\w>])', re.I), '<email>'),
@@ -66,8 +130,8 @@ class Redactor:
         for rule, names, placeholder in (('username', usernames, '<user>'), ('hostname', hostnames, '<host>')):
             for name in sorted(set(names) - {''}, key=lambda item: (-len(item), item)):
                 self.rules.append((rule, re.compile(r'(?<![\w<])' + re.escape(name) + r'(?![\w>])', re.I), placeholder))
-        self.rules += [('temporary', re.compile(r'/var/tmp/'), '<VAR_TMP>/'),
-                       ('temporary', re.compile(r'/tmp/'), '<TMP>/')]
+        # General system/fixture paths are not personal. The historical
+        # "temporary" manifest rule remains recognized for existing exports.
 
     @classmethod
     def runtime(cls):
@@ -85,11 +149,15 @@ class Redactor:
 
     def transform(self, value):
         changes = []
+        qualification_series = (isinstance(value, dict) and value.get('schema_version') == 'qualification-series-v1'
+            and any(ACCOUNT_KEYS.fullmatch(key) for row in value.get('attempts', [])
+                    for key in (row.get('quota') or {})))
         def visit(item, parts):
             if isinstance(item, dict):
                 output = {}
+                quota_observation = parts and parts[-1] == 'quota' and qualification_series
                 for key, child in item.items():
-                    if ACCOUNT_KEYS.fullmatch(key):
+                    if quota_observation or ACCOUNT_KEYS.fullmatch(key):
                         changes.append({'path': pointer((*parts, key)), 'field_type': 'removed-field', 'rules': ['account']})
                         continue
                     new_key, rules = self.text(key)
@@ -110,7 +178,7 @@ class Redactor:
                     embedded = None
                 if isinstance(embedded, (dict, list)):
                     public = visit(embedded, (*parts, '@json'))
-                    return probe.canonical(public) if public != embedded else item
+                    return preserved_json(item.encode(), public, rename=lambda key: self.text(key)[0]).decode() if public != embedded else item
                 lines = item.splitlines(keepends=True)
                 if len(lines) > 1:
                     cleaned = []
@@ -120,9 +188,8 @@ class Redactor:
                         except (ValueError, RecursionError):
                             event = None
                         if isinstance(event, (dict, list)):
-                            ending = '\n' if line.endswith('\n') else ''
                             public = visit(event, (*parts, '@jsonl', index))
-                            cleaned.append(probe.canonical(public) + ending if public != event else line)
+                            cleaned.append(preserved_json(line.encode(), public, rename=lambda key: self.text(key)[0]).decode() if public != event else line)
                         else:
                             value, rules = self.text(line)
                             if rules:
@@ -170,17 +237,20 @@ def outcomes(document):
 
 
 class Bundle:
-    def __init__(self, redactor):
+    def __init__(self, redactor, *, preserve_format=False):
         self.redactor = redactor
+        self.preserve_format = preserve_format
         self.jobs = {}
         self.generated = {}
+        self.notes = {}
 
     def add(self, name, source, source_id):
         content = source.read_bytes()
         original = probe.read_evidence(source)
         document, changes = self.redactor.transform(original)
         self.jobs[name] = {'source_id': source_id, 'source_sha256': probe.sha(content),
-            'original': original, 'document': document, 'changes': changes, 'source': source}
+            'original': original, 'document': document, 'changes': changes, 'source': source,
+            'content': content}
         self.bind_embedded(name, original, document)
         return document
 
@@ -221,7 +291,15 @@ class Bundle:
             job['changes'].append({'path': pointer(parts), 'field_type': 'string', 'rules': [rule]})
 
     def file_sha(self, name):
-        return probe.sha(bytes_for(Path(name), self.jobs[name]['document']))
+        return probe.sha(self.file_bytes(name))
+
+    def file_bytes(self, name):
+        job = self.jobs[name]
+        if self.preserve_format:
+            if Path(name).suffix == '.gz':
+                raise ValueError('format-preserving export requires unpacked JSON')
+            return preserved_json(job['content'], job['document'], rename=lambda key: self.redactor.text(key)[0])
+        return bytes_for(Path(name), job['document'])
 
     def finish(self, folder):
         files = []
@@ -245,7 +323,7 @@ class Bundle:
             normalized_original, _ = self.redactor.transform(job['original'])
             if outcomes(normalized_original) != outcomes(job['document']):
                 raise ValueError('redaction changed an outcome or count: ' + name)
-            content = bytes_for(Path(name), job['document'])
+            content = self.file_bytes(name)
             outputs[name] = content
             files.append({'path': name, 'source_id': job['source_id'],
                 'source_sha256': job['source_sha256'], 'derived_sha256': probe.sha(content),
@@ -261,6 +339,8 @@ class Bundle:
         manifest = {'schema_version': 'redaction-manifest-v1', 'rules': RULES,
             'files': files, 'generated_files': generated,
             'source_commitments': 'Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts.'}
+        if self.notes:
+            manifest['notes'] = self.notes
         self.redactor.check(manifest)
         outputs['redaction-manifest-v1.json'] = encoded(manifest)
         # Check all collisions before any mutation; reruns of identical inputs
@@ -325,6 +405,21 @@ def bind_canary(bundle, name):
         for key, value in (('request_sha256', evidence['request_document']), ('writer_sha256', evidence['writer_schema']),
                            ('profile_sha256', proof['profile']), ('raw_sha256', proof['raw'])):
             bundle.bind(name, (*base, key), probe.digest(value))
+
+
+def export_historical_qualification(evidence, output, redactor):
+    """Redact legacy measurements and rebind their public file dependencies."""
+    bundle = Bundle(redactor, preserve_format=True)
+    for name in ('phase-0-v1.json', 'poc-reference-v1.json', 'qualification-series-v1.json',
+                 'isolation-v1.json', *(path.name for path in sorted(evidence.glob('qualification-protocol-v*.json'))),
+                 'canary-v1.json'):
+        bundle.add(name, evidence / name, 'historical-qualification-' + name)
+    bundle.notes['quota_policy'] = {
+        'removed': 'Qualification quota observations are not graded; retain the required empty object/null metric.',
+        'retained': 'Phase-0 CLI usage counters and subscription_quota_measured=false are operational evidence required by validate_phase0, not account balances.',
+    }
+    bundle.notes['binding_sources'] = {'capability-v1.json': probe.sha((evidence / 'capability-v1.json').read_bytes())}
+    return bundle.finish(output)
 
 
 def export_reviewer(evidence, completion, canary, output, redactor, *, decisions=None):
@@ -424,12 +519,18 @@ def main(argv=None):
     parser.add_argument('--topology', type=Path)
     parser.add_argument('--out', type=Path)
     parser.add_argument('--verify', type=Path)
+    parser.add_argument('--legacy-reviewer-evidence', type=Path)
     args = parser.parse_args(argv)
     redactor = Redactor.runtime()
     if args.verify:
         verify(args.verify, redactor=redactor)
         return 0
-    if any(value is None for key, value in vars(args).items() if key not in {'verify', 'topology'}):
+    if args.legacy_reviewer_evidence:
+        if args.out is None:
+            parser.error('legacy reviewer export requires --out')
+        export_historical_qualification(args.legacy_reviewer_evidence, args.out, redactor)
+        return 0
+    if any(value is None for key, value in vars(args).items() if key not in {'verify', 'topology', 'legacy_reviewer_evidence'}):
         parser.error('export requires all private inputs and --out')
     for capability, export, inputs in (
         (BOUNDARY_REVIEWER, export_reviewer, (args.reviewer_evidence, args.reviewer_phase0, args.reviewer_canary)),

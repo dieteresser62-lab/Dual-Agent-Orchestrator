@@ -36,7 +36,7 @@ from scripts.qualification.profiles import BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEW
 
 
 def _before_experimental_promotion(raw: str) -> str:
-    """Keep the original byte guards, excluding only the authorized promotion.
+    """Keep the original byte guards, excluding authorized promotion/redaction.
 
     Restore status and evidence references, not capabilities, policies, rights,
     model/version restrictions or any already-certified row.
@@ -44,6 +44,21 @@ def _before_experimental_promotion(raw: str) -> str:
     document = json.loads(raw)
     root = Path(__file__).resolve().parents[1]
     for row in document['certifications']:
+        evidence = root / row['evidence']['path']
+        capability = json.loads(evidence.read_text())
+        manifest_ref = capability.get('measurements', {}).get('redaction_manifest')
+        if manifest_ref is not None:
+            manifest_bytes = (root / manifest_ref['path']).read_bytes()
+            assert hashlib.sha256(manifest_bytes).hexdigest() == manifest_ref['sha256']
+            manifest = json.loads(manifest_bytes)
+            assert hashlib.sha256(evidence.read_bytes()).hexdigest() == row['evidence']['sha256']
+            canary = root / row['canary_evidence']['path']
+            assert hashlib.sha256(canary.read_bytes()).hexdigest() == row['canary_evidence']['sha256']
+            source_canary = next(entry for entry in manifest['files']
+                                 if entry['path'] == canary.name)
+            assert source_canary['derived_sha256'] == row['canary_evidence']['sha256']
+            row['evidence']['sha256'] = manifest['notes']['binding_sources'][evidence.name]
+            row['canary_evidence']['sha256'] = source_canary['source_sha256']
         if row['capability_profile'] not in {BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER}:
             continue
         assert row['status'] == 'experimental'
@@ -245,7 +260,8 @@ def test_agy_capability_evidence_matches_frozen_s6_bytes() -> None:
     assert measured["version_stdout"] == "1.2.12\n"
     phase_path = root / measured["phase_0_path"]
     fixture_path = root / measured["format_fixture_path"]
-    assert hashlib.sha256(phase_path.read_bytes()).hexdigest() == measured["phase_0_sha256"]
+    from role_certification import read_qualification_evidence
+    assert read_qualification_evidence(root, measured['phase_0_path'], measured['phase_0_sha256']) == phase_path.read_bytes()
     assert hashlib.sha256(fixture_path.read_bytes()).hexdigest() == measured["format_fixture_sha256"]
     phase = json.loads(phase_path.read_text())
     fixture = json.loads(fixture_path.read_text())

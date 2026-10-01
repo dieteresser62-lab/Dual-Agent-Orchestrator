@@ -1,6 +1,7 @@
 """Provider-free regressions for branch-review B's public qualification contracts."""
 import copy
 import json
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from tests.test_role_certification import _copy_sources
 from tests.test_redact_evidence import PROVIDERS, redactor
 from agent_roles import AgentSlot
 from agent_config import AgentSettings
-from role_certification import CertificationError, CertificationErrorCode, load_role_certifications
+from role_certification import CertificationError, CertificationErrorCode, load_role_certifications, read_qualification_evidence
 from workflow_run_setup import _apply_resumed_agent_profiles
 
 ROOT = probe.ROOT
@@ -32,7 +33,51 @@ def bound_paths():
         completion = probe.read_evidence(directory/'phase0-results.json')
         for kind in ('protection', 'format'):
             paths.update(str(directory.relative_to(ROOT)/item['path']) for item in completion.get(kind, []))
+    legacy = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    manifest = legacy / 'redaction-manifest-v1.json'
+    paths.add(str(manifest.relative_to(ROOT)))
+    paths.update(str(legacy.relative_to(ROOT)/item['path']) for item in probe.read_evidence(manifest)['files'])
     return sorted(paths)
+
+
+def test_preregistered_digest_resolves_to_table_bound_redacted_bytes(tmp_path):
+    _copy_sources(tmp_path)
+    directory = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    path = str(directory.relative_to(ROOT) / 'phase-0-v1.json')
+    original = probe.read_evidence(directory / 'qualification-protocol-v5.json')['phase0_sha256']
+    public = read_qualification_evidence(tmp_path, path, original)
+    assert public == (tmp_path / path).read_bytes()
+    assert probe.sha(public) != original
+    with pytest.raises(CertificationError) as exc:
+        read_qualification_evidence(tmp_path, path, '0' * 64)
+    assert exc.value.code is CertificationErrorCode.EVIDENCE_INVALID
+
+
+@pytest.mark.parametrize('filename', ('phase-0-v1.json', 'redaction-manifest-v1.json'))
+def test_preregistered_resolution_rejects_replaced_file_or_manifest(tmp_path, filename):
+    _copy_sources(tmp_path)
+    directory = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    base = directory.relative_to(ROOT)
+    original = probe.read_evidence(directory / 'qualification-protocol-v5.json')['phase0_sha256']
+    (tmp_path / base / filename).write_bytes(b'{}\n')
+    with pytest.raises(CertificationError) as exc:
+        read_qualification_evidence(tmp_path, str(base / 'phase-0-v1.json'), original)
+    assert exc.value.code is CertificationErrorCode.EVIDENCE_INVALID
+
+
+def test_restoring_private_original_does_not_bypass_redaction_binding(tmp_path):
+    _copy_sources(tmp_path)
+    directory = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    path = str(directory.relative_to(ROOT) / 'phase-0-v1.json')
+    original_digest = probe.read_evidence(directory / 'qualification-protocol-v5.json')['phase0_sha256']
+    original = subprocess.check_output(['git', 'show', f'0f1d63e:{path}'], cwd=ROOT)
+    assert probe.sha(original) == original_digest
+    (tmp_path / path).write_bytes(original)
+    for verify in (lambda: read_qualification_evidence(tmp_path, path, original_digest),
+                   lambda: load_role_certifications(root=tmp_path)):
+        with pytest.raises(CertificationError) as exc:
+            verify()
+        assert exc.value.code is CertificationErrorCode.EVIDENCE_INVALID
 
 
 @pytest.mark.parametrize('path', bound_paths())

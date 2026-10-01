@@ -190,24 +190,115 @@ def test_experimental_topology_starts_and_standard_remains_default(tmp_path):
             table.require_occupancy(bad)
 
 
-def test_public_evidence_has_no_personal_patterns_except_frozen_legacy_files():
-    legacy = probe.qualification_pair({'schema_version':'qualification-protocol-v5'}).evidence_directory
-    exceptions = {legacy/'phase-0-v1.json', legacy/'poc-reference-v1.json', legacy/'isolation-v1.json'}
+def test_public_evidence_has_no_personal_or_account_patterns():
     red = redact.Redactor.runtime()
     for path in (ROOT/'docs/evidence').rglob('*'):
-        if not path.is_file() or path.suffix not in {'.json', '.gz'} or path in exceptions: continue
+        if not path.is_file() or path.suffix not in {'.json', '.gz'}: continue
         red.check(probe.read_evidence(path))
 
 
-def test_frozen_prerequisites_and_legacy_private_evidence_are_unchanged():
+def test_frozen_prerequisites_and_legacy_source_commitments_remain_bound():
     legacy = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
     original_digests = {
         'phase-0-v1.json': '51218e146b13f922b539fada2084718fb10d5d345471caaf674419ba5f9665c7',
         'poc-reference-v1.json': 'b2b55390e3fdcf0ca75118f9fbd47c6ae10677e1ffc128bb1c6a25eca6b1628b',
         'isolation-v1.json': '33ce921c70ed9c66a535471bfc66d47446db960eecb43e46e275026ec0671a6c',
     }
+    manifest = redact.verify(legacy)
+    entries = {item['path']: item for item in manifest['files']}
     for name, digest in original_digests.items():
-        assert probe.sha((legacy / name).read_bytes()) == digest
+        assert entries[name]['source_sha256'] == digest
+        assert probe.sha((legacy / name).read_bytes()) == entries[name]['derived_sha256']
+        assert (entries[name]['derived_sha256'] == digest) is (name == 'isolation-v1.json')
     reviewer = ROOT / 'docs/evidence' / PROVIDERS[0]
     assert probe.sha((reviewer / 'phase-0-v1.json').read_bytes()) == 'f241302d273095eb1b3ba4dad9a64da4a1ad09df031b8bc022184c35c5b7eaac'
     assert probe.sha((reviewer / 'qualification-protocol-v6.json').read_bytes()) == 'fa1e65f4734b230657f685921d965a5fe66223458c4d5a80e07a60a4c85c6222'
+
+
+def test_subscription_observations_removed_but_operational_usage_retained():
+    source = {'schema_version': 'qualification-series-v1', 'attempts': [{
+        'quota': {'five_hour_remaining_percent': 42, 'weekly_refresh_in': 'private', 'note': 'account observation'},
+        'usage': {'tokens': 7}, 'session_id': 'random-session', 'service_tier': 'standard', 'checks': {'native': True}}]}
+    public, changes = redactor().transform(source)
+    assert public['attempts'][0] == {**source['attempts'][0], 'quota': {}}
+    assert all(item['field_type'] == 'removed-field' and item['rules'] == ['account'] for item in changes)
+    redactor().check(public)
+    phase = {'quota': {'total_tokens_agy': 7, 'daily_cli_total_tokens': {'date': 7},
+        'subscription_quota_measured': False, 'usage_source': 'CLI usage', 'daily_subscription_limit': 'private'}}
+    assert redactor().transform(phase)[0]['quota'] == {key: value for key, value in phase['quota'].items()
+                                                    if key != 'daily_subscription_limit'}
+
+
+def test_legacy_export_preserves_qualification_and_rebinds_dependencies(tmp_path):
+    import shutil
+    legacy = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    private = tmp_path / 'private'
+    shutil.copytree(legacy, private)
+    series = probe.read_evidence(private / 'qualification-series-v1.json')
+    series['attempts'][0]['quota'] = {'five_hour_remaining_percent': 17, 'five_hour_reset_in': 'private'}
+    (private / 'qualification-series-v1.json').write_bytes(redact.encoded(series))
+    canary = probe.read_evidence(private / 'canary-v1.json')
+    canary['shared_evidence']['qualification']['sha256'] = probe.sha((private / 'qualification-series-v1.json').read_bytes())
+    (private / 'canary-v1.json').write_bytes(redact.encoded(canary))
+    before = {path.name: path.read_bytes() for path in private.iterdir()}
+    protocol = probe.read_evidence(private / 'qualification-protocol-v5.json')
+    envelopes = probe.read_evidence(private / 'qualification-envelopes-v1.json.gz')
+    quality = probe.read_evidence(private / 'quality-results-v1.json')
+    decisions = probe.read_evidence(private / 'operator-decisions-v1.json')
+    verdict = probe.qualification_summary(series, envelopes, protocol, quality, decisions)
+    output = tmp_path / 'public'
+    first = redact.export_historical_qualification(private, output, redactor())
+    assert redact.export_historical_qualification(private, output, redactor()) == first
+    assert {path.name: path.read_bytes() for path in private.iterdir()} == before
+    assert probe.qualification_summary(probe.read_evidence(output / 'qualification-series-v1.json'),
+        envelopes, probe.read_evidence(output / 'qualification-protocol-v5.json'), quality, decisions) == verdict
+    for name in ('phase-0-v1.json', 'qualification-series-v1.json'):
+        assert probe.read_evidence(output / name) == probe.read_evidence(legacy / name)
+    for name in ('canary-v1.json', 'isolation-v1.json', *(f'qualification-protocol-v{i}.json' for i in range(1, 6))):
+        assert (output / name).read_bytes() == before[name]
+
+
+def test_redacted_fixtures_preserve_envelopes_and_trace_semantics():
+    folder = ROOT / 'tests/fixtures'
+    manifest = redact.verify(folder)
+    assert {row['path'] for row in manifest['files']} == {
+        'antigravity-envelopes-v1.json', 'phase0-traces/s1/codex-P2.json'}  # allowlist:provider -- transport: recorded fake fixtures
+    fixture = probe.read_evidence(folder / manifest['files'][0]['path'])
+    assert all(row[key].startswith('/fixtures/agy/') for row in fixture['cases'] for key in ('source', 'stderr_source'))
+
+
+@pytest.mark.parametrize('indent', (None, 2, '\t'))
+def test_minimal_export_preserves_original_format_and_key_order(indent):
+    source = {'z': '/var/tmp/dao-agy-review-<uid>', 'path': '/home/test-account/bin',
+              'a': [{'path': '/tmp/fixture'}, {'path': '/usr/lib/library'}]}
+    raw = (json.dumps(source, indent=indent) + '\n').encode()
+    public, changes = redactor().transform(source)
+    assert public == {**source, 'path': '<HOME>/bin'}
+    assert changes == [{'path': '/path', 'field_type': 'string', 'rules': ['home']}]
+    assert redact.preserved_json(raw, public) == raw.replace(b'/home/test-account/bin', b'<HOME>/bin')
+
+
+@pytest.mark.parametrize('position', ('first', 'middle', 'last'))
+def test_minimal_export_deletes_fields_without_reformatting_neighbors(position):
+    members = [('a', 1), ('z', {'nested': True})]
+    members.insert({'first': 0, 'middle': 1, 'last': 2}[position], ('account_id', 'private'))
+    raw = (json.dumps(dict(members), indent=2) + '\n').encode()
+    public, _ = redactor().transform(json.loads(raw))
+    output = redact.preserved_json(raw, public)
+    assert json.loads(output) == public
+    assert b'  "z": {\n    "nested": true\n  }' in output
+    assert b'  "a": 1' in output and b'account_id' not in output
+
+
+@pytest.mark.parametrize(('filename', 'digest'), (
+    ('qualification-protocol-v1.json', '552864ac16678449e0542d69528e26a6d723a224e8f9c2b555f089ff4c58d26b'),
+    ('qualification-protocol-v2.json', 'eec62a336bfb562a255349cf18c87c72e76d107d67ddf7da1e1b124b796e1e95'),
+    ('qualification-protocol-v3.json', '3ceebb07569254812093681d692c4f56b400b345b4ff8b4bcd29c8ee97406f12'),
+    ('qualification-protocol-v4.json', 'ea842c09175dddc30ab191d29cb14e992edcfe80aba3586b553007d8409414ee'),
+    ('qualification-protocol-v5.json', 'e421988505eba7666b275459b7ecd2cd3e63e12569650262187abaa255176f35'),
+    ('isolation-v1.json', '33ce921c70ed9c66a535471bfc66d47446db960eecb43e46e275026ec0671a6c'),
+    ('canary-v1.json', '6d1e20e8b11d52e3d3f8d8e26e64b06b5d3dd7c18d90645b01c14bffb8c912d2'),
+))
+def test_preregistered_and_reference_documents_keep_exact_0f1d63e_bytes(filename, digest):
+    directory = probe.qualification_pair({'schema_version': 'qualification-protocol-v5'}).evidence_directory
+    assert probe.sha((directory / filename).read_bytes()) == digest

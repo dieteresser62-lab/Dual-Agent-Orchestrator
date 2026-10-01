@@ -85,7 +85,8 @@ def _parse_json(data: bytes, raw: str) -> dict[str, Any]:
     return value
 
 
-def _read_file(root: Path, raw: str, *, expected_digest: str | None = None) -> bytes:
+def _read_file(root: Path, raw: str, *, expected_digest: str | None = None,
+               redactions: dict[str, tuple[str, str]] | None = None) -> bytes:
     if not isinstance(raw, str) or not raw or raw == "." or PurePosixPath(raw).is_absolute():
         raise CertificationError(CertificationErrorCode.SOURCE_INVALID, f"unsafe source path: {raw!r}")
     parts = PurePosixPath(raw).parts
@@ -111,7 +112,8 @@ def _read_file(root: Path, raw: str, *, expected_digest: str | None = None) -> b
     if expected_digest is not None:
         if not isinstance(expected_digest, str) or _SHA256.fullmatch(expected_digest) is None:
             raise CertificationError(CertificationErrorCode.ENTRY_INVALID, f"invalid digest: {raw}")
-        if hashlib.sha256(data).hexdigest() != expected_digest:
+        actual_digest = hashlib.sha256(data).hexdigest()
+        if actual_digest != expected_digest and (redactions or {}).get(raw) != (expected_digest, actual_digest):
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"evidence digest differs: {raw}")
     return data
 
@@ -175,6 +177,49 @@ def _validate_evidence_slots(document: dict[str, Any]) -> None:
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "invalid evidence test node ID or description")
 
 
+def _validate_redaction_binding(root: Path, reference: dict[str, Any], evidence_path: str) -> dict[str, tuple[str, str]]:
+    ref = _require_keys(reference, {"path", "sha256"}, "redaction manifest reference")
+    base = str(PurePosixPath(evidence_path).parent) + "/"
+    if ref["path"] != base + "redaction-manifest-v1.json":
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction manifest path differs")
+    manifest = _parse_json(_read_file(root, ref["path"], expected_digest=ref["sha256"]), ref["path"])
+    files = manifest.get("files")
+    if manifest.get("schema_version") != "redaction-manifest-v1" or not isinstance(files, list) or not files:
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction manifest is invalid")
+    seen = set()
+    bindings = {}
+    for item in files:
+        path = item.get("path") if isinstance(item, dict) else None
+        if not isinstance(path, str):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction file path is invalid")
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or ".." in relative.parts or str(relative) != path or path in seen:
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction file path is invalid or duplicate")
+        seen.add(path)
+        digest = item.get("derived_sha256")
+        original = item.get("source_sha256")
+        if any(not isinstance(value, str) or _SHA256.fullmatch(value) is None for value in (digest, original)):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction file digest is invalid")
+        _read_file(root, base + path, expected_digest=digest)
+        bindings[base + path] = (original, digest)
+    return bindings
+
+
+def read_qualification_evidence(root: Path, path: str, expected_digest: str) -> bytes:
+    """Resolve a historical commitment only through a table-bound manifest."""
+    table = _parse_json(_read_file(root, TABLE_PATH), TABLE_PATH)
+    references = [row['evidence'] for row in table['certifications']
+                  if PurePosixPath(row['evidence']['path']).parent == PurePosixPath(path).parent]
+    if not references or any(ref != references[0] for ref in references):
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "redaction anchor is missing or ambiguous")
+    reference = references[0]
+    document = _parse_json(_read_file(root, reference['path'], expected_digest=reference['sha256']), reference['path'])
+    bindings = None
+    if 'measurements' in document:
+        bindings = _validate_redaction_binding(root, document['measurements'].get('redaction_manifest', {}), reference['path'])
+    return _read_file(root, path, expected_digest=expected_digest, redactions=bindings)
+
+
 def _validate_role_shared_evidence(root: Path, document: dict[str, Any], *, provider: str, role: AgentRoleName) -> None:
     """Require file-byte commitments, rather than treating prose claims as authority."""
     if provider not in _ROLE_QUALIFICATION_PROVIDERS:
@@ -211,7 +256,8 @@ def _validate_role_shared_evidence(root: Path, document: dict[str, Any], *, prov
             _read_file(root, base + str(relative), expected_digest=report.get("sha256"))
 
 
-def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_family_pattern: str) -> None:
+def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_family_pattern: str,
+                          redactions: dict[str, tuple[str, str]] | None = None) -> None:
     ref = _require_keys(reference, {"path", "sha256"}, "canary reference")
     if ref["path"] != "docs/evidence/antigravity/canary-v1.json":
         raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected canary evidence path")
@@ -227,7 +273,7 @@ def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_famil
         item = _require_keys(shared[name], {"path", "sha256"}, "canary shared reference")
         if item["path"] != f"docs/evidence/antigravity/{filename}":
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary shared evidence path differs")
-        _read_file(root, item["path"], expected_digest=item["sha256"])
+        _read_file(root, item["path"], expected_digest=item["sha256"], redactions=redactions)
     slots = document.get("slots")
     if document.get("status") != "passed" or not isinstance(slots, dict) or set(slots) != {
             "reviewer", "final_reviewer"}:
@@ -517,6 +563,14 @@ def _load_role_certifications(
         canary_ref = row.get("canary_evidence")
         if key not in _BASELINE and row["status"] != "candidate" and canary_ref is None:
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "missing canary evidence")
+        raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
+        if evidence_path not in evidence_cache:
+            evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)
+            _validate_evidence_slots(evidence_cache[evidence_path])
+        document = evidence_cache[evidence_path]
+        redactions = None
+        if document["schema_version"] == "antigravity-capability-v1":
+            redactions = _validate_redaction_binding(root, document["measurements"].get("redaction_manifest", {}), evidence_path)
         if canary_ref is not None:
             canary_ref = _require_keys(canary_ref, {"path", "sha256"}, "canary reference")
             canary_path = canary_ref["path"]
@@ -532,7 +586,7 @@ def _load_role_certifications(
                 if (provider, canary_path) != _LEGACY_CANARY_FORMATS[canary_version]:
                     raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unexpected legacy canary evidence path")
                 if row["status"] != "candidate":
-                    _validate_agy_canaries(root, canary_ref, model_family_pattern=model_family_pattern)
+                    _validate_agy_canaries(root, canary_ref, model_family_pattern=model_family_pattern, redactions=redactions)
             elif canary["schema_version"] == "role-canary-v1":
                 if not canary_path.startswith(f"docs/evidence/{provider}/"):
                     raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "canary evidence provider path differs")
@@ -541,11 +595,6 @@ def _load_role_certifications(
                                             model_family_pattern=model_family_pattern)
             else:
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "unknown canary evidence version")
-        raw_evidence = _read_file(root, evidence_path, expected_digest=evidence_digest)
-        if evidence_path not in evidence_cache:
-            evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)
-            _validate_evidence_slots(evidence_cache[evidence_path])
-        document = evidence_cache[evidence_path]
         if canary_ref is not None and canary.get("schema_version") == "role-canary-v1" and row["status"] != "candidate":
             _validate_role_shared_evidence(root, document, provider=provider, role=role)
         slot_refs = document["slots"]

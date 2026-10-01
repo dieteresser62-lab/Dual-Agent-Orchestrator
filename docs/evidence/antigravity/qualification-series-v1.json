@@ -27,12 +27,6 @@
       "profile_sha256": "c43a4af65cedc7d33df54f4eb4861353e1384da37cea2b5b4506c9252a5553ee",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-46b91be67d86fec0023191a06cbd9aa8cfd6f9e68e6d196edff87b935025930b",
       "request_sha256": "a3b7c713e6f352e959cc9e79dc8adbf8d0f5baa51bc455ffcdd84db249f14ec9",
@@ -80,12 +74,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-2d47630b833bfecb01a89bd152b78b1520aad230454cf76cda67dfcea9a05c01",
       "request_sha256": "7c5c5bc598bdd75757cc93f0252bc0865f63177f43dc2dc8f2eff7332519a88b",
@@ -136,12 +124,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-664f8bcdc33a1c0376872eabdd9fc6b65ba5261383653abc8deca127f98e3f75",
       "request_sha256": "f1624460862b980eb8016b55051ac9e188dc7485e240ab4cdd379d766bf3069a",
@@ -190,12 +172,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-f403a59db20a7c9f40766ea9bc3015435a4fa59f29b56e0bb6e00e91ccf1382d",
       "request_sha256": "34f20dc353d0994c577a96d5a5b12e62b7d5a7ef52339e58edec410ba0086120",
@@ -244,12 +220,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-387f03cdda4929ebcf9541e9811d389e008a4a147a9e21ba347466769144c77f",
       "request_sha256": "fbda047fb38a3f558769f804fcc8e0c931cad004a657c9efe64613b99457babc",
@@ -298,12 +268,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-dd9254e8d5efc34ec7ba1606cef0f28dd1e3e1b35427fb4ec66ea9b93d9bf249",
       "request_sha256": "1772ccd97562bb6a125aa817239a207b245e34bb57a851ef0ac54959d96db189",
@@ -352,12 +316,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-c3b1046a71f5902a616e4dfa15aa67d05bf09dae72da42d7ebaec337b6979c25",
       "request_sha256": "46ded56063288747f7e676c389aa52c9583f898bc4ac331bbd32399226c2bd16",
@@ -406,12 +364,6 @@
       "profile_sha256": "88e997986cd57823c964daccb5298d3deea548b66fb0fca3a4f851b1134be4ad",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-aabb95344b1d99b4b5db402a4669134773dd68c384b00f3941fd2f9da1540978",
       "request_sha256": "e5c3b167eda4fe0526f7586348f8ae86a11467cbbaca03511a760a5cf9f00bf4",
@@ -460,12 +412,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-516c0daf1d1b2764773ee5dcd6ce616f30f0b1e187e48a98ca5beaeb7dfb4558",
       "request_sha256": "04a1144d52e8bb83a616503941a167cd97161c7e09f7d12cb3ddf43bbf152291",
@@ -516,12 +462,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-fcb9600bbcf0a884b25b2953f7ec875ab2f20f251f33bdb10a2cb4b5b62d0a63",
       "request_sha256": "7fd8b99caefca7a7a9c65f6393c48ba9d7c98ab662d855be2fa3eaa93d41f630",
@@ -570,12 +510,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-fca10ac7aaf9ee5a300bd72912c235ddb3e83bc286c5c3c60f51b1d0eb8c3fb1",
       "request_sha256": "40d354db7a53161f19957c8d3e4c316272488b96e9fe040a0ee7c5c09e719a85",
@@ -624,12 +558,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-4fcf3f5dcb2146c996af110f341d1f172a324e1dd5c9e4d08d389d7ef679656c",
       "request_sha256": "f0ec8658f146d50dc940097dafc459f10a8afe10c51e5b4285a79d1de20bc160",
@@ -678,12 +606,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-5ef96eed1a0ad1d126b3cc9e7c50c5825f2533037bb3cfdcd39bddc3438f07e3",
       "request_sha256": "f4d3286f2e7ab2bff78f6a99d51d7f3174930d135c5e9e47453175b08b0ccc61",
@@ -732,12 +654,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-f6a59e607043a16509ff787495bb54691f92c24ed764c8c5cc717759df3a95d5",
       "request_sha256": "d69ca67117e6d3c63eab62d49048f28c5fc1dba209b75443dfecc8f956890e68",
@@ -786,12 +702,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-7928d8e6ab1f9342462f5b2a93f4e3b745f9c72aec001c9c9d4586f640c01e1c",
       "request_sha256": "d9ab80c31c8d796c8a819826c18a1542c4a543ecc6685f39618ddbc109b8b8f2",
@@ -840,12 +750,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-37e9ff29a1c1366b96887207db2b3d240c211baa4bd2dfa938b3f517318dab8a",
       "request_sha256": "f1771e0ec19f07748423ca237412fc69946479408e64c8e1962856859fe1856e",
@@ -894,12 +798,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-e75a6bd5ad10372a6aa627f2365cf4f11e2f2093514bf575e41f968ebad1d9c0",
       "request_sha256": "de18b04f9c66264dad0968570536351dc3f475ed12ee396342fd4af294d53b49",
@@ -948,12 +846,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-f88c0341ade419f2b00e770e46f89dd3755933c15cedd224f96f032a9ae4b81e",
       "request_sha256": "f05b38e5692fcfcd4cf7e3ced6dab7573c1bce25336f2bbac30aff2d37289ae9",
@@ -1002,12 +894,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-71354a54777aabf53e00301f5eb01cec04481f7d63c6cb763cf9e6233c7243be",
       "request_sha256": "1a0ee9297d2055438d53190e383e9c4893d2790dbf804aadb6b2d7c3d0f051a6",
@@ -1056,12 +942,6 @@
       "profile_sha256": "3a35f7eb78a39f0dd712f9be06fe4a3d0af39e0dae7d0403df3da9c5ebd8abe0",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-f915aff473706e29363c895da24691f601d38e357e8de4dd927a741a9c7b8306",
       "request_sha256": "d3f5b85612d8a31b10b8f06d7142ad8a8a0da6c8f2abbdf91922f752a10c8cad",
@@ -1102,12 +982,6 @@
       "profile_sha256": "dde54808eece1fdb5a81fbe1c0865b2849ad3be7eb2258214f73f07ab5976b24",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-6dd74e84bb4bbc8224f564b7498d9bcf2b09fde8ea70fbf0df497adf9a43f7ae",
       "request_sha256": "518e1c15a789a7d93c6bda1a03311655ca4bc650c1c59762499e43e9bea96a15",
@@ -1142,12 +1016,6 @@
       "profile_sha256": "f2b0dc290a771ae19360ca9329f3184c7e96132aaf7c4cbcd93ebe477633d01d",
       "provider": "agy",
       "quota": {
-        "five_hour_remaining_percent": 100,
-        "gemini_models_weekly_remaining_percent": 85.34,
-        "note": "Ausgangswert vor Kampagnenblock 1; seither keine AGY-Aufrufe des Steuermanns; private Operatornutzung danach unbekannt",
-        "observed_local": "2026-09-29 ca. 09:15 (vor der Selbstaktualisierung um 09:16:57)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "23h 33m"
       },
       "request_id": "native-review-request-8f227fb45fa7b19a8ca4e6472ee40d800b43388370daa3f30888cdea442838d5",
       "request_sha256": "9194432d7891cd2dc09eeaf40e9f02902a54be6c711b2883d5cd7ba12b57c9e8",
@@ -1184,13 +1052,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-7fa426dab4344b93fdc168133bb91b59f6d065a670e54d41db7c85d450dd70ac",
       "request_sha256": "0215875a6051b248de145f747e7b4a1e37f11329553f8ab30468a0cbd715abb4",
@@ -1225,13 +1086,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-9cbb6e149552aa385a82c68dbba6d57d58c03862143990e9caf23d3749213dd0",
       "request_sha256": "f8ec914560b66dac81ed1e68076fbdb190ca2ddb7b9fdc39bc8ea996f428df91",
@@ -1300,13 +1154,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-0c0be3051aaa176d7f8299a166d530d6a93940bd21e7d95936a6332f12364dcd",
       "request_sha256": "6b26e6426fc3f62899234bacf688bd6925b77e04a65e14ec0167355a20d876a6",
@@ -1373,13 +1220,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-e96873b5ce2af1ed9081bf7b23aee1d2ed8f3d4e15501c50715d16f31a798c59",
       "request_sha256": "828ade6c08e2a77560b1b6245a8fb24c66ce2c044c1e4007b7f142b242400da6",
@@ -1446,13 +1286,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-cb3a9489f1562a431b6a6c49d2c2b81af5b09b96e513e1b1db085573655101f9",
       "request_sha256": "925f8701cb37fe947b2e24b979e49d448618dcfb520e8f7f21da169bd73b2411",
@@ -1519,13 +1352,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-346f163a776ae8b438bf38a9f884c9da8e5f5d1e3ab9e2ce71f4128f3247fd62",
       "request_sha256": "42a212b4ba3c84d3069e2597b4a6cb43424998d18d50a43dcdbc0ae25d390c6c",
@@ -1592,13 +1418,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-d3aa6ce0f47a12045ec05af723815e3a5df90e564915a7b3095e5b0fb22d9554",
       "request_sha256": "66c98fd7fbf5abe383653babe798df761bd05d622593cc09e55aa648e412d89f",
@@ -1665,13 +1484,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-e4c4acf4a95781acd295f3693d175a561d33417743e8675f561e2b5d81bc790f",
       "request_sha256": "7d3f1205b7c6ca7105f59d63af0a72c77f439f6d163161258dbd7daa2f7dc22f",
@@ -1712,13 +1524,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-94765cab9db16b1beb39104e9b2690649737fa8954d39cf4c431ab10c127cdda",
       "request_sha256": "c156360a8639c734ce11fb7019daaebf5dc5f931c11f8cd3b3e6c6fef1f1ed44",
@@ -1759,13 +1564,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-66fc3ca2cf976b3f44623f8fc6b75ea1801e38a560d9812bebf7c16d616efeb0",
       "request_sha256": "2e57f8c6d77e2348996c7be619890aebf00b3a4cd072c74ba38b7c289a48ba49",
@@ -1806,13 +1604,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-03a28b8f4b743300b43911f44efc2eeba8b899027c6d61092b4ebd92783927a9",
       "request_sha256": "46c93bbcfbfdf47633ecb3f98140fc3af7cdffb8f4c0165bc08e43d4e0052d26",
@@ -1853,13 +1644,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-c2fb2337bb9af139a53e7ed04b7dc664f36e973908bce01fabe49d88347f3928",
       "request_sha256": "6a46aa75e9630498d5be0cb2858f5c95bbec56f2ab88a61a2621e1d43af530cd",
@@ -1904,13 +1688,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-22f0ee3a1d23e12292d542c696f299dee410142f123d73552a116582dcc022c5",
       "request_sha256": "6f069ace7cc260bd525ec6d4dae9d4ac5c0b8ddab1d8978af8158edb14a32ddb",
@@ -1958,13 +1735,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-4896ec1caeb77061932beabe4b88352e88086359b31b8aa8de2932d6c188bc25",
       "request_sha256": "7263b846d46fa0c3ffe06fc8d0528a0c040e320f4b1a7db9533b400191533c5b",
@@ -2012,13 +1782,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-2cffae0a298d257f1f83c3ca413e4be9da143f587f967c0c0d584e1dc6b35a46",
       "request_sha256": "c3fe6c899c70ad00a7ff0ce871e69c641e3ab1d1e420949324f99a5e492066fc",
@@ -2068,13 +1831,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-e78bed5e54d9a1379a70ad51372b575aa102202c6e8321222d1fc6fb2c9f000b",
       "request_sha256": "937e6aa34347bf9efa25d366ea21803aee7899e65ebb56a5ae4be73709114502",
@@ -2120,13 +1876,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-ae5bb581e9ce1a261a94c280088cd7dc24b66e793971736dc6ba9143360290ac",
       "request_sha256": "1b2b0e652d618b9900f224542540ee35cd0f2c05a1594f78b7cd80fc51a61680",
@@ -2172,13 +1921,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-dfe50b50a2943f78d836ce1cbafc1a5a6f9c9cb51ae6b810d2945449fd0a942e",
       "request_sha256": "43dbf415c23babb9904e9637627ea3298ab59da3a0f06f8106888a6a75ebf5e8",
@@ -2224,13 +1966,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-f87322b55abd00721bf7bbd395b25306e5d7b2164531231d72ebc0d5b1c2f85e",
       "request_sha256": "c470c844324f9704f48011552b30f31685a3d73f234e52abc2616b1af886ba9b",
@@ -2276,13 +2011,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "3h 39m",
-        "five_hour_remaining_percent": 67.79,
-        "gemini_models_weekly_remaining_percent": 79.47,
-        "note": "Endwert Block 1 = Ausgangswert Block 2 (AGY-Qualität)",
-        "observed_local": "2026-09-29, eingegangen ca. 11:28 (nach Block 1)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "21h 22m"
       },
       "request_id": "native-review-request-f2d2f4d08df5185a82d4d404b8671aae7b33d508c4d5a4b7174911393398df8c",
       "request_sha256": "5ed3615ca6396d70484483ed33117419e1c2dd10f03da028671ec1b59d43f1d9",
@@ -2328,13 +2056,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-f016861416c61fe19c49c5b75dc3413c9029d2074d5837d27ec290ae0f2ef6f5",
       "request_sha256": "6a27fa83beaf23afb5343de58d948ef4c59ff22eda686c1c2d5540b24c97430d",
@@ -2408,13 +2129,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-ef6b3acba96c77c0de5e94f7c54a42a5a5d0397e6ac85413780a022d3799724b",
       "request_sha256": "98d4e4cd32825bce51730e36ea8ece6a10c03e0ecf3a8dd9a21cffa41adfb949",
@@ -2486,13 +2200,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-caf9db8c731a08490c553eec0261175d010d1bed57f3f901966b58c52ddfa79d",
       "request_sha256": "b2d229890cde2f0fa241b059a2cade4f90f8823149873938d9250baa16b4b2bf",
@@ -2564,13 +2271,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-cc96b35376f96a7054e6a51a8a8a0eeef970fdde0ae5f51839efeb93f755fab1",
       "request_sha256": "0e98b3ba30ecdeb784a3e100bff2aa013ef5f854abe0b9b16531f63a624fde35",
@@ -2642,13 +2342,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-3dddcd29a3a76b1155ab33872e39c6bdb84215a7cb4b127429c23e503dfd531a",
       "request_sha256": "2e7d56b0e1e1c781a0ae1da5a4592701b0e9850fe4bffe182c0645bc3980a678",
@@ -2720,13 +2413,6 @@
       "provider": "claude",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_reset_in": "1 Std. 52 Min.",
-        "five_hour_used_percent": 8,
-        "note": "Ausgangswert vor der Claude-Qualitätsserie; enthält die Steuermann-Sitzung selbst",
-        "observed_local": "2026-09-29, eingegangen 09:39",
-        "source": "Operator-Screenshot Claude Plan-Nutzungslimits (Max 5x)",
-        "weekly_all_models_used_percent": 35,
-        "weekly_reset": "Mi. 30.09.2026 19:00"
       },
       "request_id": "native-review-request-8a87cd45b123487082beee8b0b3f348e3473af3774c8ed18b65b79c22e7cdd4c",
       "request_sha256": "0b4a40385c397bd5d155c54d3165f9df011169f180de7635ef650af079a13b2f",
@@ -2798,13 +2484,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-05cf430ae79f78c4f143097a21290e836edd2812927e74fc584b379e5df46940",
       "request_sha256": "9d80c0ebe77b39e84b01fe0a7f0d5ac12b11ad52f87d0c7e51a6f95d1489d974",
@@ -2852,13 +2531,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-e4aa329bb4087d2a5e1f2baf16760f07913e5e05613773bb4c8b912b6d73723c",
       "request_sha256": "57590f8cbdacc3967c4491a3f0b078c8e5b3f914d6d1f883a3604dbb8cbf14f5",
@@ -2904,13 +2576,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-2e6aff8444cead6ac52269f56c526aed3c98c3a60b3e0c94f13be103ddaae8a1",
       "request_sha256": "7b386bf675de58829ba8340f3c66f4daab11b8cf551012b9cf5e249b42fde594",
@@ -2956,13 +2621,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-5f8f326059b10ace633dec4d71714c1078c6e848791b0407736e465c652e6467",
       "request_sha256": "d5e96e1f866ac1450e2e63e8e3afda23f44ffadf977e8cc221a86998b99ef662",
@@ -3008,13 +2666,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-0fec04622b1bf0119747fc4cf7f7d35ca777ed916ff5db1ab42d16e9ce9f7857",
       "request_sha256": "4a937b50bcd4de75cb3539637c6b2a5f6c46d78b160cc78f29c17954510218c8",
@@ -3060,13 +2711,6 @@
       "provider": "agy",
       "public_validation_sha256": "0e96d7ca7406320840ee2e704cbada03e2fe4b6d6aea1d667b4f685b07e7e24d",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-5b8ab4b30aeab8bda00bd462738cc4e6eb2eac6852002026ca74b693b3283481",
       "request_sha256": "12ee93279a698982fe2de96a701f2ea7c4efe1b49ca61bf13a4b734d59175de5",
@@ -3112,13 +2756,6 @@
       "provider": "agy",
       "public_validation_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
       "quota": {
-        "five_hour_refresh_in": "2h 10m",
-        "five_hour_remaining_percent": 43.12,
-        "gemini_models_weekly_remaining_percent": 75.69,
-        "note": "Endwert Block 2 (AGY-Qualität, 13 Aufrufe) = Ausgangswert Block 3",
-        "observed_local": "2026-09-29, eingegangen ca. 12:58 (nach AGY-Qualitätsserien s1-s3)",
-        "source": "Operator-Screenshot AGY /usage",
-        "weekly_refresh_in": "19h 53m"
       },
       "request_id": "native-review-request-1e362cade7b1da53ea6e60cb7557344bf1257ed6c5386cb92c25728e76562355",
       "request_sha256": "e742e04d5ec3b061dfd33d2a4c58bc231ee0ee941d19696936ab9f304c4e0fb4",
@@ -3169,11 +2806,6 @@
       "provider": "agy",
       "public_validation_sha256": "a71df3ef716cabe43ead70bd8311cda3aeadcb986bea501da0ea9262f31c3925",
       "quota": {
-        "five_hour_window": "nach Erneuerung gegen 15:05 vermutlich frisch; nicht gemessen",
-        "gemini_models_weekly_remaining_percent_estimate": 73.7,
-        "note": "Schätzwert, kein Screenshot; der Operator liefert den Endwert nach Block 3",
-        "observed_local": "2026-09-29, Start der Größenfälle nach der 5-Stunden-Erneuerung (ca. 15:10)",
-        "source": "Schätzung des Steuermanns aus Operator-Messpunkt 3 (12:58) abzüglich 7 AGY-Qualitätsaufrufe (Serie agy-quality-s4)"
       },
       "request_id": "native-review-request-6f30424b3cb4ac06bd392a343cda4912e3f1cd55c5266697e22d65f1183c7241",
       "request_sha256": "62bfb70c8d6afad3d0702d0151511c42b651664abd1219b9d6389759e450a394",

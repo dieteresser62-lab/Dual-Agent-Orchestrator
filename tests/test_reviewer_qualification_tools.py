@@ -41,6 +41,7 @@ def test_fake_pair_reuses_plan_series_retries_blind_rating_and_final_verdict(tmp
                                                          "effort": "high", "isolation": True},
                                       "fake-reference": {"model": "opus", "effort": "high",
                                                          "isolation": False}},
+                    phase0_sha256=probe.sha((evidence / "phase-0-v1.json").read_bytes()),
                     evidence_directory=str(evidence))
     protocol["quality"]["providers"] = ["fake-candidate", "fake-reference"]
     probe.validate_qualification(protocol)
@@ -238,6 +239,7 @@ def test_fake_pair_canary_and_quicktest_use_candidate_profile(
                                                          "effort": "high", "isolation": True},
                                       "fake-reference": {"model": "opus", "effort": "high",
                                                          "isolation": False}},
+                    phase0_sha256=probe.sha((evidence / "phase-0-v1.json").read_bytes()),
                     evidence_directory=str(evidence))
     protocol["quality"]["providers"] = ["fake-candidate", "fake-reference"]
     protocol_file = tmp_path / "protocol.json"

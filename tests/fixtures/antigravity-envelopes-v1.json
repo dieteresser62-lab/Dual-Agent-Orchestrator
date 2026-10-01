@@ -4,9 +4,9 @@
   "cases": [
     {
       "name": "soft_deny_s1",
-      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s1/agy-P1/process/stdout.txt",
+      "source": "/fixtures/agy/gate-package/raw/s1/agy-P1/process/stdout.txt",
       "stdout_sha256": "df5288fe419fd851ee8cc2feb69898734f9fe2b6a42b5a5495557209c2e42920",
-      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s1/agy-P1/process/stderr.txt",
+      "stderr_source": "/fixtures/agy/gate-package/raw/s1/agy-P1/process/stderr.txt",
       "stderr_sha256": "2f70f945243833d446f0501960769e51d4aabe7f6b4f4f502a24883d197ccc06",
       "exit_code": 0,
       "envelope": {
@@ -84,9 +84,9 @@
     },
     {
       "name": "soft_deny_s4",
-      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-P6/process/stdout.txt",
+      "source": "/fixtures/agy/gate-package/raw/s4/agy-P6/process/stdout.txt",
       "stdout_sha256": "d41e710331d9bf5875a5e95e00cacc9ca05370aff3590b86a9cfba158bdf95b5",
-      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-P6/process/stderr.txt",
+      "stderr_source": "/fixtures/agy/gate-package/raw/s4/agy-P6/process/stderr.txt",
       "stderr_sha256": "2f70f945243833d446f0501960769e51d4aabe7f6b4f4f502a24883d197ccc06",
       "exit_code": 0,
       "envelope": {
@@ -164,9 +164,9 @@
     },
     {
       "name": "error_with_output",
-      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-F1/process/stdout.txt",
+      "source": "/fixtures/agy/gate-package/raw/s4/agy-F1/process/stdout.txt",
       "stdout_sha256": "876e0ec8d20a1a072ee9e1fb757d1884d57c84823502aea5eb5e7a1b1afaba38",
-      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s4/agy-F1/process/stderr.txt",
+      "stderr_source": "/fixtures/agy/gate-package/raw/s4/agy-F1/process/stderr.txt",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "exit_code": 0,
       "envelope": {
@@ -1263,9 +1263,9 @@
     },
     {
       "name": "valid_s6",
-      "source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s6/agy-F3/process/stdout.txt",
+      "source": "/fixtures/agy/gate-package/raw/s6/agy-F3/process/stdout.txt",
       "stdout_sha256": "5dcbe52446d072f33a908b7e0fac65e7961e8bd59ec62e3b1582bf46e2f68990",
-      "stderr_source": "/home/dieter/task-b-steuerung/phase0/gate-package/raw/s6/agy-F3/process/stderr.txt",
+      "stderr_source": "/fixtures/agy/gate-package/raw/s6/agy-F3/process/stderr.txt",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "exit_code": 0,
       "envelope": {
@@ -4347,9 +4347,9 @@
     },
     {
       "name": "print_timeout",
-      "source": "/home/dieter/repos/Dual-Agent-Orchestrator/inbox/backlog/agy-json-poc/results/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stdout.json",
+      "source": "/fixtures/agy/poc/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stdout.json",
       "stdout_sha256": "069c2fba623565ce79760274738ffe32bdfa156007d8bd88d97c1f4158cb2953",
-      "stderr_source": "/home/dieter/repos/Dual-Agent-Orchestrator/inbox/backlog/agy-json-poc/results/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stderr.txt",
+      "stderr_source": "/fixtures/agy/poc/20260927T114043Z/20-gemini-3.1-pro-high-conflict_const_list/stderr.txt",
       "stderr_sha256": "a534ee5682fb348186a27ac72d10b7f94bd46f96323a028430c26c8dc956f65a",
       "exit_code": 0,
       "envelope": {

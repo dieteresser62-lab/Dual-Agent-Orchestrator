@@ -56,7 +56,7 @@
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
         "path": "docs/evidence/antigravity/capability-v1.json",
-        "sha256": "9320b542d1c17831a7c7a6dc1e6a167091b8df502862db9bc72b47d8ad3f60a6"
+        "sha256": "31aa02269f1dff6790b7f4ef3dd62cc2f60fc2437fe75c1b1db6006aac0da5f7"
       },
       "probe_profile": {
         "provider": "antigravity",
@@ -139,7 +139,7 @@
       "rights_sha256": "c165330301197913cb72ab1280ad9c1688968e878020486168c8d554e42efeb9",
       "evidence": {
         "path": "docs/evidence/antigravity/capability-v1.json",
-        "sha256": "9320b542d1c17831a7c7a6dc1e6a167091b8df502862db9bc72b47d8ad3f60a6"
+        "sha256": "31aa02269f1dff6790b7f4ef3dd62cc2f60fc2437fe75c1b1db6006aac0da5f7"
       },
       "probe_profile": {
         "provider": "antigravity",

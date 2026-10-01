@@ -49,6 +49,11 @@ def _copy_sources(root: Path) -> None:
     # Promoted rows bind their measurement bundles, including P/F/W reports.
     for ref in list(paths):
         document = json.loads((ROOT / ref).read_text())
+        manifest_ref = document.get('measurements', {}).get('redaction_manifest')
+        if manifest_ref:
+            paths.add(manifest_ref['path'])
+            manifest = json.loads((ROOT / manifest_ref['path']).read_text())
+            paths.update(str(Path(manifest_ref['path']).parent / item['path']) for item in manifest['files'])
         references = document.get("shared_evidence", [])
         for shared in references.values() if isinstance(references, dict) else references:
             paths.add(shared["path"])
@@ -210,10 +215,23 @@ def test_agy_experimental_requires_both_canaries_and_separate_slot_entries(tmp_p
         path = tmp_path / CANARY_EVIDENCE
         path.write_text(json.dumps(doc))
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Publish a consistent derived bundle so this test exercises the
+        # canary's domain contract, separately from byte-binding failures.
+        capability_path = tmp_path / AGY_EVIDENCE
+        capability = json.loads(capability_path.read_text())
+        manifest_ref = capability['measurements']['redaction_manifest']
+        manifest_path = tmp_path / manifest_ref['path']
+        manifest = json.loads(manifest_path.read_text())
+        next(item for item in manifest['files'] if item['path'] == path.name)['derived_sha256'] = digest
+        manifest_path.write_text(json.dumps(manifest))
+        manifest_ref['sha256'] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        capability_path.write_text(json.dumps(capability))
+        capability_digest = hashlib.sha256(capability_path.read_bytes()).hexdigest()
 
         def update(table: dict[str, object]) -> None:
             for row in table["certifications"]:
                 if row["provider"] == "antigravity":
+                    row['evidence']['sha256'] = capability_digest
                     row["canary_evidence"]["sha256"] = digest
                     row["status"] = "experimental" if row["slot"] in experimental_slots else "candidate"
 

@@ -95,6 +95,8 @@ Die erste Phase-0-F6-Anfrage fehlte ein produktives Finalreview-Kriterium; Anfra
 
 Die [AGY-Messung](antigravity-reviewer.md) meldete 2.115.470 CLI-Token für 34 Phase-0-Aufrufe. Das ist weder ein Rechnungsbetrag noch ein Kaufpreis. Formatproben benötigten ungefähr 97–146 Sekunden und 63.306–89.796 gemeldete Token je Aufruf. Abonnementkontingent, gekaufte Credits, tatsächlicher Preis und das bediente Modell bleiben ohne gesonderte Betreiberbelege unbekannt. Erfasse Quoten-Screenshots und Zeitpunkte als `--quota-observation`, rechne Nutzung und Kosten getrennt und plane Reserven für komplette Serien-Neustarts ein. Eine eingefrorene Binärkopie dient nur der Konsistenz einer Kampagne.
 
+Die öffentliche AGY-Evidenz ist eine geschwärzte Ableitung ohne persönliche Pfade oder Kontingentstände; das [Schwärzungsmanifest](../evidence/antigravity/redaction-manifest-v1.json) bindet Original- und neue Digests sowie die entfernten Felder. Vorab festgelegte Protokolle und unveränderte Verweisdokumente behalten ihre Original-Digests, die über das gebundene Manifest aufgelöst werden; Urteile, CLI-Nutzungszähler, allgemeine Systempfade und die Originalformatierung bleiben erhalten.
+
 ## Codex-Prüfer: Berechtigungsprofil und Pflicht-Härtung
 
 Der [NativeCodexReviewAdapter](../../src/codex_review_adapter.py) verwendet das Profil `codex-reviewer` für beide Reviewslots. Die [Zertifizierungstabelle](../../schemas/role-provider-certifications-v1.json) führt beide seit dem 01.10.2026 als `experimental` mit gebundener Qualifikation und bestandenen Slot-Canaries. Claude / Codex / Codex ist ausdrücklich per TOML wählbar. Ein bestandener Offline-Quicktest oder vorhandener Writer allein ist keine Zulassung.

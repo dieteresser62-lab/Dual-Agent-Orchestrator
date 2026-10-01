@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import getpass
+import gzip
 import io
 import json
 import re
@@ -338,7 +340,7 @@ def test_role_certification_references_document_binding_rules(document: str, req
     source = (ROOT / "docs/reference" / document).read_text()
     for fragment in required:
         assert fragment in source, f"{document}: {fragment}"
-    assert "/home/dieter/" not in source
+    assert str(Path.home()) not in source
     prefix = "W" if document == "implementer-certification.md" else "P"
     count = 8 if prefix == "W" else 6
     for number in range(1, count + 1):
@@ -361,7 +363,38 @@ def test_free_role_setup_documents_candidate_gate_and_operational_checks(documen
         "implementer-certification.md", "reviewer-certification.md",
     ):
         assert fragment in source, f"{document}: {fragment}"
-    assert "/home/dieter/" not in source
+    assert str(Path.home()) not in source
+
+
+def _assert_public_privacy(source: str, label: str) -> None:
+    assert str(Path.home()) not in source, label
+    name = re.escape(getpass.getuser())
+    assert re.search(rf"/(?:home|Users)/{name}(?:/|[\s\"'])", source, re.I) is None, label
+    for match in re.finditer(r"[A-Z0-9._%+-]+@([A-Z0-9-]+(?:\.[A-Z0-9-]+)+)", source, re.I):
+        assert match[1].lower() in {"example.com", "example.org"}, label
+
+
+def test_public_evidence_fixtures_and_schemas_have_no_personal_patterns() -> None:
+    for directory in ("docs/evidence", "tests/fixtures", "schemas"):
+        for path in (ROOT / directory).rglob('*'):
+            if not path.is_file():
+                continue
+            raw = path.read_bytes()
+            if path.suffix == '.gz':
+                raw = gzip.decompress(raw)
+            _assert_public_privacy(raw.decode('utf-8', errors='replace'), str(path.relative_to(ROOT)))
+
+
+@pytest.mark.parametrize('location', ('home', 'user-home', 'user-macos', 'email'))
+def test_public_privacy_guard_rejects_runtime_accounts_and_non_example_emails(location) -> None:
+    source = {'home': str(Path.home()), 'user-home': '/home/' + getpass.getuser() + '/file',
+              'user-macos': '/Users/' + getpass.getuser() + '/file', 'email': 'account@private.invalid'}[location]
+    with pytest.raises(AssertionError):
+        _assert_public_privacy(source, 'fixture')
+
+
+def test_public_privacy_guard_accepts_neutral_paths_and_example_emails() -> None:
+    _assert_public_privacy('<HOME>/file /home/<user>/file /fixtures/agy/file a@example.com b@example.org', 'fixture')
 
 
 def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
@@ -1308,6 +1341,8 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "tests/test_workflow_run_setup.py",
         "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
         "tests/fixtures/antigravity-envelopes-v1.json",
+        "tests/fixtures/redaction-manifest-v1.json",
+        "tests/test_redact_evidence.py",
         "schemas/orchestrator-artifact-v3.schema.json",
     }
     retired = (

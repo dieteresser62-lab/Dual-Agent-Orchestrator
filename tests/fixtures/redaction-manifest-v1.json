@@ -1,0 +1,182 @@
+{
+ "files": [
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/cases/0/source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/0/stderr_source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/1/source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/1/stderr_source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/2/source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/2/stderr_source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/3/source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/3/stderr_source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/4/source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/4/stderr_source",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/0/source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/0/stderr_source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/1/source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/1/stderr_source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/2/source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/2/stderr_source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/3/source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/3/stderr_source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/4/source",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/cases/4/stderr_source",
+     "rules": [
+      "report-reference"
+     ]
+    }
+   ],
+   "derived_sha256": "150ef2b447787cebfdf4b7e9ad6bba69fe547d0482f8b916f01488b5065a7420",
+   "outcomes_sha256": "5eeb0f12451a7e4ac79dbe5406538bfffb66bef91859fe11908699d5fe007bca",
+   "path": "antigravity-envelopes-v1.json",
+   "source_id": "fake-transport-fixture",
+   "source_sha256": "8222645ec79162f17ae1a888ea565bc2605274c33a516b21fae9fffff709d5a3"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/0/item/aggregated_output/138",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "5554a973b73028603c56bb242b9f5dbf4d16497b070e0e0564719ca333eb4539",
+   "outcomes_sha256": "944a652dd39dd4eb1afb9e2aabdfdc41e2355606659c8ad39858c12fbe33dbdc",
+   "path": "phase0-traces/s1/codex-P2.json",
+   "source_id": "fake-trace-fixture",
+   "source_sha256": "22bbb12a229ff575c9eccc0b1f347175151c46ced0791d26f6e90390f0450293"
+  }
+ ],
+ "generated_files": [],
+ "rules": {
+  "account": "Remove account, organization, subscription and quota fields, including embedded JSON streams; retain operational random session/event IDs.",
+  "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "email": "Replace email addresses by <email>.",
+  "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
+  "hostname": "Replace runtime host names at token boundaries by <host>.",
+  "report-reference": "Use bundle-relative report paths instead of private absolute paths.",
+  "temporary": "Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.",
+  "username": "Replace runtime account names at token boundaries by <user>."
+ },
+ "schema_version": "redaction-manifest-v1",
+ "source_commitments": "Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts."
+}

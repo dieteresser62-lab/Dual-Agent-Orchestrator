@@ -1,6 +1,6 @@
 {
   "binary": {
-    "path": "/home/dieter/.local/bin/agy",
+    "path": "<HOME>/.local/bin/agy",
     "sha256": "ce6fdd9e7621ee9ac6eedaa337731ca1f235e412ff57cf9eabcd2aa23b3576ca",
     "version": "1.2.12 (language server version in every run log)"
   },
@@ -4097,8 +4097,6 @@
     "daily_cli_total_tokens": {
       "2026-09-28": 2115470
     },
-    "daily_quota": null,
-    "daily_subscription_limit": "unmeasured",
     "subscription_quota_measured": false,
     "total_tokens_agy": 2115470,
     "usage_source": "CLI usage"

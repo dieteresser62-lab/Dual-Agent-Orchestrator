@@ -1,6 +1,6 @@
 {
   "binary": {
-    "path": "/home/dieter/.local/bin/agy",
+    "path": "<HOME>/.local/bin/agy",
     "sha256": "ce6fdd9e7621ee9ac6eedaa337731ca1f235e412ff57cf9eabcd2aa23b3576ca",
     "version": "1.2.12"
   },

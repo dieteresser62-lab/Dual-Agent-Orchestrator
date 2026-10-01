@@ -39,6 +39,10 @@
     "accepted_schema_echo": "All six s6 envelopes passed writer_schema and schema_echo checks; F6 failed case_semantics only.",
     "positional_tuple": "PoC prefixItems/items:false rejected with INVALID_ARGUMENT.",
     "version_stdout": "1.2.12\n",
-    "model": "gemini-3.1-pro-high"
+    "model": "gemini-3.1-pro-high",
+    "redaction_manifest": {
+      "path": "docs/evidence/antigravity/redaction-manifest-v1.json",
+      "sha256": "db8630b299ccea8225621afbc171d911969a9eec8a7f81fc6b07fbdb5b77048a"
+    }
   }
 }

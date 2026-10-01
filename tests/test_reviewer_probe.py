@@ -97,7 +97,9 @@ def test_qualification_protocol_counts_rules_slots_and_evidence_digests() -> Non
     protocol = load(EVIDENCE / "qualification-protocol-v5.json")
     probe.validate_qualification(protocol)
     assert protocol["quality"]["corpus_sha256"] == sha(FIXTURES / "reviewer-quality-corpus-v1.json")
-    assert protocol["phase0_sha256"] == sha(EVIDENCE / "phase-0-v1.json")
+    from role_certification import read_qualification_evidence
+    phase0 = EVIDENCE / 'phase-0-v1.json'
+    assert read_qualification_evidence(probe.ROOT, str(phase0.relative_to(probe.ROOT)), protocol['phase0_sha256']) == phase0.read_bytes()
     assert protocol["format_regression_sha256"] == sha(FIXTURES / "reviewer-format-s6-v1.json")
     plan = probe.probe_plan(protocol)
     assert [sum(x["series"] == key for x in plan) for key in
