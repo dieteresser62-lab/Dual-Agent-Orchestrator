@@ -35,7 +35,7 @@ from scripts.qualification.profiles import (
     LEGACY_REFERENCE_DECISION_KEY, LEGACY_REFERENCE_EVIDENCE_ID,
     LEGACY_REFERENCE_DIGEST_KEY, LEGACY_REFERENCE_DESCRIPTION,
     DEFAULT_REVIEW_CAPABILITY, IMPLEMENTER_CAPABILITY, LEGACY_RUNTIME, LEGACY_BLIND_WORDS,
-    REVIEW_ENVELOPES, BLIND_WORDS,
+    REVIEW_ENVELOPES, BLIND_WORDS, BOUNDARY_REVIEWER,
 )
 FORMAT_REPO_FIXTURE = ROOT / "tests/fixtures/reviewer-format-repo-v1.json"
 FORMAT_REPO_SHA256 = "3b6f775aebdc90075524f942c1749233c3c63ddc56d9ed19a58dd1cf82a4fa15"
@@ -1347,8 +1347,9 @@ def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
 
 
 def size_override(decisions: dict | None, verdicts: dict,
-                  pair: QualificationPair | None = None) -> dict | None:
-    """Accept only the recorded operator exception for the measured 128 case."""
+                  pair: QualificationPair | None = None,
+                  protocol: dict | None = None) -> dict | None:
+    """Accept one candidate exception matching the protocol and measured failure."""
     if decisions is None:
         return None
     if decisions.get("schema_version") != "operator-decisions-v1":
@@ -1360,14 +1361,25 @@ def size_override(decisions: dict | None, verdicts: dict,
         raise ValueError("duplicate size override")
     row = matches[0]
     pair = pair or qualification_pair({"schema_version": "qualification-protocol-v5"})
+    if protocol is not None and qualification_pair(protocol) != pair:
+        raise ValueError("size override pair differs from protocol")
+    failed_case, not_run = ("128", ["512"])
+    candidate_v6 = (protocol is not None and protocol.get("schema_version") == "qualification-protocol-v6"
+            and qualification_pair(protocol) == pair
+            and pair.capability(pair.candidate) == BOUNDARY_REVIEWER)
+    if candidate_v6:
+        failed_case, not_run = "512", []
     series_id = row.get("series")
+    size_series = [name for name, measured in verdicts.items()
+                   if measured.get("kind") == "large_output" and measured.get("provider") == pair.candidate]
     if (row.get("decision") != "approve_experimental_despite_failed_size_case"
-        or not isinstance(series_id, str) or row.get("failed_case") != "128"
+        or not isinstance(series_id, str) or row.get("failed_case") != failed_case
         or (pair.candidate == LEGACY_CANDIDATE and series_id != f"{LEGACY_CANDIDATE}-large-s1")
-        or row.get("not_run") != ["512"]
+        or row.get("not_run") != not_run
         or not isinstance(row.get("documented_weakness"), str)
         or not row["documented_weakness"].strip()
-        or verdicts.get(series_id, {}).get("failed_cases") != ["128"]
+        or candidate_v6 and (not size_series or series_id != size_series[-1])
+        or verdicts.get(series_id, {}).get("failed_cases") != [failed_case]
         or verdicts[series_id].get("kind") != "large_output"
         or verdicts[series_id].get("provider") != pair.candidate):
         raise ValueError("size override differs from the recorded failed case")
@@ -1390,7 +1402,7 @@ def qualification_summary(series: dict, envelopes: dict, protocol: dict,
     required = all(latest.get(key, {}).get("passed") for key in (
         ("transport", pair.candidate), ("print_timeout", pair.candidate),
         ("quality", pair.candidate), ("quality", pair.reference)))
-    override = size_override(decisions, verdicts, pair)
+    override = size_override(decisions, verdicts, pair, protocol)
     size_passed = latest.get(("large_output", pair.candidate), {}).get("passed", False)
     qualified = bool(required and quality[pair.candidate]["passed"] and
                      (quality[pair.reference]["passed"] or
@@ -2321,7 +2333,8 @@ def run_canary_call(slot: str, *, profile_file: Path, output_dir: Path,
     pair = qualification_pair(protocol)
     capability = pair.capability(pair.candidate)
     binary = Path(profile["binary"])
-    if not binary.is_absolute() or not binary.is_file() or binary.is_symlink():
+    if (not binary.is_absolute() or not binary.is_file()
+            or binary.is_symlink() and capability != BOUNDARY_REVIEWER):
         raise ValueError("candidate binary must be an absolute regular file")
     runtime = _runtime_profile(protocol, pair.candidate)
     if profile.get("effort") != runtime["effort"]:

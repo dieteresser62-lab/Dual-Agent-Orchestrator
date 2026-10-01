@@ -151,16 +151,74 @@ def make_clone(case: str, folder: Path, tool_roots: list[Path]) -> tuple[Path, s
     return repo, git(repo, "rev-parse", "HEAD"), frozen
 
 
+def _process_stat(pid: int):
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text()
+        fields = text[text.rindex(")") + 2:].split()
+        return fields[0], int(fields[1]), int(fields[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _descendant_snapshot(pid: int) -> dict[int, int]:
+    """Freeze parent chains before TERM can reparent children in other sessions."""
+    entries = {int(path.name): _process_stat(int(path.name))
+               for path in Path("/proc").iterdir() if path.name.isdecimal()}
+    owned, pending = {}, {pid}
+    while pending:
+        children = {number: stat for number, stat in entries.items()
+                    if stat is not None and stat[1] in pending and number != pid
+                    and number not in owned}
+        owned.update({number: stat[2] for number, stat in children.items()})
+        pending = set(children)
+    return owned
+
+
+def _descendant_alive(pid: int, ticks: int) -> bool:
+    stat = _process_stat(pid)
+    return stat is not None and stat[2] == ticks and stat[0] not in {"Z", "X", "x"}
+
+
+def _signal_descendants(snapshot: dict[int, int], number: int) -> None:
+    for pid, ticks in snapshot.items():
+        if _descendant_alive(pid, ticks):
+            try:
+                os.kill(pid, number)
+            except ProcessLookupError:
+                pass
+
+
 def stop_process(process) -> None:
-    """Bound cleanup to the session created by this runner."""
+    """Stop the owned session and its identity-checked descendant snapshot."""
     if process.poll() is not None:
         return
-    os.killpg(process.pid, signal.SIGTERM)
+    descendants = _descendant_snapshot(process.pid)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # The parent can exit after the snapshot; its children are owned.
+    _signal_descendants(descendants, signal.SIGTERM)
+    deadline = time.monotonic() + 5
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait(timeout=5)
+    while time.monotonic() < deadline and any(
+        _descendant_alive(pid, ticks) for pid, ticks in descendants.items()
+    ):
+        time.sleep(0.05)
+    _signal_descendants(descendants, signal.SIGKILL)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and any(
+        _descendant_alive(pid, ticks) for pid, ticks in descendants.items()
+    ):
+        time.sleep(0.02)
+    if any(_descendant_alive(pid, ticks) for pid, ticks in descendants.items()):
+        raise RuntimeError("owned descendants remained alive after KILL")
 
 
 def run_process(command: list[str], repo: Path, log: Path, *, interrupt: bool = False,

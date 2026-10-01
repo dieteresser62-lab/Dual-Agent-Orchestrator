@@ -213,6 +213,7 @@ def test_timeout_cleanup_is_bounded_to_owned_process_group(tmp_path, monkeypatch
             raise subprocess.TimeoutExpired("fake", timeout)
         process.returncode = -9
     process.wait = wait
+    monkeypatch.setattr(runner, "_descendant_snapshot", lambda _pid: {})
     monkeypatch.setattr(runner.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
     runner.stop_process(process)
     assert signals == [(67890, signal.SIGTERM), (67890, signal.SIGKILL)]

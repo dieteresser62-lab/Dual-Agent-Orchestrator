@@ -277,11 +277,20 @@ def test_implementer_sigint_resume_preserves_writer_profile(
     _topology_journey(tmp_path, monkeypatch, "claude", "codex", None, None, implementer_interrupt=step)  # allowlist:provider -- profile configuration: interrupted implementer journey
 
 
+@pytest.mark.parametrize("signal_name", ("SIGTERM", "SIGHUP"))
+def test_termination_signal_keeps_the_workflow_resumable(tmp_path, monkeypatch, signal_name):
+    import signal
+    _topology_journey(tmp_path, monkeypatch, "claude", "codex", None, None,  # allowlist:provider -- profile configuration: signal/resume journey
+                      implementer_interrupt=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+                      signal_number=getattr(signal, signal_name))
+
+
 def _topology_journey(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     implementer: str, reviewer: str, work_plan: str | None,
     interruption: WorkflowStep | None, *, binding_failures: int = 0,
     implementer_interrupt: WorkflowStep | None = None,
+    signal_number: int | None = None,
 ) -> None:
     import test_orchestrator_runtime as fixture
     from agent_adapters import build_slot_agent_registry
@@ -364,16 +373,22 @@ def _topology_journey(
                     import signal
                     import subprocess
                     process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+                    interrupted_implementer = True
                     try:
                         attempt.process_started(process.pid)
-                        process.send_signal(signal.SIGINT)
-                        process.wait(timeout=5)
+                        if signal_number is not None:
+                            import os
+                            from cli import shutdown_signals
+                            with shutdown_signals():
+                                os.kill(os.getpid(), signal_number)
+                        else:
+                            process.send_signal(signal.SIGINT)
+                            process.wait(timeout=5)
                     finally:
                         if process.poll() is None:
                             process.kill()
                             process.wait()
                         adapter.cleanup()
-                    interrupted_implementer = True
                     raise KeyboardInterrupt
             envelope = {"type": "result", "subtype": "success", "is_error": False,
                         "structured_output": {"result": json.loads(expected_implementer.canonical_json)}}

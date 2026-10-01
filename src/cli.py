@@ -6,7 +6,10 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Sequence
@@ -58,6 +61,38 @@ ALLOWED_ENV_NAMES = frozenset({
 
 class ConfigError(ValueError):
     """Raised when declarative or environment configuration is invalid."""
+
+
+class ShutdownRequested(KeyboardInterrupt):
+    """A catchable shutdown that unwinds the active provider's cleanup."""
+
+    def __init__(self, signal_number: int) -> None:
+        self.signal_number = signal_number
+        super().__init__(signal_number)
+
+
+@contextmanager
+def shutdown_signals():
+    """Turn process termination into the same resumable unwind as Ctrl-C."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    selected = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {number: signal.getsignal(number) for number in selected}
+
+    def interrupt(number, _frame):
+        # A second signal must not interrupt TERM/KILL/reap cleanup.
+        for managed in selected:
+            signal.signal(managed, signal.SIG_IGN)
+        raise ShutdownRequested(number)
+
+    try:
+        for number in selected:
+            signal.signal(number, interrupt)
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 @dataclass(frozen=True)
@@ -1272,15 +1307,16 @@ def main(
         watch_inbox_fn = orchestrator.watch_inbox
         find_task_file_fn = orchestrator.find_task_file
     try:
-        return run_cli(
-            args,
-            run_pipeline_fn=run_pipeline_fn,
-            watch_inbox_fn=watch_inbox_fn,
-            find_task_file_fn=find_task_file_fn,
-        )
-    except KeyboardInterrupt:
+        with shutdown_signals():
+            return run_cli(
+                args,
+                run_pipeline_fn=run_pipeline_fn,
+                watch_inbox_fn=watch_inbox_fn,
+                find_task_file_fn=find_task_file_fn,
+            )
+    except KeyboardInterrupt as exc:
         print("interrupted; resume with --resume", file=sys.stderr)
-        return 130
+        return 128 + getattr(exc, "signal_number", signal.SIGINT)
 
 
 if __name__ == "__main__":
