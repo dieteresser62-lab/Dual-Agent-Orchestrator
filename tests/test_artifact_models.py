@@ -1028,8 +1028,9 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
         )
 
 
-def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> None:
-    diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID.text
+@pytest.mark.parametrize("diagnostic", [OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID.text,
+    OrchestratorDiagnostic.PROVIDER_OVERLOADED.text])
+def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional(diagnostic) -> None:
     raw = "provider-controlled diagnostic mutation"
     marker, digest, byte_count = technical_text_evidence(raw)
     payload = InvocationFailurePayload(

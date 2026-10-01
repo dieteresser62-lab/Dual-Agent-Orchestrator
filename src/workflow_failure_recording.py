@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping
 
 from agent_runtime import (
     AgentInvocationError,
+    compute_retry_backoff_seconds,
     is_structured_output_retry_exhaustion,
     normalize_provider_usage,
 )
@@ -28,6 +29,7 @@ from artifact_models import (
 from contracts import AgentRole
 from agent_config import current_provider_for_role
 from orchestrator_diagnostics import (
+    OrchestratorDiagnostic,
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
     STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
 )
@@ -333,9 +335,10 @@ def _prior_native_retry_counts(
     )
     transport_failures = sum(
         item.automatic_resume
-        and item.failure_kind is AgentFailureKind.OUTPUT
-        and item.native_review_rejection is None
-        and item.native_implementer_rejection is None
+        and (item.orchestrator_diagnostic == OrchestratorDiagnostic.PROVIDER_OVERLOADED.text
+             or item.failure_kind is AgentFailureKind.OUTPUT
+             and item.native_review_rejection is None
+             and item.native_implementer_rejection is None)
         for item in matching_failures
     )
     return transport_failures, contract_rejections
@@ -347,10 +350,11 @@ def _native_retry_budget(
     prior_contract_rejections: int,
     max_transport_failures: int,
     max_contract_rejections: int,
+    *, transport_failure: bool = False,
 ) -> tuple[int, int, str | None, bool | None]:
     """Apply the classified native failure to exactly one finite budget."""
 
-    is_transport_failure = diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+    is_transport_failure = diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE or transport_failure
     is_contract_rejection = diagnostic_code in {
         "NATIVE-REVIEW-FORM",
         "NATIVE-IMPLEMENTER-FORM",
@@ -415,6 +419,7 @@ def _invocation_retry_decision(
         prior_contract_rejections,
         max_transport_failures,
         max_contract_rejections,
+        transport_failure=error.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED,
     )
     reset_at, quota_resume_at, automatic_quota = _quota_resume_decision(
         error=error,
@@ -478,6 +483,9 @@ def _invocation_retry_decision(
         transient_policy.maximum_delay_seconds,
         transient_policy.initial_delay_seconds * (2**prior_budget_failures),
     )
+    if error.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED:
+        transient_delay = min(transient_policy.maximum_delay_seconds,
+                              compute_retry_backoff_seconds(error.technical_text, prior_budget_failures + 1))
     resume_at = (
         quota_resume_at
         if error.kind is AgentFailureKind.QUOTA

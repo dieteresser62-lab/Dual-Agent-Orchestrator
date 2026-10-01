@@ -128,6 +128,60 @@ def test_compute_retry_backoff_seconds_exponential() -> None:
     assert compute_retry_backoff_seconds("generic error", 5) == 30
 
 
+@pytest.mark.parametrize('message', ['Selected model is at capacity. Please try a different model.',
+    'at capacity', 'overloaded', 'overloaded_error', 'server is busy', 'service unavailable',
+    'temporarily unavailable', 'HTTP 503', 'HTTP/1.1 529', 'status=503', 'status_code: 529',
+    '{"error":{"code":503}}', '529'])
+@pytest.mark.parametrize('hint', [None, AgentFailureKind.PROCESS])
+def test_provider_overload_is_transient_even_with_process_hint(message, hint):
+    failure = classify_agent_failure('provider', agent_runtime.AgentProcessError(message, exit_code=1, kind_hint=hint), invocation_id='overload')
+    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED
+    assert 'provider overloaded' in failure.technical_text
+
+
+@pytest.mark.parametrize('message', ['503 Tests', 'line 503', 'tests=529', '{"input_tokens":503}',
+    '1503', '503.1', 'status=503.1', 'HTTP 1529', 'overloadedness', 'HTTP 5030'])
+def test_incidental_capacity_numbers_are_not_transient(message):
+    assert not agent_runtime.is_provider_overload_error(message)
+    failure = classify_agent_failure('provider', agent_runtime.AgentProcessError(message, exit_code=1), invocation_id='not-overload')
+    assert failure.kind is AgentFailureKind.PROCESS
+
+
+@pytest.mark.parametrize('message,expected', [('HTTP 429 rate limit; at capacity', AgentFailureKind.QUOTA),
+    ('unauthorized HTTP 401; overloaded', AgentFailureKind.AUTH), ('generic process failure', AgentFailureKind.PROCESS)])
+def test_overload_does_not_replace_quota_auth_or_process(message, expected):
+    failure = classify_agent_failure('provider', agent_runtime.AgentProcessError(message, exit_code=1), invocation_id='precedence', quota_reset_profile='standard')
+    assert failure.kind is expected
+
+
+def test_bound_output_error_does_not_become_overload():
+    failure = classify_agent_failure('provider', AgentOutputError('at capacity', exit_code=1, kind_hint=AgentFailureKind.OUTPUT), invocation_id='output')
+    assert failure.kind is AgentFailureKind.OUTPUT
+
+
+def test_invalid_json_does_not_become_overload():
+    failure = classify_agent_failure('provider', AgentOutputError('invalid JSON: at capacity', exit_code=1), invocation_id='invalid-output')
+    assert failure.kind is AgentFailureKind.OUTPUT
+
+
+def test_overload_keeps_quota_reset_parsing():
+    failure = classify_agent_failure('provider', AgentOutputError('HTTP 429 rate limit: temporarily unavailable', exit_code=1,
+        provider_data={'error': {'type': 'rate_limit_error', 'retry_after_seconds': 60}}),
+        invocation_id='quota-reset', quota_reset_profile='standard')
+    assert failure.kind is AgentFailureKind.QUOTA
+    assert failure.quota_reset is not None
+
+
+def test_review_error_envelope_overload_is_transient():
+    from agent_adapters import NativeClaudeReviewAdapter  # allowlist:provider -- transport: reviewer error envelope
+    adapter = NativeClaudeReviewAdapter(default_agent_settings()["reviewer"])  # allowlist:provider -- transport: reviewer error envelope
+    with pytest.raises(AgentOutputError) as caught:
+        adapter.extract_output(json.dumps({'is_error': True, 'error': {'type': 'overloaded_error', 'status': 529}}), '', {})
+    failure = classify_agent_failure(adapter.name, caught.value, invocation_id='review-overload')
+    assert failure.kind is AgentFailureKind.NETWORK
+
+
 def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
     assert compute_retry_backoff_seconds("HTTP 429 too many requests", 1) == 10
     assert compute_retry_backoff_seconds("rate limit", 2) == 10

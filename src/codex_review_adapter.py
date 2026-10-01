@@ -30,7 +30,7 @@ from reviewer_input import (
     build_reviewer_input, measured_reviewer_path_text,
 )
 from role_binding import RoleBinding, binding_for
-from agent_runtime import ReviewerWorkspace, create_read_only_reviewer_workspace
+from agent_runtime import AgentProcessError, ReviewerWorkspace, create_read_only_reviewer_workspace, is_provider_overload_error
 
 def _tree_fingerprint(root: Path) -> tuple[tuple[object, ...], ...]:
     records = []
@@ -260,8 +260,12 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         self.metadata = {**event_usage(stdout), **stream_model_metrics(stdout)}
-        _ = stderr, extra_files
         path = self.invocation.last_message_file
+        process_text = "\n".join(part for part in (stderr, stdout) if part)
+        if (extra_files.get("exit_code") not in (None, "0")
+            and (path is None or not path.is_file() or is_provider_overload_error(process_text))):
+            raise AgentProcessError(process_text or "reviewer process failed without output",
+                                    exit_code=int(extra_files["exit_code"]))
         if path is None or not path.is_file():
             raise AgentOutputError("Codex reviewer produced no last-message file")  # allowlist:provider -- transport: reviewer CLI binding
         raw = path.read_text(encoding="utf-8").strip()

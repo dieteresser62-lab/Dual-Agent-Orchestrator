@@ -4953,6 +4953,39 @@ def test_transport_failure_budget_halts_independently(caplog) -> None:
     ) in caplog.text
 
 
+@pytest.mark.parametrize('exhaust', [False, True])
+def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog, exhaust):
+    now = [datetime(2026, 10, 1, 13, 26, tzinfo=timezone.utc)]
+    overloads = [classify_agent_failure(current_provider_for_role('reviewer'), AgentProcessError('Selected model is at capacity. Please try a different model.', exit_code=1),
+        invocation_id=f'overloaded-{index}', received_at=now[0]) for index in range(3)]
+    failures = overloads if exhaust else [_structured_output_failure('structured-first', received_at=now[0]), overloads[0], None]
+    driver = FakeDriver(snapshots=[_changes('1', 'src/early.py', TEST_FILE)],
+        codex_outputs=[_codex_ready()], reviewer_outputs=[] if exhaust else [_review_approval(AgentRole.REVIEWER)],  # allowlist:provider -- transport: existing default implementer fake fixture
+        reviewer_failures=failures)
+    delays = []
+    def sleep(seconds):
+        delays.append(seconds)
+        now[0] += timedelta(seconds=seconds)
+    context = replace(_context(), max_transport_failures=3,
+        transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=0))
+    caplog.set_level('INFO', logger='workflow')
+    result = WorkflowEngine(driver, now_fn=lambda: now[0], sleep_fn=sleep).run_current_work_unit(_slice_state(), context)
+    assert result.completed is not exhaust
+    assert len(driver.reviewer_calls) == 3
+    assert all(item.native_review_rejection is None for item in driver.failure_payloads)
+    assert 'contract_rejections=0/3' in caplog.text
+    assert 'provider overloaded' in caplog.text
+    if exhaust:
+        assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+        assert [item.automatic_resume for item in driver.failure_payloads] == [True, True, False]
+        assert 'exhausted_budget=max_transport_failures transport_failures=3/3' in caplog.text
+        assert delays == [2, 4]
+    else:
+        assert all(item.automatic_resume for item in driver.failure_payloads)
+        assert 'transport_failures=2/3' in caplog.text
+        assert delays[-1] == 4
+
+
 def test_contract_rejection_budget_halts_independently(caplog) -> None:
     now = [datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc)]
     failures = [

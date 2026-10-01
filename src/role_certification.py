@@ -186,6 +186,7 @@ def _validate_role_shared_evidence(root: Path, document: dict[str, Any], *, prov
                "qualification-protocol-v6.json", "phase-0-v1.json"})
     expected = {base + name for name in names}
     expected.add("docs/evidence/claude/topology-run-v1.json")  # allowlist:provider -- certification data: measured topology
+    expected.add("docs/evidence/claude/topology-followup-v1.json")  # allowlist:provider -- certification data: measured follow-up topology
     shared = document.get("shared_evidence")
     if not isinstance(shared, list) or len(shared) != len(expected):
         raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "shared qualification evidence is incomplete")

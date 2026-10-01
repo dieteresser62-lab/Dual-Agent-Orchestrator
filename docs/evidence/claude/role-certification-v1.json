@@ -4,7 +4,7 @@
     "final_reviewer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=10f660d9ae5c544e9850a36d58a8d9e71452e6acd9f03f207ab8988e0ee4220e; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=13c60bde4cf9b71da1db02bad49cd30cdaea568e754ae4ad4bbdd0559f4d7c8d; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
@@ -14,7 +14,7 @@
     "implementer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=10f660d9ae5c544e9850a36d58a8d9e71452e6acd9f03f207ab8988e0ee4220e; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=13c60bde4cf9b71da1db02bad49cd30cdaea568e754ae4ad4bbdd0559f4d7c8d; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
@@ -24,7 +24,7 @@
     "reviewer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=10f660d9ae5c544e9850a36d58a8d9e71452e6acd9f03f207ab8988e0ee4220e; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=13c60bde4cf9b71da1db02bad49cd30cdaea568e754ae4ad4bbdd0559f4d7c8d; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=0e5cc0f5be70e304fb5d34181f8e6e26497bc6ff1155cf3d0ea06e28994ac54d; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts seven measured safe Phase-0 cases, W4 unmeasured due to provider refusal and proven offline, with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
@@ -47,11 +47,15 @@
     },
     {
       "path": "docs/evidence/claude/redaction-manifest-v1.json",
-      "sha256": "10f660d9ae5c544e9850a36d58a8d9e71452e6acd9f03f207ab8988e0ee4220e"
+      "sha256": "13c60bde4cf9b71da1db02bad49cd30cdaea568e754ae4ad4bbdd0559f4d7c8d"
     },
     {
       "path": "docs/evidence/claude/role-canary-v1.json",
       "sha256": "777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4"
+    },
+    {
+      "path": "docs/evidence/claude/topology-followup-v1.json",
+      "sha256": "4b9727ee42fcddf5ac5fb5cc400a610e599c86eb81d93325dda4007c29fa0fdb"
     },
     {
       "path": "docs/evidence/claude/topology-run-v1.json",

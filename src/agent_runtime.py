@@ -2615,9 +2615,39 @@ _CLAUDE_SESSION_LIMIT_PATTERN = re.compile(
     r"(?i)\byou(?:'ve| have) hit your session limit\b"
 )
 
+
+def is_provider_overload_error(text: str) -> bool:
+    """Recognize capacity errors, never incidental numbers in model prose."""
+    raw = text or ""
+    words = re.sub(r"[_-]+", " ", raw.lower())
+    if re.search(r"\b(?:at capacity|overloaded(?: error)?|server is busy|service unavailable|temporarily unavailable)\b", words):
+        return True
+    return re.search(
+        r'(?im)(?:\bHTTP(?:/\d(?:\.\d)?)?\s+(?:status(?:\s+code)?\s*[:=]?\s*)?'
+        r'|["\x27]?\b(?:status|code|status_code|http_status|http_status_code)["\x27]?\s*[:=]\s*["\x27]?'
+        r'|\bstatus\s+code\s*[:=]?\s*)(?:503|529)(?![\w.]|,\d)'
+        r'|^\s*(?:503|529)\s*$', raw,
+    ) is not None
+
+def _is_provider_overload_failure(exc, kind_hint, process_exit_code, technical_text, structured_text, provider_data) -> bool:
+    lowered = technical_text.lower()
+    return (
+        kind_hint in (None, AgentFailureKind.PROCESS, AgentFailureKind.NETWORK)
+        and not isinstance(exc, AgentPermissionError)
+        and not (isinstance(exc, AgentOutputError) and any(marker in lowered
+                 for marker in ("empty output", "invalid json", "no non-empty", "unparsable")))
+        and not any(marker in lowered or marker in structured_text.lower()
+                    for marker in ("unauthorized", "authentication", "invalid api key", "401", "403"))
+        and (not isinstance(exc, AgentOutputError) or process_exit_code not in (None, 0)
+             or isinstance(provider_data, Mapping) and ("error" in provider_data or str(provider_data.get("subtype", "")).startswith("error")))
+        and (is_provider_overload_error(technical_text) or is_provider_overload_error(structured_text))
+    )
+
+
 _PROVIDER_DIAGNOSTIC_KEYS = frozenset(
     {
         "status",
+        "status_code",
         "error",
         "code",
         "type",
@@ -2681,9 +2711,9 @@ def _diagnostic_texts(value: object) -> list[str]:
         if isinstance(child, Mapping):
             found.extend(_diagnostic_texts(child))
         elif isinstance(child, str) and key in _PROVIDER_DIAGNOSTIC_KEYS:
-            found.append(child)
-        elif key in {"status", "code"} and isinstance(child, int):
-            found.append(str(child))
+            found.append(f"{key}={child}" if key in {"status", "status_code", "code"} else child)
+        elif key in {"status", "status_code", "code"} and isinstance(child, int):
+            found.append(f"{key}={child}")
     return found
 
 
@@ -2802,6 +2832,12 @@ def classify_agent_failure(
             technical_text=technical_text,
             orchestrator_diagnostic=orchestrator_diagnostic,
         )
+    elif _is_provider_overload_failure(
+        exc, kind_hint, process_exit_code, technical_text, structured_text, provider_data
+    ):
+        kind = AgentFailureKind.NETWORK
+        orchestrator_diagnostic = OrchestratorDiagnostic.PROVIDER_OVERLOADED
+        technical_text = "provider overloaded: " + technical_text
     elif isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
     elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:

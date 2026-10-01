@@ -3214,6 +3214,7 @@
             "finding-signature-duplicate: native review findings must not duplicate a known signature",
             "finding-signature-duplicate: unchanged closed signature must be recorded as an occurrence",
             "missing-own-finding-update: native review output must update every required owned finding",
+            "provider overloaded",
             "provider-budget-config: provider input budget configuration is incomplete or invalid",
             "request-mismatch: native implementer output must match its bound request",
             "request-mismatch: native review output must match its bound request",

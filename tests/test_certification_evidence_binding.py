@@ -79,6 +79,50 @@ def test_topology_projection_binds_records_and_retains_final_discoveries():
         step.get('result_type') for step in steps if step['record_type'] == 'provider_content'}
 
 
+def test_followup_topology_retains_halts_versions_and_final_discoveries():
+    topology = probe.read_evidence(IMPLEMENT/'topology-followup-v1.json')
+    assert topology['schema_version'] == 'topology-followup-v1'
+    assert [section['orchestrator_commit'] for section in topology['sections']] == [
+        '96cf4a5', '5a7d6f8', '5a7d6f8', '4811480', '0ac5466', '0ac5466']
+    assert [section['exit_code'] for section in topology['sections']] == [3, 0, 3, 3, 3, 0]
+    assert [halt['correcting_round'] for halt in topology['halts']] == [16, 17, 18, 20]
+    assert topology['halts'][-1]['correcting_commit'] is None
+    assert 'cannot be reconstructed' in topology['halts'][1]['cause']
+    assert topology['remaining_provider_processes'] == 0
+    assert topology['followup'] == {'name': 'followup02', 'finding_count': 2, 'executed': False}
+    assert [len(run['records']) for run in topology['runs']] == [63, 164]
+    steps = [step for run in topology['runs'] for step in run['steps']]
+    commits = [step['commit'][:7] for step in steps if step['record_type'] == 'side_effect']
+    assert commits == ['c35013d', '05e4011', 'e7da371']
+    assert topology['sections'][-1]['snapshot_head'] == 'e7da371'
+    assert any(step['record_type'] == 'finding_transition' and step['payload']['finding_id'] == 'R-01'
+               and step['payload']['finding_status'] == 'closed' for step in steps)
+    final = next(step['payload'] for step in steps if step['record_type'] == 'final_review_completed')
+    assert len(final['new_findings']) == 2
+    assert any(step['record_type'] == 'validation_attestation' for step in steps)
+    assert any(ref.get('record_file', '').startswith('arb1-') for run in topology['runs'] for ref in run['records'])
+    for run in topology['runs']:
+        assert all(redact.SHA.fullmatch(ref['sha256']) for ref in run['records'])
+
+
+def test_followup_export_preserves_outcomes_and_private_sources(tmp_path):
+    from scripts.qualification.topology_evidence import project_followup
+    # Use the public projection as fixture, keeping this test independent of private paths.
+    source = tmp_path/'original.json'
+    document = probe.read_evidence(IMPLEMENT/'topology-followup-v1.json')
+    source.write_bytes(redact.encoded(document))
+    before = source.read_bytes()
+    bundle = redact.Bundle(redactor())
+    exported = bundle.add('topology-followup-v1.json', source, 'followup-fixture')
+    bundle.finish(tmp_path/'public')
+    assert exported == document and source.read_bytes() == before
+    assert redact.outcomes(exported) == redact.outcomes(document)
+    log = tmp_path/'incomplete.log'
+    log.write_text('interrupted')
+    with pytest.raises(ValueError, match='incomplete'):
+        project_followup(tmp_path, log, remaining_provider_processes=0)
+
+
 def test_topology_tool_validates_chain_without_providers(tmp_path, monkeypatch):
     from artifact_store import ArtifactStore
     record = SimpleNamespace(record_id='bound', record_type=SimpleNamespace(value='side_effect'), payload=None)

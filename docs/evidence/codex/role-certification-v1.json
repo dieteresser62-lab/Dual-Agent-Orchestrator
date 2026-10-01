@@ -34,6 +34,10 @@
   },
   "shared_evidence": [
     {
+      "path": "docs/evidence/claude/topology-followup-v1.json",
+      "sha256": "4b9727ee42fcddf5ac5fb5cc400a610e599c86eb81d93325dda4007c29fa0fdb"
+    },
+    {
       "path": "docs/evidence/claude/topology-run-v1.json",
       "sha256": "0be29d3bcd2f4c355b3e197b4b579e5751ea70aca2478e2dd1085d61aededb25"
     },

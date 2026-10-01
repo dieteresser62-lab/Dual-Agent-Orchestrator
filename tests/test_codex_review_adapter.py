@@ -127,6 +127,37 @@ def _input_digest(prepared) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+@pytest.mark.parametrize("stderr", ["", "CLI initialization warning"])
+def test_capacity_stdout_without_last_message_is_transient_on_productive_path(tmp_path, monkeypatch, stderr):
+    import agent_runtime
+    import subprocess
+    from provider_input_budget import default_provider_input_budget_policy
+    adapter, repo, bundle = _prepared(tmp_path)
+    model = adapter.model
+    monkeypatch.setattr(agent_runtime, 'verify_agent_capabilities', lambda *a, **k: None)
+    monkeypatch.setattr(agent_runtime, '_check_bound_provider_identity', lambda *a, **k: None)
+    monkeypatch.setattr(agent_runtime, '_bound_launch_command', lambda _adapter, command: list(command))
+    monkeypatch.setattr(agent_runtime, '_run_agent_process', lambda _adapter, command, *_args, **_kwargs:
+        subprocess.CompletedProcess(command, 1, 'Selected model is at capacity. Please try a different model.', stderr))
+    config = agent_runtime.OrchestratorConfig(repo_root=repo, provider_input_budget=default_provider_input_budget_policy((
+        ('implementer', 'implementer', 'claude'),  # allowlist:provider -- profile configuration: fake occupancy
+        ('reviewer', 'reviewer', adapter.name), ('final_reviewer', 'reviewer', adapter.name))))
+    terminal = []
+    lifecycle = agent_runtime.ProviderAttemptLifecycle(start=lambda *_args: 'capacity-attempt',
+        terminal=lambda handle, duration, failure, usage: terminal.append(failure))
+    with pytest.raises(agent_runtime.AgentInvocationError) as caught:
+        agent_runtime.run_native_review_agent_checked(adapter=adapter, bundle=bundle,
+            config=config, log_dir=tmp_path, log_prefix='capacity',
+            write_file=lambda path, data: path.write_text(data), shorten=lambda value, limit: value or '',
+            reviewer_manifest_paths=None, operation='reviewer_slice_review', binding_fingerprint='c'*64,
+            pre_start_callback=None, provider_attempt_lifecycle=lifecycle)
+    assert caught.value.kind is agent_runtime.AgentFailureKind.NETWORK
+    assert caught.value.readable_orchestrator_diagnostic == 'provider overloaded'
+    assert 'at capacity' in caught.value.provider_text
+    assert adapter.model == model
+    assert terminal == ['network']
+
+
 def test_repeated_review_input_measurement_is_stable_and_wire_paths_are_real(tmp_path: Path) -> None:
     adapter, repo, bundle = _prepared(tmp_path)
     digests = []

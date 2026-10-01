@@ -16,6 +16,8 @@ STRUCTURED_OUTPUT_DIAGNOSTIC_CODE = "PROVIDER-STRUCTURED-OUTPUT"
 class OrchestratorDiagnostic(StrEnum):
     """Diagnostics whose complete rendered text is owned by this repository."""
 
+    PROVIDER_OVERLOADED = "provider overloaded"
+
     CLASSIFIED_HALT_RULE = (
         "classified-halt: a repository-owned error rule halted the run"
     )

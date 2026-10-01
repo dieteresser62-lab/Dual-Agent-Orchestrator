@@ -7342,6 +7342,29 @@
    "source_sha256": "3553b86af7e9bcc4572eafc3b2aa6c14d143924d722803486c0f87b10e8b6bda"
   },
   {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/private_source/log",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/private_source/repository",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "4b9727ee42fcddf5ac5fb5cc400a610e599c86eb81d93325dda4007c29fa0fdb",
+   "outcomes_sha256": "410b608e9c9f93d22dc7557fef74dbee1cf0893aef69f30bbc23736f114d5880",
+   "path": "topology-followup-v1.json",
+   "source_id": "topology-followup-plan-implementation-resumes-final",
+   "source_sha256": "0f4d7469dc71c2ace1e61beb92d16fe1b1ad08c3c99c8862e9c627cc42dc32c6"
+  },
+  {
    "changes": [],
    "derived_sha256": "0be29d3bcd2f4c355b3e197b4b579e5751ea70aca2478e2dd1085d61aededb25",
    "outcomes_sha256": "71ec18a90ccc12361cff5be576fdd4b3fff7c4a78dbed864acc499700fcbdf15",

@@ -59,6 +59,32 @@ def _prepared(tmp_path: Path):
     return root, adapter, bundle, prepared
 
 
+@pytest.mark.parametrize('error', [{'type': 'overloaded_error', 'message': 'overloaded', 'status': 529},
+    {'type': 'api_error', 'message': 'HTTP 503 Service unavailable', 'status_code': 503},
+    {'type': 'api_error', 'message': 'request failed', 'status_code': 529}])
+def test_overloaded_stream_result_is_transient_on_productive_path(tmp_path, monkeypatch, error):
+    root = _repo(tmp_path)
+    adapter = _adapter(root)
+    bundle = build_native_implementer_request(_spec(), profile="claude-implementer")  # allowlist:provider -- profile configuration: overload writer
+    monkeypatch.setattr(agent_runtime, 'verify_agent_capabilities', lambda *a, **k: None)
+    monkeypatch.setattr(agent_runtime, '_bound_launch_command', lambda _adapter, command: list(command))
+    stdout = _stream({'subtype': 'error_during_execution', 'is_error': True, 'error': error})
+    monkeypatch.setattr(agent_runtime, '_run_agent_process', lambda _adapter, command, *_args, **_kwargs:
+        subprocess.CompletedProcess(command, 1, stdout, ''))
+    config = OrchestratorConfig(repo_root=root, inbox_dir=root/'inbox', outbox_dir=root/'outbox',
+        provider_input_budget=default_provider_input_budget_policy((('implementer', 'implementer', adapter.name),
+            ('reviewer', 'reviewer', 'codex'), ('final_reviewer', 'reviewer', 'codex'))))  # allowlist:provider -- profile configuration: fake occupancy
+    model = adapter.model
+    with pytest.raises(agent_runtime.AgentInvocationError) as caught:
+        agent_runtime.run_native_implementer_agent_checked(adapter=adapter, bundle=bundle, config=config,
+            raw_response_path=tmp_path/'response.json', write_file=lambda path, data: path.write_text(data),
+            shorten=lambda value, limit: value or '', operation='implementer_plan', binding_fingerprint='a'*64,
+            pre_start_callback=None, provider_attempt_lifecycle=None)
+    assert caught.value.kind is agent_runtime.AgentFailureKind.NETWORK
+    assert caught.value.readable_orchestrator_diagnostic == 'provider overloaded'
+    assert adapter.model == model
+
+
 def test_unknown_write_target_denial_is_tolerated_and_logged(tmp_path, caplog):
     root, adapter, bundle, _ = _prepared(tmp_path)
     try:
