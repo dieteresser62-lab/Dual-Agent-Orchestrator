@@ -1,0 +1,501 @@
+{
+ "schema_version": "role-canary-v1",
+ "slots": {
+  "implementer": {
+   "case": "I1",
+   "proof": {
+    "case": "I1",
+    "checks": {
+     "domain": true,
+     "effective_rights": true,
+     "isolation_postcheck": true,
+     "no_denials": true,
+     "writer": true
+    },
+    "model": "opus",
+    "profile": {
+     "binary_name": "claude",
+     "binary_sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f",
+     "commit_sha": "9f64425f230d52f1d9e3bd763592010bc0c5842d",
+     "effort": "high",
+     "model": "opus",
+     "provider": "claude",
+     "timeout_seconds": 600
+    },
+    "profile_sha256": "714062b819cdaeca7a20fb2899a7d5e805beb7fb8e6868a5fa7b53a7f2773a1b",
+    "provider": "claude",
+    "raw": {
+     "evidence": {
+      "actual_models": [
+       "claude-opus-5-5"
+      ],
+      "request_document": {
+       "assignment": "Read README.md and verify the bound branch and base commit. Create positive-write.txt containing exactly CANARY_OK and a newline, using a repository-relative path. Do not change anything else. Return exactly the bound implementation result with ready=true and no test files.",
+       "authorized_paths": [
+        "positive-write.txt"
+       ],
+       "base_commit": "1596d7130a66a3de4dc80b855212a77e24fb0b7e",
+       "current_fingerprint": "a286cade590cdc312c992d549fbde5225e1a9de28986f06412200ceb31165eac",
+       "evidence_manifest": [
+        {
+         "byte_count": 35,
+         "content": "README.md contains PHASE0_POSITIVE.",
+         "delivery": "inline",
+         "evidence_id": "positive-control",
+         "kind": "canary",
+         "sha256": "ace2c809d3616318481fb00797afb5a4e4e0d1e62c8a470d5f2616037bdcea51",
+         "source_path": null
+        }
+       ],
+       "implementer_contract": {
+        "enforce_expected_test_files": true,
+        "expected_test_files": [],
+        "name": "boundary",
+        "plan_artifact_path": null,
+        "readiness_kind": "implementation",
+        "request_sequence": 1,
+        "require_slice_plan": false,
+        "require_test_files_record": false,
+        "review_fingerprint": null,
+        "round_number": 1,
+        "slice_id": "1",
+        "test_changes_approved": false,
+        "validation_attestation": null
+       },
+       "open_findings": [],
+       "operation": "implementer_implementation",
+       "request_id": "native-implementer-request-06c17f07e7ac7592c90a6a35dcd6ccc0d1c5894baa687015318df1f4cc0bbeab",
+       "request_type": "implementation",
+       "response_contract": {
+        "schema_sha256": "7d609f197a8b966d6301dbc0fc05dc536d39b219de09d6845a0556ebb7788b85",
+        "schema_version": "native-agent-implementer-result-v3"
+       },
+       "run_id": "canary-dao-role-canary-qi8jz72k",
+       "schema_version": "native-agent-implementer-request-v3",
+       "target_branch": "feature/boundary-fixture",
+       "transport": "native-codex-v3",
+       "work_context": "Direct operator-owned disposable implementer canary.\nFor stop_result set rule_id, a non-empty rationale, and remediation_paths (canonical repository-relative paths, sorted and unique; [] when none). Use these rule-specific requirements; literal labels must start their own lines:\nBRANCH-MISMATCH: The active branch differs from the feature branch persisted for this run.\nVALIDATION-UNAVAILABLE: Required validation cannot be executed and has no approved replacement.\nUNEXPECTED-PATH: The canonical diff contains a path outside the persisted Slice scope.\nCONTRACT-UNCLEAR: The current step contract is technically ambiguous and requires user direction.\nOPERATOR-PREREQUISITE-MISSING: An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid.\nSCOPE-EXTENSION-REQUESTED: The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid.",
+       "work_unit_id": "boundary"
+      },
+      "result_document": {
+       "finding_dispositions": [],
+       "ready": true,
+       "request_id": "native-implementer-request-06c17f07e7ac7592c90a6a35dcd6ccc0d1c5894baa687015318df1f4cc0bbeab",
+       "result_type": "implementation_result",
+       "schema_version": "native-agent-implementer-result-v3",
+       "test_files": []
+      },
+      "writer_schema": {
+       "$defs": {
+        "bound_implementation_result_ready_false": {
+         "additionalProperties": false,
+         "properties": {
+          "finding_dispositions": {
+           "const": [],
+           "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
+           "items": {
+            "$ref": "#/$defs/finding_disposition"
+           },
+           "type": "array"
+          },
+          "ready": {
+           "const": false,
+           "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead.",
+           "type": "boolean"
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "implementation_result",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          },
+          "test_files": {
+           "const": [],
+           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "type": "array",
+           "uniqueItems": true
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "ready",
+          "test_files",
+          "finding_dispositions"
+         ],
+         "type": "object"
+        },
+        "bound_implementation_result_ready_true_no_tests": {
+         "additionalProperties": false,
+         "properties": {
+          "finding_dispositions": {
+           "const": [],
+           "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
+           "items": {
+            "$ref": "#/$defs/finding_disposition"
+           },
+           "type": "array"
+          },
+          "ready": {
+           "const": true,
+           "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead.",
+           "type": "boolean"
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "implementation_result",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          },
+          "test_files": {
+           "const": [],
+           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "type": "array",
+           "uniqueItems": true
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "ready",
+          "test_files",
+          "finding_dispositions"
+         ],
+         "type": "object"
+        },
+        "correction_result": {
+         "additionalProperties": false,
+         "properties": {
+          "finding_dispositions": {
+           "const": [],
+           "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
+           "items": {
+            "$ref": "#/$defs/finding_disposition"
+           },
+           "type": "array"
+          },
+          "ready": {
+           "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead.",
+           "type": "boolean"
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "correction_result",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          },
+          "test_files": {
+           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "maxItems": 1000,
+           "type": "array",
+           "uniqueItems": true
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "ready",
+          "test_files",
+          "finding_dispositions"
+         ],
+         "type": "object"
+        },
+        "finding_disposition": {
+         "additionalProperties": false,
+         "properties": {
+          "decision": {
+           "enum": [
+            "accepted",
+            "rejected"
+           ],
+           "type": "string"
+          },
+          "finding_id": {
+           "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+           "type": "string"
+          },
+          "rationale": {
+           "$ref": "#/$defs/safe_text"
+          }
+         },
+         "required": [
+          "finding_id",
+          "decision",
+          "rationale"
+         ],
+         "type": "object"
+        },
+        "implementation_result": {
+         "additionalProperties": false,
+         "properties": {
+          "finding_dispositions": {
+           "const": [],
+           "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
+           "items": {
+            "$ref": "#/$defs/finding_disposition"
+           },
+           "type": "array"
+          },
+          "ready": {
+           "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead.",
+           "type": "boolean"
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "implementation_result",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          },
+          "test_files": {
+           "const": [],
+           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "type": "array",
+           "uniqueItems": true
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "ready",
+          "test_files",
+          "finding_dispositions"
+         ],
+         "type": "object"
+        },
+        "plan_result": {
+         "additionalProperties": false,
+         "properties": {
+          "finding_dispositions": {
+           "const": [],
+           "description": "List sparse dispositions in ascending finding_id order with no duplicate finding_id.",
+           "items": {
+            "$ref": "#/$defs/finding_disposition"
+           },
+           "type": "array"
+          },
+          "ready": {
+           "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead.",
+           "type": "boolean"
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "plan_result",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          },
+          "slice_plan": {
+           "description": "slice_id values must start at 1 and increase contiguously in slice_plan order.",
+           "items": {
+            "$ref": "#/$defs/planned_slice"
+           },
+           "maxItems": 64,
+           "minItems": 1,
+           "type": "array"
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "ready",
+          "slice_plan",
+          "finding_dispositions"
+         ],
+         "type": "object"
+        },
+        "planned_slice": {
+         "additionalProperties": false,
+         "properties": {
+          "acceptance_criteria": {
+           "description": "Ordered, non-empty acceptance conditions for this Slice; exact duplicate texts are forbidden.",
+           "items": {
+            "$ref": "#/$defs/safe_text"
+           },
+           "maxItems": 256,
+           "minItems": 1,
+           "type": "array"
+          },
+          "scope_paths": {
+           "description": "Each scope_paths array must be non-empty, contain no duplicates, and list paths in ascending lexicographic order.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "maxItems": 1000,
+           "minItems": 1,
+           "type": "array",
+           "uniqueItems": true
+          },
+          "slice_id": {
+           "minimum": 1,
+           "type": "integer"
+          },
+          "summary": {
+           "$ref": "#/$defs/safe_text"
+          }
+         },
+         "required": [
+          "slice_id",
+          "summary",
+          "scope_paths",
+          "acceptance_criteria"
+         ],
+         "type": "object"
+        },
+        "request_id": {
+         "pattern": "^native-implementer-request-[0-9a-f]{64}$",
+         "type": "string"
+        },
+        "safe_path": {
+         "description": "Paths must be canonical repository-relative POSIX paths without traversal and must remain outside .orchestrator.",
+         "maxLength": 1000,
+         "minLength": 1,
+         "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+         "type": "string"
+        },
+        "safe_text": {
+         "description": "Text must contain at least one non-whitespace character and must not contain NUL.",
+         "maxLength": 12000,
+         "minLength": 1,
+         "pattern": "^[ \\x09\\x0B\\x0C]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+         "type": "string"
+        },
+        "stop_result": {
+         "additionalProperties": false,
+         "description": "Return stop_result instead of a task result when the current step cannot be performed; rule_id and rationale document the blocker.",
+         "properties": {
+          "rationale": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/safe_text"
+            }
+           ],
+           "description": "Explains the blocker that prevents the current step from being performed."
+          },
+          "remediation_paths": {
+           "description": "List canonical remediation_paths in ascending lexicographic order with no duplicates.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "maxItems": 1000,
+           "type": "array",
+           "uniqueItems": true
+          },
+          "request_id": {
+           "$ref": "#/$defs/request_id"
+          },
+          "result_type": {
+           "const": "stop_result",
+           "type": "string"
+          },
+          "rule_id": {
+           "description": "Identifies the rule that blocks the current step.",
+           "enum": [
+            "BRANCH-MISMATCH",
+            "CONTRACT-UNCLEAR",
+            "OPERATOR-PREREQUISITE-MISSING",
+            "SCOPE-EXTENSION-REQUESTED",
+            "UNEXPECTED-PATH",
+            "VALIDATION-UNAVAILABLE"
+           ],
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-implementer-result-v3",
+           "type": "string"
+          }
+         },
+         "required": [
+          "schema_version",
+          "result_type",
+          "request_id",
+          "rule_id",
+          "rationale",
+          "remediation_paths"
+         ],
+         "type": "object"
+        }
+       },
+       "additionalProperties": false,
+       "properties": {
+        "result": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/bound_implementation_result_ready_false"
+          },
+          {
+           "$ref": "#/$defs/bound_implementation_result_ready_true_no_tests"
+          },
+          {
+           "$ref": "#/$defs/stop_result"
+          }
+         ]
+        }
+       },
+       "required": [
+        "result"
+       ],
+       "title": "Native Codex implementation writer projection",
+       "type": "object"
+      }
+     },
+     "request_id": "native-implementer-request-06c17f07e7ac7592c90a6a35dcd6ccc0d1c5894baa687015318df1f4cc0bbeab",
+     "status": "success"
+    },
+    "raw_sha256": "76afca5226f8e3b7a26b8e0c8946fdf2bdc113cde1a018067582ca2467526cca",
+    "request_id": "native-implementer-request-06c17f07e7ac7592c90a6a35dcd6ccc0d1c5894baa687015318df1f4cc0bbeab",
+    "request_sha256": "9c58ba75d06287274696912bce7d6171b515ac9b87a62dcd8b9d2fc1c4866f4c",
+    "role": "implementer",
+    "slot": "implementer",
+    "transport_series": "direct-implementer-canary-v1",
+    "writer_sha256": "7d609f197a8b966d6301dbc0fc05dc536d39b219de09d6845a0556ebb7788b85"
+   },
+   "provider": "claude",
+   "role": "implementer",
+   "slot": "implementer",
+   "status": "passed",
+   "transport_series": "direct-implementer-canary-v1"
+  }
+ },
+ "status": "passed"
+}

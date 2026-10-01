@@ -1270,6 +1270,7 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         "scripts/qualification/blind.py",
         "docs/evidence/codex/qualification-protocol-v6.json",  # allowlist:provider -- certification data: neutral rater protocol
         "docs/evidence/codex/quality-rubric-v1.json",  # allowlist:provider -- certification data: neutral rater schema
+        "docs/evidence/codex/quality-results-v1.json",  # allowlist:provider -- certification data: measured neutral rater judgments
         "scripts/qualification/run_probe.py",
         "tests/test_reviewer_probe.py",
         "tests/test_reviewer_qualification_tools.py",

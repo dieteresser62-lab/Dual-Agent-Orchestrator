@@ -356,9 +356,13 @@ Timeoutvorschlag. `timeout_seconds` darf jeden positiven Wert oder `0` haben.
 Die Herstellertrennung ist hart: Der Implementer-Hersteller muss sich von
 beiden Reviewslot-Herstellern unterscheiden. Andere Belegungen sind per TOML
 wählbar, wenn jeder gewählte Slot mit gültiger Evidenz `certified` oder
-`experimental` ist. **Derzeit sind Claude/Implementer und beide Codex-Reviewslots
-`candidate`; dieses Beispiel startet erst nach ihrer vollständigen Freigabe.**
-Ein Adapter, Offline-Test oder Rauchlauf allein hebt die Sperre nicht auf.
+`experimental` ist. **Claude/Implementer und beide Codex-Reviewslots sind seit
+dem 01.10.2026 `experimental`; dieses Beispiel startet ohne Kandidatenstopp.**
+Die gebundenen Qualifikations- und Canary-Digests werden beim Start und Resume
+geprüft. Die [Reviewer-Zertifizierung](reviewer-certification.md) dokumentiert
+die akzeptierte 512-Befunde-Schwäche, die [Implementer-Zertifizierung](implementer-certification.md)
+die Phase-0-Befunde W2/W4/W8. Andere `candidate`-Paare bleiben gesperrt; die
+Standardbelegung bleibt Codex / Claude / Claude.
 
 ```toml
 [roles]

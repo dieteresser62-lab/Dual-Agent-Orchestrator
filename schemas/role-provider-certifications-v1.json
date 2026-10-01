@@ -212,7 +212,7 @@
       "role": "reviewer",
       "provider": "codex",
       "manufacturer": "openai",
-      "status": "candidate",
+      "status": "experimental",
       "version_scope": {
         "cli_version": "codex-cli 0.156.1",
         "version_policy": "forward"
@@ -221,8 +221,8 @@
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
-        "path": "docs/evidence/codex/reviewer-candidate-v1.json",
-        "sha256": "f9f78ffc433f546298f3a06772a50787bec3912eca30b5a0a172becb84119913"
+        "path": "docs/evidence/codex/role-certification-v1.json",
+        "sha256": "2abd5c5a8f488796f336bba79fb3e85790dffd7aefb49545bd5b4ac538e5c54a"
       },
       "probe_profile": {
         "provider": "codex",
@@ -260,14 +260,18 @@
           "stdin=-"
         ]
       },
-      "capability_profile": "codex-reviewer"
+      "capability_profile": "codex-reviewer",
+      "canary_evidence": {
+        "path": "docs/evidence/codex/role-canary-v1.json",
+        "sha256": "46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d"
+      }
     },
     {
       "slot": "final_reviewer",
       "role": "reviewer",
       "provider": "codex",
       "manufacturer": "openai",
-      "status": "candidate",
+      "status": "experimental",
       "version_scope": {
         "cli_version": "codex-cli 0.156.1",
         "version_policy": "forward"
@@ -276,8 +280,8 @@
       "policy_sha256": "a1f002614be324619583ed6058d1f902c203a1b1779f2ae6967df33de0551a6d",
       "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
-        "path": "docs/evidence/codex/reviewer-candidate-v1.json",
-        "sha256": "f9f78ffc433f546298f3a06772a50787bec3912eca30b5a0a172becb84119913"
+        "path": "docs/evidence/codex/role-certification-v1.json",
+        "sha256": "2abd5c5a8f488796f336bba79fb3e85790dffd7aefb49545bd5b4ac538e5c54a"
       },
       "probe_profile": {
         "provider": "codex",
@@ -315,14 +319,18 @@
           "stdin=-"
         ]
       },
-      "capability_profile": "codex-reviewer"
+      "capability_profile": "codex-reviewer",
+      "canary_evidence": {
+        "path": "docs/evidence/codex/role-canary-v1.json",
+        "sha256": "46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d"
+      }
     },
     {
       "slot": "implementer",
       "role": "implementer",
       "provider": "claude",
       "manufacturer": "anthropic",
-      "status": "candidate",
+      "status": "experimental",
       "version_scope": {
         "cli_version": "2.1.285 (Claude Code)",
         "version_policy": "forward"
@@ -331,8 +339,8 @@
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
       "rights_sha256": "e63dced92a33d74fa722a0162a1b6b3883b3d550d27fade798c2576589b414ce",
       "evidence": {
-        "path": "docs/evidence/role-certification-candidates-v1.json",
-        "sha256": "71040c483567d90b7c09fbe25de5f55d8ca93803463c58b6b9e24a7f39d8cc9f"
+        "path": "docs/evidence/claude/role-certification-v1.json",
+        "sha256": "c79ab023ef734defad1cacfcf8a81edaee7e5fae05124a4a2ea902b84213ddf4"
       },
       "probe_profile": {
         "provider": "claude",
@@ -364,7 +372,11 @@
           "stdin=<bound-request>"
         ]
       },
-      "capability_profile": "claude-implementer"
+      "capability_profile": "claude-implementer",
+      "canary_evidence": {
+        "path": "docs/evidence/claude/role-canary-v1.json",
+        "sha256": "777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4"
+      }
     }
   ]
 }

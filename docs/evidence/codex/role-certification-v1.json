@@ -1,0 +1,35 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ],
+    "implementer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ]
+  }
+}

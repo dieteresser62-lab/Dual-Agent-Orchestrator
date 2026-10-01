@@ -27,8 +27,11 @@ Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** 
 Andere Belegungen sind nur mit gültiger `certified`- oder `experimental`-
 Zertifizierung jedes Slots wählbar. Der Implementer-Hersteller muss sich von
 beiden Reviewslot-Herstellern unterscheiden. Beispiel für Claude / Codex / Codex:
-**Diese drei neuen Rollenpaare stehen derzeit auf `candidate` und starten erst
-nach vollständiger Freigabe.**
+**Claude/Implementer und beide Codex-Reviewslots sind seit dem 01.10.2026
+`experimental`; diese Belegung ist jetzt ausdrücklich per TOML wählbar.**
+Die [Reviewer-Zertifizierung](docs/reference/reviewer-certification.md) dokumentiert
+die akzeptierte 512-Befunde-Schwäche, die [Implementer-Zertifizierung](docs/reference/implementer-certification.md)
+die Phase-0-Befunde. Andere `candidate`-Paare bleiben gesperrt.
 
 ```toml
 [roles]

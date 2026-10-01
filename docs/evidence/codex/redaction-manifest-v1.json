@@ -1,0 +1,2142 @@
+{
+ "files": [
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/format/0/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/1/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/2/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/3/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/4/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/5/path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/0/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/1/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/2/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/3/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/4/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/5/path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/0/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/0/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/1/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/1/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/2/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/2/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/3/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/3/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/4/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/4/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/5/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/protection/5/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/0/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/0/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/1/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/1/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/2/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/2/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/3/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/3/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/4/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/4/sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/5/path",
+     "rules": [
+      "report-reference"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/format/5/sha256",
+     "rules": [
+      "digest"
+     ]
+    }
+   ],
+   "derived_sha256": "32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a",
+   "outcomes_sha256": "2cd077709f15e6d44b5481ebd8e2576928f582f80d2394182a5444617e4b75f8",
+   "path": "phase0-results.json",
+   "source_id": "reviewer-phase0-completion",
+   "source_sha256": "96f1afa6cbff97c018989ca20aee8b45ac56b07218e78eefc6473d257f0a48ca"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "7436dc86b0624b7407bccf61563902b924077993ca17f6062d14f2e3f52d9ce7",
+   "outcomes_sha256": "7e4b09c8ef6e13328465f984077a0a8e7180456639ad13e0b0b2593c3bf68f62",
+   "path": "phase0/F1.json",
+   "source_id": "reviewer-phase0-F1",
+   "source_sha256": "78cd49460a4e1bf4d1765c2f05c626e24841a57a524dd362dd992aa47f7580d4"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "7a5491dba10a95d55585e3b90cd195729c3cd25a5bf461091e92bca1cee78c7d",
+   "outcomes_sha256": "30d004a95d986f74dd6e3078adc85a1849dd3a1e3a034cf27ac801b321f7ca05",
+   "path": "phase0/F2.json",
+   "source_id": "reviewer-phase0-F2",
+   "source_sha256": "47fcc9571c2a06b9be2a261ca2d61c221af46d2789988e56e8e1933e61d11587"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "e69b73c0972dcf9f198fe4fa55d8d0e47cbef9104abf6f83d4747879d133002e",
+   "outcomes_sha256": "6ff35088d3d8a27649fd6c28b33aab706054142c8a38ad3c7ada22b85f9239e6",
+   "path": "phase0/F3.json",
+   "source_id": "reviewer-phase0-F3",
+   "source_sha256": "edeb1fcddec538ab80d814cb8f3f63cab7aaf3cfcd307a70adf91292161ed37d"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "ef441e43557ee0b266f9762145b1ca71a10d0d00d70aae2712be69fadd6987c6",
+   "outcomes_sha256": "4fa494ea647db0b673f9f045689d46ee33cd5f1c09e07e239efb2461a77fa7c5",
+   "path": "phase0/F4.json",
+   "source_id": "reviewer-phase0-F4",
+   "source_sha256": "b02ec9b3e8c6d0ac5850b88ef07959cb7b46a9516eb625f18ede7b24865a4ba8"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "7b37a05a134fdeedf0c08fcdeb710ebe1461f0ccead253a4a683cdcc96980008",
+   "outcomes_sha256": "5987359498d365bdac8af99a94b64e6ca7dffd988f3cb0636545f13c5947f7db",
+   "path": "phase0/F5.json",
+   "source_id": "reviewer-phase0-F5",
+   "source_sha256": "91199fc8d38f2d4e7f99fb6a8da0715b8b4d544e246c19041ff6fea3a620a838"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "e28424124aa6bf5c71db72cc1330e3e530ec824ea6a8e834dd38426ce1f8a781",
+   "outcomes_sha256": "b06bb915f64299c8e8c3a448503ad95b26da02330778a5326c524bbcab6bf036",
+   "path": "phase0/F6.json",
+   "source_id": "reviewer-phase0-F6",
+   "source_sha256": "4baa58b72e38887b93da69468843592ee6f2a5a5fd7e741ed2b46a03b0242011"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/project_markers/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/project_markers/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/project_markers/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/project_markers/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "3cbe8c3f84c846683f0c2d1ba34cc5d35667aad49c1f5259e6d940ee5ad81511",
+   "outcomes_sha256": "c34f7f0bebaf991662cdaa5abcf6987f827295f92715e2b25c185a3cee560825",
+   "path": "phase0/P1.json",
+   "source_id": "reviewer-phase0-P1",
+   "source_sha256": "1377a8900cab44fe825e7904bc0831a7208e609bbc83f80e32cef9bef540f082"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "home",
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/2/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/2/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/3/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/3/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/4/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/4/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/5/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/5/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/6/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/6/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/7/instruction",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/7/unavailable_reason",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "69bfe6063457ce177e8e64e4c851138b9d56c87d81de5c141286e87145cbac46",
+   "outcomes_sha256": "4e21ef3a5ede79e2f5ffab09ab0e6b6cdba157e21a01a687dbd302fc771f14ef",
+   "path": "phase0/P2.json",
+   "source_id": "reviewer-phase0-P2",
+   "source_sha256": "e2b03b361d0bdabf80a35d18aa6f397492db44d7071289aa386c3a43b6bd32d1"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/2/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "a5593ec1274581a556a1e2f21875dbc56f118861e6f432a23a968050d6383b49",
+   "outcomes_sha256": "12a85aa4831f020705dbab1feb5476c1cacf262a41202482dc9e6db90ea26246",
+   "path": "phase0/P3.json",
+   "source_id": "reviewer-phase0-P3",
+   "source_sha256": "48d5059a4f9faa0799acd6f19e009f104fd8fb4ffea510b470f9a37ecc30ff4f"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/input/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/2/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "d1ca08eb9824785e8bcf30cf55bfb420f02f17865f10f4fe911a8db1a4470c62",
+   "outcomes_sha256": "81fa4ec9a11e32a87f1d356c010cf88a874f3ae906b8f9237bf146fcbd9f2e35",
+   "path": "phase0/P4.json",
+   "source_id": "reviewer-phase0-P4",
+   "source_sha256": "3c3c4c869e23e1e6af903c4d601cc368bfe2c37ae4099fbcf0da054d57ee5e1c"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/input/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/8/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output",
+     "rules": [
+      "home",
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/2/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/3/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/4/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "3c1a36b79a185d47ea28c25d57c1298a872a12c027725408c7e89ca105ff4d83",
+   "outcomes_sha256": "e9da7f0f56a48101f100b29cb56337ebf90b8e542b9a87f10215f7b3ed8105a5",
+   "path": "phase0/P5.json",
+   "source_id": "reviewer-phase0-P5",
+   "source_sha256": "31eed74bb5cd60ad24b6850d278b859e6b575f6b3799ad87e9c4f42e32672d9c"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/cwd",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    }
+   ],
+   "derived_sha256": "b5b7f925ee8644fc03ab405cabb15dad31b7b8dc4bf1fa88f60ca5912224749c",
+   "outcomes_sha256": "3ed0a907da1707b939504de05fe6b58890e12781cad8ed748ae86230fc9c1b50",
+   "path": "phase0/P6.json",
+   "source_id": "reviewer-phase0-P6",
+   "source_sha256": "8ed03617dd9be224a60e10213ff9a260f84a31819faf3769d206ad8bd29a6751"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/envelopes/0/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events",
+     "rules": [
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/2/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events",
+     "rules": [
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/5/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events",
+     "rules": [
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events",
+     "rules": [
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events",
+     "rules": [
+      "username",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/19/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events",
+     "rules": [
+      "temporary"
+     ]
+    }
+   ],
+   "derived_sha256": "18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8",
+   "outcomes_sha256": "6502311244856c2e007b49bf16bfc6c07286f02d12fd1fcb16257384b53c3fee",
+   "path": "qualification-envelopes-v1.json.gz",
+   "source_id": "qualification-envelopes-v1",
+   "source_sha256": "248a314e72a0d423f11c835d991dc56cb7918849c6be3f9705b0f81689e44a61"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/attempts/27/restart_change",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/0/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/1/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/2/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/3/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/4/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/5/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/6/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/7/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/8/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/9/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/10/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/11/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/15/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/16/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/17/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/18/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/19/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/21/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/22/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/24/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/attempts/25/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    }
+   ],
+   "derived_sha256": "131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c",
+   "outcomes_sha256": "3469ef307292cc1e6a4250c2931045e4bc4d4e8ca9117fb155300add38a61ca5",
+   "path": "qualification-series-v1.json",
+   "source_id": "qualification-series-v1.json",
+   "source_sha256": "cf779eca683a7b8fb424566a5b868a7b5e49c642d0ee5e208cea96056d480a09"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414",
+   "outcomes_sha256": "726fb967d8ffbb2f5e202e59e94a39fb112e6916565749283fe64eb72162730a",
+   "path": "quality-results-v1.json",
+   "source_id": "quality-results-v1.json",
+   "source_sha256": "9ad02504eba252dd59d4ee8d0ea1505c8dc998fcb2eac72db6436c8458c2b784"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d",
+   "outcomes_sha256": "a5f2d6dfbb4faa2e542589378e88dec229d7358111f48a40fbea62a01d8ad8ee",
+   "path": "role-canary-v1.json",
+   "source_id": "reviewer-role-canary",
+   "source_sha256": "8195c70673c3214a476c7f92ab03be834fd059730b24bb650bdd045cd6974d18"
+  }
+ ],
+ "generated_files": [],
+ "rules": {
+  "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
+  "hostname": "Replace runtime host names at token boundaries by <host>.",
+  "report-reference": "Use bundle-relative report paths instead of private absolute paths.",
+  "temporary": "Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.",
+  "username": "Replace runtime account names at token boundaries by <user>."
+ },
+ "schema_version": "redaction-manifest-v1",
+ "source_commitments": "Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts."
+}

@@ -1,0 +1,1478 @@
+{
+ "schema_version": "role-canary-v1",
+ "slots": {
+  "final_reviewer": {
+   "case": "F5",
+   "proof": {
+    "case": "F5",
+    "checks": {
+     "domain": true,
+     "effective_rights": true,
+     "isolation_postcheck": true,
+     "no_denials": true,
+     "writer": true
+    },
+    "model": "gpt-6.1-sol",
+    "profile": {
+     "binary_name": "codex",
+     "binary_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+     "commit_sha": "9f64425f230d52f1d9e3bd763592010bc0c5842d",
+     "effort": "high",
+     "model": "gpt-6.1-sol",
+     "provider": "codex",
+     "timeout_seconds": 600
+    },
+    "profile_sha256": "dc2f72424ea3cd1ce1116e603d52b81f04adb877f44421efca2ea3d0553a7205",
+    "provider": "codex",
+    "raw": {
+     "evidence": {
+      "request_document": {
+       "acceptance_criteria": [
+        "At branch HEAD, eligible(10) must be True.",
+        "This final review request binds max_new_findings=2. Return FINAL_REVIEW_COMPLETED only after a complete scan and set scan_complete=true. If the scan reaches that capacity, return a stop_request with rule_id=DISCOVERY_OUTPUT_LIMIT; the partial finding set is not authoritative, must not be truncated, and must not be continued through pages, cursors, or another automatic provider call."
+       ],
+       "authorized_paths": [
+        "docs/plan.md",
+        "src/limit.py",
+        "src/negative.py",
+        "src/zero.py",
+        "tests/test_limit.py"
+       ],
+       "base_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       "capability_profile": "codex-reviewer",
+       "current_fingerprint": "6cd28ed32abf73d0d64218a8ce983fd5e460ac662b660a556b8939d9d6ae37a3",
+       "evidence_manifest": [
+        {
+         "byte_count": 2545,
+         "content": "Previously validated reference slice review from quality Q3: {\"anchors\":[],\"decision\":\"denied\",\"new_findings\":[{\"acceptance_test\":{\"kind\":\"prose\",\"text\":\"within(\\\"mini2/x.py\\\", \\\"mini\\\") und within(\\\"minimal.txt\\\", \\\"mini\\\") liefern False; within(\\\"mini\\\", \\\"mini\\\") und within(\\\"mini/a.py\\\", \\\"mini\\\") liefern True; within(\\\"mini/../docs/plan.md\\\", \\\"mini\\\") liefert False. Ein Test in tests/test_public.py prüft den Geschwisterfall explizit.\"},\"affected_paths\":[\"mini/pathing.py\"],\"evidence_anchor_sha256\":null,\"finding_class\":\"FINDING\",\"finding_id\":\"R-18\",\"predecessor_finding_ref\":null,\"summary\":\"Regression in mini/pathing.py: within() prüft jetzt `candidate.startswith(anchor)` statt `candidate.startswith(anchor + \\\"/\\\")`. Damit gelten Geschwisterverzeichnisse mit gleichem Textpräfix als innerhalb der Wurzel, z. B. within(\\\"mini2/x.py\\\", \\\"mini\\\") und within(\\\"minimal.txt\\\", \\\"mini\\\") liefern True. Das verletzt das Abnahmekriterium „Sibling directories remain outside the root.“ und öffnet über selected() eine Pfadgrenzen-Umgehung.\"}],\"pre_mortem\":\"Würde der Slice so committet, könnten Aufrufer über selected() Dateien in Geschwisterverzeichnissen mit gemeinsamem Namenspräfix (mini2/, minimal/) freigeben. Die Traversal-Korrektur selbst ist tragfähig; der Fehler liegt allein im entfernten \\\"/\\\"-Trenner.\",\"request_id\":\"native-review-request-e96873b5ce2af1ed9081bf7b23aee1d2ed8f3d4e15501c50715d16f31a798c59\",\"result_type\":\"review_result\",\"review_evidence\":{\"break_condition\":\"within(\\\"mini2/x.py\\\", \\\"mini\\\") gibt mit dem aktuellen Diff True zurück, obwohl der Pfad außerhalb der Wurzel liegt.\",\"dimensions\":\"Korrektheit von normalize()/within() anhand des Diffs, Abnahmekriterien (Traversal, Geschwisterverzeichnisse), Sicherheitsgrenze der Pfadprüfung, Validierungsattest (5 passed) gegen Diff-Fingerprint.\",\"largest_residual_risk\":\"Der Präfixvergleich ohne Trennzeichen in within() erlaubt Geschwisterpfade wie mini2/ unter der Wurzel mini; die grünen Tests decken diesen Fall offenkundig nicht ab.\"},\"reviewer\":\"reviewer\",\"schema_version\":\"native-agent-review-result-v3\",\"status_changes\":[{\"closure\":{\"kind\":\"fixed\"},\"finding_id\":\"R-17\",\"rationale\":\"Durch posixpath.normpath in normalize() wird mini/../docs/plan.md zu docs/plan.md normalisiert; dies beginnt nicht mit dem Anker mini und liegt damit außerhalb. Mehrfache Elternsprünge (z. B. mini/../../x → ../x) werden durch die bestehende Prüfung auf \\\"..\\\" bzw. \\\"../\\\" abgewiesen. Der ursprüngliche Traversal-Fall ist behoben.\",\"status\":\"CLOSED\"}]}",
+         "delivery": "inline",
+         "evidence_id": "reference_slice_review",
+         "kind": "review_evidence",
+         "sha256": "620aa15908d167fd4cdaac259f3d40ce5259ac06650b42fe93869b4d1c139167",
+         "source_path": null
+        },
+        {
+         "byte_count": 197,
+         "content": "Complete branch scan: src/limit.py still contains `return n < 10`. tests/test_limit.py asserts eligible(10) is True; run failed: expected True, got False. The defect is on the reviewed branch HEAD.",
+         "delivery": "inline",
+         "evidence_id": "scenario",
+         "kind": "review_evidence",
+         "sha256": "42fed46def7171b3ab67f0646c24d5145a13f8953e5294c0e03b697236bde55b",
+         "source_path": null
+        }
+       ],
+       "operation": "reviewer_final_review",
+       "persistence_protocol": "structured-v2",
+       "request_id": "native-review-request-b604eef57350998a0af30de20b6ad5f62ee6116f7b9c542d29a2da31cf05ac55",
+       "request_type": "review_request",
+       "response_contract": {
+        "schema_sha256": "ed94ec903261083da41360fb90128f5efa9b67ffb47da460928eb6acff8b99c4",
+        "schema_version": "native-agent-review-result-v3"
+       },
+       "review_contract": {
+        "allow_new_findings": true,
+        "anchor_origin": null,
+        "approval_marker": "FINAL_REVIEW_COMPLETED",
+        "known_open_finding_signatures": [],
+        "known_stop_rules": [
+         {
+          "description": "The active branch differs from the feature branch persisted for this run.",
+          "id": "BRANCH-MISMATCH"
+         },
+         {
+          "description": "The current step contract is technically ambiguous and requires user direction.",
+          "id": "CONTRACT-UNCLEAR"
+         },
+         {
+          "description": "An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid.",
+          "id": "OPERATOR-PREREQUISITE-MISSING"
+         },
+         {
+          "description": "The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid.",
+          "id": "SCOPE-EXTENSION-REQUESTED"
+         },
+         {
+          "description": "The canonical diff contains a path outside the persisted Slice scope.",
+          "id": "UNEXPECTED-PATH"
+         },
+         {
+          "description": "Required validation cannot be executed and has no approved replacement.",
+          "id": "VALIDATION-UNAVAILABLE"
+         }
+        ],
+        "max_new_findings": 2,
+        "next_finding_id": "R-01",
+        "planned_slices": [],
+        "previous_findings": [],
+        "red_state_followup_slice": null,
+        "request_sequence": 1,
+        "round_number": 1,
+        "slice_commit_decision_finding_ids": [],
+        "slice_id": "FINAL",
+        "test_changes_approved": true,
+        "test_files": [
+         "tests/test_smoke.py"
+        ],
+        "validation_attestation": {
+         "attestation_id": "p0-F5",
+         "command_specs": [
+          {
+           "argv": [
+            "python3",
+            "-m",
+            "pytest",
+            "tests/test_smoke.py",
+            "-q"
+           ],
+           "legacy_shell": null
+          }
+         ],
+         "diff_fingerprint": "6cd28ed32abf73d0d64218a8ce983fd5e460ac662b660a556b8939d9d6ae37a3",
+         "expected_commands": [
+          "python3 -m pytest tests/test_smoke.py -q"
+         ],
+         "output_digest": "c170a0864a6f10c7f15ff52e35b6a315716aea7e6c95ad3856f9349f05cd28be",
+         "records": [
+          {
+           "command": "python3 -m pytest tests/test_smoke.py -q",
+           "exit_code": 0,
+           "output": "1 passed",
+           "status": "PASS"
+          }
+         ],
+         "summary": "1 passed"
+        }
+       },
+       "review_kind": "final_review",
+       "reviewer": "reviewer",
+       "run_id": "canary-final_reviewer-9f64425f230d",
+       "schema_version": "native-agent-review-request-v3",
+       "target_branch": "p0/review-boundary",
+       "transport": "native-claude-review-v3",
+       "work_unit_id": "limit-change"
+      },
+      "result_document": {
+       "new_findings": [
+        {
+         "acceptance_test": {
+          "kind": "prose",
+          "text": "Nach Korrektur von src/limit.py liefert eligible(10) True und eligible(11) False. tests/test_limit.py::test_upper_bound_inclusive muss mit beiden Assertions in Zeilen 5–6 bestehen; diesen Test in die Abschlussvalidierung aufnehmen."
+         },
+         "affected_paths": [
+          "src/limit.py"
+         ],
+         "evidence_anchor_sha256": null,
+         "finding_class": "FINDING",
+         "finding_id": "R-01",
+         "predecessor_finding_ref": null,
+         "summary": "src/limit.py:2 verwendet weiterhin `return n < 10`. Dadurch liefert eligible(10) False und verletzt das ausdrückliche Abnahmekriterium. Der vorhandene Grenzwerttest scheitert reproduzierbar an tests/test_limit.py:5. Die attestierte Prüfung führt ausschließlich den Importtest aus und erkennt diesen Fehler nicht."
+        }
+       ],
+       "occurrences": [],
+       "pre_mortem": "Bei Freigabe würden Eingaben mit dem zulässigen Grenzwert 10 weiterhin abgewiesen. Eine erneute reine Importprüfung könnte trotz dieses Vertragsbruchs erfolgreich sein.",
+       "request_id": "native-review-request-b604eef57350998a0af30de20b6ad5f62ee6116f7b9c542d29a2da31cf05ac55",
+       "result_type": "final_review_completed",
+       "review_evidence": {
+        "break_condition": "Die Ausführung von `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -p no:cacheprovider tests/test_smoke.py tests/test_limit.py -q` ergibt `1 failed, 1 passed`; `assert eligible(10) is True` scheitert mit `False is True`.",
+        "dimensions": "Alle fünf vorhandenen Repository-Dateien geprüft: Plan, Implementierung, leeres src/__init__.py und beide Tests. Der Grenzwerttest prüft src/limit.py durch Assertions für 10 und 11; die zweite wird wegen des ersten Fehlers nicht erreicht. Der Importtest enthält keine Verhaltensassertion. Die Funktion hat weder Zustandsänderungen noch externe Zugriffe; Wiederholung und Wiederaufnahme ändern ihr Ergebnis nicht. Zusätzliche Sicherheits- oder Fehlerpfaddefekte ergeben sich aus dem vorhandenen Quelltext nicht.",
+        "largest_residual_risk": "Branchzuordnung, Basisvergleich und Diff-Fingerprint sind nicht verifizierbar: Der vollständig inventarisierte Snapshot enthält weder Git-Metadaten noch einen Diff oder Basisdateien. Der Grenzwertfehler ist dagegen unmittelbar im bereitgestellten Quelltext und durch Testausführung bestätigt und als R-01 erfasst."
+       },
+       "reviewer": "reviewer",
+       "scan_complete": true,
+       "schema_version": "native-agent-review-result-v3"
+      },
+      "writer_schema": {
+       "$defs": {
+        "acceptance_test": {
+         "$ref": "#/$defs/prose_acceptance"
+        },
+        "bound_final_review_completed": {
+         "additionalProperties": false,
+         "properties": {
+          "new_findings": {
+           "description": "Use distinct Finding IDs starting at the request's next_finding_id in contiguous ascending order. A scan reaching max_new_findings must stop with DISCOVERY_OUTPUT_LIMIT; a capacity-sized result is partial. Do not duplicate a known open Finding signature.",
+           "items": {
+            "$ref": "#/$defs/bound_final_review_finding"
+           },
+           "maxItems": 2,
+           "type": "array"
+          },
+          "occurrences": {
+           "description": "Each known Finding ID may occur at most once; describe only an offered known open Finding and do not repeat a new Finding signature.",
+           "items": {
+            "$ref": "#/$defs/final_review_occurrence"
+           },
+           "maxItems": 0,
+           "minItems": 0,
+           "type": "array"
+          },
+          "pre_mortem": {
+           "maxLength": 3000,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "request_id": {
+           "description": "Copy the exact request_id from the current canonical request.",
+           "pattern": "^native-review-request-[0-9a-f]{64}$",
+           "type": "string"
+          },
+          "result_type": {
+           "const": "final_review_completed",
+           "type": "string"
+          },
+          "review_evidence": {
+           "$ref": "#/$defs/evidence"
+          },
+          "reviewer": {
+           "const": "reviewer",
+           "type": "string"
+          },
+          "scan_complete": {
+           "const": true,
+           "type": "boolean"
+          },
+          "schema_version": {
+           "const": "native-agent-review-result-v3",
+           "type": "string"
+          }
+         },
+         "required": [
+          "new_findings",
+          "occurrences",
+          "pre_mortem",
+          "request_id",
+          "result_type",
+          "review_evidence",
+          "reviewer",
+          "scan_complete",
+          "schema_version"
+         ],
+         "type": "object"
+        },
+        "bound_final_review_finding": {
+         "additionalProperties": false,
+         "properties": {
+          "acceptance_test": {
+           "$ref": "#/$defs/acceptance_test"
+          },
+          "affected_paths": {
+           "description": "List unique canonical repository-relative POSIX paths. Duplicate paths are forbidden even when the provider omits uniqueItems.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "maxItems": 256,
+           "type": "array"
+          },
+          "evidence_anchor_sha256": {
+           "type": "null"
+          },
+          "finding_class": {
+           "enum": [
+            "BLOCKER",
+            "FINDING"
+           ],
+           "type": "string"
+          },
+          "finding_id": {
+           "enum": [
+            "R-01",
+            "R-02"
+           ],
+           "type": "string"
+          },
+          "predecessor_finding_ref": {
+           "type": "null"
+          },
+          "summary": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "acceptance_test",
+          "affected_paths",
+          "evidence_anchor_sha256",
+          "finding_class",
+          "finding_id",
+          "predecessor_finding_ref",
+          "summary"
+         ],
+         "type": "object"
+        },
+        "bound_final_review_stop": {
+         "additionalProperties": false,
+         "properties": {
+          "rationale": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "remediation_paths": {
+           "description": "List canonical repository-relative POSIX paths in ascending UTF-8 byte order, without duplicates or the .orchestrator root and its descendants.",
+           "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+            "type": "string"
+           },
+           "maxItems": 1000,
+           "type": "array"
+          },
+          "request_id": {
+           "description": "Copy the exact request_id from the current canonical request.",
+           "pattern": "^native-review-request-[0-9a-f]{64}$",
+           "type": "string"
+          },
+          "result_type": {
+           "const": "stop_request",
+           "type": "string"
+          },
+          "reviewer": {
+           "const": "reviewer",
+           "type": "string"
+          },
+          "rule_id": {
+           "description": "Stop rules: BRANCH-MISMATCH: The active branch differs from the feature branch persisted for this run. CONTRACT-UNCLEAR: The current step contract is technically ambiguous and requires user direction. DISCOVERY_OUTPUT_LIMIT: The scan reached max_new_findings; partial findings are not authoritative. OPERATOR-PREREQUISITE-MISSING: An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid. SCOPE-EXTENSION-REQUESTED: The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid. UNEXPECTED-PATH: The canonical diff contains a path outside the persisted Slice scope. VALIDATION-UNAVAILABLE: Required validation cannot be executed and has no approved replacement.",
+           "enum": [
+            "BRANCH-MISMATCH",
+            "CONTRACT-UNCLEAR",
+            "DISCOVERY_OUTPUT_LIMIT",
+            "OPERATOR-PREREQUISITE-MISSING",
+            "SCOPE-EXTENSION-REQUESTED",
+            "UNEXPECTED-PATH",
+            "VALIDATION-UNAVAILABLE"
+           ],
+           "maxLength": 200,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-review-result-v3",
+           "type": "string"
+          }
+         },
+         "required": [
+          "rationale",
+          "remediation_paths",
+          "request_id",
+          "result_type",
+          "reviewer",
+          "rule_id",
+          "schema_version"
+         ],
+         "type": "object"
+        },
+        "evidence": {
+         "additionalProperties": false,
+         "properties": {
+          "break_condition": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "dimensions": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "largest_residual_risk": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "break_condition",
+          "dimensions",
+          "largest_residual_risk"
+         ],
+         "type": "object"
+        },
+        "final_review_occurrence": {
+         "additionalProperties": false,
+         "properties": {
+          "evidence_anchor_sha256": {
+           "anyOf": [
+            {
+             "pattern": "^[0-9a-f]{64}$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "finding_id": {
+           "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+           "type": "string"
+          },
+          "rationale": {
+           "maxLength": 3000,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "evidence_anchor_sha256",
+          "finding_id",
+          "rationale"
+         ],
+         "type": "object"
+        },
+        "prose_acceptance": {
+         "additionalProperties": false,
+         "properties": {
+          "kind": {
+           "const": "prose",
+           "type": "string"
+          },
+          "text": {
+           "maxLength": 2000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "kind",
+          "text"
+         ],
+         "type": "object"
+        },
+        "safe_path": {
+         "maxLength": 1000,
+         "minLength": 1,
+         "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+         "type": "string"
+        }
+       },
+       "additionalProperties": false,
+       "properties": {
+        "result": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/bound_final_review_completed"
+          },
+          {
+           "$ref": "#/$defs/bound_final_review_stop"
+          }
+         ]
+        }
+       },
+       "required": [
+        "result"
+       ],
+       "title": "Native final review writer projection",
+       "type": "object"
+      }
+     },
+     "request_id": "native-review-request-b604eef57350998a0af30de20b6ad5f62ee6116f7b9c542d29a2da31cf05ac55",
+     "status": "success"
+    },
+    "raw_sha256": "e3cc0e2f23e02ff86629fcef28d2bdb783857b684bfa1882e84683fee1898637",
+    "request_id": "native-review-request-b604eef57350998a0af30de20b6ad5f62ee6116f7b9c542d29a2da31cf05ac55",
+    "request_sha256": "170b816c2a7ce4cbd150f4da866dca870327912de160c712e2e4bdca6a3f0e8f",
+    "role": "reviewer",
+    "slot": "final_reviewer",
+    "transport_series": "qualification-protocol-v6",
+    "writer_sha256": "ed94ec903261083da41360fb90128f5efa9b67ffb47da460928eb6acff8b99c4"
+   },
+   "provider": "codex",
+   "role": "reviewer",
+   "slot": "final_reviewer",
+   "status": "passed",
+   "transport_series": "qualification-protocol-v6"
+  },
+  "reviewer": {
+   "case": "F4",
+   "proof": {
+    "case": "F4",
+    "checks": {
+     "domain": true,
+     "effective_rights": true,
+     "isolation_postcheck": true,
+     "no_denials": true,
+     "writer": true
+    },
+    "model": "gpt-6.1-sol",
+    "profile": {
+     "binary_name": "codex",
+     "binary_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+     "commit_sha": "9f64425f230d52f1d9e3bd763592010bc0c5842d",
+     "effort": "high",
+     "model": "gpt-6.1-sol",
+     "provider": "codex",
+     "timeout_seconds": 600
+    },
+    "profile_sha256": "dc2f72424ea3cd1ce1116e603d52b81f04adb877f44421efca2ea3d0553a7205",
+    "provider": "codex",
+    "raw": {
+     "evidence": {
+      "request_document": {
+       "acceptance_criteria": [
+        "eligible(10) must be True; close R-01 only if the current regression passes."
+       ],
+       "authorized_paths": [
+        "docs/plan.md",
+        "src/limit.py",
+        "src/negative.py",
+        "src/zero.py",
+        "tests/test_limit.py"
+       ],
+       "base_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       "capability_profile": "codex-reviewer",
+       "current_fingerprint": "015b7913470194d2a46ead719afc7768a3c4e8af770766cfe7898d7d834c0362",
+       "evidence_manifest": [
+        {
+         "byte_count": 237,
+         "content": "Round 1 reviewer finding R-01 identified `return n < 10`. Current diff changes it to `return n <= 10`. tests/test_limit.py asserts eligible(10) is True. Validation: 1 passed; exit 0. The prior defect is fixed and no other change appears.",
+         "delivery": "inline",
+         "evidence_id": "scenario",
+         "kind": "review_evidence",
+         "sha256": "b670f3350ea43bf04b83d532def1a7ce70d26f1db04c5738431465bedc9f2ad3",
+         "source_path": null
+        }
+       ],
+       "operation": "reviewer_slice_review",
+       "persistence_protocol": "structured-v2",
+       "request_id": "native-review-request-7e2de6e21ea8e0b7ebd3027eb71a48fcbaad88650efcee404f6a714906715c0b",
+       "request_type": "review_request",
+       "response_contract": {
+        "schema_sha256": "5d081cb1cdc47ac2cdbd4aea1eaf1e4a0ef05927b01e30bed23c8a2a89cc54ca",
+        "schema_version": "native-agent-review-result-v3"
+       },
+       "review_contract": {
+        "allow_new_findings": false,
+        "anchor_origin": null,
+        "approval_marker": "SLICE_APPROVAL",
+        "known_open_finding_signatures": [
+         {
+          "finding_id": "R-01",
+          "signature": "ae415a66c374fe927564b3af3ce26719fe421fdce63a118cbec4801924861a13"
+         }
+        ],
+        "known_stop_rules": [
+         {
+          "description": "The active branch differs from the feature branch persisted for this run.",
+          "id": "BRANCH-MISMATCH"
+         },
+         {
+          "description": "The current step contract is technically ambiguous and requires user direction.",
+          "id": "CONTRACT-UNCLEAR"
+         },
+         {
+          "description": "An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid.",
+          "id": "OPERATOR-PREREQUISITE-MISSING"
+         },
+         {
+          "description": "The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid.",
+          "id": "SCOPE-EXTENSION-REQUESTED"
+         },
+         {
+          "description": "The canonical diff contains a path outside the persisted Slice scope.",
+          "id": "UNEXPECTED-PATH"
+         },
+         {
+          "description": "Required validation cannot be executed and has no approved replacement.",
+          "id": "VALIDATION-UNAVAILABLE"
+         }
+        ],
+        "next_finding_id": "R-02",
+        "planned_slices": [],
+        "previous_findings": [
+         {
+          "acceptance_test": "The boundary test at 10 passes.",
+          "affected_paths": [
+           "src/limit.py"
+          ],
+          "finding_class": "BLOCKER",
+          "finding_id": "R-01",
+          "origin": {
+           "reporter": "reviewer",
+           "round_number": 1,
+           "slice_id": "1"
+          },
+          "responses": [],
+          "status": "OPEN",
+          "status_rationale": null,
+          "summary": "Upper bound excludes 10."
+         }
+        ],
+        "red_state_followup_slice": null,
+        "request_sequence": 2,
+        "round_number": 2,
+        "slice_commit_decision_finding_ids": [
+         "R-01"
+        ],
+        "slice_id": "1",
+        "test_changes_approved": true,
+        "test_files": [
+         "tests/test_limit.py"
+        ],
+        "validation_attestation": {
+         "attestation_id": "p0-F4",
+         "command_specs": [
+          {
+           "argv": [
+            "python3",
+            "-m",
+            "pytest",
+            "tests/test_limit.py",
+            "-q"
+           ],
+           "legacy_shell": null
+          }
+         ],
+         "diff_fingerprint": "015b7913470194d2a46ead719afc7768a3c4e8af770766cfe7898d7d834c0362",
+         "expected_commands": [
+          "python3 -m pytest tests/test_limit.py -q"
+         ],
+         "output_digest": "c170a0864a6f10c7f15ff52e35b6a315716aea7e6c95ad3856f9349f05cd28be",
+         "records": [
+          {
+           "command": "python3 -m pytest tests/test_limit.py -q",
+           "exit_code": 0,
+           "output": "1 passed",
+           "status": "PASS"
+          }
+         ],
+         "summary": "1 passed"
+        }
+       },
+       "review_kind": "slice",
+       "reviewer": "reviewer",
+       "run_id": "canary-reviewer-9f64425f230d",
+       "schema_version": "native-agent-review-request-v3",
+       "target_branch": "p0/review-boundary",
+       "transport": "native-claude-review-v3",
+       "work_unit_id": "limit-change"
+      },
+      "result_document": {
+       "anchors": [],
+       "decision": "approved",
+       "new_findings": [],
+       "pre_mortem": "Eine spätere Rückkehr zu `n < 10` würde die Grenze erneut ausschließen; die Assertion `assert eligible(10) is True` erkennt diese Regression.",
+       "request_id": "native-review-request-7e2de6e21ea8e0b7ebd3027eb71a48fcbaad88650efcee404f6a714906715c0b",
+       "result_type": "review_result",
+       "review_evidence": {
+        "break_condition": "R-01 bleibt offen, falls die aktuelle Regression fehlschlägt. Der ausgeführte Test besteht mit Exitcode 0.",
+        "dimensions": "Alle vier Snapshot-Dateien geprüft. `src/limit.py` verwendet `return n <= 10`. `tests/test_limit.py::test_upper_bound_inclusive` bestätigt mit `assert eligible(10) is True` und `assert eligible(11) is False` beide Grenzen aus `docs/plan.md`. Ausführung: `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_limit.py -q -p no:cacheprovider`; Ergebnis: `1 passed in 0.00s`. Die Funktion ist zustandslos, ohne Ein-/Ausgabe oder Persistenz; Wiederholungen erzeugen keine zusätzlichen Effekte. Für nicht vergleichbare Eingaben entsteht ein TypeError; deren Behandlung ist nicht vereinbart.",
+        "largest_residual_risk": "Branch, kanonischer Diff und die Behauptung, dass keine weiteren Änderungen vorliegen, sind nicht verifizierbar: Der bereitgestellte Snapshot enthält weder Git-Metadaten noch einen Diff oder Baseline-Dateien. Die aktuelle Implementierung und Regression sind direkt geprüft."
+       },
+       "reviewer": "reviewer",
+       "schema_version": "native-agent-review-result-v3",
+       "status_changes": [
+        {
+         "closure": {
+          "kind": "fixed"
+         },
+         "finding_id": "R-01",
+         "rationale": "Die aktuelle Implementierung in `src/limit.py` schließt 10 durch `n <= 10` ein. Die zugehörige Assertion `assert eligible(10) is True` in `tests/test_limit.py` wurde erfolgreich ausgeführt; der gesamte Grenztest besteht mit Exitcode 0.",
+         "status": "CLOSED"
+        }
+       ]
+      },
+      "writer_schema": {
+       "$defs": {
+        "acceptance_test": {
+         "$ref": "#/$defs/prose_acceptance"
+        },
+        "anchor": {
+         "additionalProperties": false,
+         "properties": {
+          "anchor_id": {
+           "description": "Use a distinct anchor_id for every anchor in this response.",
+           "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$",
+           "type": "string"
+          },
+          "expected": {
+           "maxLength": 2000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "input_fixture": {
+           "maxLength": 2000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "tolerance": {
+           "maxLength": 1000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "anchor_id",
+          "expected",
+          "input_fixture",
+          "tolerance"
+         ],
+         "type": "object"
+        },
+        "bound_slice_convergence_approved": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "anchors": {
+             "items": {
+              "$ref": "#/$defs/anchor"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "decision": {
+             "const": "approved",
+             "type": "string"
+            },
+            "new_findings": {
+             "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature. Every new Finding must be closed in this response for approval.",
+             "items": {
+              "$ref": "#/$defs/finding"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "pre_mortem": {
+             "maxLength": 3000,
+             "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+             "type": "string"
+            },
+            "request_id": {
+             "description": "Copy the exact request_id from the current canonical request.",
+             "pattern": "^native-review-request-[0-9a-f]{64}$",
+             "type": "string"
+            },
+            "result_type": {
+             "const": "review_result",
+             "type": "string"
+            },
+            "review_evidence": {
+             "$ref": "#/$defs/evidence"
+            },
+            "reviewer": {
+             "const": "reviewer",
+             "type": "string"
+            },
+            "schema_version": {
+             "const": "native-agent-review-result-v3",
+             "type": "string"
+            },
+            "status_changes": {
+             "description": "Each Finding ID may occur at most once. Close every open Finding assigned to this plan or Slice before approval; a newly opened Finding may be closed in the same response.",
+             "items": {
+              "anyOf": [
+               {
+                "anyOf": [
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "closure": {
+                    "anyOf": [
+                     {
+                      "$ref": "#/$defs/finding_closure"
+                     }
+                    ]
+                   },
+                   "finding_id": {
+                    "const": "R-01",
+                    "type": "string"
+                   },
+                   "rationale": {
+                    "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                    "maxLength": 3000,
+                    "minLength": 1,
+                    "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                    "type": "string"
+                   },
+                   "status": {
+                    "const": "CLOSED",
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "closure",
+                   "finding_id",
+                   "rationale",
+                   "status"
+                  ],
+                  "type": "object"
+                 }
+                ]
+               }
+              ]
+             },
+             "maxItems": 1,
+             "minItems": 1,
+             "type": "array"
+            }
+           },
+           "required": [
+            "anchors",
+            "decision",
+            "new_findings",
+            "pre_mortem",
+            "request_id",
+            "result_type",
+            "review_evidence",
+            "reviewer",
+            "schema_version",
+            "status_changes"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "anchors": {
+             "items": {
+              "$ref": "#/$defs/anchor"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "decision": {
+             "const": "approved",
+             "type": "string"
+            },
+            "new_findings": {
+             "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature. Every new Finding must be closed in this response for approval.",
+             "items": {
+              "$ref": "#/$defs/finding"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "pre_mortem": {
+             "maxLength": 3000,
+             "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+             "type": "string"
+            },
+            "request_id": {
+             "description": "Copy the exact request_id from the current canonical request.",
+             "pattern": "^native-review-request-[0-9a-f]{64}$",
+             "type": "string"
+            },
+            "result_type": {
+             "const": "review_result",
+             "type": "string"
+            },
+            "review_evidence": {
+             "$ref": "#/$defs/evidence"
+            },
+            "reviewer": {
+             "const": "reviewer",
+             "type": "string"
+            },
+            "schema_version": {
+             "const": "native-agent-review-result-v3",
+             "type": "string"
+            },
+            "status_changes": {
+             "description": "Each Finding ID may occur at most once. Close every open Finding assigned to this plan or Slice before approval; a newly opened Finding may be closed in the same response.",
+             "items": {
+              "anyOf": [
+               {
+                "anyOf": [
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "closure": {
+                    "anyOf": [
+                     {
+                      "$ref": "#/$defs/finding_closure"
+                     }
+                    ]
+                   },
+                   "finding_id": {
+                    "const": "R-01",
+                    "type": "string"
+                   },
+                   "rationale": {
+                    "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+                    "maxLength": 3000,
+                    "minLength": 1,
+                    "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+                    "type": "string"
+                   },
+                   "status": {
+                    "const": "CLOSED",
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "closure",
+                   "finding_id",
+                   "rationale",
+                   "status"
+                  ],
+                  "type": "object"
+                 }
+                ]
+               }
+              ]
+             },
+             "maxItems": 1,
+             "minItems": 0,
+             "type": "array"
+            }
+           },
+           "required": [
+            "anchors",
+            "decision",
+            "new_findings",
+            "pre_mortem",
+            "request_id",
+            "result_type",
+            "review_evidence",
+            "reviewer",
+            "schema_version",
+            "status_changes"
+           ],
+           "type": "object"
+          }
+         ]
+        },
+        "bound_slice_convergence_denied": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "anchors": {
+             "items": {
+              "$ref": "#/$defs/anchor"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "decision": {
+             "const": "denied",
+             "type": "string"
+            },
+            "new_findings": {
+             "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature.",
+             "items": {
+              "$ref": "#/$defs/finding"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "pre_mortem": {
+             "anyOf": [
+              {
+               "type": "null"
+              },
+              {
+               "maxLength": 3000,
+               "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+               "type": "string"
+              }
+             ]
+            },
+            "request_id": {
+             "description": "Copy the exact request_id from the current canonical request.",
+             "pattern": "^native-review-request-[0-9a-f]{64}$",
+             "type": "string"
+            },
+            "result_type": {
+             "const": "review_result",
+             "type": "string"
+            },
+            "review_evidence": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/evidence"
+              },
+              {
+               "type": "null"
+              }
+             ],
+             "type": [
+              "object",
+              "null"
+             ]
+            },
+            "reviewer": {
+             "const": "reviewer",
+             "type": "string"
+            },
+            "schema_version": {
+             "const": "native-agent-review-result-v3",
+             "type": "string"
+            },
+            "status_changes": {
+             "description": "Each Finding ID may occur at most once. A denied review must leave at least one reviewer-owned Finding or BLOCKER open.",
+             "items": {
+              "$ref": "#/$defs/bound_status_change"
+             },
+             "maxItems": 1,
+             "minItems": 1,
+             "type": "array"
+            }
+           },
+           "required": [
+            "anchors",
+            "decision",
+            "new_findings",
+            "pre_mortem",
+            "request_id",
+            "result_type",
+            "review_evidence",
+            "reviewer",
+            "schema_version",
+            "status_changes"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "anchors": {
+             "items": {
+              "$ref": "#/$defs/anchor"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "decision": {
+             "const": "denied",
+             "type": "string"
+            },
+            "new_findings": {
+             "description": "Use distinct Finding IDs starting at next_finding_id in contiguous ascending order; do not duplicate a known open Finding signature.",
+             "items": {
+              "$ref": "#/$defs/finding"
+             },
+             "maxItems": 0,
+             "minItems": 0,
+             "type": "array"
+            },
+            "pre_mortem": {
+             "anyOf": [
+              {
+               "type": "null"
+              },
+              {
+               "maxLength": 3000,
+               "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+               "type": "string"
+              }
+             ]
+            },
+            "request_id": {
+             "description": "Copy the exact request_id from the current canonical request.",
+             "pattern": "^native-review-request-[0-9a-f]{64}$",
+             "type": "string"
+            },
+            "result_type": {
+             "const": "review_result",
+             "type": "string"
+            },
+            "review_evidence": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/evidence"
+              }
+             ],
+             "type": [
+              "object",
+              "null"
+             ]
+            },
+            "reviewer": {
+             "const": "reviewer",
+             "type": "string"
+            },
+            "schema_version": {
+             "const": "native-agent-review-result-v3",
+             "type": "string"
+            },
+            "status_changes": {
+             "description": "Each Finding ID may occur at most once. A denied review must leave at least one reviewer-owned Finding or BLOCKER open.",
+             "items": {
+              "$ref": "#/$defs/bound_status_change"
+             },
+             "maxItems": 1,
+             "type": "array"
+            }
+           },
+           "required": [
+            "anchors",
+            "decision",
+            "new_findings",
+            "pre_mortem",
+            "request_id",
+            "result_type",
+            "review_evidence",
+            "reviewer",
+            "schema_version",
+            "status_changes"
+           ],
+           "type": "object"
+          }
+         ]
+        },
+        "bound_slice_convergence_stop": {
+         "additionalProperties": false,
+         "properties": {
+          "rationale": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "remediation_paths": {
+           "description": "List canonical repository-relative POSIX paths in ascending UTF-8 byte order, without duplicates or the .orchestrator root and its descendants.",
+           "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^[^/\\x00\\x0A\\x0D\\\\]+(/[^/\\x00\\x0A\\x0D\\\\]+)*$",
+            "type": "string"
+           },
+           "maxItems": 1000,
+           "type": "array"
+          },
+          "request_id": {
+           "description": "Copy the exact request_id from the current canonical request.",
+           "pattern": "^native-review-request-[0-9a-f]{64}$",
+           "type": "string"
+          },
+          "result_type": {
+           "const": "stop_request",
+           "type": "string"
+          },
+          "reviewer": {
+           "const": "reviewer",
+           "type": "string"
+          },
+          "rule_id": {
+           "description": "Stop rules: BRANCH-MISMATCH: The active branch differs from the feature branch persisted for this run. CONTRACT-UNCLEAR: The current step contract is technically ambiguous and requires user direction. OPERATOR-PREREQUISITE-MISSING: An operator-provided prerequisite is missing and the implementer cannot supply it. The rationale must contain one non-empty line for each of these labels: 'Missing prerequisite: ...', 'Why it cannot be self-provided: ...', and 'Operator action: ...'. Additional unlabeled lines are allowed; repeated labels are invalid. SCOPE-EXTENSION-REQUESTED: The current Slice requires repository paths outside its persisted scope. The rationale must contain one non-empty line for each of these labels: 'Required paths: ...' and 'Why required for current Slice: ...'. The structured remediation_paths carry the canonical path list. Additional unlabeled lines and blank lines are allowed; repeated labels are invalid. UNEXPECTED-PATH: The canonical diff contains a path outside the persisted Slice scope. VALIDATION-UNAVAILABLE: Required validation cannot be executed and has no approved replacement.",
+           "enum": [
+            "BRANCH-MISMATCH",
+            "CONTRACT-UNCLEAR",
+            "OPERATOR-PREREQUISITE-MISSING",
+            "SCOPE-EXTENSION-REQUESTED",
+            "UNEXPECTED-PATH",
+            "VALIDATION-UNAVAILABLE"
+           ],
+           "maxLength": 200,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "schema_version": {
+           "const": "native-agent-review-result-v3",
+           "type": "string"
+          }
+         },
+         "required": [
+          "rationale",
+          "remediation_paths",
+          "request_id",
+          "result_type",
+          "reviewer",
+          "rule_id",
+          "schema_version"
+         ],
+         "type": "object"
+        },
+        "bound_status_change": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "closure": {
+             "anyOf": [
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "finding_id": {
+             "enum": [
+              "R-01"
+             ],
+             "type": "string"
+            },
+            "rationale": {
+             "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+             "maxLength": 3000,
+             "minLength": 1,
+             "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+             "type": "string"
+            },
+            "status": {
+             "const": "OPEN",
+             "type": "string"
+            }
+           },
+           "required": [
+            "closure",
+            "finding_id",
+            "rationale",
+            "status"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "closure": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/finding_closure"
+              }
+             ]
+            },
+            "finding_id": {
+             "enum": [
+              "R-01"
+             ],
+             "type": "string"
+            },
+            "rationale": {
+             "description": "For an existing Finding, add a new rationale different from its previous status_rationale. A rejected closure needs named evidence.",
+             "maxLength": 3000,
+             "minLength": 1,
+             "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+             "type": "string"
+            },
+            "status": {
+             "const": "CLOSED",
+             "type": "string"
+            }
+           },
+           "required": [
+            "closure",
+            "finding_id",
+            "rationale",
+            "status"
+           ],
+           "type": "object"
+          }
+         ]
+        },
+        "evidence": {
+         "additionalProperties": false,
+         "properties": {
+          "break_condition": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "dimensions": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          },
+          "largest_residual_risk": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "break_condition",
+          "dimensions",
+          "largest_residual_risk"
+         ],
+         "type": "object"
+        },
+        "finding": {
+         "additionalProperties": false,
+         "properties": {
+          "acceptance_test": {
+           "$ref": "#/$defs/acceptance_test"
+          },
+          "affected_paths": {
+           "description": "List unique canonical repository-relative POSIX paths. Duplicate paths are forbidden even when the provider omits uniqueItems.",
+           "items": {
+            "$ref": "#/$defs/safe_path"
+           },
+           "maxItems": 256,
+           "type": "array"
+          },
+          "evidence_anchor_sha256": {
+           "anyOf": [
+            {
+             "pattern": "^[0-9a-f]{64}$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "finding_class": {
+           "enum": [
+            "BLOCKER",
+            "FINDING"
+           ],
+           "type": "string"
+          },
+          "finding_id": {
+           "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+           "type": "string"
+          },
+          "predecessor_finding_ref": {
+           "anyOf": [
+            {
+             "pattern": "^R-(0[1-9]|[1-9][0-9]*)$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "summary": {
+           "maxLength": 3000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "acceptance_test",
+          "affected_paths",
+          "evidence_anchor_sha256",
+          "finding_class",
+          "finding_id",
+          "predecessor_finding_ref",
+          "summary"
+         ],
+         "type": "object"
+        },
+        "finding_closure": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "kind": {
+             "const": "fixed",
+             "type": "string"
+            }
+           },
+           "required": [
+            "kind"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "evidence": {
+             "maxLength": 3000,
+             "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+             "type": "string"
+            },
+            "kind": {
+             "const": "rejected",
+             "type": "string"
+            },
+            "rejection_reason": {
+             "enum": [
+              "no_defect",
+              "out_of_scope",
+              "already_fixed"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "evidence",
+            "kind",
+            "rejection_reason"
+           ],
+           "type": "object"
+          }
+         ]
+        },
+        "prose_acceptance": {
+         "additionalProperties": false,
+         "properties": {
+          "kind": {
+           "const": "prose",
+           "type": "string"
+          },
+          "text": {
+           "maxLength": 2000,
+           "minLength": 1,
+           "pattern": "^[^\\x00]*[^\\x00 \\x09\\x0A\\x0B\\x0C\\x0D][^\\x00]*$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "kind",
+          "text"
+         ],
+         "type": "object"
+        },
+        "safe_path": {
+         "maxLength": 1000,
+         "minLength": 1,
+         "pattern": "^[^/\\x00\\x0A\\x0D\\\\][^\\x00\\x0A\\x0D\\\\]*$",
+         "type": "string"
+        }
+       },
+       "additionalProperties": false,
+       "properties": {
+        "result": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/bound_slice_convergence_approved"
+          },
+          {
+           "$ref": "#/$defs/bound_slice_convergence_denied"
+          },
+          {
+           "$ref": "#/$defs/bound_slice_convergence_stop"
+          }
+         ]
+        }
+       },
+       "required": [
+        "result"
+       ],
+       "title": "Native Claude slice_convergence writer projection",
+       "type": "object"
+      }
+     },
+     "request_id": "native-review-request-7e2de6e21ea8e0b7ebd3027eb71a48fcbaad88650efcee404f6a714906715c0b",
+     "status": "success"
+    },
+    "raw_sha256": "b3c485f5ab2f1a6b3f7c190e0aa7763e4ffea8dfa6fac083adc34a00656972aa",
+    "request_id": "native-review-request-7e2de6e21ea8e0b7ebd3027eb71a48fcbaad88650efcee404f6a714906715c0b",
+    "request_sha256": "476f73ac0fe0e9732d9e3d7f9dfaf3a8a6a42716209069c6dcb58ff008dee9d8",
+    "role": "reviewer",
+    "slot": "reviewer",
+    "transport_series": "qualification-protocol-v6",
+    "writer_sha256": "5d081cb1cdc47ac2cdbd4aea1eaf1e4a0ef05927b01e30bed23c8a2a89cc54ca"
+   },
+   "provider": "codex",
+   "role": "reviewer",
+   "slot": "reviewer",
+   "status": "passed",
+   "transport_series": "qualification-protocol-v6"
+  }
+ },
+ "status": "passed"
+}

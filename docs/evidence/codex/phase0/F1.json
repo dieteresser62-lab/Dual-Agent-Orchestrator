@@ -1,0 +1,21 @@
+{
+ "capability": "codex-reviewer",
+ "case": "F1",
+ "checks": {
+  "case_semantics": true,
+  "domain_contract": true,
+  "exit_zero": true,
+  "no_denials": true,
+  "no_error": true,
+  "schema_echo": true,
+  "status_success": true,
+  "stderr_clean": true,
+  "structured_output_object": true,
+  "writer_schema": true
+ },
+ "passed": true,
+ "provider": "codex",
+ "request_sha256": "323c6b59221f023133d6f655afebabfcc653a6686855b206b3202e42f2eb6a60",
+ "schema_version": "reviewer-format-probe-v1",
+ "writer_sha256": "a88984d0e848a5287a3f53190e42a55abf44bf0ab2cbf386d501dfcc40d9c7a1"
+}

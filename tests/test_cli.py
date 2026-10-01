@@ -92,7 +92,8 @@ def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(
         "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer candidate proof
         "docs/evidence/antigravity/capability-v1.json",
         "docs/evidence/antigravity/canary-v1.json",
-    ):
+    ) + tuple(row[key]["path"] for row in json.loads((root / "schemas/role-provider-certifications-v1.json").read_text())["certifications"]
+              for key in ("evidence", "canary_evidence") if key in row):
         target = candidate_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, target)
@@ -210,14 +211,14 @@ max_budget_usd = 10.0
 
 
 @pytest.mark.parametrize("providers", itertools.product(("codex", "claude"), repeat=3))
-def test_all_provider_topologies_parse_but_only_certified_one_starts(tmp_path: Path, providers: tuple[str, str, str]) -> None:
+def test_all_provider_topologies_parse_and_qualified_separated_ones_start(tmp_path: Path, providers: tuple[str, str, str]) -> None:
     def profile(name: str, provider: str) -> str:
         model = "sol" if provider == "codex" else "opus"
         return f'[agent_profiles.{name}]\nprovider = "{provider}"\nmodel = "{model}"\neffort = "high"\n'
     config = _write_config(tmp_path, '[roles]\nimplementer = "impl"\nreviewer = "rev"\nfinal_reviewer = "fin"\n' + ''.join(profile(name, provider) for name, provider in zip(("impl", "rev", "fin"), providers)))
     assert set(load_repo_config(config).agent_profiles) >= {"impl", "rev", "fin"}
-    if providers == ("codex", "claude", "claude"):
-        assert parse_args([], cwd=tmp_path, environ={}).slot_settings["final_reviewer"].name == "claude"
+    if providers[0] != providers[1] and providers[1] == providers[2]:
+        assert parse_args([], cwd=tmp_path, environ={}).slot_settings["final_reviewer"].name == providers[2]
     else:
         with pytest.raises(ConfigError, match="slot=.*provider="):
             parse_args([], cwd=tmp_path, environ={})

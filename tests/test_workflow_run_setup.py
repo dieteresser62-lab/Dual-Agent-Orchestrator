@@ -113,7 +113,11 @@ def test_resume_rejects_tampered_qualification_before_binary_probe(
     }
     args = SimpleNamespace(slot_settings=slots, agent_profile_overrides=(), scripted_provider_identity=True)
     monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_args, **_kwargs: pytest.fail("binary probe must not start"))
-    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*slot=implementer"):
+    # The promoted implementer now reaches manufacturer separation; changing
+    # its provider to that of the reviewers fails at the colliding review slot.
+    expected = ("AGENT-PROFILE-DIFF.*slot=reviewer.*manufacturers must differ"
+                if field == "provider" else "AGENT-PROFILE-DIFF.*slot=implementer")
+    with pytest.raises(StateSchemaError, match=expected):
         workflow_run_setup._apply_resumed_agent_profiles(args, state)
 
 

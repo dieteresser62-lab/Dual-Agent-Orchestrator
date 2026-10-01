@@ -39,7 +39,8 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         "docs/evidence/antigravity/qualification-series-v1.json",
         "docs/evidence/antigravity/quality-results-v1.json",
         "docs/evidence/antigravity/operator-decisions-v1.json",
-    ):
+    ) + tuple(row[key]["path"] for row in json.loads((root / table_path).read_text())["certifications"]
+              for key in ("evidence", "canary_evidence") if key in row):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, target)

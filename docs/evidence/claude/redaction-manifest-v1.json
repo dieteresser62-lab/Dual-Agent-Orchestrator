@@ -1,0 +1,6032 @@
+{
+ "files": [
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/26/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/26/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/26/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/26/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/34/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/34/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/34/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/34/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/45/payload/operation/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/46/payload/operation/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/47/payload/target",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/2/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/2/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/2/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/2/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/3/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/3/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/3/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/attempts/3/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/26/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/26/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/26/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/26/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/34/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/34/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/34/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/34/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/46/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/46/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/51/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/51/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/61/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/61/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/61/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/61/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/69/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/69/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/69/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/69/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/88/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/88/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/88/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/88/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/94/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/94/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/94/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/94/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/99/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/100/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/100/payload/result",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/2/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/2/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/2/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/2/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/3/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/3/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/3/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/3/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/4/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/4/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/5/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/5/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/6/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/6/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/6/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/6/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/7/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/7/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/7/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/7/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/8/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/8/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/8/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/8/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/9/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/9/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/9/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/attempts/9/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/26/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/26/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/26/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/26/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/34/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/34/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/34/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/34/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/46/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/46/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/51/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/51/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/61/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/61/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/61/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/61/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/69/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/69/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/69/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/69/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/88/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/88/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/88/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/88/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/94/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/94/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/94/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/94/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/99/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/100/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/100/payload/result",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/2/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/2/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/2/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/2/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/3/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/3/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/3/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/3/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/4/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/4/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/5/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/5/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/6/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/6/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/6/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/6/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/7/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/7/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/7/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/7/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/8/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/8/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/8/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/8/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/9/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/9/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/9/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/attempts/9/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/28/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/28/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/28/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/28/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/36/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/36/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/36/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/36/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/48/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/48/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/53/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/53/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/63/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/63/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/63/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/63/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/72/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/72/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/72/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/72/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/81/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/81/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/87/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/87/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/97/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/97/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/97/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/97/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/106/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/106/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/106/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/106/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/123/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/123/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/128/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/128/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/138/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/138/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/138/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/138/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/146/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/146/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/146/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/146/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/169/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/169/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/169/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/169/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/175/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/175/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/175/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/175/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/180/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/181/payload/operation/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/181/payload/result",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/2/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/2/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/2/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/2/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/3/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/3/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/3/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/3/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/4/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/4/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/5/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/5/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/6/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/6/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/6/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/6/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/7/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/7/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/7/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/7/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/8/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/8/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/9/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/9/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/10/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/10/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/10/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/10/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/11/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/11/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/11/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/11/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/12/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/12/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/13/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/13/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/14/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/14/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/14/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/14/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/15/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/15/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/15/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/15/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/16/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/16/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/16/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/16/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/17/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/17/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/17/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/attempts/17/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/26/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/26/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/26/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/26/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/34/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/34/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/34/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/34/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/46/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/46/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/47/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/47/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/51/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/51/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/56/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/56/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/66/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/66/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/66/payload/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/66/payload/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/2/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/2/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/2/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/2/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/3/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/3/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/3/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/3/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/4/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/4/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/5/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/5/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/6/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/6/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/7/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/7/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/8/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/8/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/8/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/attempts/8/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/processes/1/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/0/payload/task_file",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/implementer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/implementer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/final_reviewer/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/final_reviewer/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/final_reviewer/binary_identity/interpreter_real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/12/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/12/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/17/payload/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/17/payload/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/attempts/0/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/attempts/0/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/attempts/1/binary_identity/entry_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/attempts/1/binary_identity/real_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/processes/0/log",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/0/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/1/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/2/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/3/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/4/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/implementer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/tasks/5/evidence/records/2/payload/final_reviewer/binary_identity_sha256",
+     "rules": [
+      "digest"
+     ]
+    }
+   ],
+   "derived_sha256": "18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111",
+   "outcomes_sha256": "6ae931c1015d8c912091b82cad4039b0b64452306cff22a9bda235d38a2dcd5b",
+   "path": "implementer-package-report-v1.json",
+   "source_id": "implementer-package-T1-T6",
+   "source_sha256": "7c92f883ecae2410fe2d0d67ca40fd53a7f603e56fabf2e9206a8d4167f55e00"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo~120f43a5d-0c05-42b9-8739-5c74f403e409",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo~120f43a5d-0c05-42b9-8739-5c74f403e409/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo~120f43a5d-0c05-42b9-8739-5c74f403e409~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W1-allowed-repo~120f43a5d-0c05-42b9-8739-5c74f403e409~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/6/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/6/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/7/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/7/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "8e758f7912499ade95006db6b092022fa82df4b0d07eebafd002f609724b70d0",
+   "outcomes_sha256": "ff89a12c4a8cd7ef94a7b77eac1975d73702bdbb7c883a0bf91ecb700d011df5",
+   "path": "phase0/W1.json",
+   "source_id": "implementer-phase0-W1",
+   "source_sha256": "b8ae2353657e3d389274de17cde8f908d16a1019abf1cf1b68dfd01be56984f9"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/input/result/rationale",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo~1e352ef75-c272-475f-a097-ead94ba070c9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo~1e352ef75-c272-475f-a097-ead94ba070c9/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo~1e352ef75-c272-475f-a097-ead94ba070c9~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W2-allowed-repo~1e352ef75-c272-475f-a097-ead94ba070c9~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "6e417ee386791cc55ee1d6cdf10668a4b6d760f5fca8bca9169588717f2588f7",
+   "outcomes_sha256": "fb926670ccc3fde1ae2857b5e478a10c1d0deffcfc95dcaeb78ad8e38dad1099",
+   "path": "phase0/W2.json",
+   "source_id": "implementer-phase0-W2",
+   "source_sha256": "c25767d685bb895d2730aa286ee4a65c88cd0a1abfb3ba5c66f63549a7fe66b5"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/denials/0/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/denials/1/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/denials/2/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/denials/3/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/denials/4/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/denials/5/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/8/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/8/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/10/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/10/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/10/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/11/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/11/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/11/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/12/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/12/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/12/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/13/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/13/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/13/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/14/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/14/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/14/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/15/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/15/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/15/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/16/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/16/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/16/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/17/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/17/input/__unparsedToolInput/raw",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/18/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/18/input/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo~129164fa9-5aa9-441c-a1d8-9ee1a08ba3d9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo~129164fa9-5aa9-441c-a1d8-9ee1a08ba3d9/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo~129164fa9-5aa9-441c-a1d8-9ee1a08ba3d9~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W3-allowed-repo~129164fa9-5aa9-441c-a1d8-9ee1a08ba3d9~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "222fe3edcfc552be546718f71571c1e9bbe3f40513b4c0291d4074219706c9dc",
+   "outcomes_sha256": "77b713fddb7fba284f13f5f7a8878fe2aafae504ffd305f08cb870f3fb0535f1",
+   "path": "phase0/W3.json",
+   "source_id": "implementer-phase0-W3",
+   "source_sha256": "21b2d13eb9da17d3412b6491c35921b728e2621ef1c8ea2d1554f32bc206adf1"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo~1c843e872-9abb-4f2d-a48a-bf1424203e2e",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo~1c843e872-9abb-4f2d-a48a-bf1424203e2e/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo~1c843e872-9abb-4f2d-a48a-bf1424203e2e~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W4-allowed-repo~1c843e872-9abb-4f2d-a48a-bf1424203e2e~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "95859b0e43fd9912b19c10ac3d1d12c490c78f31551ee76528adfaba4e56f5de",
+   "outcomes_sha256": "fdb1ba26b7ba4d94803078dbe6af8bfe6ede6844b6dbe993ef522955ac617f35",
+   "path": "phase0/W4.json",
+   "source_id": "implementer-phase0-W4",
+   "source_sha256": "23579b237898ddb0033c57ccbfbc73f22e1e6e828493b5c277c9ca39ee1dacb0"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/input/__unparsedToolInput/raw",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/input/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo~1b653c01e-bdd8-4bdb-8134-bc9ea7df9d8c",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo~1b653c01e-bdd8-4bdb-8134-bc9ea7df9d8c/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo~1b653c01e-bdd8-4bdb-8134-bc9ea7df9d8c~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W5-allowed-repo~1b653c01e-bdd8-4bdb-8134-bc9ea7df9d8c~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "fbf7944e367b17d277555a9d8657b3f100d840af0f2613c86e3995304afbcd0f",
+   "outcomes_sha256": "804a52e46e077db67cc10d41b8f106660c227f249f2a29771b91fcbc7610da31",
+   "path": "phase0/W5.json",
+   "source_id": "implementer-phase0-W5",
+   "source_sha256": "21de99ad095ef6387e9570dea43e3e2902138635bd8b85fd5371bcdf24706225"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/denials/0/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/input/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo~14dfef5b3-72e0-4fae-9380-490059acb49c",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo~14dfef5b3-72e0-4fae-9380-490059acb49c/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo~14dfef5b3-72e0-4fae-9380-490059acb49c~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W6-allowed-repo~14dfef5b3-72e0-4fae-9380-490059acb49c~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "e2956fc96b1c68c2fff9254cb341f89f30b843b6aeef1fd379482a68222b58fe",
+   "outcomes_sha256": "d98c2c2e2586191b16b6d87071fcac3cb123bf765e2338e8287e2b9e74f174d5",
+   "path": "phase0/W6.json",
+   "source_id": "implementer-phase0-W6",
+   "source_sha256": "8860a1a1e986a69e679ecf07e73a4356e512c1800ccf2caec1e2154419d4fb70"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo~19a680228-1b11-4e83-8c25-fab45e02db19",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo~19a680228-1b11-4e83-8c25-fab45e02db19/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo~19a680228-1b11-4e83-8c25-fab45e02db19~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W7-allowed-repo~19a680228-1b11-4e83-8c25-fab45e02db19~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "256632e121e0cbc5c6fefc7e1c18340abb27991c2dd39c94004fc9984577c11d",
+   "outcomes_sha256": "6a3392ef2a474b52db6fa13c39c29e64cf44b8c66d18d7760641d84a9f6aa980",
+   "path": "phase0/W7.json",
+   "source_id": "implementer-phase0-W7",
+   "source_sha256": "79ba008d90cab5f004aa8143eaebe393a1b3b99bd2e49df602f3ab89938214e9"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
+     "path": "/denials/1/input_excerpt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/protected_paths/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/allowed",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/evidence",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/outside",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/runtime",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/scratch",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/sibling",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/snapshot",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/values/toolchain",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/native_observation/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/0/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/input/file_path",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/4/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/output",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/input/file_path",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/input/__unparsedToolInput/raw",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/8/cwd",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/8/input/result/rationale",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/0/instruction",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/coverage/1/instruction",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/cwd_candidates/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/marker_action_targets/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/positive_evidence/0/matched_cwds/0",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout",
+     "rules": [
+      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo~100776d59-aad5-453e-9036-3428a3e03567",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo~100776d59-aad5-453e-9036-3428a3e03567/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "object-key",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo~100776d59-aad5-453e-9036-3428a3e03567~1tasks",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/after/entries/scratch~1claude-1000~1-home-<user>-task-c-steuerung-phase0-runs-c-s4-claude-W8-allowed-repo~100776d59-aad5-453e-9036-3428a3e03567~1tasks/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1docs~1outside-link.txt/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/snapshots/before/entries/repo~1outside-dir/target",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/3/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/4/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/after/path",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/workspace_changes/5/path",
+     "rules": [
+      "username"
+     ]
+    }
+   ],
+   "derived_sha256": "0d1a951c5dbde0c14ecbf038118c6db066f6f3ea81e5b9ba9c83fc9a4c07a50f",
+   "outcomes_sha256": "63558e1b361443bada17ed15b3105e34338f6b8270824aff415bd9c19a6a47f4",
+   "path": "phase0/W8.json",
+   "source_id": "implementer-phase0-W8",
+   "source_sha256": "33ae984d39974b1822a6f75719562b979283dbba6d5b83c5d78e2b830bf4e211"
+  },
+  {
+   "changes": [],
+   "derived_sha256": "777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4",
+   "outcomes_sha256": "16c447ad24b5727f9abb0189c0558c9f46eb1dadd71e0c6ce6753df245f15418",
+   "path": "role-canary-v1.json",
+   "source_id": "implementer-role-canary",
+   "source_sha256": "3553b86af7e9bcc4572eafc3b2aa6c14d143924d722803486c0f87b10e8b6bda"
+  }
+ ],
+ "generated_files": [
+  {
+   "path": "phase0-results.json",
+   "rule": "Aggregate preserved case checks and explicit operator decisions.",
+   "sha256": "ef2287be3adfe8e19b73443fd9e3032e3e7d787def0b47cafb3a23b460fab22f"
+  }
+ ],
+ "rules": {
+  "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
+  "hostname": "Replace runtime host names at token boundaries by <host>.",
+  "report-reference": "Use bundle-relative report paths instead of private absolute paths.",
+  "temporary": "Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.",
+  "username": "Replace runtime account names at token boundaries by <user>."
+ },
+ "schema_version": "redaction-manifest-v1",
+ "source_commitments": "Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts."
+}

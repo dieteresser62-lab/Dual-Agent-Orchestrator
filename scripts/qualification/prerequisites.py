@@ -75,8 +75,20 @@ def verify(protocol_file: Path, completion: Path | None) -> None:
         entries = result.get(kind)
         if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
             raise ValueError("Phase-0 completion has no complete report list")
-        measured = _reports([Path(entry["path"]) for entry in entries], manifest, kind)
-        if measured != entries:
+        paths = []
+        normalized = []
+        for entry in entries:
+            path = Path(entry["path"])
+            if not path.is_absolute():
+                if ".." in path.parts or str(path) != entry["path"]:
+                    raise ValueError("Phase-0 report reference must be bundle-relative")
+                path = completion.parent / path
+                if not path.resolve().is_relative_to(completion.parent.resolve()) or path.is_symlink():
+                    raise ValueError("Phase-0 report reference leaves the public bundle")
+            paths.append(path)
+            normalized.append({**entry, "path": str(path.resolve())})
+        measured = _reports(paths, manifest, kind)
+        if measured != normalized:
             raise ValueError("Phase-0 report bytes or case binding changed")
 
 

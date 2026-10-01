@@ -90,3 +90,27 @@ def test_pending_manifest_stops_campaign_before_any_process(tmp_path, monkeypatc
             profile=tmp_path / 'unused', protocol=PROTOCOL, evidence_dir=tmp_path / 'out',
             source_dir=tmp_path / 'sources', cases=probe.qualification_cases('transport', pair.candidate, pair), live=True)
     assert calls == [] and not (tmp_path / 'sources').exists()
+
+
+@pytest.mark.parametrize('change', ['none', 'escape', 'symlink', 'bytes'])
+def test_portable_completion_checks_relative_report_paths_and_bytes(tmp_path, change):
+    protection, formats = reports(tmp_path)
+    output = tmp_path / 'completion.json'
+    record = prerequisites.record(PROTOCOL, protection, formats, output)
+    for kind in ('protection', 'format'):
+        for item in record[kind]:
+            item['path'] = Path(item['path']).name
+    if change == 'escape':
+        record['protection'][0]['path'] = '../outside.json'
+    elif change == 'symlink':
+        link = tmp_path / 'link.json'
+        link.symlink_to(protection[0])
+        record['protection'][0]['path'] = link.name
+    elif change == 'bytes':
+        protection[0].write_text(protection[0].read_text() + '\n')
+    output.write_text(json.dumps(record))
+    if change == 'none':
+        prerequisites.verify(PROTOCOL, output)
+    else:
+        with pytest.raises(ValueError):
+            prerequisites.verify(PROTOCOL, output)

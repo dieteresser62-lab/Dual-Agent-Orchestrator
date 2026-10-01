@@ -32,6 +32,31 @@ from native_provider_schema import (
 )
 from workflow_run_setup import _fresh_state
 from workflow_state import ProtocolBinding
+from scripts.qualification.profiles import BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER
+
+
+def _before_experimental_promotion(raw: str) -> str:
+    """Keep the original byte guards, excluding only the authorized promotion.
+
+    Restore status and evidence references, not capabilities, policies, rights,
+    model/version restrictions or any already-certified row.
+    """
+    document = json.loads(raw)
+    root = Path(__file__).resolve().parents[1]
+    for row in document['certifications']:
+        if row['capability_profile'] not in {BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEWER}:
+            continue
+        assert row['status'] == 'experimental'
+        assert row['evidence']['path'] == f"docs/evidence/{row['provider']}/role-certification-v1.json"
+        assert row['canary_evidence']['path'] == f"docs/evidence/{row['provider']}/role-canary-v1.json"
+        original = (f"docs/evidence/{row['provider']}/reviewer-candidate-v1.json"
+                    if row['capability_profile'] == BOUNDARY_REVIEWER
+                    else 'docs/evidence/role-certification-candidates-v1.json')
+        row['status'] = 'candidate'
+        row['evidence'] = {'path': original,
+                          'sha256': hashlib.sha256((root / original).read_bytes()).hexdigest()}
+        row.pop('canary_evidence')
+    return json.dumps(document, indent=2) + '\n'
 
 
 def _codex_command(*, model: str = "gpt-6-sol", effort: str = "medium") -> list[str]:
@@ -530,7 +555,10 @@ def test_capability_and_certification_tables_keep_frozen_bytes() -> None:
         "schemas/role-provider-certifications-v1.json": "68a099dfce9894b2ab21d5926fb7f0e266067e48fdc0a3953a62bd27165b0be9",
     }
     for path, digest in expected.items():
-        assert hashlib.sha256((root / path).read_bytes()).hexdigest() == digest
+        content = (root / path).read_bytes()
+        if path.endswith('role-provider-certifications-v1.json'):
+            content = _before_experimental_promotion(content.decode()).encode()
+        assert hashlib.sha256(content).hexdigest() == digest
 
 
 @pytest.mark.parametrize("provider", ("claude", "codex"))
@@ -628,6 +656,8 @@ def test_projected_schema_guard_rejects_other_invalid_empty_schema_arrays(
 ])
 def test_other_registry_rows_keep_exact_pre_5b1_bytes(path, expected):
     raw = (Path(__file__).resolve().parents[1] / path).read_text()
+    if path.endswith('role-provider-certifications-v1.json'):
+        raw = _before_experimental_promotion(raw)
     decoder = json.JSONDecoder()
     index = raw.index("[") + 1
     while True:

@@ -1,0 +1,35 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=b8aa0b4b6a0c2004c2591747175aca52c54b1a6683d0674fb29b4bb0727f47bb; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=ef2287be3adfe8e19b73443fd9e3032e3e7d787def0b47cafb3a23b460fab22f; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts 8 safe Phase-0 cases with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ],
+    "implementer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=b8aa0b4b6a0c2004c2591747175aca52c54b1a6683d0674fb29b4bb0727f47bb; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=ef2287be3adfe8e19b73443fd9e3032e3e7d787def0b47cafb3a23b460fab22f; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts 8 safe Phase-0 cases with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
+        "proves": "Public measurements: docs/evidence/claude/redaction-manifest-v1.json sha256=b8aa0b4b6a0c2004c2591747175aca52c54b1a6683d0674fb29b4bb0727f47bb; docs/evidence/claude/role-canary-v1.json sha256=777058cf35c97b10868fdedcee2ffe2021d55be0c794a84b803e791075646cf4; docs/evidence/claude/phase0-results.json sha256=ef2287be3adfe8e19b73443fd9e3032e3e7d787def0b47cafb3a23b460fab22f; docs/evidence/claude/implementer-package-report-v1.json sha256=18ac34fb06d344da70b036c0c19baef90480db19374230dc4ca3716105ddb111; operator accepts 8 safe Phase-0 cases with W2/W4/W8 findings; the package passed 5/6 with zero absolute errors."
+      },
+      {
+        "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
+        "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
+      }
+    ]
+  }
+}

@@ -83,6 +83,7 @@
 ## Role occupancy
 
 - The shipped default occupancy remains Codex / Claude / Claude for implementer / reviewer / final reviewer. The run-bound profile assigns the role; provider entry files do not.
+- Claude implementer and both Codex review slots are `experimental` since 1 October 2026, bound to redacted qualification and passed role-canary evidence. The Codex 512-finding weakness is accepted explicitly in `docs/evidence/codex/operator-decisions-v1.json`; Claude Phase-0 findings W2/W4/W8 remain documented.
 - Other occupancies, such as Claude / Codex / Codex, are selectable through explicit TOML profiles only when every selected slot is `certified` or `experimental` with valid bound evidence. Hard manufacturer separation requires the implementer manufacturer to differ from both review-slot manufacturers. Candidates do not start; no automatic provider switch occurs.
 - In either provider CLI, an implementer follows the implementer contract and a reviewer follows the reviewer contract above. Implementers never approve their own work; reviewers never edit product code or attest validation.
 

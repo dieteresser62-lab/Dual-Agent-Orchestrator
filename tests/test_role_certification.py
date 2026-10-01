@@ -43,6 +43,9 @@ def _copy_sources(root: Path) -> None:
              "docs/evidence/antigravity/qualification-series-v1.json",
              "docs/evidence/antigravity/quality-results-v1.json",
              "docs/evidence/antigravity/operator-decisions-v1.json"}
+    source_table = json.loads((ROOT / TABLE).read_text())
+    paths.update(row[key]["path"] for row in source_table["certifications"]
+                 for key in ("evidence", "canary_evidence") if key in row)
     for path in paths:
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -95,9 +98,9 @@ def test_three_existing_slots_are_certified_with_distinct_reviewer_entries() -> 
         (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "antigravity", "google", "experimental"),
         (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "claude", "anthropic", "certified"),
-        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "candidate"),  # allowlist:provider -- certification data: candidate row
-        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "candidate"),  # allowlist:provider -- certification data: candidate row
-        (AgentSlot.IMPLEMENTER, AgentRoleName.IMPLEMENTER, "claude", "anthropic", "candidate"),  # allowlist:provider -- certification data: candidate row
+        (AgentSlot.REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "experimental"),  # allowlist:provider -- certification data: promoted row
+        (AgentSlot.FINAL_REVIEWER, AgentRoleName.REVIEWER, "codex", "openai", "experimental"),  # allowlist:provider -- certification data: promoted row
+        (AgentSlot.IMPLEMENTER, AgentRoleName.IMPLEMENTER, "claude", "anthropic", "experimental"),  # allowlist:provider -- certification data: promoted row
     ]
     assert table.entries[2].evidence_sha256 == table.entries[4].evidence_sha256
     assert table.entries[0].probe_profile["model"] == "gpt-6-sol"
@@ -259,6 +262,10 @@ def test_new_candidate_pairs_are_blocked_at_start_and_resume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     table = load_role_certifications()
+    # Keep the immutable candidate-gate proof meaningful after promotion.
+    table = CertificationTable(tuple(replace(entry, status="candidate")
+        if entry.status == "experimental" and entry.capability_profile in {"codex-reviewer", "claude-implementer"}  # allowlist:provider -- certification data: test-only candidate downgrade
+        else entry for entry in table.entries))
     selected = {
         AgentSlot.IMPLEMENTER: "claude", AgentSlot.REVIEWER: "codex",  # allowlist:provider -- certification data: candidate occupancy
         AgentSlot.FINAL_REVIEWER: "codex",  # allowlist:provider -- certification data: candidate occupancy
@@ -306,7 +313,8 @@ def test_generic_provider_canary_gates_candidate_experimental_and_certified(
     evidence_sha = hashlib.sha256(evidence_file.read_bytes()).hexdigest()
     source = json.loads((tmp_path / TABLE).read_text())["certifications"][5]
     row = json.loads(json.dumps(source))
-    row.update(provider="fiction", manufacturer="sample-maker", capability_profile="fiction",
+    row.pop("canary_evidence", None)
+    row.update(status="candidate", provider="fiction", manufacturer="sample-maker", capability_profile="fiction",
                probe_profile=profile["transport_profile"],
                capability_sha256=hashlib.sha256(json.dumps(profile, sort_keys=True,
                    separators=(",", ":")).encode()).hexdigest(),
@@ -514,6 +522,9 @@ def test_factory_checks_pair_and_slot_before_instantiating(monkeypatch: pytest.M
         raise AssertionError("adapter was constructed")
 
     monkeypatch.setattr(agent_adapters, "NativeCodexAdapter", should_not_construct)
+    table = CertificationTable(tuple(replace(entry, status="candidate")
+        if entry.provider == "codex" and entry.role is AgentRoleName.REVIEWER else entry  # allowlist:provider -- certification data: explicit candidate gate
+        for entry in table.entries))
     with pytest.raises(CertificationError, match="slot=reviewer provider=codex.*missing qualification evidence"):
         create_agent_pair("codex", AgentRoleName.REVIEWER, slot=AgentSlot.REVIEWER, settings=settings["codex"], certifications=table)
 

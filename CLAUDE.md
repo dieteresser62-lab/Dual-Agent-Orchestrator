@@ -4,4 +4,6 @@ Follow `AGENTS.md`. Claude can be implementer or reviewer; the run-bound profile
 
 Role occupancy and certification follow `AGENTS.md`, including manufacturer separation and the candidate start prohibition. The shipped default is Codex / Claude / Claude.
 
+Claude implementer and both Codex review slots are `experimental` (1 October 2026); bound evidence and accepted weaknesses follow `AGENTS.md`.
+
 The Claude implementer uses `--safe-mode` and does not automatically load `CLAUDE.md`; this file serves manual and other CLI use.
