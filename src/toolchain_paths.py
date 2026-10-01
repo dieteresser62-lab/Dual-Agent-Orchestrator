@@ -10,6 +10,7 @@ CREDENTIAL_LOCATIONS = (
     ".claude.json", ".gemini", ".docker", ".kube", ".netrc", ".git-credentials",  # allowlist:provider -- profile configuration: credential path denylist
     ".password-store", ".local/share/keyrings", ".npmrc", ".pypirc",
 )
+AGENT_CONFIG_LOCATIONS = (".claude", ".codex", ".gemini", ".agents")  # allowlist:provider -- profile configuration: repository agent configuration
 
 
 def _overlaps(left: Path, right: Path) -> bool:

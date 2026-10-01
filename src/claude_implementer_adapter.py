@@ -18,12 +18,12 @@ from agent_adapters import (
 )
 from provider_metrics import failure_metrics, log_permission_denials, actual_model_metrics
 from agent_config import AgentSettings
-from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch
+from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch, AGENT_CONFIG_LOCATIONS
 from permission_policy import classify_implementer_denial
 from provider_metrics import permission_denial_summaries
 from agent_roles import AgentRoleName
 from workflow_state import AgentFailureKind
-from native_implementer_contract import NativeImplementerContractError, canonical_native_implementer_json
+from native_implementer_contract import NativeImplementerContractError, NativeImplementerErrorCode, canonical_native_implementer_json
 from native_implementer_request import NativeImplementerRequestBundle
 from native_provider_schema import (
     CLAUDE_IMPLEMENTER_START_DIRECTIVE, NativeProviderSchemaError, assert_provider_capabilities,  # allowlist:provider -- profile configuration: implementer stdin directive
@@ -72,6 +72,7 @@ def protected_implementer_paths(
             root / ".orchestrator" / "checkpoints" / run_id,
             root / ".orchestrator" / "artifacts" / "native-codex-evidence",  # allowlist:provider -- transport: established evidence namespace
             root / "inbox", root / "outbox",
+            *(root / name for name in AGENT_CONFIG_LOCATIONS),
             _absolute_path(inbox_dir, root), _absolute_path(outbox_dir, root),
             _absolute_path(Path(git_paths[0]), root),
             _absolute_path(Path(git_paths[1]), root),
@@ -188,6 +189,8 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         self._directory_placeholders: tuple[Path, ...] = ()
         self._repository_root: Path | None = None
         self._protected_paths: tuple[Path, ...] | None = None
+        self._protected_before = None
+        self._process_evidence_path = None
 
     def bind_implementer_boundary(
         self, repository_root: Path, inbox_dir: Path | None, outbox_dir: Path | None,
@@ -200,6 +203,32 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         raise RuntimeError("native Claude implementer requires a bound request")  # allowlist:provider -- transport: implementer binding
+
+    def bind_process_evidence(self, path: Path) -> None:
+        self._process_evidence_path = path
+
+    def before_provider_process(self) -> None:
+        from protected_tree import fingerprint
+        self._fingerprint_excluded = {self._process_evidence_path} if self._process_evidence_path is not None else set()
+        # Only files actually opened by the parent logger may change while
+        # stream messages are emitted. Records/head/checkpoints are not exempt.
+        for logger in (logging.getLogger(), logging.getLogger(__name__)):
+            for handler in logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    self._fingerprint_excluded.add(Path(handler.baseFilename))
+        self._protected_before = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
+
+    def after_provider_process(self) -> None:
+        if self._protected_before is None: return
+        from protected_tree import fingerprint, differences
+        self.remove_sandbox_placeholders()
+        after = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
+        changed = differences(self._protected_before, after)
+        self._protected_before = None
+        if changed:
+            self.metadata["protected_tree_changes"] = changed
+            raise AgentPermissionError("implementer changed protected trees: " + ", ".join(changed),
+                                       provider_data=self.metadata)
 
     def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
         raise RuntimeError("native Claude implementer requires a bound request")  # allowlist:provider -- transport: implementer binding
@@ -264,6 +293,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                 "claude-implementer", command, bound_settings_json=settings_json, bound_repository_root=self._repository_root,  # allowlist:provider -- transport: implementer normalization
                 bound_toolchain_read_roots=self.settings.toolchain_read_roots, bound_scratch=self._scratch,
                 bound_environment=self.env,
+                bound_protected_paths=self._protected_paths,
             )
             assert_provider_capabilities("claude-implementer", (), profile=profile)  # allowlist:provider -- transport: implementer capability
             measured_settings = json.loads(settings_json)
@@ -330,6 +360,8 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         return tuple(removed)
 
     def cleanup(self) -> None:
+        self._protected_before = None
+        self._process_evidence_path = None
         self.remove_sandbox_placeholders()
         if self._scratch is not None:
             shutil.rmtree(self._scratch, ignore_errors=True)
@@ -337,6 +369,7 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
         super().cleanup()
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
+        self.after_provider_process()
         events = []
         try:
             for line in stdout.splitlines():
@@ -415,15 +448,19 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
                    (isinstance(errors, list) and any(isinstance(error, str) and "refus" in error.lower() for error in errors)))
         if refusal or envelope.get("is_error") is not False or envelope.get("subtype") != "success":
             raise AgentOutputError("implementer reported an error", provider_data=safe_envelope,
-                                   technical_text="implementer provider refusal" if refusal else None,
+                                   technical_text="implementer provider refusal" if refusal else str(envelope.get("result", ""))[:4000] or None,
                                    kind_hint=AgentFailureKind.OUTPUT if refusal else None)
         structured = envelope.get("structured_output")
         if not isinstance(structured, dict) or set(structured) != {"result"} or not isinstance(structured["result"], dict):
             raise AgentOutputError("Claude implementer result envelope is invalid")  # allowlist:provider -- transport: implementer output
         result = structured["result"]
-        if result.get("request_id") != self.invocation.request_id or result.get("schema_version") != self.role_binding.contract:
-            raise AgentOutputError("Claude implementer result differs from bound request")  # allowlist:provider -- transport: implementer output
         try:
+            if result.get("request_id") != self.invocation.request_id:
+                raise NativeImplementerContractError(NativeImplementerErrorCode.REQUEST_MISMATCH,
+                    "request_id must be exactly " + str(self.invocation.request_id))
+            if result.get("schema_version") != self.role_binding.contract:
+                raise NativeImplementerContractError(NativeImplementerErrorCode.SCHEMA_INVALID,
+                    "schema_version must be exactly " + self.role_binding.contract)
             return canonical_native_implementer_json(result)
         except NativeImplementerContractError as exc:
             raise AgentOutputError(

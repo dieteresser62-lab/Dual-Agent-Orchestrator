@@ -88,7 +88,8 @@ def shutdown_signals():
 
     try:
         for number in selected:
-            signal.signal(number, interrupt)
+            if previous[number] != signal.SIG_IGN:
+                signal.signal(number, interrupt)
         yield
     finally:
         for number, handler in previous.items():

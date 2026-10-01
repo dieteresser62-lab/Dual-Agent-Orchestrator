@@ -32,6 +32,8 @@ class ProviderIdentity:
     interpreter_args: tuple[str, ...] = ()
     interpreter_sha256: str | None = None
     kind: str = "verified"
+    native_binary_path: str | None = None
+    native_binary_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"verified", "dry_run"}:
@@ -45,7 +47,11 @@ class ProviderIdentity:
                 raise ValueError("provider identity has an incomplete interpreter binding")
         elif not all(isinstance(value, str) and value for value in (self.interpreter_entry_path, self.interpreter_real_path, self.interpreter_version, self.interpreter_sha256)):
             raise ValueError("provider identity requires a complete interpreter binding")
-        for value in (self.sha256, self.interpreter_sha256):
+        if (self.native_binary_path is None) != (self.native_binary_sha256 is None):
+            raise ValueError("provider native binary binding is incomplete")
+        if self.native_binary_path is not None and (not isinstance(self.native_binary_path, str) or not Path(self.native_binary_path).is_absolute()):
+            raise ValueError("provider native binary path is invalid")
+        for value in (self.sha256, self.interpreter_sha256, self.native_binary_sha256):
             if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
                 raise ValueError("provider identity SHA-256 is invalid")
         if not isinstance(self.interpreter_args, tuple) or any(not isinstance(arg, str) for arg in self.interpreter_args):
@@ -60,11 +66,13 @@ class ProviderIdentity:
             "interpreter_version": self.interpreter_version,
             "interpreter_args": list(self.interpreter_args),
             "interpreter_sha256": self.interpreter_sha256,
+            **({"native_binary_path": self.native_binary_path,
+                "native_binary_sha256": self.native_binary_sha256} if self.native_binary_path is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> ProviderIdentity:
-        if not isinstance(value, dict) or set(value) != {
+        if not isinstance(value, dict) or set(value) - {"native_binary_path", "native_binary_sha256"} != {
             "kind", "entry_path", "real_path", "version", "sha256",
             "interpreter_entry_path", "interpreter_real_path", "interpreter_version",
             "interpreter_args", "interpreter_sha256",
@@ -78,6 +86,7 @@ class ProviderIdentity:
             interpreter_version=value["interpreter_version"],
             interpreter_args=tuple(value["interpreter_args"]),
             interpreter_sha256=value["interpreter_sha256"], kind=value["kind"],
+            native_binary_path=value.get("native_binary_path"), native_binary_sha256=value.get("native_binary_sha256"),
         )
 
     @property
@@ -275,6 +284,7 @@ def capture_provider_identity(
             hashlib.sha256(Path(interpreter_real).read_bytes()).hexdigest()
             if interpreter_real is not None else None
         )
+        native_path, native_digest = _native_binary_identity(real)
     except OSError as exc:
         raise ValueError(f"CLI target cannot be read: {entry}") from exc
     if expected is not None and (
@@ -284,6 +294,7 @@ def capture_provider_identity(
         or interpreter_real != expected.interpreter_real_path
         or interpreter_args != expected.interpreter_args
         or interpreter_digest != expected.interpreter_sha256
+        or native_path != expected.native_binary_path or native_digest != expected.native_binary_sha256
     ):
         raise ValueError("on-disk binary or interpreter identity differs from the bound identity")
     prefix = (
@@ -299,7 +310,22 @@ def capture_provider_identity(
         entry, str(real), version, digest,
         interpreter_entry, interpreter_real, interpreter_version, interpreter_args,
         interpreter_digest,
+        native_binary_path=native_path, native_binary_sha256=native_digest,
     )
+
+
+def _native_binary_identity(real: Path) -> tuple[str | None, str | None]:
+    """Bind the npm dispatcher's native executable without invoking it."""
+    if real.name != "codex.js" or real.parent.name != "bin":  # allowlist:provider -- profile configuration: native npm dispatcher
+        return None, None
+    root = real.parent.parent
+    if root.parts[-3:] != ("node_modules", "@openai", "codex"):  # allowlist:provider -- profile configuration: native npm dispatcher
+        return None, None
+    from native_provider_schema import validate_codex_review_package_root  # allowlist:provider -- profile configuration: native package validation
+    validate_codex_review_package_root(root)  # allowlist:provider -- profile configuration: native package executable
+    candidates = (*root.glob("vendor/*/bin/codex"), *root.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"))  # allowlist:provider -- profile configuration: native package executable
+    native = candidates[0].resolve(strict=True)
+    return str(native), hashlib.sha256(native.read_bytes()).hexdigest()
 
 
 def inspect_provider_installations(

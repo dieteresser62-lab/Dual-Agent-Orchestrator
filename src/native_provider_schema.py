@@ -966,9 +966,10 @@ def normalize_transport_profile(
     bound_scratch: Path | None = None,
     bound_environment: Mapping[str, str] | None = None,
     bound_model_row_sha256: str | None = None,
+    bound_protected_paths: tuple[Path, ...] | None = None,
 ) -> ProviderTransportProfile:
     if provider == "claude-implementer":  # allowlist:provider -- profile configuration: implementer transport
-        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch, bound_environment)  # allowlist:provider -- profile configuration: implementer transport
+        return _normalize_claude_implementer(command, bound_settings_json, bound_repository_root, bound_toolchain_read_roots, bound_scratch, bound_environment, bound_protected_paths)  # allowlist:provider -- profile configuration: implementer transport
     if provider == "codex-reviewer":  # allowlist:provider -- profile configuration: reviewer transport
         if bound_package_root is None or bound_container is None or bound_runtime_dir is None:
             raise NativeProviderSchemaError("reviewer package, container or runtime identity is unbound")
@@ -1053,6 +1054,7 @@ def _normalize_claude_implementer(  # allowlist:provider -- profile configuratio
     command: Sequence[str], bound_settings_json: str | None,
     repository_root: Path | None = None, tool_roots: tuple[str, ...] = (), scratch: Path | None = None,
     environment: Mapping[str, str] | None = None,
+    protected_paths: tuple[Path, ...] | None = None,
 ) -> ProviderTransportProfile:
     from prompts import NATIVE_IMPLEMENTER_SYSTEM_POLICY
 
@@ -1082,6 +1084,12 @@ def _normalize_claude_implementer(  # allowlist:provider -- profile configuratio
     except (ValueError, TypeError) as exc:
         raise NativeProviderSchemaError("Claude implementer JSON arguments are invalid") from exc  # allowlist:provider -- profile configuration: implementer CLI grammar
     deny = _validate_claude_implementer_settings(settings, repository_root, tool_roots, scratch)  # allowlist:provider -- profile configuration: implementer settings
+    from claude_implementer_adapter import implementer_settings  # allowlist:provider -- profile configuration: exact bound permissions
+    if protected_paths is None or repository_root is None:
+        raise NativeProviderSchemaError("implementer protection paths are unbound")
+    expected_settings = implementer_settings(protected_paths, repository_root, tool_roots, scratch=scratch)
+    if settings != expected_settings:
+        raise NativeProviderSchemaError("implementer protection paths differ from bound paths")
     if values[21] != ",".join(deny):
         raise NativeProviderSchemaError("Claude implementer CLI deny rules differ from settings")  # allowlist:provider -- profile configuration: implementer CLI grammar
     if (canonical_schema_json(settings) != values[23] or not isinstance(schema, dict)

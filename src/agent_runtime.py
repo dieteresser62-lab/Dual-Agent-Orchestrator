@@ -1380,24 +1380,27 @@ def _run_agent_process(
     process_started: Callable[[int], None] | None = None,
 ) -> StreamResult | subprocess.CompletedProcess[str]:
     """Own a provider session until its pipes and process group are settled."""
-    process = subprocess.Popen(
-        command_parts,
-        stdin=(subprocess.DEVNULL if getattr(adapter, "stdin_closed_when_unused", False) and stdin_text is None
-               else subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=env, cwd=execution_root, bufsize=1, start_new_session=True,
-    )
+    process = None
     identity: ProcessIdentity | None = None
     start = time.monotonic()
     finished = False
     group_cleanup_done = False
     try:
-        try:
-            identity = capture_process_identity(process.pid)
-        except (OSError, ValueError, IndexError, UnicodeError):
-            pass
-        if process_started is not None:
-            process_started(process.pid)
+        from shutdown_control import defer_shutdown
+        with defer_shutdown():
+            process = subprocess.Popen(
+                command_parts,
+                stdin=(subprocess.DEVNULL if getattr(adapter, "stdin_closed_when_unused", False) and stdin_text is None
+                       else subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=env, cwd=execution_root, bufsize=1, start_new_session=True,
+            )
+            try:
+                identity = capture_process_identity(process.pid)
+            except (OSError, ValueError, IndexError, UnicodeError):
+                pass
+            if process_started is not None:
+                process_started(process.pid)
         if config.agent_live_stream:
             assert process.stdout is not None and process.stderr is not None
             if stdin_text is None and process.stdin is not None:
@@ -1410,7 +1413,6 @@ def _run_agent_process(
                 "skip_prompt_echo": False, "last_emitted_line": "",
             }
             writer_errors: queue.Queue[BaseException] = queue.Queue()
-
             def write_input() -> None:
                 if process.stdin is None:
                     return
@@ -1419,7 +1421,6 @@ def _run_agent_process(
                     process.stdin.close()
                 except BaseException as exc:
                     writer_errors.put(exc)
-
             def read_stream(stream: TextIO, channel: str) -> None:
                 try:
                     while line := stream.readline():
@@ -1553,12 +1554,13 @@ def _run_agent_process(
         finished = True
         return result
     except BaseException:
-        if identity is None:
+        if identity is None and process is not None:
             try:
                 identity = capture_process_identity(process.pid)
             except (OSError, ValueError, IndexError, UnicodeError):
                 pass
-        _stop_provider_group(process, identity, drain_seconds=0.2 if group_cleanup_done else 2.0)
+        if process is not None:
+            _stop_provider_group(process, identity, drain_seconds=0.2 if group_cleanup_done else 2.0)
         raise
     finally:
         if finished:
@@ -1601,6 +1603,13 @@ def _require_input_budget_registration(
             f"adapter {agent_key!r} has no provider input budget registration"
         )
 
+
+
+def _bind_process_evidence(adapter, attempt):
+    bind = getattr(adapter, "bind_process_evidence", None)
+    if bind is not None and attempt.handle is not None and attempt.lifecycle.durable_response_path is not None:
+        from provider_process import process_evidence_path
+        bind(process_evidence_path(attempt.lifecycle.durable_response_path(attempt.handle)))
 
 def run_agent(
     adapter: AgentAdapter,
@@ -1715,22 +1724,26 @@ def run_agent(
 
         if attempt_invocation is not None:
             attempt_invocation.begin(measurement, bootstrap_context)
+            _bind_process_evidence(adapter, attempt_invocation)
 
         getattr(adapter, "before_provider_process", lambda: None)()
-        result = _run_agent_process(
-            adapter,
-            command_parts,
-            stdin_text,
-            config=config,
-            env=env,
-            execution_root=execution_root,
-            timeout_seconds=timeout_seconds,
-            agent_key=agent_key,
-            process_started=(
-                attempt_invocation.process_started
-                if attempt_invocation is not None else None
-            ),
-        )
+        try:
+            result = _run_agent_process(
+                adapter,
+                command_parts,
+                stdin_text,
+                config=config,
+                env=env,
+                execution_root=execution_root,
+                timeout_seconds=timeout_seconds,
+                agent_key=agent_key,
+                process_started=(
+                    attempt_invocation.process_started
+                    if attempt_invocation is not None else None
+                ),
+            )
+        finally:
+            getattr(adapter, "after_provider_process", lambda: None)()
 
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()

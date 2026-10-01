@@ -76,6 +76,8 @@ def codex_package_root(entry_path: str) -> Path:  # allowlist:provider -- transp
 
 class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport: reviewer registration
     reviewer = True
+    inherit_process_environment = False
+    set_pwd = False
     live_stream_profile = "json-events"
     quota_reset_profile = "dated-local"
     required_hosts = ("chatgpt.com", "api.openai.com")
@@ -185,6 +187,11 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
             raise AgentOutputError("Codex reviewer rights differ from bound profile")  # allowlist:provider -- transport: reviewer CLI binding
         package_root = codex_package_root(self.provider_identity.entry_path)  # allowlist:provider -- transport: reviewer CLI binding
         runtime_dir = self._new_runtime_dir()
+        from agent_config import REVIEWER_ENVIRONMENT_POLICY
+        self.env = {name: value for name, value in os.environ.items()
+                    if name in REVIEWER_ENVIRONMENT_POLICY or name.startswith("LC_")}
+        self.env.setdefault("HOME", str(Path.home()))
+        self.env.setdefault("PATH", os.defpath)
         try:
             try:
                 catalog_json = hardened_reviewer_catalog(json.loads(self.settings.reviewer_model_catalog_json), self.model)

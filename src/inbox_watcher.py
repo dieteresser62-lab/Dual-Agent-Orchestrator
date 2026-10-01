@@ -1853,6 +1853,15 @@ def _handle_completed_archive_failure(
         )
 
 
+
+def _shutdown_status(exc):
+    from cli import ShutdownRequested
+    if isinstance(exc, ShutdownRequested):
+        logger.warning("Watch mode interrupted; resume with --resume (signal=%s).", exc.signal_number)
+        return 128 + exc.signal_number
+    logger.info("Watch mode stopped.")
+    return 0
+
 def watch_inbox(
     *,
     inbox_dir: Path,
@@ -2109,8 +2118,8 @@ def watch_inbox(
             _log_watch_task_completion(
                 task_file, task_succeeded_already, task_result
             )
-    except KeyboardInterrupt:
-        logger.info("Watch mode stopped.")
-        return 0
+    except KeyboardInterrupt as exc:
+        # Signals retain their resumable status; plain Ctrl-C keeps the legacy result.
+        return _shutdown_status(exc)
     finally:
         release_inbox_lock(lock_handle)

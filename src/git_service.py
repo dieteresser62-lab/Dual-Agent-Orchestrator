@@ -1147,13 +1147,12 @@ def _git(
     input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
-        result = subprocess.run(
-            ["git", *arguments],
-            cwd=repository_root,
-            capture_output=True,
-            check=False,
-            input=input_bytes,
-        )
+        from shutdown_control import defer_shutdown
+        with defer_shutdown():
+            result = subprocess.run(
+                ["git", *arguments], cwd=repository_root,
+                capture_output=True, check=False, input=input_bytes,
+            )
     except OSError as exc:
         raise GitTransactionError(f"could not execute git: {exc}") from exc
     if result.returncode not in accepted_exit_codes:

@@ -19,7 +19,7 @@ def boundary(tmp_path):
 
 @pytest.mark.parametrize("tool,data,expected", [
     # The three smoke attempts: Write and two shell operations outside the repo.
-    ("Write", {"file_path": "/tmp/claude-1000/mut/mutate.mjs", "content": "fake"}, "tolerated"),  # allowlist:provider -- profile configuration: real event or smoke path fixture
+    ("Write", {"file_path": "/tmp/claude-1000/mut/mutate.mjs", "content": "fake"}, "violation"),  # allowlist:provider -- profile configuration: real event or smoke path fixture
     ("Bash", {"command": 'mkdir -p "$TMPDIR/mut" && cp tests/check.mjs "$TMPDIR/mut/"'}, "tolerated"),
     ("Bash", {"command": 'node /tmp/claude-1000/mut/mutate.mjs'}, "tolerated"),  # allowlist:provider -- profile configuration: real event or smoke path fixture
     ("Bash", {"command": 'node "$TMPDIR/mut/mutate.mjs"'}, "tolerated"),
@@ -86,7 +86,7 @@ def test_unknown_denials_fail_closed(boundary, denial):
     '''M=$TMPDIR/mut && mkdir -p $M/tests && cp tests/simulator-tab-panel-pairing.test.mjs $M/tests/ &&
 run() { node -e 'const fs=require("fs");const [src,dst,from,to]=process.argv.slice(1);const h=fs.readFileSync(src,"utf8");fs.writeFileSync(dst,h.replace(from,to));' "$1" "$M/$2" "$3" "$4"; }
 run dashboard.html dashboard.html before after''',
-    '''mkdir -p /tmp/smoke-temp/mut && cat > /tmp/smoke-temp/mut/mutate.mjs <<'EOF'
+    '''mkdir -p "$TMPDIR/mut" && cat > "$TMPDIR/mut/mutate.mjs" <<'EOF'
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -133,10 +133,11 @@ def test_tmpdir_expansion_uses_actual_bound_scratch_for_protection(boundary, rou
     "cat > /tmp/safe <<EOF\n$UNKNOWN\nEOF", "cat > /tmp/safe <<'EOF'\nunterminated",
     '''M="$TMPDIR/mut" && rm -rf "$M" && mkdir -p "$M/tests" && cp tests/simulator-tab-panel-pairing.test.mjs "$M/tests/" && run() { name="$1"; shift; cp Simulator.html "$M/Simulator.html"; node -e "$1" "$M/Simulator.html"; (cd "$M" && node --test tests/) >/dev/null 2>&1 && echo "$name: survived" || echo "$name: killed"; }; run missing-panel "const fs=require(\\"fs\\");const p=process.argv[1];fs.writeFileSync(p,fs.readFileSync(p,\\"utf8\\").replace(/id=\\"tab-a\\"/,\\"id=\\\\\\"tab-x\\\\\\"\\"))"''',
 ])
-def test_opaque_scratch_work_without_boundary_hints_is_tolerated(boundary, command):
-    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == "tolerated"
+def test_opaque_scratch_work_requires_bound_write_targets(boundary, command):
+    expected = "violation" if any(word in command for word in ("mkdir", "cat >")) else "tolerated"
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == expected
     root, paths, _ = boundary
-    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths) == "tolerated"
+    assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths) == expected
 
 
 @pytest.mark.parametrize("arguments,expected", [
@@ -159,7 +160,7 @@ def test_read_only_branch_forms(boundary, arguments, expected):
 
 @pytest.mark.parametrize("command,expected", [
     ('echo "TMPDIR=$TMPDIR"; cd {repo} && git status --short && git branch --show-current && ls -la . .git/hooks 2>&1 | head -50; ls -la .orchestrator inbox outbox 2>&1', "tolerated"),
-    ('test -e "$HOME/.codex" && echo VISIBLE; echo "DAO_P0_ENV=${DAO_P0_ENV-<unset>}"; if [ -n "${ANTHROPIC_API_KEY+x}" ]; then echo PHASE0_API_KEY_VISIBLE; fi; echo "TMPDIR=$TMPDIR"; git -C {repo} branch --show-current', "tolerated"),  # allowlist:provider -- transport: reduced real environment-name probe
+    ('test -e "$HOME/.codex" && echo VISIBLE; echo "DAO_P0_ENV=${DAO_P0_ENV-<unset>}"; if [ -n "${ANTHROPIC_API_KEY+x}" ]; then echo PHASE0_API_KEY_VISIBLE; fi; echo "TMPDIR=$TMPDIR"; git -C {repo} branch --show-current', "violation"),  # allowlist:provider -- transport: credential-location access now stops
     ("ls .git > .git/hooks/x", "violation"), ("cat x | tee .orchestrator/y", "violation"),
     ("find .git -delete", "violation"), ('echo "$HOME"; git -C {repo} commit', "violation"),
     ("cd .git && touch x", "violation"), ("echo x >> inbox/a", "violation"),

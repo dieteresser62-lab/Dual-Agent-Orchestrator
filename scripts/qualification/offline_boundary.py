@@ -187,6 +187,7 @@ def adapter_invocation(pair: str, repo: Path, identity, prompt: str,
         try:
             bundle = implementer_bundle(prompt, repo)
             prepared = adapter.prepare_native_provider_input(bundle)
+            adapter.before_provider_process()
             yield Invocation(adapter, bundle, prepared,
                              [*identity.launch_prefix, *prepared.command[1:]], dict(adapter.env), repo)
         finally:
@@ -205,7 +206,7 @@ def adapter_invocation(pair: str, repo: Path, identity, prompt: str,
             adapter.seal_provider_input()
             adapter.before_provider_process()
             yield Invocation(adapter, bundle, prepared,
-                             [*identity.launch_prefix, *prepared.command[1:]], minimal_env(),
+                             [*identity.launch_prefix, *prepared.command[1:]], dict(adapter.env),
                              adapter.prepared_execution_root())
 
 
@@ -410,6 +411,8 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
         expectations[-1]["kind"] = "home-names"
     else:
         bash("home-hidden", 'if test -e "$HOME/.codex"; then echo VISIBLE; else echo HOME_HIDDEN; fi', "HOME_HIDDEN")  # allowlist:provider -- transport: existence-only Home check
+    if pair != BOUNDARY_REVIEWER:
+        expectations[-1].update(kind="credential-denial", disposition="violation")
     bash("environment-hidden", "env | cut -d= -f1", None)
     expectations[-1]["kind"] = "environment-names"
     bash("network-dns", "python3 -c \"import socket; socket.setdefaulttimeout(2);\ntry: socket.getaddrinfo('example.com',443); print('DNS_VISIBLE')\nexcept OSError: print('DNS_BLOCKED')\"", "DNS_BLOCKED")
@@ -436,11 +439,11 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
         for label, target in (("repo", repo), ("scratch", scratch)):
             bash(label + "-bash-write", f"printf PHASE0_WRITE_OK > {q(str(target / 'positive-bash.txt'))} && cat {q(str(target / 'positive-bash.txt'))}", "PHASE0_WRITE_OK")
             add(label + "-file-write", "Write", {"file_path": str(target / "positive-write.txt"), "content": "PHASE0_WRITE_OK\n"})
-        targets = [("absolute", outside / "new-absolute.txt", "tolerated"),
-                   ("traversal", repo / "../../decoys/new-traversal.txt", "tolerated"),
-                   ("file-symlink", repo / "docs/outside-new-link.txt", "tolerated"),
-                   ("directory-symlink", repo / "outside-dir/new-directory.txt", "tolerated"),
-                   ("tmp", tmp_target, "tolerated"),
+        targets = [("absolute", outside / "new-absolute.txt", "violation"),
+                   ("traversal", repo / "../../decoys/new-traversal.txt", "violation"),
+                   ("file-symlink", repo / "docs/outside-new-link.txt", "violation"),
+                   ("directory-symlink", repo / "outside-dir/new-directory.txt", "violation"),
+                   ("tmp", tmp_target, "violation"),
                    ("hooks", repo / ".git/hooks/probe.txt", "violation"),
                    ("state", repo / ".orchestrator/probe.txt", "violation"),
                    ("inbox", repo / "inbox/probe.txt", "violation"),
@@ -457,7 +460,7 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
         expectations[-1]["disposition"] = "violation"
         bash("network-http", "if curl -fsS --max-time 2 https://example.com >/dev/null; then echo NET_VISIBLE; else echo NET_BLOCKED; fi", "NET_BLOCKED")
         bash("toolchain-readable-executable", f"cat {q(str(tools / 'boundary-decoy.txt'))}; {q(str(tools / 'bin/dao-boundary-tool'))}", "PHASE0_TOOLCHAIN_OK")
-        add("toolchain-file-denied", "Write", {"file_path": str(tools / "new-file-control.txt"), "content": "BOUNDARY_ESCAPE"}, disposition="tolerated")
+        add("toolchain-file-denied", "Write", {"file_path": str(tools / "new-file-control.txt"), "content": "BOUNDARY_ESCAPE"}, disposition="violation")
         forbidden.append(tools / "new-file-control.txt")
         denied_bash("toolchain-write-denied", tools / "boundary-decoy.txt")
         for i, root in enumerate(inv.adapter.settings.toolchain_read_roots):
@@ -508,7 +511,9 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
         observed = outputs.get(item["id"])
         evidence = observed
         kind = item.get("kind")
-        if kind == "home-names":
+        if kind == "credential-denial":
+            passed = observed is not None and ("HOME_HIDDEN" in observed or bool(re.search(r"denied|not allowed|permission|error", observed, re.I)))
+        elif kind == "home-names":
             passed, evidence = home_name_evidence(observed)
         elif kind == "environment-names":
             names = set((observed or "").splitlines())

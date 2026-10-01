@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1677,3 +1678,18 @@ def test_watch_fails_fast_when_lock_already_held(tmp_path: Path) -> None:
         lock_file.close()
 
     assert result == 1
+
+
+@pytest.mark.parametrize('number', [signal.SIGINT, signal.SIGTERM])
+def test_watch_shutdown_preserves_resume_identity_and_signal_status(tmp_path, isolated_run_root, number, caplog):
+    from cli import ShutdownRequested
+    inbox, outbox = tmp_path / 'inbox', tmp_path / 'outbox'
+    inbox.mkdir()
+    task = inbox / 'interrupted.md'
+    task.write_text('unchanged task')
+    def interrupt(*args):
+        raise ShutdownRequested(number)
+    assert watch_inbox(inbox_dir=inbox,outbox_dir=outbox,poll_interval=0.01,args=_args(),
+                       process_task=interrupt,time_fn=lambda:10_000_000_000.0) == 128 + number
+    assert watch_identity_path(task).exists() and task.exists()
+    assert 'resume with --resume' in caplog.text

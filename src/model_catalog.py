@@ -14,6 +14,15 @@ def hardened_reviewer_catalog(catalog: object, model: str) -> str:
     result = json.loads(json.dumps(catalog))
     rows = result["models"] if isinstance(result, dict) else result
     for row in rows:
+        known = {"multi_agent_version", "multi_agent_reasoning_effort", "web_search_tool_type",
+                 "experimental_supported_tools", "supports_search_tool", "apply_patch_tool_type",
+                 "shell_type", "tool_mode", "include_apply_patch_tool_instructions",
+                 "include_parallel_tool_calling_instructions", "include_shell_usage_instructions",
+                 "include_node_repl_usage_instructions", "node_repl_available",
+                 "node_repl_supported", "node_repl_tool_type"}
+        unknown = [key for key in row if re.search(r"tool|agent|search|browser|mcp", key, re.I) and key not in known]
+        if unknown:
+            raise ValueError("unclassified reviewer tool capability fields: " + ", ".join(sorted(unknown)))
         for key in ("multi_agent_version", "multi_agent_reasoning_effort", "web_search_tool_type"):
             row.pop(key, None)
         # Required CLI fields: neutralize opt-ins rather than deleting them.

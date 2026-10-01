@@ -188,29 +188,32 @@ def _signal_descendants(snapshot: dict[int, int], number: int) -> None:
                 pass
 
 
-def stop_process(process) -> None:
+def stop_process(process, descendants: dict[int, int] | None = None) -> None:
     """Stop the owned session and its identity-checked descendant snapshot."""
-    if process.poll() is not None:
-        return
-    descendants = _descendant_snapshot(process.pid)
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass  # The parent can exit after the snapshot; its children are owned.
+    descendants = dict(descendants or {})
+    if process.poll() is None:
+        descendants.update(_descendant_snapshot(process.pid))
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     _signal_descendants(descendants, signal.SIGTERM)
     deadline = time.monotonic() + 5
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    while time.monotonic() < deadline:
+        if process.poll() is None:
+            newly_seen = _descendant_snapshot(process.pid)
+            _signal_descendants({pid: ticks for pid, ticks in newly_seen.items() if pid not in descendants}, signal.SIGTERM)
+            descendants.update(newly_seen)
+        if process.poll() is not None and not any(_descendant_alive(pid, ticks) for pid, ticks in descendants.items()):
+            break
+        time.sleep(0.05)
+    if process.poll() is None:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    if process.returncode is None:
         process.wait(timeout=5)
-    while time.monotonic() < deadline and any(
-        _descendant_alive(pid, ticks) for pid, ticks in descendants.items()
-    ):
-        time.sleep(0.05)
     _signal_descendants(descendants, signal.SIGKILL)
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline and any(
@@ -227,22 +230,24 @@ def run_process(command: list[str], repo: Path, log: Path, *, interrupt: bool = 
     start = clock()
     interrupted = False
     timed_out = False
+    descendants = {}
     with log.open("wb") as output:
         process = popen(command, cwd=repo, stdin=subprocess.DEVNULL, stdout=output,
                         stderr=subprocess.STDOUT, start_new_session=True)
         try:
             while process.poll() is None:
+                descendants.update(_descendant_snapshot(process.pid))
                 if interrupt and not interrupted and ready(repo):
                     process.send_signal(signal.SIGINT)
                     interrupted = True
                     # Allow normal orchestrator/provider cleanup; do not signal twice.
                 if clock() - start >= timeout:
                     timed_out = True
-                    stop_process(process)
+                    stop_process(process, descendants)
                     break
                 sleep(0.05)
         finally:
-            stop_process(process)
+            stop_process(process, descendants)
     return {"returncode": process.returncode, "interrupted": interrupted,
             "timed_out": timed_out, "log": str(log), "seconds": clock() - start}
 

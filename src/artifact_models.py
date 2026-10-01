@@ -2448,7 +2448,7 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     raw = asdict(payload)
     if isinstance(payload, RunProfilePayload):
         for slot in ("implementer", "reviewer", "final_reviewer"):
-            raw[slot]["binary_identity"]["interpreter_args"] = list(raw[slot]["binary_identity"]["interpreter_args"])
+            raw[slot]["binary_identity"] = getattr(payload, slot).binary_identity.to_dict()
             if raw[slot]["isolation_options_sha256"] is None:
                 raw[slot].pop("isolation_options_sha256")
     if (isinstance(payload, RunProfilePayload)
@@ -2524,6 +2524,7 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     if isinstance(payload, ProviderAttemptPayload) and not payload.permission_denials:
         raw.pop("permission_denials", None)
     if isinstance(payload, ProviderAttemptPayload):
+        raw["binary_identity"] = payload.binary_identity.to_dict()
         if not payload.actual_models:
             raw.pop("actual_models", None)
         if payload.init_model is None:

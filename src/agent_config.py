@@ -17,6 +17,7 @@ import role_occupancy
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+REVIEWER_ENVIRONMENT_POLICY = ("PATH", "HOME", "LANG", "LC_*", "TERM", "TMPDIR", "CODEX_HOME")  # allowlist:provider -- profile configuration: credential-free reviewer environment
 
 
 class AgentConfigError(ValueError):
@@ -104,6 +105,8 @@ def isolation_options_digest(settings: AgentSettings) -> str | None:
         catalog_binding = ({"reviewer_model_row_sha256": reviewer_model_row_sha256(settings.reviewer_model_catalog_json, settings.model)}
                            if settings.reviewer_model_catalog_json is not None else {"reviewer_model_catalog": None})
         payload = json.dumps({**catalog_binding,
+                              **({"process_environment_allowlist": REVIEWER_ENVIRONMENT_POLICY}
+                                 if settings.reviewer_model_catalog_json is not None else {}),
                               "fixed_environment": settings.fixed_environment,
                               "toolchain_read_roots": settings.toolchain_read_roots}, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

@@ -1216,7 +1216,9 @@
         "interpreter_real_path": {"type": ["string", "null"]},
         "interpreter_version": {"type": ["string", "null"]},
         "interpreter_args": {"type": "array", "items": {"type": "string"}},
-        "interpreter_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+        "interpreter_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "native_binary_path": {"type": "string", "minLength": 1},
+        "native_binary_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "run_profile": {

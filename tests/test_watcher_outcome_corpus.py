@@ -55,7 +55,37 @@ PRE_B61_BLOB = "30581cdc366f48579f1f3f8c8f94ce69575948d0"
 HISTORICAL_RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 RECORD_SEQUENCE_BLOB = "5c135a8002a03359ef097164fe4b6d3ac32f3664"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
-SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
+def _project_shutdown_delta(source_text):
+    """Check the authorized signal delta, then compare legacy Ctrl-C unchanged.
+
+    The frozen refactoring corpus predates signal-specific statuses. No anchor
+    or fixture is resealed; raw watch signal behavior is tested separately.
+    """
+    tree = ast.parse(source_text, filename=str(SOURCE))
+    watch = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "watch_inbox")
+    helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_shutdown_status")
+    expected = ast.parse('''def _shutdown_status(exc):
+    from cli import ShutdownRequested
+    if isinstance(exc, ShutdownRequested):
+        logger.warning("Watch mode interrupted; resume with --resume (signal=%s).", exc.signal_number)
+        return 128 + exc.signal_number
+    logger.info("Watch mode stopped.")
+    return 0
+''').body[0]
+    assert ast.dump(helper, include_attributes=False) == ast.dump(expected, include_attributes=False)
+    handler = next(node for node in ast.walk(watch) if isinstance(node, ast.ExceptHandler)
+                   and isinstance(node.type, ast.Name) and node.type.id == "KeyboardInterrupt")
+    assert handler.name == "exc"
+    expected_body = ast.parse("return _shutdown_status(exc)").body
+    assert ast.dump(ast.Module(body=handler.body,type_ignores=[]), include_attributes=False) == ast.dump(ast.Module(body=expected_body,type_ignores=[]), include_attributes=False)
+    handler.name = None
+    legacy_body = ast.parse('logger.info("Watch mode stopped.")\nreturn 0')
+    ast.increment_lineno(legacy_body, handler.lineno)
+    handler.body = legacy_body.body
+    return ast.fix_missing_locations(tree)
+
+
+SOURCE_TREE = _project_shutdown_delta(SOURCE_TEXT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1603,3 +1633,8 @@ def test_b61_watch_entry_shrinks_and_helpers_stay_below_threshold() -> None:
     }
     assert set(helper_spans) == set(B61_HELPERS)
     assert all(span < threshold for span in helper_spans.values()), helper_spans
+
+
+def test_signal_delta_projection_rejects_changed_shutdown_status():
+    with pytest.raises(AssertionError):
+        _project_shutdown_delta(SOURCE_TEXT.replace('128 + exc.signal_number', '0'))

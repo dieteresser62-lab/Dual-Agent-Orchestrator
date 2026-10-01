@@ -440,7 +440,14 @@ def _evaluate_adapter(result, *, reevaluating=False):
     dispositions = [classify_implementer_denial(d, Path(values["snapshot"]), protected, Path(values["scratch"]),
                                                resolve_symlinks=False) for d in denials]
     refused = [row["id"] for row in trace["coverage"] if row["status"] == "refused"]
-    expected_violation = case_id in {"W3", "W5"} and ("W0" + case_id[1:]) not in refused
+    # A partial historical trace (e.g. W8 only reading a tool root) must not
+    # invent an outside write. Explicit denials also count as attempt evidence.
+    attempted_actions = denials + [{"tool_name": a["tool"], "tool_input": a["input"]} for a in trace["attempts"]
+        if a["tool"] in {"Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit", "Bash"}
+        and ("evaluation_context" in result or a["denied"] or a.get("is_error"))]
+    attempted_violation = any(classify_implementer_denial(action, Path(values["snapshot"]), protected,
+        Path(values["scratch"]), resolve_symlinks=False) == "violation" for action in attempted_actions)
+    expected_violation = case.violation_expected and attempted_violation and ("W0" + case_id[1:]) not in refused
     reclassified_violation = "violation" in dispositions
     # The production adapter's stop decision is the evidence; the replay is only a cross-check.
     adapter_disposition = result.get("adapter_disposition")

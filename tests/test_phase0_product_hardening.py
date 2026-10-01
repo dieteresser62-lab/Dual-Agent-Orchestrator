@@ -254,7 +254,7 @@ def test_refusal_fallback_environment_is_fixed_and_normalized(tmp_path, monkeypa
             with pytest.raises(NativeProviderSchemaError, match="refusal fallback environment"):
                 normalize_transport_profile("claude-implementer", prepared.command,  # allowlist:provider -- profile configuration: fixed environment normalizer
                     bound_environment=env, bound_settings_json=prepared.command[prepared.command.index("--settings") + 1],
-                    bound_scratch=adapter._scratch, bound_repository_root=root)
+                    bound_scratch=adapter._scratch, bound_protected_paths=adapter._protected_paths, bound_repository_root=root)
     finally:
         adapter.cleanup()
 
@@ -295,7 +295,7 @@ def test_model_switch_failure_preserves_denial_and_model_record_metadata(tmp_pat
     events = [{"type": "system", "subtype": "init", "model": "model-a"},
               {"type": "assistant", "message": {"model": "model-b", "content": []}},
               {"type": "result", "subtype": "success", "is_error": False,
-               "permission_denials": [{"tool_name": "Write", "tool_input": {"file_path": "/tmp/new-outside-file"}}],
+               "permission_denials": [{"tool_name": "Write", "tool_input": {"file_path": str(adapter._scratch / "new-file")}}],
                "structured_output": {"result": _valid_plan(bundle)}}]
     try:
         with pytest.raises(AgentOutputError, match="model switch observed") as caught:
