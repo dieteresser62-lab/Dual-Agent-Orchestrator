@@ -1,2 +1,4 @@
 * text=auto eol=lf
 run_task text eol=lf
+*.pdf binary
+*.zip binary
