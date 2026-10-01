@@ -83,20 +83,8 @@ def test_agy_budget_and_timeout_parse_but_candidate_cannot_start(
     from role_certification import load_role_certifications
     root = Path(__file__).resolve().parents[1]
     candidate_root = tmp_path / "candidate_registry"
-    for relative in (
-        "schemas/role-provider-certifications-v1.json",
-        "schemas/native-provider-schema-capabilities-v2.json",
-        "docs/evidence/role-certification-v1.json",
-        "docs/evidence/role-certification-reviewer-restricted-v1.json",
-        "docs/evidence/role-certification-candidates-v1.json",
-        "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer candidate proof
-        "docs/evidence/antigravity/capability-v1.json",
-        "docs/evidence/antigravity/canary-v1.json",
-    ) + tuple(row[key]["path"] for row in json.loads((root / "schemas/role-provider-certifications-v1.json").read_text())["certifications"]
-              for key in ("evidence", "canary_evidence") if key in row):
-        target = candidate_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(root / relative, target)
+    from tests.test_role_certification import _copy_sources
+    _copy_sources(candidate_root)
     table_path = candidate_root / "schemas/role-provider-certifications-v1.json"
     document = json.loads(table_path.read_text())
     for row in document["certifications"]:

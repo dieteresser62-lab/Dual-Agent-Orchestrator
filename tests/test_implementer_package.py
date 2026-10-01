@@ -371,6 +371,7 @@ def test_live_cli_preserves_every_negative_task_in_report(tmp_path, monkeypatch)
     assert called == list(scoring.TASK_IDS)
     assert len(report["tasks"]) == 6 and report["verdict"] == "failed"
     assert report["rule_sha256"] == scoring.RULE_SHA256
+    assert report["orchestrator"] == runner.orchestrator_identity(runner.ROOT)
 
 
 def test_default_cli_never_calls_orchestrator(tmp_path, monkeypatch):

@@ -4,6 +4,22 @@
    "changes": [
     {
      "field_type": "string",
+     "path": "/decisions/0/envelope_sha256",
+     "rules": [
+      "digest"
+     ]
+    }
+   ],
+   "derived_sha256": "be1e7778de9aa8e15a26b9bdc05855132dd7c1b26875f50dc06ba1e2ab19f602",
+   "outcomes_sha256": "6d7f0061258b0fdf76f672a974ddd163b0bd36c2d86cd615aff217fd37b3d29c",
+   "path": "operator-decisions-v1.json",
+   "source_id": "reviewer-operator-decisions",
+   "source_sha256": "4d152224cc0d30057bc2a84ec10ca2de656e571855cc7f45fcd2e6c3e8455a76"
+  },
+  {
+   "changes": [
+    {
+     "field_type": "string",
      "path": "/format/0/path",
      "rules": [
       "temporary"
@@ -255,7 +271,7 @@
      ]
     }
    ],
-   "derived_sha256": "32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a",
+   "derived_sha256": "019493fb97f82a27b412bcda01256f1719f323a9e6ba19cfb0f20199cf7949bc",
    "outcomes_sha256": "2cd077709f15e6d44b5481ebd8e2576928f582f80d2394182a5444617e4b75f8",
    "path": "phase0-results.json",
    "source_id": "reviewer-phase0-completion",
@@ -320,7 +336,7 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
      "rules": [
       "home"
      ]
@@ -404,7 +420,7 @@
     },
     {
      "field_type": "string",
-     "path": "/native_observation/result/rationale",
+     "path": "/native_observation/result/rationale/2",
      "rules": [
       "temporary"
      ]
@@ -418,7 +434,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -432,7 +448,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
      "rules": [
       "temporary"
      ]
@@ -446,7 +462,21 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/2/output",
+     "path": "/observations/attempts/2/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/11",
      "rules": [
       "temporary"
      ]
@@ -460,10 +490,37 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/3/output",
+     "path": "/observations/attempts/3/output/1",
      "rules": [
-      "home",
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/3/output/6",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -503,9 +560,78 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
      "rules": [
-      "home",
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/11",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/11/item/text/@json/result/rationale/2",
+     "rules": [
       "temporary"
      ]
     },
@@ -538,7 +664,7 @@
      ]
     }
    ],
-   "derived_sha256": "3cbe8c3f84c846683f0c2d1ba34cc5d35667aad49c1f5259e6d940ee5ad81511",
+   "derived_sha256": "7c343cb763a8d9a98f69346ed183bf33ad4f9b369d1889fc730c6449a1ae4a8f",
    "outcomes_sha256": "c34f7f0bebaf991662cdaa5abcf6987f827295f92715e2b25c185a3cee560825",
    "path": "phase0/P1.json",
    "source_id": "reviewer-phase0-P1",
@@ -555,7 +681,56 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/7",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/8",
      "rules": [
       "home",
       "temporary"
@@ -612,7 +787,7 @@
     },
     {
      "field_type": "string",
-     "path": "/native_observation/result/rationale",
+     "path": "/native_observation/result/rationale/2",
      "rules": [
       "home"
      ]
@@ -626,7 +801,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -640,7 +815,56 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/8",
      "rules": [
       "home",
       "temporary"
@@ -655,11 +879,31 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/2/output",
+     "path": "/observations/attempts/2/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/141",
      "rules": [
       "home",
-      "username",
-      "temporary"
+      "username"
      ]
     },
     {
@@ -678,7 +922,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/1/unavailable_reason",
+     "path": "/observations/coverage/1/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -692,7 +936,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/2/unavailable_reason",
+     "path": "/observations/coverage/2/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -706,7 +950,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/3/unavailable_reason",
+     "path": "/observations/coverage/3/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -720,7 +964,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/4/unavailable_reason",
+     "path": "/observations/coverage/4/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -734,7 +978,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/5/unavailable_reason",
+     "path": "/observations/coverage/5/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -748,7 +992,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/6/unavailable_reason",
+     "path": "/observations/coverage/6/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -763,7 +1007,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/coverage/7/unavailable_reason",
+     "path": "/observations/coverage/7/unavailable_reason/1",
      "rules": [
       "home"
      ]
@@ -791,11 +1035,102 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/8",
      "rules": [
       "home",
-      "username",
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/141",
+     "rules": [
+      "home",
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/9/item/text/@json/result/rationale/2",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -827,7 +1162,7 @@
      ]
     }
    ],
-   "derived_sha256": "69bfe6063457ce177e8e64e4c851138b9d56c87d81de5c141286e87145cbac46",
+   "derived_sha256": "e3908995d2713fdd1567118658f5d4b0d65717817a50f5a59eb1d2bc8cd5b3e2",
    "outcomes_sha256": "4e21ef3a5ede79e2f5ffab09ab0e6b6cdba157e21a01a687dbd302fc771f14ef",
    "path": "phase0/P2.json",
    "source_id": "reviewer-phase0-P2",
@@ -844,10 +1179,23 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
      "rules": [
-      "home",
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/2",
+     "rules": [
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/3",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -908,7 +1256,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -922,7 +1270,21 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/3",
      "rules": [
       "temporary"
      ]
@@ -936,7 +1298,21 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/2/output",
+     "path": "/observations/attempts/2/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/8",
      "rules": [
       "temporary"
      ]
@@ -992,7 +1368,49 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/8",
      "rules": [
       "temporary"
      ]
@@ -1026,7 +1444,7 @@
      ]
     }
    ],
-   "derived_sha256": "a5593ec1274581a556a1e2f21875dbc56f118861e6f432a23a968050d6383b49",
+   "derived_sha256": "f13d78c5b8c365e5009fc1c0bf67b1f8da4a1074d2061d7a8215883324968fd9",
    "outcomes_sha256": "12a85aa4831f020705dbab1feb5476c1cacf262a41202482dc9e6db90ea26246",
    "path": "phase0/P3.json",
    "source_id": "reviewer-phase0-P3",
@@ -1043,9 +1461,15 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
      "rules": [
-      "home",
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/3",
+     "rules": [
       "temporary"
      ]
     },
@@ -1114,7 +1538,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -1135,7 +1559,14 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/3",
      "rules": [
       "temporary"
      ]
@@ -1149,7 +1580,21 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/2/output",
+     "path": "/observations/attempts/2/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/2/output/137",
      "rules": [
       "temporary"
      ]
@@ -1198,7 +1643,70 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/8/item/aggregated_output/137",
      "rules": [
       "temporary"
      ]
@@ -1232,7 +1740,7 @@
      ]
     }
    ],
-   "derived_sha256": "d1ca08eb9824785e8bcf30cf55bfb420f02f17865f10f4fe911a8db1a4470c62",
+   "derived_sha256": "b892a5b19a1fc67f31ab899011ad0f1c8f65a2b5cbfd349901f3f85aa296cd4c",
    "outcomes_sha256": "81fa4ec9a11e32a87f1d356c010cf88a874f3ae906b8f9237bf146fcbd9f2e35",
    "path": "phase0/P4.json",
    "source_id": "reviewer-phase0-P4",
@@ -1249,7 +1757,35 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/5",
      "rules": [
       "home"
      ]
@@ -1312,7 +1848,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -1326,10 +1862,37 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
      "rules": [
-      "home",
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/5",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -1418,7 +1981,14 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/7/output",
+     "path": "/observations/attempts/7/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/7/output/2",
      "rules": [
       "temporary"
      ]
@@ -1439,7 +2009,56 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/9/output",
+     "path": "/observations/attempts/9/output/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/8",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/9/output/10",
      "rules": [
       "home",
       "username"
@@ -1503,11 +2122,178 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/3",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/11/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/12/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/13/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/13/item/aggregated_output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/14/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/14/item/aggregated_output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/15/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/16/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/16/item/aggregated_output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/18/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/18/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/3",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/4",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/5",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/6",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/8",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/22/item/aggregated_output/10",
      "rules": [
       "home",
-      "username",
-      "temporary"
+      "username"
      ]
     },
     {
@@ -1539,7 +2325,7 @@
      ]
     }
    ],
-   "derived_sha256": "3c1a36b79a185d47ea28c25d57c1298a872a12c027725408c7e89ca105ff4d83",
+   "derived_sha256": "b1fd3ab59c9e0d7a080ca1979011fa89be69b441f0b603ceca520440157b6b8a",
    "outcomes_sha256": "e9da7f0f56a48101f100b29cb56337ebf90b8e542b9a87f10215f7b3ed8105a5",
    "path": "phase0/P5.json",
    "source_id": "reviewer-phase0-P5",
@@ -1556,7 +2342,14 @@
     },
     {
      "field_type": "string",
-     "path": "/evaluation_context/prompt",
+     "path": "/evaluation_context/prompt/1",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/evaluation_context/prompt/2",
      "rules": [
       "home"
      ]
@@ -1619,7 +2412,7 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/0/output",
+     "path": "/observations/attempts/0/output/4",
      "rules": [
       "temporary"
      ]
@@ -1633,10 +2426,16 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/1/output",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/1",
      "rules": [
-      "home",
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/1/output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -1683,7 +2482,21 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/5/output",
+     "path": "/observations/attempts/5/output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/5/output/134",
      "rules": [
       "temporary"
      ]
@@ -1697,7 +2510,14 @@
     },
     {
      "field_type": "string",
-     "path": "/observations/attempts/6/output",
+     "path": "/observations/attempts/6/output/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/observations/attempts/6/output/3",
      "rules": [
       "home"
      ]
@@ -1746,10 +2566,79 @@
     },
     {
      "field_type": "string",
-     "path": "/run/stdout",
+     "path": "/run/stdout/@jsonl/4/item/aggregated_output/4",
      "rules": [
-      "home",
       "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/1",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/6/item/aggregated_output/@json/evidence_manifest/0/content/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/7/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/command",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/10/item/aggregated_output",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/14/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/14/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/14/item/aggregated_output/134",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/16/item/aggregated_output/2",
+     "rules": [
+      "home"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/run/stdout/@jsonl/16/item/aggregated_output/3",
+     "rules": [
+      "home"
      ]
     },
     {
@@ -1781,7 +2670,7 @@
      ]
     }
    ],
-   "derived_sha256": "b5b7f925ee8644fc03ab405cabb15dad31b7b8dc4bf1fa88f60ca5912224749c",
+   "derived_sha256": "6cac93916d5e4b93b88ddf8cc30e1771f42d6286729784c76fdfe9438d96f033",
    "outcomes_sha256": "3ed0a907da1707b939504de05fe6b58890e12781cad8ed748ae86230fc9c1b50",
    "path": "phase0/P6.json",
    "source_id": "reviewer-phase0-P6",
@@ -1791,158 +2680,1399 @@
    "changes": [
     {
      "field_type": "string",
-     "path": "/envelopes/0/envelope/envelope/process_events",
+     "path": "/envelopes/0/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/1/envelope/envelope/process_events",
-     "rules": [
-      "username",
-      "temporary"
-     ]
-    },
-    {
-     "field_type": "string",
-     "path": "/envelopes/2/envelope/envelope/process_events",
+     "path": "/envelopes/0/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/3/envelope/envelope/process_events",
-     "rules": [
-      "username",
-      "temporary"
-     ]
-    },
-    {
-     "field_type": "string",
-     "path": "/envelopes/4/envelope/envelope/process_events",
+     "path": "/envelopes/0/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/5",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/5/envelope/envelope/process_events",
+     "path": "/envelopes/0/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/7",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/6/envelope/envelope/process_events",
-     "rules": [
-      "username",
-      "temporary"
-     ]
-    },
-    {
-     "field_type": "string",
-     "path": "/envelopes/7/envelope/envelope/process_events",
-     "rules": [
-      "username",
-      "temporary"
-     ]
-    },
-    {
-     "field_type": "string",
-     "path": "/envelopes/8/envelope/envelope/process_events",
-     "rules": [
-      "username",
-      "temporary"
-     ]
-    },
-    {
-     "field_type": "string",
-     "path": "/envelopes/9/envelope/envelope/process_events",
+     "path": "/envelopes/0/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/139",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/10/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/11/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/0",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/15/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/2",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/16/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/134",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/17/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/5",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/6",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/18/envelope/envelope/process_events",
+     "path": "/envelopes/1/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/8",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/19/envelope/envelope/process_events",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/21/envelope/envelope/process_events",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/22/envelope/envelope/process_events",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/5",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/24/envelope/envelope/process_events",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/7",
      "rules": [
       "temporary"
      ]
     },
     {
      "field_type": "string",
-     "path": "/envelopes/25/envelope/envelope/process_events",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/2/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/6",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/7",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/8",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/10",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/34",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/3/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/36",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/264",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/4/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/264",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/5/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/5/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/5/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/5/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/6",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/7",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/8",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/10",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/6/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/5",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/139",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/5",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/8",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/10",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/272",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/1",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/2",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/3",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/7/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/4",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/8",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/10",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/14/item/aggregated_output/6",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/14/item/aggregated_output/7",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/14/item/aggregated_output/8",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/14/item/aggregated_output/9",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/8/envelope/envelope/process_events/@jsonl/14/item/aggregated_output/10",
+     "rules": [
+      "username"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/6",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/8",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/10",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/9/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/7",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/10/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/11/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/131",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/133",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/15/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/16/envelope/envelope/process_events/@jsonl/12/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/10/item/aggregated_output",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/17/envelope/envelope/process_events/@jsonl/16/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/10",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/12",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/291",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/18/envelope/envelope/process_events/@jsonl/10/item/aggregated_output/293",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/19/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/19/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/19/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/19/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/11",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/21/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/2",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/22/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/11",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/10",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/24/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/12",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/3/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/4/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/4/item/aggregated_output/4",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/5/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/6/item/command",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/0",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/9",
+     "rules": [
+      "temporary"
+     ]
+    },
+    {
+     "field_type": "string",
+     "path": "/envelopes/25/envelope/envelope/process_events/@jsonl/8/item/aggregated_output/11",
      "rules": [
       "temporary"
      ]
     }
    ],
-   "derived_sha256": "18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8",
+   "derived_sha256": "4a9cdfa87d220c5dfcdfe17af6839c80de513d85f60db11d90a60e1a943ea2f9",
    "outcomes_sha256": "6502311244856c2e007b49bf16bfc6c07286f02d12fd1fcb16257384b53c3fee",
    "path": "qualification-envelopes-v1.json.gz",
    "source_id": "qualification-envelopes-v1",
@@ -2105,7 +4235,7 @@
      ]
     }
    ],
-   "derived_sha256": "131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c",
+   "derived_sha256": "a6a3c984ba697c59bef569226f46fd9a7c8c017831215d3df5efba0ca052f48f",
    "outcomes_sha256": "3469ef307292cc1e6a4250c2931045e4bc4d4e8ca9117fb155300add38a61ca5",
    "path": "qualification-series-v1.json",
    "source_id": "qualification-series-v1.json",
@@ -2130,7 +4260,9 @@
  ],
  "generated_files": [],
  "rules": {
+  "account": "Remove account, organization, subscription and quota fields, including embedded JSON streams; retain operational random session/event IDs.",
   "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "email": "Replace email addresses by <email>.",
   "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
   "hostname": "Replace runtime host names at token boundaries by <host>.",
   "report-reference": "Use bundle-relative report paths instead of private absolute paths.",

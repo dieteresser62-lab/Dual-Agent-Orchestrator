@@ -4,7 +4,7 @@
     "final_reviewer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=f0546df7b65468b75afd82fc6c6f91431a09f954210de665c3d0b9bcdd574f7b; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=019493fb97f82a27b412bcda01256f1719f323a9e6ba19cfb0f20199cf7949bc; docs/evidence/codex/qualification-series-v1.json sha256=a6a3c984ba697c59bef569226f46fd9a7c8c017831215d3df5efba0ca052f48f; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=4a9cdfa87d220c5dfcdfe17af6839c80de513d85f60db11d90a60e1a943ea2f9; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=be1e7778de9aa8e15a26b9bdc05855132dd7c1b26875f50dc06ba1e2ab19f602; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
@@ -14,7 +14,7 @@
     "implementer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=f0546df7b65468b75afd82fc6c6f91431a09f954210de665c3d0b9bcdd574f7b; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=019493fb97f82a27b412bcda01256f1719f323a9e6ba19cfb0f20199cf7949bc; docs/evidence/codex/qualification-series-v1.json sha256=a6a3c984ba697c59bef569226f46fd9a7c8c017831215d3df5efba0ca052f48f; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=4a9cdfa87d220c5dfcdfe17af6839c80de513d85f60db11d90a60e1a943ea2f9; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=be1e7778de9aa8e15a26b9bdc05855132dd7c1b26875f50dc06ba1e2ab19f602; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
@@ -24,12 +24,54 @@
     "reviewer": [
       {
         "node_id": "tests/test_redact_evidence.py::test_public_measurements_and_promotion_are_digest_bound",
-        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=981617335622f92dc75e5caeec55c889ddbf732a4ae9ca67c3a7ee0c2a514bc5; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=32a2e14f7fed71f333ce588583919a44409c59986fbfdbef742450c0b905f91a; docs/evidence/codex/qualification-series-v1.json sha256=131775452061a71b399bbceb28187db5f9de74e796d8060b4eefcd353fe16b6c; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=18844b14bfae850a4fd397f51f810d2d64e59976af568519af9055dfaa2e23c8; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=4751e14a4829e3614c40026f758418342dd61926c73d949a9a171b9860d83e45; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
+        "proves": "Public measurements: docs/evidence/codex/redaction-manifest-v1.json sha256=f0546df7b65468b75afd82fc6c6f91431a09f954210de665c3d0b9bcdd574f7b; docs/evidence/codex/role-canary-v1.json sha256=46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d; docs/evidence/codex/phase0-results.json sha256=019493fb97f82a27b412bcda01256f1719f323a9e6ba19cfb0f20199cf7949bc; docs/evidence/codex/qualification-series-v1.json sha256=a6a3c984ba697c59bef569226f46fd9a7c8c017831215d3df5efba0ca052f48f; docs/evidence/codex/qualification-envelopes-v1.json.gz sha256=4a9cdfa87d220c5dfcdfe17af6839c80de513d85f60db11d90a60e1a943ea2f9; docs/evidence/codex/quality-results-v1.json sha256=5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414; docs/evidence/codex/operator-decisions-v1.json sha256=be1e7778de9aa8e15a26b9bdc05855132dd7c1b26875f50dc06ba1e2ab19f602; operator size-override accepts the measured 512 case despite DISCOVERY_OUTPUT_LIMIT; the 128 case passed."
       },
       {
         "node_id": "tests/test_redact_evidence.py::test_experimental_topology_starts_and_standard_remains_default",
         "proves": "The explicit experimental topology loads without a candidate gate; default occupancy and manufacturer separation remain enforced."
       }
     ]
-  }
+  },
+  "shared_evidence": [
+    {
+      "path": "docs/evidence/claude/topology-run-v1.json",
+      "sha256": "0be29d3bcd2f4c355b3e197b4b579e5751ea70aca2478e2dd1085d61aededb25"
+    },
+    {
+      "path": "docs/evidence/codex/operator-decisions-v1.json",
+      "sha256": "be1e7778de9aa8e15a26b9bdc05855132dd7c1b26875f50dc06ba1e2ab19f602"
+    },
+    {
+      "path": "docs/evidence/codex/phase-0-v1.json",
+      "sha256": "f241302d273095eb1b3ba4dad9a64da4a1ad09df031b8bc022184c35c5b7eaac"
+    },
+    {
+      "path": "docs/evidence/codex/phase0-results.json",
+      "sha256": "019493fb97f82a27b412bcda01256f1719f323a9e6ba19cfb0f20199cf7949bc"
+    },
+    {
+      "path": "docs/evidence/codex/qualification-envelopes-v1.json.gz",
+      "sha256": "4a9cdfa87d220c5dfcdfe17af6839c80de513d85f60db11d90a60e1a943ea2f9"
+    },
+    {
+      "path": "docs/evidence/codex/qualification-protocol-v6.json",
+      "sha256": "fa1e65f4734b230657f685921d965a5fe66223458c4d5a80e07a60a4c85c6222"
+    },
+    {
+      "path": "docs/evidence/codex/qualification-series-v1.json",
+      "sha256": "a6a3c984ba697c59bef569226f46fd9a7c8c017831215d3df5efba0ca052f48f"
+    },
+    {
+      "path": "docs/evidence/codex/quality-results-v1.json",
+      "sha256": "5a5865839656d37c7000f8bb2f4770fc5a06a8b25ea9136eeebdf8ef6e20a414"
+    },
+    {
+      "path": "docs/evidence/codex/redaction-manifest-v1.json",
+      "sha256": "f0546df7b65468b75afd82fc6c6f91431a09f954210de665c3d0b9bcdd574f7b"
+    },
+    {
+      "path": "docs/evidence/codex/role-canary-v1.json",
+      "sha256": "46d1c987ad110dc84dc3096dccb61eb49dc17fed00e40c82db87f104f82a779d"
+    }
+  ]
 }

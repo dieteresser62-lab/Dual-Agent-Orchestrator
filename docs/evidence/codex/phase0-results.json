@@ -38,32 +38,32 @@
   {
    "case": "P1",
    "path": "phase0/P1.json",
-   "sha256": "3cbe8c3f84c846683f0c2d1ba34cc5d35667aad49c1f5259e6d940ee5ad81511"
+   "sha256": "7c343cb763a8d9a98f69346ed183bf33ad4f9b369d1889fc730c6449a1ae4a8f"
   },
   {
    "case": "P2",
    "path": "phase0/P2.json",
-   "sha256": "69bfe6063457ce177e8e64e4c851138b9d56c87d81de5c141286e87145cbac46"
+   "sha256": "e3908995d2713fdd1567118658f5d4b0d65717817a50f5a59eb1d2bc8cd5b3e2"
   },
   {
    "case": "P3",
    "path": "phase0/P3.json",
-   "sha256": "a5593ec1274581a556a1e2f21875dbc56f118861e6f432a23a968050d6383b49"
+   "sha256": "f13d78c5b8c365e5009fc1c0bf67b1f8da4a1074d2061d7a8215883324968fd9"
   },
   {
    "case": "P4",
    "path": "phase0/P4.json",
-   "sha256": "d1ca08eb9824785e8bcf30cf55bfb420f02f17865f10f4fe911a8db1a4470c62"
+   "sha256": "b892a5b19a1fc67f31ab899011ad0f1c8f65a2b5cbfd349901f3f85aa296cd4c"
   },
   {
    "case": "P5",
    "path": "phase0/P5.json",
-   "sha256": "3c1a36b79a185d47ea28c25d57c1298a872a12c027725408c7e89ca105ff4d83"
+   "sha256": "b1fd3ab59c9e0d7a080ca1979011fa89be69b441f0b603ceca520440157b6b8a"
   },
   {
    "case": "P6",
    "path": "phase0/P6.json",
-   "sha256": "b5b7f925ee8644fc03ab405cabb15dad31b7b8dc4bf1fa88f60ca5912224749c"
+   "sha256": "6cac93916d5e4b93b88ddf8cc30e1771f42d6286729784c76fdfe9438d96f033"
   }
  ],
  "protocol_sha256": "fa1e65f4734b230657f685921d965a5fe66223458c4d5a80e07a60a4c85c6222",

@@ -26,7 +26,7 @@ def test_runtime_patterns_replace_values_and_keys_without_literal_accounts():
               'checks': {'secret': False}, 'status': 'failed', 'count': 512}
     public, changes = redactor().transform(source)
     assert '<HOME>/private' in public and '/home/<user>/repo' in public['<HOME>/private']
-    assert '<user>@<host>' in public['<HOME>/private']
+    assert '<email>' in public['<HOME>/private']
     assert public['checks'] == source['checks'] and public['status'] == source['status']
     assert public['count'] == 512
     assert any(item['field_type'] == 'object-key' for item in changes)
@@ -154,8 +154,11 @@ def test_public_measurements_and_promotion_are_digest_bound():
     assert summarize(package['tasks'], mode=package['mode']) == package
     assert package['verdict'] == 'passed' and package['passed_tasks'] == 5 and package['absolute_errors'] == []
     phase = probe.read_evidence(implementer/'phase0-results.json')
-    assert phase['safe_cases'] == 8 and phase['passed_cases'] == 5
-    assert phase['operator_decision']['finding_cases'] == ['W2', 'W4', 'W8']
+    assert phase['safe_cases'] == 7 and phase['passed_cases'] == 5
+    assert phase['not_measured_cases'] == ['W4']
+    decisions = probe.read_evidence(implementer/'operator-decisions-v1.json')
+    assert phase['operator_decision']['sha256'] == probe.sha((implementer/'operator-decisions-v1.json').read_bytes())
+    assert decisions['decisions'][0]['finding_cases'] == ['W2', 'W4', 'W8']
     for entry in phase['protection']:
         path = redact.public_path(implementer, entry['path'])
         report = probe.read_evidence(path)

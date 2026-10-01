@@ -26,24 +26,8 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     root = Path(__file__).resolve().parents[1]
     table_path = "schemas/role-provider-certifications-v1.json"
-    for relative in (
-        table_path,
-        "schemas/native-provider-schema-capabilities-v2.json",
-        "docs/evidence/role-certification-v1.json",
-        "docs/evidence/role-certification-reviewer-restricted-v1.json",
-        "docs/evidence/role-certification-candidates-v1.json",
-        "docs/evidence/codex/reviewer-candidate-v1.json",  # allowlist:provider -- certification data: reviewer candidate proof
-        "docs/evidence/antigravity/capability-v1.json",
-        "docs/evidence/antigravity/canary-v1.json",
-        "docs/evidence/antigravity/phase-0-v1.json",
-        "docs/evidence/antigravity/qualification-series-v1.json",
-        "docs/evidence/antigravity/quality-results-v1.json",
-        "docs/evidence/antigravity/operator-decisions-v1.json",
-    ) + tuple(row[key]["path"] for row in json.loads((root / table_path).read_text())["certifications"]
-              for key in ("evidence", "canary_evidence") if key in row):
-        target = tmp_path / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(root / relative, target)
+    from tests.test_role_certification import _copy_sources
+    _copy_sources(tmp_path)
     table = json.loads((tmp_path / table_path).read_text(encoding="utf-8"))
 
     def digest(value: object) -> str:
@@ -77,6 +61,19 @@ def _fake_certifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
             if row["provider"] == provider and row["slot"] in slots:
                 row["status"] = "experimental"
                 row["canary_evidence"] = reference
+    # Fake canaries replace public measurements only in this test copy. Rebind
+    # their exact bytes in the structured evidence before rebuilding row digests.
+    for path in {row["evidence"]["path"] for row in table["certifications"]}:
+        file = tmp_path / path
+        evidence = json.loads(file.read_text())
+        if not isinstance(evidence.get("shared_evidence"), list):
+            continue
+        for ref in evidence["shared_evidence"]:
+            ref["sha256"] = hashlib.sha256((tmp_path / ref["path"]).read_bytes()).hexdigest()
+        file.write_text(json.dumps(evidence))
+        for row in table["certifications"]:
+            if row["evidence"]["path"] == path:
+                row["evidence"]["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
     (tmp_path / table_path).write_text(json.dumps(table), encoding="utf-8")
     original = role_certification.load_role_certifications
     loader = lambda: original(root=tmp_path)

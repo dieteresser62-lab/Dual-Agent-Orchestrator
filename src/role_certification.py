@@ -31,6 +31,7 @@ _LEGACY_CANARY_FORMATS = {
     "antigravity-canary-v1": ("antigravity", "docs/evidence/antigravity/canary-v1.json"),
 }
 _CANARY_CHECKS = frozenset({"writer", "domain", "effective_rights", "isolation_postcheck", "no_denials"})
+_ROLE_QUALIFICATION_PROVIDERS = {"codex", "claude"}  # allowlist:provider -- certification data: promoted measurement bundle registry
 
 
 class CertificationErrorCode(StrEnum):
@@ -142,6 +143,8 @@ def _registered_manufacturers(
 
 def _validate_evidence_slots(document: dict[str, Any]) -> None:
     required = {"schema_version", "slots"}
+    if "shared_evidence" in document:
+        required.add("shared_evidence")
     if document.get("schema_version") == "antigravity-capability-v1":
         required.add("measurements")
     _require_keys(document, required, "evidence document")
@@ -170,6 +173,41 @@ def _validate_evidence_slots(document: dict[str, Any]) -> None:
                 or not isinstance(proves, str) or not proves.strip()
             ):
                 raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "invalid evidence test node ID or description")
+
+
+def _validate_role_shared_evidence(root: Path, document: dict[str, Any], *, provider: str, role: AgentRoleName) -> None:
+    """Require file-byte commitments, rather than treating prose claims as authority."""
+    if provider not in _ROLE_QUALIFICATION_PROVIDERS:
+        return  # Other providers retain their separate certification evidence contracts.
+    base = f"docs/evidence/{provider}/"
+    names = {"phase0-results.json", "operator-decisions-v1.json", "redaction-manifest-v1.json", "role-canary-v1.json"}
+    names |= ({"implementer-package-report-v1.json"} if role is AgentRoleName.IMPLEMENTER else
+              {"qualification-series-v1.json", "qualification-envelopes-v1.json.gz", "quality-results-v1.json",
+               "qualification-protocol-v6.json", "phase-0-v1.json"})
+    expected = {base + name for name in names}
+    expected.add("docs/evidence/claude/topology-run-v1.json")  # allowlist:provider -- certification data: measured topology
+    shared = document.get("shared_evidence")
+    if not isinstance(shared, list) or len(shared) != len(expected):
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "shared qualification evidence is incomplete")
+    seen = set()
+    for ref in shared:
+        if (not isinstance(ref, dict) or set(ref) != {"path", "sha256"}
+                or not isinstance(ref["path"], str) or ref["path"] not in expected or ref["path"] in seen):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "shared qualification reference differs")
+        seen.add(ref["path"])
+        _read_file(root, ref["path"], expected_digest=ref["sha256"])
+    # Completion manifests bind every P/F/W report, including report replacement/deletion.
+    completion = _json_file(root, base + "phase0-results.json")
+    for kind in ("protection", "format"):
+        for report in completion.get(kind, []):
+            if not isinstance(report, dict) or not isinstance(report.get("path"), str):
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "invalid Phase-0 report reference")
+            relative = PurePosixPath(report["path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "Phase-0 report path escapes bundle")
+            if not isinstance(report.get("sha256"), str) or _SHA256.fullmatch(report["sha256"]) is None:
+                raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "Phase-0 report digest is missing or invalid")
+            _read_file(root, base + str(relative), expected_digest=report.get("sha256"))
 
 
 def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_family_pattern: str) -> None:
@@ -435,6 +473,8 @@ def _load_role_certifications(
         if manufacturer != manufacturers[provider]:
             raise CertificationError(CertificationErrorCode.SOURCE_MISMATCH, "provider manufacturer differs")
         model_family_pattern = row.get("model_family_pattern")
+        if provider in {item[0] for item in _LEGACY_CANARY_FORMATS.values()} and model_family_pattern is None:
+            raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "AGY model family pattern is required")
         if model_family_pattern is not None:
             if not isinstance(model_family_pattern, str) or not model_family_pattern.startswith("^") or not model_family_pattern.endswith("$"):
                 raise CertificationError(CertificationErrorCode.ENTRY_INVALID, "model family pattern must be anchored")
@@ -505,6 +545,8 @@ def _load_role_certifications(
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)
             _validate_evidence_slots(evidence_cache[evidence_path])
         document = evidence_cache[evidence_path]
+        if canary_ref is not None and canary.get("schema_version") == "role-canary-v1" and row["status"] != "candidate":
+            _validate_role_shared_evidence(root, document, provider=provider, role=role)
         slot_refs = document["slots"]
         if slot.value not in slot_refs:
             raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, f"missing evidence for {slot.value}")

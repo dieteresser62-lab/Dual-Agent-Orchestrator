@@ -52,14 +52,19 @@ toolchain_read_roots = ["/absolute/node-root"]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 0
+timeout_seconds = 900
 
 [agent_profiles.final_review]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 0
+timeout_seconds = 900
 ```
+
+Die Zertifizierung gilt **je Slot**, ohne Allowlist kompletter Belegungen. Topologie-Evidenz liegt für Claude / Codex / Codex und die Standardbelegung vor; für andere Mischungen, etwa Claude / AGY / AGY oder Claude / Codex / AGY, wird ein eigener Probelauf empfohlen.
+
+Das Beispiel begrenzt beide Codex-Reviewprofile auf **900 Sekunden**. Stille, hängende Antworten von 20–60 Minuten wurden bei T4/T5 und im Topologie-Lauf beobachtet. Ein Zeitlimit macht diese Fälle für die transiente Wiederholung sichtbar. Die ausgelieferte Standardkonfiguration bleibt unverändert.
+
 
 `/absolute/node-root` ist ein Platzhalter für ein existierendes absolutes
 Verzeichnis, etwa `~/.nvm/versions/node/<version>`; `~` muss im TOML durch den

@@ -46,6 +46,17 @@ def _copy_sources(root: Path) -> None:
     source_table = json.loads((ROOT / TABLE).read_text())
     paths.update(row[key]["path"] for row in source_table["certifications"]
                  for key in ("evidence", "canary_evidence") if key in row)
+    # Promoted rows bind their measurement bundles, including P/F/W reports.
+    for ref in list(paths):
+        document = json.loads((ROOT / ref).read_text())
+        references = document.get("shared_evidence", [])
+        for shared in references.values() if isinstance(references, dict) else references:
+            paths.add(shared["path"])
+            if shared["path"].endswith("phase0-results.json"):
+                completion = json.loads((ROOT / shared["path"]).read_text())
+                for kind in ("protection", "format"):
+                    paths.update(str(Path(shared["path"]).parent / item["path"])
+                                 for item in completion.get(kind, []))
     for path in paths:
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -222,7 +222,7 @@
       "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
         "path": "docs/evidence/codex/role-certification-v1.json",
-        "sha256": "2abd5c5a8f488796f336bba79fb3e85790dffd7aefb49545bd5b4ac538e5c54a"
+        "sha256": "d744f7f656efae53dbb07155b021158b60d3d5a1db3a3e38dae2c8d35041716a"
       },
       "probe_profile": {
         "provider": "codex",
@@ -281,7 +281,7 @@
       "rights_sha256": "a82430d7c5b0996ee5fb90b664b57531e956bae119bed4314e6528d660c4f21c",
       "evidence": {
         "path": "docs/evidence/codex/role-certification-v1.json",
-        "sha256": "2abd5c5a8f488796f336bba79fb3e85790dffd7aefb49545bd5b4ac538e5c54a"
+        "sha256": "d744f7f656efae53dbb07155b021158b60d3d5a1db3a3e38dae2c8d35041716a"
       },
       "probe_profile": {
         "provider": "codex",
@@ -340,7 +340,7 @@
       "rights_sha256": "e63dced92a33d74fa722a0162a1b6b3883b3d550d27fade798c2576589b414ce",
       "evidence": {
         "path": "docs/evidence/claude/role-certification-v1.json",
-        "sha256": "c79ab023ef734defad1cacfcf8a81edaee7e5fae05124a4a2ea902b84213ddf4"
+        "sha256": "17dc564efb375da376f94184c5875255dfc91de8c0b5c8e7cfd63c638f218de2"
       },
       "probe_profile": {
         "provider": "claude",

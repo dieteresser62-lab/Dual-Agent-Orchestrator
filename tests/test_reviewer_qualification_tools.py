@@ -68,9 +68,12 @@ def test_fake_pair_reuses_plan_series_retries_blind_rating_and_final_verdict(tmp
     rated = probe.combine_quality_ratings(packet, mapping, quality["ratings"], corpus, protocol, answers)
     rated["reference_special_decision"] = "approve_experimental"
     assert probe.grade_quality(rated, corpus, protocol)["fake-candidate"]["passed"]
-    final = probe.qualification_summary(series, envelopes, protocol, rated, decisions)
-    assert final["qualified_for_canary"] == historical["qualified_for_canary"] is True
-    assert final["size_qualification"] == historical["size_qualification"] == "operator_override"
+    # The historical AGY size exception is confined to v5, even under a fake alias.
+    with pytest.raises(ValueError, match="legacy size override requires protocol v5"):
+        probe.qualification_summary(series, envelopes, protocol, rated, decisions)
+    final = probe.qualification_summary(series, envelopes, protocol, rated)
+    assert historical["qualified_for_canary"] is True
+    assert final["qualified_for_canary"] is False and final["size_qualification"] == "failed"
 
 
 def test_campaign_retries_only_production_retryable_and_binds_restart(tmp_path: Path) -> None:

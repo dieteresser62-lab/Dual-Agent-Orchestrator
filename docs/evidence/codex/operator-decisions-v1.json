@@ -1,15 +1,32 @@
 {
-  "schema_version": "operator-decisions-v1",
-  "decisions": [
-    {
-      "id": "size-override",
-      "date": "2026-10-01",
-      "decision": "approve_experimental_despite_failed_size_case",
-      "series": "codex-large-s1",
-      "failed_case": "512",
-      "not_run": [],
-      "documented_weakness": "Wertet das exakte Erreichen von max_new_findings (512) als Ausgabegrenze und stoppt mit DISCOVERY_OUTPUT_LIMIT, statt die 512 erkannten Befunde zu liefern; 128 vollständig bestanden.",
-      "basis": "Operatorentscheidung 01.10.2026 nach Entblindung: Qualität bestanden (2/2 kritisch, 4/4 Defekte, 0 unbegründet, 0 erfunden), Transport 12/12, Timeout korrekt, 128 bestanden; 512 als dokumentierte Schwäche akzeptiert."
-    }
-  ]
+ "decisions": [
+  {
+   "basis": "Operatorentscheidung 01.10.2026 nach Entblindung: Qualität bestanden (2/2 kritisch, 4/4 Defekte, 0 unbegründet, 0 erfunden), Transport 12/12, Timeout korrekt, 128 bestanden; 512 als dokumentierte Schwäche akzeptiert.",
+   "call_id": "codex-large-s1-512",
+   "date": "2026-10-01",
+   "decision": "approve_experimental_despite_failed_size_case",
+   "documented_weakness": "Wertet das exakte Erreichen von max_new_findings (512) als Ausgabegrenze und stoppt mit DISCOVERY_OUTPUT_LIMIT, statt die 512 erkannten Befunde zu liefern; 128 vollständig bestanden.",
+   "envelope_sha256": "bf17d576c2a9f9f673b467b503245da44bf83d3af68f6924e8fea50e54ec61c9",
+   "failed_case": "512",
+   "failed_checks": [
+    "finding_count",
+    "all_paths",
+    "unique_ids"
+   ],
+   "id": "size-override",
+   "not_run": [],
+   "series": "codex-large-s1"
+  },
+  {
+   "basis": "Der Steuermann-Bewerter gehört zum Hersteller der Referenz. Er war vorab in Protokoll v6 festgelegt; beide Blindbewerter waren in allen regelrelevanten Punkten einig. Die Kampagne wird so akzeptiert. Nach v6 werden Bewerter gegen Kandidaten- und Referenzhersteller geprüft.",
+   "date": "2026-10-01",
+   "decision": "accept_predeclared_reference_manufacturer_rater",
+   "id": "rater-neutrality-v6",
+   "protocol": "qualification-protocol-v6",
+   "rater": "steering",
+   "rater_manufacturer": "anthropic",
+   "reference_manufacturer": "anthropic"
+  }
+ ],
+ "schema_version": "operator-decisions-v1"
 }

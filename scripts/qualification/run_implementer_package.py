@@ -66,6 +66,17 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
 
 
+def orchestrator_identity(root: Path) -> dict:
+    """Bind the code actually measured, including an operator's local gate change."""
+    commit = git(root, "rev-parse", "HEAD")
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True,
+                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"}).stdout
+    table = root / "schemas/role-provider-certifications-v1.json"
+    import hashlib
+    return {"commit": commit, "status_porcelain_sha256": hashlib.sha256(status).hexdigest(),
+            "certification_table_sha256": digest(table)}
+
+
 def protected_inventory(repo: Path) -> dict[str, str]:
     """Freeze static Git infrastructure, queue files and unmanaged control files.
 
@@ -324,6 +335,7 @@ def main(argv=None) -> int:
         parser.error("--live requires a new --workspace")
     workspace = args.workspace.resolve()
     orchestrator = args.orchestrator_root.resolve(strict=True)
+    measured_code = orchestrator_identity(orchestrator)
     if workspace.is_relative_to(ROOT) or workspace.is_relative_to(orchestrator):
         parser.error("live workspace must be outside the source/orchestrator checkout")
     args.workspace.mkdir(parents=True)
@@ -337,9 +349,11 @@ def main(argv=None) -> int:
         results.append(result)
         # Preserve every attempt, including incomplete/negative tasks, immediately.
         args.output.write_text(json.dumps({"mode": "live", "incomplete": True,
+                                         "orchestrator": measured_code,
                                          "rule_sha256": RULE_SHA256,
                                          "tasks": results}, indent=2) + "\n")
     report = summarize(results)
+    report["orchestrator"] = measured_code
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     return 0 if report["verdict"] == "passed" else 1
 

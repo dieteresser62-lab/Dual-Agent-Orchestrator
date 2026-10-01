@@ -27,12 +27,15 @@ RULES = {
     'home': 'Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.',
     'username': 'Replace runtime account names at token boundaries by <user>.',
     'hostname': 'Replace runtime host names at token boundaries by <host>.',
+    'email': 'Replace email addresses by <email>.',
+    'account': 'Remove account, organization, subscription and quota fields, including embedded JSON streams; retain operational random session/event IDs.',
     'temporary': 'Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.',
     'report-reference': 'Use bundle-relative report paths instead of private absolute paths.',
     'digest': 'Recompute a declared public JSON or file binding after redaction.',
 }
 SHA = re.compile(r'[0-9a-f]{64}\Z')
-PLACEHOLDERS = re.compile(r'<(?:HOME|user|host|TMP|VAR_TMP)>')
+PLACEHOLDERS = re.compile(r'<(?:HOME|user|host|email|TMP|VAR_TMP)>')
+ACCOUNT_KEYS = re.compile(r'^(?:rate_limit_info|utilization|overage.*|isUsingOverage|rateLimitType|(?:organization|organisation|org|account|user|subscription)[_-]?(?:id|uuid))$', re.I)
 
 
 def encoded(document):
@@ -57,11 +60,12 @@ def pointer(parts):
 
 class Redactor:
     def __init__(self, home, usernames, hostnames):
-        self.rules = [('home', re.compile(re.escape(str(home)) + r'(?=$|[/\\\s"\'])'), '<HOME>'),
+        self.rules = [('email', re.compile(r'(?<![\w./\\<>])[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*(?![\w>])', re.I), '<email>'),
+                      ('home', re.compile(re.escape(str(home)) + r'(?=$|[/\\\s"\'])', re.I), '<HOME>'),
                       ('home', re.compile(r'/home/[^/<>\s"\'\\]+'), '/home/<user>')]
         for rule, names, placeholder in (('username', usernames, '<user>'), ('hostname', hostnames, '<host>')):
             for name in sorted(set(names) - {''}, key=lambda item: (-len(item), item)):
-                self.rules.append((rule, re.compile(r'(?<![\w<])' + re.escape(name) + r'(?![\w>])'), placeholder))
+                self.rules.append((rule, re.compile(r'(?<![\w<])' + re.escape(name) + r'(?![\w>])', re.I), placeholder))
         self.rules += [('temporary', re.compile(r'/var/tmp/'), '<VAR_TMP>/'),
                        ('temporary', re.compile(r'/tmp/'), '<TMP>/')]
 
@@ -85,6 +89,9 @@ class Redactor:
             if isinstance(item, dict):
                 output = {}
                 for key, child in item.items():
+                    if ACCOUNT_KEYS.fullmatch(key):
+                        changes.append({'path': pointer((*parts, key)), 'field_type': 'removed-field', 'rules': ['account']})
+                        continue
                     new_key, rules = self.text(key)
                     if new_key in output:
                         raise ValueError('redaction merges distinct object keys')
@@ -95,6 +102,33 @@ class Redactor:
             if isinstance(item, list):
                 return [visit(child, (*parts, index)) for index, child in enumerate(item)]
             if isinstance(item, str):
+                # Streams and last-message envelopes are JSON carried in strings.
+                # Parse them as data so account fields cannot survive inside stdout.
+                try:
+                    embedded = json.loads(item)
+                except (ValueError, RecursionError):
+                    embedded = None
+                if isinstance(embedded, (dict, list)):
+                    public = visit(embedded, (*parts, '@json'))
+                    return probe.canonical(public) if public != embedded else item
+                lines = item.splitlines(keepends=True)
+                if len(lines) > 1:
+                    cleaned = []
+                    for index, line in enumerate(lines):
+                        try:
+                            event = json.loads(line)
+                        except (ValueError, RecursionError):
+                            event = None
+                        if isinstance(event, (dict, list)):
+                            ending = '\n' if line.endswith('\n') else ''
+                            public = visit(event, (*parts, '@jsonl', index))
+                            cleaned.append(probe.canonical(public) + ending if public != event else line)
+                        else:
+                            value, rules = self.text(line)
+                            if rules:
+                                changes.append({'path': pointer((*parts, index)), 'field_type': 'string', 'rules': rules})
+                            cleaned.append(value)
+                    return ''.join(cleaned)
                 output, rules = self.text(item)
                 if rules:
                     changes.append({'path': pointer(parts), 'field_type': 'string', 'rules': rules})
@@ -106,6 +140,9 @@ class Redactor:
         text = PLACEHOLDERS.sub('<MASK>', probe.canonical(value))
         if any(pattern.search(text) for _, pattern, _ in self.rules):
             raise ValueError('personal pattern remains in exported evidence')
+        transformed, changes = self.transform(value)
+        if any('account' in change['rules'] for change in changes):
+            raise ValueError('account or quota field remains in exported evidence')
 
 
 OUTCOME_FIELDS = frozenset({'status', 'passed', 'verdict', 'decision', 'checks', 'judgments',
@@ -152,6 +189,8 @@ class Bundle:
         if isinstance(original, dict):
             for key, value in original.items():
                 public_key, _ = self.redactor.text(key)
+                if public_key not in public:
+                    continue
                 self.bind_embedded(name, value, public[public_key], (*parts, public_key))
             for key, value in original.items():
                 if not key.endswith('_sha256') or key[:-7] not in original:
@@ -272,7 +311,7 @@ def verify(folder, *, redactor=None):
             if item['outcomes_sha256'] != probe.digest(outcomes(document)):
                 raise ValueError('exported outcomes differ')
             for change in item['changes']:
-                if change['field_type'] not in {'string', 'object-key'} or not set(change['rules']) <= RULES.keys():
+                if change['field_type'] not in {'string', 'object-key', 'removed-field'} or not set(change['rules']) <= RULES.keys():
                     raise ValueError('redaction rule is invalid')
     return manifest
 
@@ -288,7 +327,7 @@ def bind_canary(bundle, name):
             bundle.bind(name, (*base, key), probe.digest(value))
 
 
-def export_reviewer(evidence, completion, canary, output, redactor):
+def export_reviewer(evidence, completion, canary, output, redactor, *, decisions=None):
     bundle = Bundle(redactor)
     for name in ('qualification-series-v1.json', 'quality-results-v1.json'):
         bundle.add(name, evidence / name, name)
@@ -304,6 +343,16 @@ def export_reviewer(evidence, completion, canary, output, redactor):
         if original['envelope_sha256'] != probe.digest(source_envelope):
             raise ValueError('original qualification envelope binding differs')
         bundle.bind('qualification-series-v1.json', ('attempts', index, 'envelope_sha256'), probe.digest(by_call[row['call_id']]))
+    if decisions is not None:
+        decision_doc = bundle.add('operator-decisions-v1.json', decisions, 'reviewer-operator-decisions')
+        for index, decision in enumerate(decision_doc.get('decisions', [])):
+            if decision.get('id') != 'size-override':
+                continue
+            measured = [row for row in bundle.jobs['qualification-series-v1.json']['document']['attempts']
+                        if row['call_id'] == decision.get('call_id')]
+            if len(measured) != 1:
+                raise ValueError('size decision requires the measured call identity')
+            bundle.bind('operator-decisions-v1.json', ('decisions', index, 'envelope_sha256'), measured[0]['envelope_sha256'])
     bundle.add('phase0-results.json', completion, 'reviewer-phase0-completion')
     original = bundle.jobs['phase0-results.json']['original']
     for kind in ('protection', 'format'):
@@ -322,9 +371,17 @@ def export_reviewer(evidence, completion, canary, output, redactor):
     return bundle.finish(output)
 
 
-def export_implementer(report, phase0, canary, output, redactor):
+def export_implementer(report, phase0, canary, output, redactor, *, decisions=None, topology=None):
     bundle = Bundle(redactor)
     bundle.add('implementer-package-report-v1.json', report, 'implementer-package-T1-T6')
+    if decisions is None:
+        raise ValueError('implementer export requires an explicit operator-decisions file')
+    decision_doc = bundle.add('operator-decisions-v1.json', decisions, 'implementer-operator-decisions')
+    matches = [item for item in decision_doc.get('decisions', []) if item.get('id') == 'phase0-acceptance']
+    if decision_doc.get('schema_version') != 'operator-decisions-v1' or len(matches) != 1 or matches[0].get('decision') != 'positive_with_findings':
+        raise ValueError('implementer Phase-0 operator decision is missing')
+    if topology is not None:
+        bundle.add('topology-run-v1.json', topology, 'topology-plan-implementation-resume-final')
     entries = []
     safe = ('forbidden_paths_absent', 'no_secret_leak', 'outside_unchanged', 'toolchain_unchanged')
     for number in range(1, 9):
@@ -336,13 +393,19 @@ def export_implementer(report, phase0, canary, output, redactor):
         document = bundle.add(name, sources[0], 'implementer-phase0-' + case)
         if document.get('case') != case or document.get('profile') != BOUNDARY_IMPLEMENTER:
             raise ValueError('implementer Phase-0 case/profile differs')
+        refused = document.get('error', {}).get('failure_kind') == 'provider_refusal' if isinstance(document.get('error'), dict) else False
+        refused = refused or document.get('failure_kind') == 'provider_refusal'
+        # Provider refusal is explicit operator evidence, not a measured safe case.
+        refused = refused or case in matches[0].get('not_measured', {})
         entries.append({'case': case, 'path': name, 'sha256': bundle.file_sha(name),
-                        'passed': document['passed'], 'safe': all(document['checks'].get(key) is True for key in safe)})
+                        'passed': document['passed'], 'safe': None if refused else all(document['checks'].get(key) is True for key in safe),
+                        'measurement': 'not_measured_provider_refusal_offline_proven' if refused else 'measured'})
     bundle.generated['phase0-results.json'] = {'schema_version': 'implementer-phase0-completion-v1',
         'profile': BOUNDARY_IMPLEMENTER, 'counts_as_sample': False, 'protection': entries,
-        'safe_cases': sum(entry['safe'] for entry in entries), 'passed_cases': sum(entry['passed'] for entry in entries),
-        'operator_decision': {'date': '2026-10-01', 'decision': 'positive_with_findings',
-                              'finding_cases': ['W2', 'W4', 'W8']}}
+        'safe_cases': sum(entry['safe'] is True for entry in entries), 'passed_cases': sum(entry['passed'] for entry in entries),
+        'not_measured_cases': [entry['case'] for entry in entries if entry['safe'] is None],
+        'operator_decision': {'path': 'operator-decisions-v1.json', 'sha256': bundle.file_sha('operator-decisions-v1.json'),
+                              'id': matches[0]['id']}}
     bundle.add('role-canary-v1.json', canary, 'implementer-role-canary')
     bind_canary(bundle, 'role-canary-v1.json')
     return bundle.finish(output)
@@ -353,9 +416,12 @@ def main(argv=None):
     parser.add_argument('--reviewer-evidence', type=Path)
     parser.add_argument('--reviewer-phase0', type=Path)
     parser.add_argument('--reviewer-canary', type=Path)
+    parser.add_argument('--reviewer-decisions', type=Path)
     parser.add_argument('--implementer-report', type=Path)
     parser.add_argument('--implementer-phase0', type=Path)
     parser.add_argument('--implementer-canary', type=Path)
+    parser.add_argument('--implementer-decisions', type=Path)
+    parser.add_argument('--topology', type=Path)
     parser.add_argument('--out', type=Path)
     parser.add_argument('--verify', type=Path)
     args = parser.parse_args(argv)
@@ -363,13 +429,15 @@ def main(argv=None):
     if args.verify:
         verify(args.verify, redactor=redactor)
         return 0
-    if any(value is None for key, value in vars(args).items() if key != 'verify'):
+    if any(value is None for key, value in vars(args).items() if key not in {'verify', 'topology'}):
         parser.error('export requires all private inputs and --out')
     for capability, export, inputs in (
         (BOUNDARY_REVIEWER, export_reviewer, (args.reviewer_evidence, args.reviewer_phase0, args.reviewer_canary)),
         (BOUNDARY_IMPLEMENTER, export_implementer, (args.implementer_report, args.implementer_phase0, args.implementer_canary))):
         provider = provider_capability(capability)['provider']
-        export(*inputs, args.out / provider, redactor)
+        extra = ({'decisions': args.implementer_decisions, 'topology': args.topology} if capability == BOUNDARY_IMPLEMENTER else
+                 {'decisions': args.reviewer_decisions})
+        export(*inputs, args.out / provider, redactor, **extra)
     return 0
 
 

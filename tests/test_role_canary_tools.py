@@ -24,7 +24,7 @@ def test_codex_measured_size_exception_and_legacy_bytes():  # allowlist:provider
     pair = probe.qualification_pair(protocol)
     decisions = probe.read_evidence(DECISIONS)
     verdicts = {"codex-large-s1": {"failed_cases": ["512"], "kind": "large_output", "provider": pair.candidate}}  # allowlist:provider -- certification data: measured series
-    assert probe.size_override(decisions, verdicts, pair, protocol)["failed_case"] == "512"
+    assert probe.size_override(decisions, verdicts, pair, protocol, probe.read_evidence(PROTOCOL.parent / "qualification-series-v1.json"))["failed_case"] == "512"
     directory = probe.qualification_pair({"schema_version": "qualification-protocol-v5"}).evidence_directory
     old_protocol = probe.read_evidence(directory / "qualification-protocol-v5.json")
     old_series = probe.read_evidence(directory / "qualification-series-v1.json")
@@ -64,7 +64,7 @@ def test_size_exception_rejects_unbound_decisions(change):
     else:
         pair = probe.qualification_pair({"schema_version": "qualification-protocol-v5"})
     with pytest.raises(ValueError):
-        probe.size_override(decisions, verdicts, pair, protocol)
+        probe.size_override(decisions, verdicts, pair, protocol, probe.read_evidence(PROTOCOL.parent / "qualification-series-v1.json"))
 
 
 @pytest.mark.parametrize("slot", ("reviewer", "final_reviewer", "implementer"))

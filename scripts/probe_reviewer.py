@@ -66,7 +66,7 @@ def qualification_pair(protocol: dict) -> QualificationPair:
             raise ValueError("v5 cannot redefine its historical pair")
         return QualificationPair(LEGACY_CANDIDATE, LEGACY_REFERENCE, LEGACY_CAPABILITIES,
                                  ROOT / "docs/evidence/antigravity")
-    if version != "qualification-protocol-v6":
+    if not isinstance(version, str) or re.fullmatch(r"qualification-protocol-v(?:[6-9]|[1-9][0-9]+)", version) is None:
         raise ValueError("unsupported qualification protocol")
     candidate, reference = protocol.get("candidate_provider"), protocol.get("reference_provider")
     profiles = protocol.get("provider_profiles")
@@ -84,7 +84,7 @@ def qualification_pair(protocol: dict) -> QualificationPair:
 
 
 def qualification_raters(protocol: dict) -> tuple[str, str]:
-    """Bind two raters and reject candidate manufacturer collisions before export."""
+    """Historical protocols reject candidate collisions; successors also reject reference collisions."""
     if protocol["schema_version"] == "qualification-protocol-v5":
         return ("codex", "steering")  # allowlist:provider -- certification data: immutable historical raters
     raters = protocol.get("raters")
@@ -101,12 +101,19 @@ def qualification_raters(protocol: dict) -> tuple[str, str]:
     candidate_manufacturer = manufacturers.get(candidate)
     if not candidate_manufacturer:
         raise ValueError("unknown candidate manufacturer")
+    excluded = {candidate_manufacturer}
+    if protocol["schema_version"] != "qualification-protocol-v6":
+        reference = provider_capability(pair.capability(pair.reference))["provider"]
+        reference_manufacturer = manufacturers.get(reference)
+        if not reference_manufacturer:
+            raise ValueError("unknown reference manufacturer")
+        excluded.add(reference_manufacturer)
     for name in raters:
         provider = (LEGACY_REFERENCE if name == "steering" else
                     PROTECTION_PROFILES[name].capability if name in PROTECTION_PROFILES else name)
         manufacturer = manufacturers.get(provider)
-        if not manufacturer or manufacturer == candidate_manufacturer:
-            raise ValueError("rater manufacturer is unknown or shares candidate manufacturer")
+        if not manufacturer or manufacturer in excluded:
+            raise ValueError("rater manufacturer is unknown or shares a measured provider manufacturer")
     if protocol.get("quality", {}).get("raters") != raters:
         raise ValueError("quality raters differ from v6 raters")
     return tuple(raters)
@@ -1348,7 +1355,7 @@ def timeout_proposal(series: dict, verdicts: dict, protocol: dict) -> dict:
 
 def size_override(decisions: dict | None, verdicts: dict,
                   pair: QualificationPair | None = None,
-                  protocol: dict | None = None) -> dict | None:
+                  protocol: dict | None = None, series: dict | None = None) -> dict | None:
     """Accept one candidate exception matching the protocol and measured failure."""
     if decisions is None:
         return None
@@ -1361,6 +1368,8 @@ def size_override(decisions: dict | None, verdicts: dict,
         raise ValueError("duplicate size override")
     row = matches[0]
     pair = pair or qualification_pair({"schema_version": "qualification-protocol-v5"})
+    if protocol is None and pair != qualification_pair({"schema_version": "qualification-protocol-v5"}):
+        raise ValueError("size override requires an explicit protocol for a nonlegacy pair")
     if protocol is not None and qualification_pair(protocol) != pair:
         raise ValueError("size override pair differs from protocol")
     failed_case, not_run = ("128", ["512"])
@@ -1369,6 +1378,8 @@ def size_override(decisions: dict | None, verdicts: dict,
             and pair.capability(pair.candidate) == BOUNDARY_REVIEWER)
     if candidate_v6:
         failed_case, not_run = "512", []
+    elif protocol is not None and protocol.get("schema_version") != "qualification-protocol-v5":
+        raise ValueError("legacy size override requires protocol v5")
     series_id = row.get("series")
     size_series = [name for name, measured in verdicts.items()
                    if measured.get("kind") == "large_output" and measured.get("provider") == pair.candidate]
@@ -1383,8 +1394,21 @@ def size_override(decisions: dict | None, verdicts: dict,
         or verdicts[series_id].get("kind") != "large_output"
         or verdicts[series_id].get("provider") != pair.candidate):
         raise ValueError("size override differs from the recorded failed case")
+    if candidate_v6:
+        calls = [attempt for attempt in (series or {}).get("attempts", [])
+                 if attempt.get("series_id") == series_id and attempt.get("case_id") == failed_case
+                 and attempt.get("kind") == "large_output" and attempt.get("provider") == pair.candidate]
+        expected = {"finding_count", "all_paths", "unique_ids"}
+        failed_checks = row.get("failed_checks")
+        if (not calls or row.get("call_id") != calls[-1]["call_id"]
+                or row.get("envelope_sha256") != calls[-1]["envelope_sha256"]
+                or not isinstance(failed_checks, list) or len(failed_checks) != len(expected)
+                or set(failed_checks) != expected
+                or {key for key, value in calls[-1].get("checks", {}).items() if value is False} != expected):
+            raise ValueError("size override attempt, envelope or failed checks differ")
     return {"series": row["series"], "failed_case": row["failed_case"],
-            "documented_weakness": row["documented_weakness"]}
+            "documented_weakness": row["documented_weakness"],
+            **({key: row[key] for key in ("call_id", "envelope_sha256", "failed_checks")} if candidate_v6 else {})}
 
 
 def qualification_summary(series: dict, envelopes: dict, protocol: dict,
@@ -1402,7 +1426,7 @@ def qualification_summary(series: dict, envelopes: dict, protocol: dict,
     required = all(latest.get(key, {}).get("passed") for key in (
         ("transport", pair.candidate), ("print_timeout", pair.candidate),
         ("quality", pair.candidate), ("quality", pair.reference)))
-    override = size_override(decisions, verdicts, pair, protocol)
+    override = size_override(decisions, verdicts, pair, protocol, series)
     size_passed = latest.get(("large_output", pair.candidate), {}).get("passed", False)
     qualified = bool(required and quality[pair.candidate]["passed"] and
                      (quality[pair.reference]["passed"] or
