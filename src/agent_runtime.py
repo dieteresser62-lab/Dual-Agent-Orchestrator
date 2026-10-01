@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from _thread import LockType
 from contextlib import nullcontext
 import errno
 import hashlib
@@ -352,11 +353,15 @@ class AgentProcessError(RuntimeError):
         *,
         exit_code: int | None = None,
         kind_hint: AgentFailureKind | None = None,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
         provider_data: Mapping[str, object] | None = None,
     ) -> None:
         self.provider_text = provider_text
         self.exit_code = exit_code
         self.kind_hint = kind_hint
+        if orchestrator_diagnostic is not None and not isinstance(orchestrator_diagnostic, OrchestratorDiagnostic):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
+        self.orchestrator_diagnostic = orchestrator_diagnostic
         self.provider_data = provider_data
         super().__init__(provider_text)
 
@@ -1367,6 +1372,64 @@ def _finish_exited_leader_group(
     )
 
 
+@dataclass
+class _ModelSilence:
+    last_activity: float
+    active_tools: set[str] = field(default_factory=set)
+    _lock: LockType = field(default_factory=threading.Lock, repr=False)
+
+    def observe(self, adapter: AgentAdapter, line: str, now: float) -> None:
+        started, completed = adapter.tool_activity(line)
+        with self._lock:
+            self.active_tools.update(started)
+            self.active_tools.difference_update(completed)
+            self.last_activity = now
+
+    def duration(self, now: float) -> float:
+        with self._lock:
+            return 0.0 if self.active_tools else max(0.0, now - self.last_activity)
+
+
+def _start_provider_stream_readers(
+    process: subprocess.Popen[str], stdin_text: str | None,
+    stdout_observer: Callable[[str], None] | None = None,
+) -> tuple[queue.Queue, list[threading.Thread], threading.Thread | None, queue.Queue]:
+    assert process.stdout is not None and process.stderr is not None
+    if stdin_text is None and process.stdin is not None:
+        process.stdin.close()
+        process.stdin = None
+    stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    writer_errors: queue.Queue[BaseException] = queue.Queue()
+
+    def read_stream(stream: TextIO, channel: str) -> None:
+        try:
+            while line := stream.readline():
+                if channel == "stdout" and stdout_observer is not None:
+                    stdout_observer(line)
+                stream_queue.put((channel, line))
+        except (OSError, ValueError):
+            # Forced bounded cleanup may replace an outstanding pipe read.
+            pass
+        finally:
+            stream_queue.put((channel, None))
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    threads = [threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True),
+               threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True)]
+    for thread in threads:
+        thread.start()
+    writer = None
+    if stdin_text is not None:
+        assert process.stdin is not None
+        writer = threading.Thread(target=_write_provider_input,
+                                  args=(process.stdin, stdin_text, writer_errors), daemon=True)
+        writer.start()
+    return stream_queue, threads, writer, writer_errors
+
+
 def _run_agent_process(
     adapter: AgentAdapter,
     command_parts: list[str],
@@ -1378,11 +1441,16 @@ def _run_agent_process(
     timeout_seconds: int | None,
     agent_key: str,
     process_started: Callable[[int], None] | None = None,
+    operation: str | None = None,
 ) -> StreamResult | subprocess.CompletedProcess[str]:
     """Own a provider session until its pipes and process group are settled."""
     process = None
     identity: ProcessIdentity | None = None
     start = time.monotonic()
+    stall_limit = (getattr(adapter, "stall_timeout_seconds", 900)
+                   if getattr(adapter, "supports_stall_detection", False) else 0)
+    read_lines = config.agent_live_stream or bool(stall_limit)
+    silence = _ModelSilence(start)
     finished = False
     group_cleanup_done = False
     try:
@@ -1391,7 +1459,7 @@ def _run_agent_process(
             process = subprocess.Popen(
                 command_parts,
                 stdin=(subprocess.DEVNULL if getattr(adapter, "stdin_closed_when_unused", False) and stdin_text is None
-                       else subprocess.PIPE if config.agent_live_stream or stdin_text is not None else None),
+                       else subprocess.PIPE if read_lines or stdin_text is not None else None),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 env=env, cwd=execution_root, bufsize=1, start_new_session=True,
             )
@@ -1401,48 +1469,16 @@ def _run_agent_process(
                 pass
             if process_started is not None:
                 process_started(process.pid)
-        if config.agent_live_stream:
-            assert process.stdout is not None and process.stderr is not None
-            if stdin_text is None and process.stdin is not None:
-                process.stdin.close()
-                process.stdin = None
-            stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        if read_lines:
+            stream_queue, threads, writer, writer_errors = _start_provider_stream_readers(
+                process, stdin_text,
+                (lambda line: silence.observe(adapter, line, time.monotonic())) if stall_limit else None,
+            )
             stdout_chunks: list[str] = []
             stderr_chunks: list[str] = []
             stream_state: dict[str, object] = {
                 "skip_prompt_echo": False, "last_emitted_line": "",
             }
-            writer_errors: queue.Queue[BaseException] = queue.Queue()
-            def write_input() -> None:
-                if process.stdin is None:
-                    return
-                try:
-                    process.stdin.write(stdin_text or "")
-                    process.stdin.close()
-                except BaseException as exc:
-                    writer_errors.put(exc)
-            def read_stream(stream: TextIO, channel: str) -> None:
-                try:
-                    while line := stream.readline():
-                        stream_queue.put((channel, line))
-                except (OSError, ValueError):
-                    # Forced bounded cleanup may replace an outstanding pipe read.
-                    pass
-                finally:
-                    stream_queue.put((channel, None))
-                    try:
-                        stream.close()
-                    except Exception:
-                        pass
-
-            threads = [threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True),
-                       threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True)]
-            for thread in threads:
-                thread.start()
-            writer: threading.Thread | None = None
-            if stdin_text is not None:
-                writer = threading.Thread(target=write_input, daemon=True)
-                writer.start()
             completed_channels: set[str] = set()
             last_heartbeat = start
             leader_exit_at: float | None = None
@@ -1465,8 +1501,18 @@ def _run_agent_process(
                         f"{agent_key} output pipes remained open after group cleanup.",
                         kind_hint=AgentFailureKind.PROCESS,
                     )
+                duration = silence.duration(now)
+                if stall_limit and duration >= stall_limit and process.poll() is None:
+                    role = getattr(adapter, "bound_slot", "reviewer" if getattr(adapter, "reviewer", False) else "implementer")
+                    detail = (f"provider stalled: {duration / 60:.2f} minutes of model silence; "
+                              f"last activity at elapsed {silence.last_activity - start:.1f}s")
+                    logger.warning("[AGENT] provider=%s role=%s operation=%s model silence=%.1fs; %s",
+                                   agent_key, role, operation or "unspecified", duration, detail)
+                    raise AgentProcessError(detail, kind_hint=AgentFailureKind.NETWORK,
+                                            orchestrator_diagnostic=OrchestratorDiagnostic.PROVIDER_STALLED)
                 if now - last_heartbeat >= 30.0:
-                    logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, int(now - start))
+                    silence_text = f"{int(silence.duration(now))}s" if stall_limit else "disabled"
+                    logger.info("[AGENT] %s still running (elapsed: %ss, model silence: %s)", agent_key, int(now - start), silence_text)
                     last_heartbeat = now
                 try:
                     channel, line = stream_queue.get(timeout=0.2)
@@ -1479,6 +1525,8 @@ def _run_agent_process(
                     stdout_chunks.append(line)
                 else:
                     stderr_chunks.append(line)
+                if not config.agent_live_stream:
+                    continue
                 if config.agent_live_stream_channels not in {"both", channel}:
                     continue
                 if getattr(adapter, "suppress_live_stream", False):
@@ -1737,6 +1785,7 @@ def run_agent(
                 execution_root=execution_root,
                 timeout_seconds=timeout_seconds,
                 agent_key=agent_key,
+                operation=operation,
                 process_started=(
                     attempt_invocation.process_started
                     if attempt_invocation is not None else None

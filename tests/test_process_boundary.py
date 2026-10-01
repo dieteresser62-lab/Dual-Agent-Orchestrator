@@ -157,7 +157,7 @@ def _source_inventory(source: str) -> dict[str, object]:
 def _active_catchers(source: str) -> tuple[dict[str, object], ...]:
     tree = ast.parse(source)
     handlers: list[ast.ExceptHandler] = []
-    for function_name in ("_run_agent_process", "run_agent"):
+    for function_name in ("_start_provider_stream_readers", "_run_agent_process", "run_agent"):
         function = _top_level_function(tree, function_name)
         handlers.extend(
             node
@@ -169,7 +169,7 @@ def _active_catchers(source: str) -> tuple[dict[str, object], ...]:
     types = [ast.unparse(node.type) for node in handlers]
     queue_index = types.index("queue.Empty")
     handlers = [
-        handlers[queue_index - 1],
+        next(node for node in handlers if ast.unparse(node.type) == "Exception"),
         handlers[queue_index],
         next(node for node in handlers if ast.unparse(node.type) == "AgentOutputError"),
         next(node for node in reversed(handlers) if ast.unparse(node.type) == "subprocess.TimeoutExpired"),
@@ -1145,6 +1145,17 @@ def test_b60_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None
         # The joint 67/68 cutover intentionally changes the native-provider
         # projection baseline; it is no longer a pre-cut protected artifact.
         if path == "tests/fixtures/provider-name-coupling-baseline-v1.json":
+            continue
+        if path in {"tests/conftest.py", "tests/test_test_run_isolation.py"}:
+            # D2 adds a root-entry guard. Preserve every historical guard's
+            # complete AST instead of freezing the whole fixture module.
+            historical = ast.parse(_git("show", f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{path}"))
+            current = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+            current_functions = {node.name: node for node in current.body if isinstance(node, ast.FunctionDef)}
+            for node in historical.body:
+                if isinstance(node, ast.FunctionDef):
+                    assert ast.dump(current_functions[node.name]) == ast.dump(node), node.name
+            assert _git("rev-parse", f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{path}") == blob
             continue
         if path == "tests/fixtures/workflow-record-sequence-baseline-v1.json":
             assert _git("hash-object", str(ROOT / path)) == TARGET_RECORD_SEQUENCE_BLOB

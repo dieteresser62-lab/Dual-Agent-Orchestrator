@@ -338,6 +338,7 @@ def _create_production_state(
             profile_name=settings.profile_name,
             binary=settings.binary, timeout_seconds=settings.timeout_seconds or 0,
             max_budget_usd=settings.max_budget_usd,
+            stall_timeout_seconds=settings.stall_timeout_seconds,
             manufacturer=certificate.manufacturer,
             capability_sha256=certificate.capability_sha256,
             transport_sha256=certificate.transport_sha256,

@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from agent_adapters import AgentOutputError, CapabilitySpec, _BaseAdapter
+from agent_adapters import AgentOutputError, CapabilitySpec, CodexToolActivity, _BaseAdapter  # allowlist:provider -- transport: tool lifetime observer
 from provider_metrics import event_usage, stream_model_metrics
 from agent_config import AgentSettings
 from model_catalog import hardened_reviewer_catalog, reviewer_model_row_sha256
@@ -74,7 +74,7 @@ def codex_package_root(entry_path: str) -> Path:  # allowlist:provider -- transp
     return matches[0]
 
 
-class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport: reviewer registration
+class NativeCodexReviewAdapter(CodexToolActivity, _BaseAdapter):  # allowlist:provider -- transport: reviewer registration
     reviewer = True
     inherit_process_environment = False
     set_pwd = False

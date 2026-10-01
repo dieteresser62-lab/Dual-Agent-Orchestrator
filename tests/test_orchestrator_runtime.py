@@ -2025,6 +2025,26 @@ def test_resume_keeps_recorded_binary_after_toml_changes(tmp_path: Path, monkeyp
     assert changed.slot_settings["implementer"].binary == "codex"
 
 
+def test_resume_rejects_changed_stall_policy_before_provider_start(tmp_path, monkeypatch):
+    repository = _repository(tmp_path, "feature/stall-resume")
+    task = tmp_path / "stall-resume.md"
+    _write_task(task, "feature/stall-resume", "src/new.py")
+    state = orchestrator._fresh_state(
+        task_file=task, run_id="stall-resume", repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+    )
+    original = _args(repository, task)
+    assert state.protocol_binding.implementer_profile.stall_timeout_seconds == 900
+    orchestrator._apply_resumed_agent_profiles(original, state)
+    (repository / "orchestrator.toml").write_text(
+        '[agent_profiles.implementation]\nstall_timeout_seconds = 0\n', encoding="utf-8",
+    )
+    import workflow_run_setup
+    monkeypatch.setattr(workflow_run_setup, "_capture_slot_identities", lambda *_a, **_k: pytest.fail("provider identity check must not run"))
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF.*stall_timeout_seconds"):
+        orchestrator._apply_resumed_agent_profiles(_args(repository, task), state)
+
+
 def test_run_records_exist_before_first_workflow_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

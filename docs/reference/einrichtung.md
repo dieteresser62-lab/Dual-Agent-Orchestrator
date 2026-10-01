@@ -383,18 +383,24 @@ toolchain_read_roots = ["/absolute/node-root"]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 900
+timeout_seconds = 0
+stall_timeout_seconds = 900
 
 [agent_profiles.final_review]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 900
+timeout_seconds = 0
+stall_timeout_seconds = 900
 ```
 
 Die Zertifizierung gilt **je Slot**, ohne Allowlist kompletter Belegungen. Topologie-Evidenz liegt für Claude / Codex / Codex und die Standardbelegung vor; für andere Mischungen, etwa Claude / AGY / AGY oder Claude / Codex / AGY, wird ein eigener Probelauf empfohlen.
 
-Das Beispiel begrenzt beide Codex-Reviewprofile auf **900 Sekunden**. Stille, hängende Antworten von 20–60 Minuten wurden bei T4/T5 und im Topologie-Lauf beobachtet. Ein Zeitlimit macht diese Fälle für die transiente Wiederholung sichtbar. Die ausgelieferte Standardkonfiguration bleibt unverändert.
+`stall_timeout_seconds` begrenzt je Agent-Profil die **Modellstille**, standardmäßig auf **900 Sekunden (15 Minuten)**; `0` schaltet die Erkennung ab. Jede stdout-Ausgabezeile setzt die Uhr zurück. Während gemeldeter Werkzeugausführungen ruht sie: bei Codex von `item.started` bis zum passenden `item.completed`, beim Claude-Implementer von `tool_use` bis zum passenden `tool_result`. Auch ohne Live-Anzeige wird der Ereignisstrom intern ausgewertet. stderr-Zeilen setzen die Uhr nicht zurück.
+
+`timeout_seconds` begrenzt dagegen die gesamte Aufrufdauer einschließlich Werkzeugen; `0` bedeutet kein Gesamtzeitlimit. Die zuerst erreichte Grenze beendet die Prozessgruppe. Bei Modellstille lautet die Diagnose `provider stalled`; der Aufruf wird über `max_transport_failures` mit `transient_policy.maximum_delay_seconds` Wartezeit wiederholt. Nach Budgetende bleibt der Halt resumefähig; die Diagnose nennt Stilleminuten und die letzte Aktivität. Der Wert ist an das Laufprofil gebunden; ein geänderter Wert beim Resume wird abgelehnt. Ältere Aufzeichnungen ohne dieses Feld bleiben für den Audit lesbar, erhalten aber keine nachträglich erfundene Stille-Policy; für ihren Resume ist die passende ältere Orchestratorversion erforderlich.
+
+Die früheren Hänger von 20–60 Minuten erfordern eine Grenze für Modellstille. Das frühere Gesamtzeitlimit von 900 Sekunden für Codex-Reviewprofile ist dafür nicht mehr empfohlen: erfolgreiche Modellarbeit schwieg in den gemessenen Läufen höchstens 93 Sekunden, der Hänger 1.853 Sekunden. Legitime Werkzeugtests können dagegen 12–14 Minuten ohne Ausgabe dauern. Die neue Uhr erkennt Modellhänger und lässt solche Werkzeuge weiterlaufen. Ein zusätzliches Gesamtzeitlimit bleibt eine bewusste Operatorgrenze. Print-Transporte ohne Werkzeugereignisstrom (Antigravity sowie die Claude-Reviewprofile mit JSON-Print) erhalten keine Stille-Erkennung und behalten ausschließlich `timeout_seconds`.
 
 
 Ersetzen Sie `/absolute/node-root` durch ein existierendes absolutes
@@ -899,7 +905,8 @@ Vorrang: Kommandozeile vor `RUN_TASK_*`-Umgebungsvariablen vor
 `orchestrator.toml` des Zielrepositorys vor den mitgelieferten TOML-Profilen. Ohne eigene `[roles]`- und `[agent_profiles.*]`-Tabellen erbt das Projekt die mitgelieferte Besetzung; explizite Rollenoptionen und Umgebungsvariablen überschreiben Profilfelder. Das Claude-Budget steht unter `agent_profiles.<name>.provider_options.claude.max_budget_usd`.
 
 Die Prozesse von Implementierer und Prüfer haben ohne ausdrückliche Angabe kein
-Zeitlimit. `--implementer-timeout` und `--reviewer-timeout` sowie die entsprechenden
+Gesamtzeitlimit. Für Ereignisströme gilt zusätzlich `stall_timeout_seconds` je
+Agent-Profil: 900 Sekunden Modellstille, Ruhe während Werkzeugen, `0` = aus. `--implementer-timeout` und `--reviewer-timeout` sowie die entsprechenden
 `RUN_TASK_*_TIMEOUT`-Variablen akzeptieren positive Sekundenwerte für ein hartes
 Limit; `0` bedeutet ausdrücklich kein Limit. Das Testlimit des separaten
 Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) und die Validierungszeitlimits sind

@@ -4953,11 +4953,12 @@ def test_transport_failure_budget_halts_independently(caplog) -> None:
     ) in caplog.text
 
 
+@pytest.mark.parametrize('diagnosis', ['overload', 'stall'])
 @pytest.mark.parametrize('exhaust', [False, True])
 @pytest.mark.parametrize('maximum_delay, expected_delay', [(None, 30), (5, 5)])
-def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog, exhaust, maximum_delay, expected_delay):
+def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog, exhaust, maximum_delay, expected_delay, diagnosis):
     now = [datetime(2026, 10, 1, 13, 26, tzinfo=timezone.utc)]
-    overloads = [classify_agent_failure(current_provider_for_role('reviewer'), AgentProcessError('Selected model is at capacity. Please try a different model.', exit_code=1),
+    overloads = [classify_agent_failure(current_provider_for_role('reviewer'), AgentProcessError('provider stalled: 15.00 minutes of model silence; last activity at elapsed 0s', kind_hint=AgentFailureKind.NETWORK, orchestrator_diagnostic=OrchestratorDiagnostic.PROVIDER_STALLED) if diagnosis == 'stall' else AgentProcessError('Selected model is at capacity. Please try a different model.', exit_code=1),
         invocation_id=f'overloaded-{index}', received_at=now[0]) for index in range(3)]
     failures = overloads if exhaust else [_structured_output_failure('structured-first', received_at=now[0]), overloads[0], None]
     driver = FakeDriver(snapshots=[_changes('1', 'src/early.py', TEST_FILE)],
@@ -4977,7 +4978,7 @@ def test_provider_overload_uses_shared_transport_budget_and_keeps_resume(caplog,
     assert len(driver.reviewer_calls) == 3
     assert all(item.native_review_rejection is None for item in driver.failure_payloads)
     assert 'contract_rejections=0/3' in caplog.text
-    assert 'provider overloaded' in caplog.text
+    assert ('provider stalled' if diagnosis == 'stall' else 'provider overloaded') in caplog.text
     if exhaust:
         assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
         assert [item.automatic_resume for item in driver.failure_payloads] == [True, True, False]

@@ -1054,6 +1054,7 @@ def _assemble_workflow_state_document(
     work_units: Sequence[dict[str, object]],
     runtime_history: dict[str, dict[str, tuple[str, ...]]],
 ) -> dict[str, object]:
+    profile_document = artifact_payload_document(profile)
     return {
         "version": 3,
         "run_id": replay.expected_run_id,
@@ -1092,9 +1093,9 @@ def _assemble_workflow_state_document(
             "schema_version": "3",
             "claude_review_transport": "native-claude-review-v3",  # allowlist:provider -- transport: canonical protocol binding
             "codex_result_transport": "native-codex-v3",  # allowlist:provider -- transport: canonical protocol binding
-            "implementer_profile": {**asdict(profile.implementer), "binary_identity": profile.implementer.binary_identity.to_dict()},
-            "reviewer_profile": {**asdict(profile.reviewer), "binary_identity": profile.reviewer.binary_identity.to_dict()},
-            "final_reviewer_profile": {**asdict(profile.final_reviewer), "binary_identity": profile.final_reviewer.binary_identity.to_dict()},
+            "implementer_profile": profile_document["implementer"],
+            "reviewer_profile": profile_document["reviewer"],
+            "final_reviewer_profile": profile_document["final_reviewer"],
         },
         "bootstrap_checks": tuple(
             _project_bootstrap_fact(record.payload)

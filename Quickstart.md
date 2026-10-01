@@ -52,18 +52,20 @@ toolchain_read_roots = ["/absolute/node-root"]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 900
+timeout_seconds = 0
+stall_timeout_seconds = 900
 
 [agent_profiles.final_review]
 provider = "codex"
 model = "sol"
 effort = "high"
-timeout_seconds = 900
+timeout_seconds = 0
+stall_timeout_seconds = 900
 ```
 
 Die Zertifizierung gilt **je Slot**, ohne Allowlist kompletter Belegungen. Topologie-Evidenz liegt für Claude / Codex / Codex und die Standardbelegung vor; für andere Mischungen, etwa Claude / AGY / AGY oder Claude / Codex / AGY, wird ein eigener Probelauf empfohlen.
 
-Das Beispiel begrenzt beide Codex-Reviewprofile auf **900 Sekunden**. Stille, hängende Antworten von 20–60 Minuten wurden bei T4/T5 und im Topologie-Lauf beobachtet. Ein Zeitlimit macht diese Fälle für die transiente Wiederholung sichtbar. Die ausgelieferte Standardkonfiguration bleibt unverändert.
+Das Beispiel begrenzt die **Modellstille auf 900 Sekunden**: stdout-Zeilen setzen die Uhr zurück, während gemeldeter Werkzeuge ruht sie. `stall_timeout_seconds = 0` schaltet diese Erkennung ab; `timeout_seconds` begrenzt zusätzlich die gesamte Laufzeit einschließlich Werkzeugen. Die Hänger von 20–60 Minuten werden damit als `provider stalled` über das Transportfehlerbudget wiederholt, während legitime lange Tests weiterlaufen. Deshalb ist das frühere Gesamtzeitlimit von 900 Sekunden zur Hänger-Erkennung nicht mehr empfohlen. Details und die Print-Ausnahmen stehen in der [Einrichtung](docs/reference/einrichtung.md).
 
 
 `/absolute/node-root` ist ein Platzhalter für ein existierendes absolutes

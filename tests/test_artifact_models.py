@@ -361,6 +361,18 @@ def test_run_profile_requires_explicit_final_and_allows_null_usd_and_zero_timeou
         ArtifactRecord.from_dict(document)
 
 
+@pytest.mark.parametrize("stall_seconds", [0, 17, 900])
+def test_run_profile_persists_stall_policy_in_all_slots(stall_seconds):
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high", stall_timeout_seconds=stall_seconds),
+        bound_role_profile("reviewer-model", "high", stall_timeout_seconds=stall_seconds),
+    )
+    document = _record(profile).to_dict()
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        assert document["payload"][slot]["stall_timeout_seconds"] == stall_seconds
+    assert ArtifactRecord.from_dict(document).payload == profile
+
+
 def test_run_profile_archive_pattern_wire_compatibility() -> None:
     legacy = bound_run_profile(
         bound_role_profile("implementer-model", "medium"),
@@ -1029,7 +1041,7 @@ def test_native_rejection_roundtrips_provider_free_response_shape_for_every_retr
 
 
 @pytest.mark.parametrize("diagnostic", [OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID.text,
-    OrchestratorDiagnostic.PROVIDER_OVERLOADED.text])
+    OrchestratorDiagnostic.PROVIDER_OVERLOADED.text, OrchestratorDiagnostic.PROVIDER_STALLED.text])
 def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional(diagnostic) -> None:
     raw = "provider-controlled diagnostic mutation"
     marker, digest, byte_count = technical_text_evidence(raw)

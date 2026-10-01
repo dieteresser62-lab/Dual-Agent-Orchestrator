@@ -128,3 +128,39 @@ def test_autouse_guard_chain_detects_a_write_to_declared_real_metadata(
         match=r"added: \.orchestrator/artifacts/guard-effect",
     ):
         next(metadata_guard)
+
+
+@pytest.mark.parametrize("name", [".agents", ".aws", ".codex", ".git", "unexpected.txt"])  # allowlist:provider -- profile configuration: root pollution regression
+@pytest.mark.parametrize("root_index", [0, 1])
+def test_root_entry_guard_reports_new_entries_in_both_roots(tmp_path, name, root_index):
+    roots = (tmp_path / "repository", tmp_path / "startup")
+    for root in roots:
+        root.mkdir()
+    before = isolation_conftest.root_entry_snapshot(roots)
+    target = roots[root_index] / name
+    target.mkdir()
+    with pytest.raises(AssertionError, match=str(target).replace(".", r"\.")):
+        isolation_conftest.assert_no_new_root_entries(before)
+
+
+def test_root_entry_guard_preserves_existing_entries_and_allows_only_caches(tmp_path):
+    (tmp_path / ".aws").mkdir()
+    (tmp_path / "existing.txt").write_text("operator state")
+    before = isolation_conftest.root_entry_snapshot((tmp_path,))
+    for name in (".pytest_cache", "__pycache__"):
+        (tmp_path / name).mkdir()
+    isolation_conftest.assert_no_new_root_entries(before)
+
+
+def test_root_entry_session_guard_uses_bound_startup_directory(tmp_path, monkeypatch):
+    repository, startup, other = (tmp_path / name for name in ("repository", "startup", "other"))
+    for root in (repository, startup, other):
+        root.mkdir()
+    monkeypatch.setattr(isolation_conftest, "REPOSITORY_ROOT", repository)
+    monkeypatch.setattr(isolation_conftest, "START_WORKING_DIRECTORY", startup)
+    guard = isolation_conftest.protect_working_directory_entries.__pytest_wrapped__.obj()
+    next(guard)
+    monkeypatch.chdir(other)
+    (startup / ".agents").mkdir()
+    with pytest.raises(AssertionError, match="startup/\\.agents"):
+        next(guard)

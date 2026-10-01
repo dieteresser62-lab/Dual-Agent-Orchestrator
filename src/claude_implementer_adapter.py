@@ -15,7 +15,7 @@ from pathlib import Path
 
 from agent_adapters import (
     AgentOutputError, AgentPermissionError, CapabilitySpec,
-    PROVIDER_FAILURE_METRIC_KEYS, _BaseAdapter,
+    PROVIDER_FAILURE_METRIC_KEYS, ClaudeToolActivity, _BaseAdapter,  # allowlist:provider -- transport: tool lifetime observer
 )
 from provider_metrics import failure_metrics, log_permission_denials, actual_model_metrics
 from protected_tree import ProtectedTreeGuard
@@ -159,7 +159,7 @@ def implementer_settings(paths: tuple[Path, ...], root: Path, tool_roots: tuple[
     }
 
 
-class NativeClaudeImplementerAdapter(ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: implementer registration
+class NativeClaudeImplementerAdapter(ClaudeToolActivity, ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: implementer registration
     _protection_error = AgentPermissionError
     execution_boundary_profile = "claude-write-boundary"  # allowlist:provider -- transport: implementer boundary
     live_stream_profile = "claude-stream-json"  # allowlist:provider -- transport: implementer live stream

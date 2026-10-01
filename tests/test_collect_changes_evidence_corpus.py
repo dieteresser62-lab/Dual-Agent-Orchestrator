@@ -925,6 +925,14 @@ def test_b63_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None
             assert current != blob, path
         elif path == RECORD_SEQUENCE_BASELINE.relative_to(ROOT).as_posix():
             assert current == TARGET_RECORD_SEQUENCE_BLOB, path
+        elif path in {"tests/conftest.py", "tests/test_test_run_isolation.py"}:
+            # D2 adds guards and tests; every historical function stays intact.
+            historical = ast.parse(_git("show", f"{PRE_B63_COMMIT}:{path}"))
+            active = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+            functions = {node.name: node for node in active.body if isinstance(node, ast.FunctionDef)}
+            for node in historical.body:
+                if isinstance(node, ast.FunctionDef):
+                    assert ast.dump(functions[node.name]) == ast.dump(node), node.name
         else:
             assert current == blob, path
         assert _git("rev-parse", f"{PRE_B63_COMMIT}:{path}") == blob, path

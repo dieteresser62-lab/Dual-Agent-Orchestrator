@@ -425,6 +425,8 @@ def _apply_resumed_agent_profiles(
                     "AGENT-PROFILE-DIFF | explicit "
                     f"{role} {field} differs from the immutable persisted profile"
                 )
+        if current.stall_timeout_seconds != profile.stall_timeout_seconds:
+            raise StateSchemaError(f"AGENT-PROFILE-DIFF | {role} stall_timeout_seconds differs from the immutable persisted profile")
         slots[role] = replace(
             current,
             name=profile.provider,
@@ -433,6 +435,7 @@ def _apply_resumed_agent_profiles(
             model=profile.model,
             effort=profile.effort,
             timeout_seconds=profile.timeout_seconds or None,
+            stall_timeout_seconds=profile.stall_timeout_seconds,
             max_budget_usd=profile.max_budget_usd,
         )
     identities = _capture_slot_identities(

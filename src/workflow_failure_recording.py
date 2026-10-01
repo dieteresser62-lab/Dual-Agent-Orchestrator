@@ -334,7 +334,7 @@ def _prior_native_retry_counts(
     )
     transport_failures = sum(
         item.automatic_resume
-        and (item.orchestrator_diagnostic == OrchestratorDiagnostic.PROVIDER_OVERLOADED.text
+        and (item.orchestrator_diagnostic in {OrchestratorDiagnostic.PROVIDER_OVERLOADED.text, OrchestratorDiagnostic.PROVIDER_STALLED.text}
              or item.failure_kind is AgentFailureKind.OUTPUT
              and item.native_review_rejection is None
              and item.native_implementer_rejection is None)
@@ -418,7 +418,7 @@ def _invocation_retry_decision(
         prior_contract_rejections,
         max_transport_failures,
         max_contract_rejections,
-        transport_failure=error.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED,
+        transport_failure=error.orchestrator_diagnostic in {OrchestratorDiagnostic.PROVIDER_OVERLOADED, OrchestratorDiagnostic.PROVIDER_STALLED},
     )
     reset_at, quota_resume_at, automatic_quota = _quota_resume_decision(
         error=error,
@@ -482,7 +482,7 @@ def _invocation_retry_decision(
         transient_policy.maximum_delay_seconds,
         transient_policy.initial_delay_seconds * (2**prior_budget_failures),
     )
-    if error.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_OVERLOADED:
+    if error.orchestrator_diagnostic in {OrchestratorDiagnostic.PROVIDER_OVERLOADED, OrchestratorDiagnostic.PROVIDER_STALLED}:
         transient_delay = transient_policy.maximum_delay_seconds
     resume_at = (
         quota_resume_at

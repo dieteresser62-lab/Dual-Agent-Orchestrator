@@ -10,6 +10,8 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+START_WORKING_DIRECTORY = Path.cwd().resolve()
+ROOT_CACHE_NAMES = frozenset({".pytest_cache", "__pycache__"})
 
 MetadataSignature = tuple[tuple[str, str, str], ...]
 RunRootSignature = tuple[str, ...]
@@ -106,6 +108,24 @@ def assert_isolated_run_root(run_root: Path, temporary_root: Path) -> Path:
         f"run root escaped tmp_path: {resolved_run_root}"
     )
     return resolved_run_root
+
+
+def root_entry_snapshot(roots: tuple[Path, ...]) -> dict[Path, frozenset[str]]:
+    return {root: frozenset(path.name for path in root.iterdir()) for root in roots}
+
+
+def assert_no_new_root_entries(before: dict[Path, frozenset[str]]) -> None:
+    added = sorted(str(root / name) for root, names in before.items()
+                   for name in root_entry_snapshot((root,))[root] - names - ROOT_CACHE_NAMES)
+    assert not added, "Test run created entries outside isolated temporary directories:\n" + "\n".join(added)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def protect_working_directory_entries() -> Iterator[None]:
+    """Check both roots even if individual tests change their working directory."""
+    before = root_entry_snapshot((REPOSITORY_ROOT, START_WORKING_DIRECTORY))
+    yield
+    assert_no_new_root_entries(before)
 
 
 @pytest.fixture(scope="session", autouse=True)

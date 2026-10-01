@@ -213,6 +213,61 @@ def _json_object(text: str, role: str) -> dict[str, object]:
 
 
 
+def _stream_event(line: str) -> dict:
+    try:
+        event = json.loads(line)
+    except (ValueError, TypeError):
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
+class CodexToolActivity:  # allowlist:provider -- transport: JSON event lifetimes
+    """Interpret tool lifetimes independently of output rendering."""
+
+    supports_stall_detection = True
+
+    @staticmethod
+    def tool_activity(line: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        event = _stream_event(line)
+        item = event.get("item")
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return (), ()
+        # Message, reasoning and checklist items are model work, not tools.
+        if item.get("type") not in {
+            "command_execution", "file_change", "mcp_tool_call", "web_search",
+            "collab_tool_call", "image_generation", "dynamic_tool_call",
+        }:
+            return (), ()
+        if event.get("type") == "item.started":
+            return (item["id"],), ()
+        if event.get("type") == "item.completed":
+            return (), (item["id"],)
+        return (), ()
+
+
+class ClaudeToolActivity:  # allowlist:provider -- transport: stream-json tool lifetimes
+    """Pair assistant tool_use blocks with user tool_result blocks."""
+
+    supports_stall_detection = True
+
+    @staticmethod
+    def tool_activity(line: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        event = _stream_event(line)
+        message = event.get("message")
+        blocks = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(blocks, list):
+            return (), ()
+        started, completed = [], []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if event.get("type") == "assistant" and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+                started.append(block["id"])
+            if event.get("type") == "user" and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                completed.append(block["tool_use_id"])
+        return tuple(started), tuple(completed)
+
+
 class AgentAdapter(Protocol):
     name: str
     cli_binary: str
@@ -233,6 +288,11 @@ class AgentAdapter(Protocol):
     requires_attempt_ledger: bool
     sanitize_reviewer_environment: bool
     set_pwd: bool
+
+    supports_stall_detection: bool
+    stall_timeout_seconds: int
+
+    def tool_activity(self, line: str) -> tuple[tuple[str, ...], tuple[str, ...]]: ...
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
 
@@ -268,6 +328,7 @@ class NativeImplementerAdapter(AgentAdapter, Protocol):
 
 
 class _BaseAdapter:
+    supports_stall_detection = False
     reviewer = False
     required_hosts: tuple[str, ...] = ()
     inherit_process_environment = True
@@ -292,6 +353,7 @@ class _BaseAdapter:
         self.cli_binary = settings.binary
         self.model = settings.model
         self.timeout = settings.timeout_seconds
+        self.stall_timeout_seconds = settings.stall_timeout_seconds
         self.effort = settings.effort
         self.max_budget_usd = settings.max_budget_usd
         self.invocation = AgentInvocationData()
@@ -400,7 +462,7 @@ class _BaseAdapter:
         self.invocation.runtime_dir = None
 
 
-class NativeCodexAdapter(ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: D1 implementer isolation binding
+class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  # allowlist:provider -- transport: D1 implementer isolation binding
     """Codex transport whose last message is one schema-bound JSON object."""
 
     _protection_error = AgentPermissionError

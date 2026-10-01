@@ -16,6 +16,7 @@ import role_occupancy
 
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
+DEFAULT_STALL_TIMEOUT_SECONDS = 900
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 REVIEWER_ENVIRONMENT_POLICY = ("PATH", "HOME", "LANG", "LC_*", "TERM", "TMPDIR", "CODEX_HOME")  # allowlist:provider -- profile configuration: credential-free reviewer environment
 
@@ -36,6 +37,7 @@ class AgentSettings:
     antigravity_home: str | None = None
     antigravity_run_root: str | None = None
     toolchain_read_roots: tuple[str, ...] = ()
+    stall_timeout_seconds: int = DEFAULT_STALL_TIMEOUT_SECONDS
     reviewer_model_catalog_json: InitVar[str | None] = None
     fixed_environment: InitVar[tuple[tuple[str, str], ...]] = ()
 
@@ -58,6 +60,7 @@ class AgentProfileConfig:
     antigravity_home: str | None = None
     antigravity_run_root: str | None = None
     toolchain_read_roots: tuple[str, ...] = ()
+    stall_timeout_seconds: int = DEFAULT_STALL_TIMEOUT_SECONDS
 
 
 def default_antigravity_home() -> str:
@@ -142,6 +145,7 @@ def default_profiles() -> dict[str, AgentProfileConfig]:
             raw["effort"], _process_timeout(raw.get("timeout_seconds"), f"shipped agent_profiles.{name}.timeout_seconds"),
             raw.get("provider_options", {}).get("claude", {}).get("max_budget_usd"),  # allowlist:provider -- profile configuration: shipped USD option
             home, root,
+            stall_timeout_seconds=raw.get("stall_timeout_seconds", DEFAULT_STALL_TIMEOUT_SECONDS),
         )
     return profiles
 
@@ -167,7 +171,7 @@ def parse_profile_tables(
     for name, raw in (profiles_raw or {}).items():
         if not isinstance(name, str) or not name.strip() or not isinstance(raw, dict):
             raise AgentConfigError(f"agent_profiles.{name} must be a TOML table")
-        unknown = set(raw) - {"provider", "binary", "model", "effort", "timeout_seconds", "provider_options"}
+        unknown = set(raw) - {"provider", "binary", "model", "effort", "timeout_seconds", "stall_timeout_seconds", "provider_options"}
         if unknown:
             raise AgentConfigError(f"unknown agent_profiles.{name} keys: {sorted(unknown)}")
         base = profiles.get(name)
@@ -187,6 +191,9 @@ def parse_profile_tables(
         if timeout_raw is not None and (isinstance(timeout_raw, bool) or not isinstance(timeout_raw, int) or timeout_raw < 0):
             raise AgentConfigError(f"agent_profiles.{name}.timeout_seconds must be a non-negative integer")
         timeout = _process_timeout(timeout_raw, f"agent_profiles.{name}.timeout_seconds")
+        stall = raw.get("stall_timeout_seconds", base.stall_timeout_seconds if base else DEFAULT_STALL_TIMEOUT_SECONDS)
+        if isinstance(stall, bool) or not isinstance(stall, int) or stall < 0:
+            raise AgentConfigError(f"agent_profiles.{name}.stall_timeout_seconds must be a non-negative integer")
         options = raw.get("provider_options", {})
         if not isinstance(options, dict) or set(options) - {"claude", "codex", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
@@ -217,7 +224,7 @@ def parse_profile_tables(
                 label=f"agent_profiles.{name}.provider_options.antigravity",
             )
         tool_roots = _profile_toolchain_roots(codex_options if provider == "codex" else claude_options, repository, name)  # allowlist:provider -- profile configuration: implementer toolchain
-        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots)
+        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots, stall)
     for slot, name in roles.items():
         if name not in profiles:
             raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
@@ -416,6 +423,7 @@ def resolve_agent_settings(
             antigravity_home=profile.antigravity_home,
             antigravity_run_root=profile.antigravity_run_root,
             toolchain_read_roots=profile.toolchain_read_roots,
+            stall_timeout_seconds=profile.stall_timeout_seconds,
         )
     if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
         inherited = settings["reviewer"]
@@ -431,6 +439,7 @@ def resolve_agent_settings(
             antigravity_home=inherited.antigravity_home,
             antigravity_run_root=inherited.antigravity_run_root,
             toolchain_read_roots=inherited.toolchain_read_roots,
+            stall_timeout_seconds=inherited.stall_timeout_seconds,
         )
     return settings
 

@@ -17,6 +17,7 @@ class OrchestratorDiagnostic(StrEnum):
     """Diagnostics whose complete rendered text is owned by this repository."""
 
     PROVIDER_OVERLOADED = "provider overloaded"
+    PROVIDER_STALLED = "provider stalled"
 
     CLASSIFIED_HALT_RULE = (
         "classified-halt: a repository-owned error rule halted the run"

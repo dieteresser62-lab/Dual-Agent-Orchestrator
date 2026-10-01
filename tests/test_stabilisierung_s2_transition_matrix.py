@@ -568,7 +568,7 @@ EXPECTED_COMPARISON_COUNTS = {'src/artifact_resume.py:resolve_resume_state': 4,
  'src/workflow_audit_projection.py:_attach_record_events': 13,
  'src/orchestrator.py:_load_bound_queue_terminal': 4,
  'src/orchestrator.py:run_pipeline': 16,
- 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 20,  # Four new comparisons bind the fixed implementer environment and reviewer runtime catalog; covered in test_phase0_product_hardening.py and test_workflow_run_setup.py.
+ 'src/workflow_run_setup.py:_apply_resumed_agent_profiles': 21,  # D2 adds the immutable stall-policy comparison, covered by test_resume_rejects_changed_stall_policy_before_provider_start.
  'src/workflow_production.py:_read_production_task': 2,
  'src/workflow_production.py:_prepare_new_watch_task': 1,
  'src/workflow_production.py:_validate_resumed_state': 8,
