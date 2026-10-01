@@ -30,6 +30,12 @@ GIT_WRITES = frozenset({
     "restore", "apply", "am", "config",
 })
 GIT_READS = frozenset({"status", "diff", "show", "log", "ls-files", "rev-parse", "cat-file", "ls-tree", "check-ignore"})
+SHELL_OUTPUT_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr"})
+SHELL_SPECIAL_PARAMETER = re.compile(r"\$(?:[?!#$@*0-9-]|\{[?!#$@*0-9-]\})")
+
+
+def _channel_duplication(operator, target):
+    return operator in {">&", "<&"} and re.fullmatch(r"(?:[0-9]+|-)", target) is not None
 
 
 def _read_only_branch(arguments: list[str]) -> bool:
@@ -73,7 +79,7 @@ def _read_only_git(arguments: list[str]) -> bool:
 
 def _shell_layout(command: str) -> str:
     """Keep newlines as separators unless quoted; never evaluate shell text."""
-    result, quote, escaped = [], None, False
+    result, quote, escaped, continuation = [], None, False, False
     for char in command:
         if escaped:
             result.append(char)
@@ -83,7 +89,9 @@ def _shell_layout(command: str) -> str:
             escaped = True
         elif char in {"'", '"'}:
             quote = None if quote == char else char if quote is None else quote
-        result.append(";" if char == "\n" and quote is None else char)
+        if not char.isspace():
+            continuation = quote is None and char in "&|"
+        result.append(";" if char == "\n" and quote is None and not continuation else char)
     return "".join(result)
 
 
@@ -121,7 +129,8 @@ def _read_only_shell(command: str) -> bool:
                 target, target_operator = segment[index + 1]
                 if target_operator:
                     return False
-                if not (raw in {">", ">>", "<", "&>", "&>>"} and target == "/dev/null" or raw == ">&" and fd == "2" and target == "1"):
+                if not (raw in {">", ">>", "&>", "&>>"} and target in SHELL_OUTPUT_DEVICES
+                        or raw == "<" and target == "/dev/null" or _channel_duplication(raw, target)):
                     return False
                 index += 2
                 continue
@@ -196,7 +205,7 @@ def _protected(value: str, root: Path, paths: tuple[Path, ...], *, ancestors: bo
                for path in paths for bound in (Path(os.path.abspath(path)), path.resolve(strict=False) if resolve_symlinks else Path(os.path.abspath(path))))
 
 
-def _shell_words(command: str, scratch: Path | None) -> list[str]:
+def _shell_words(command: str, scratch: Path | None, *, allow_unknown: bool = False) -> list[str]:
     """Resolve simple literal assignments; reject unresolved shell authority.
 
     The smoke mutation uses M=$TMPDIR/mut and a function with positional
@@ -211,7 +220,9 @@ def _shell_words(command: str, scratch: Path | None) -> list[str]:
     layout = re.sub(r"'[^']*'", lambda m: "'" + " " * (len(m.group(0)) - 2) + "'", plain)
     functions = tuple(match.span() for match in re.finditer(r"\b\w+\s*\(\s*\)\s*\{[^{}]*\}", layout))
     plain = re.sub(r"'[^']*'", lambda m: m.group(0).replace("$", "_").replace("`", "_").replace("\\", "_"), plain)
-    bindings = {"TMPDIR": [(-1, str(scratch))]} if scratch is not None else {}
+    bindings = {"HOME": [(-1, str(Path.home()))]}
+    if scratch is not None:
+        bindings["TMPDIR"] = [(-1, str(scratch))]
     variable = re.compile(r"\$(?:\{([A-Za-z_]\w*|[1-9])\}|([A-Za-z_]\w*|[1-9]))")
 
     def expand(match, offset=0):
@@ -233,9 +244,12 @@ def _shell_words(command: str, scratch: Path | None) -> list[str]:
         else:
             bindings.setdefault(assignment.group(1), []).append((assignment.start(), None))
     plain = variable.sub(expand, plain)
-    if "$" in plain or "`" in plain or "\\" in plain:
+    authority = SHELL_SPECIAL_PARAMETER.sub("", plain)
+    if allow_unknown:
+        authority = variable.sub("", authority)
+    if "$" in authority or "`" in plain or "\\" in plain:
         raise ValueError("unresolved shell expansion")
-    lexer = shlex.shlex(plain, posix=True, punctuation_chars=";&|()<>")
+    lexer = shlex.shlex(_shell_layout(plain), posix=True, punctuation_chars=";&|()<>")
     lexer.whitespace_split = True
     lexer.commenters = ""
     return list(lexer)
@@ -309,6 +323,30 @@ def _write_violation(value, root, paths, scratch, resolve_symlinks):
     return _violation("outside-write", value)
 
 
+def _bash_write_target(value, cwd, root, paths, scratch, resolve_symlinks):
+    """Inspect visible authority; an ordinary unknown parameter grants none."""
+    value = os.path.expanduser(value) if value.startswith("~") else value
+    if any(char in value for char in "`\\") or any(part in value for part in ("$(", "<(", ">(", "$'")):
+        return _violation("opaque-write", value)
+    if "$" in value:
+        # A literal outside directory is observable even if its final filename
+        # is unknown. A variable-only root does not identify a write location.
+        if value.startswith("/"):
+            literal = value.split("$", 1)[0]
+            prefix = Path(literal) if literal.endswith("/") else Path(literal).parent
+            prefix = Path(os.path.abspath(prefix))
+            if resolve_symlinks and any(parent.is_symlink() for parent in (prefix, *prefix.parents)):
+                return _violation("outside-write", value)
+            if not any(prefix.is_relative_to(bound) for bound in (root, scratch) if bound is not None):
+                return _violation("outside-write", value)
+        return _tolerated("opaque-unknown-target", value)
+    if not Path(value).is_absolute() and cwd is None:
+        # Preserve the existing guard against writing a literal relative name
+        # after an indirect cd (including git-dir command substitution).
+        return _violation("indirect-exec", value)
+    return _write_violation(str((cwd or root) / value), root, paths, scratch, resolve_symlinks)
+
+
 def _write_boundary(words, root, paths, scratch, resolve_symlinks):
     separators = {";", "&&", "||", "|", "&", "(", ")"}
     segments, current = [], []
@@ -318,9 +356,9 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
             current = []
         else: current.append(word)
     if current: segments.append(current)
-    cwd = root
+    cwd, unknown = root, None
     for segment in segments:
-        while segment and (segment[0] in {"then", "if", "else", "!"} or re.match(r"^[A-Za-z_]\w*=", segment[0])):
+        while segment and (segment[0] in {"then", "if", "elif", "else", "!", "do", "while", "until"} or re.match(r"^[A-Za-z_]\w*=", segment[0])):
             segment = segment[1:]
         if not segment: continue
         name = Path(segment[0]).name
@@ -331,10 +369,12 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
                 index += 1
                 word = segment[index]
             if word in {">", ">>", "&>", "&>>", "<", ">&", "<&"}:
-                if index+1 >= len(segment): return _violation("opaque-write", word)
+                if index+1 >= len(segment):
+                    unknown = _tolerated("opaque-unknown-target", word)
+                    break
                 target = segment[index+1]
-                if word in {">", ">>", "&>", "&>>"}: targets.append(target)
-                elif word == ">&" and not (index and segment[index-1] == "2" and target == "1"): return _violation("opaque-write", target)
+                if not _channel_duplication(word, target) and word in {">", ">>", "&>", "&>>", ">&"}:
+                    if target not in SHELL_OUTPUT_DEVICES: targets.append(target)
                 index += 2
             else:
                 arguments.append(word)
@@ -345,18 +385,19 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
             for index, word in enumerate(segment[1:], 1):
                 if word in {"-t", "--target-directory"} and index+1 < len(segment): targets.append(segment[index+1])
                 elif word.startswith("--target-directory="): targets.append(word.split("=",1)[1])
-            if not targets: return _violation("opaque-write", name)
+            if not targets: unknown = _tolerated("opaque-unknown-target", name)
         elif name in {"mv", "rm", "touch", "mkdir", "chmod", "tee"}:
             targets += operands
-            if not targets: return _violation("opaque-write", name)
+            if not targets: unknown = _tolerated("opaque-unknown-target", name)
         for value in targets:
-            if cwd is None: return _violation("outside-write", value)
-            rejected = _write_violation(str(cwd / (os.path.expanduser(value) if value.startswith("~") else value)), root, paths, scratch, resolve_symlinks)
-            if rejected: return rejected
+            result = _bash_write_target(value, cwd, root, paths, scratch, resolve_symlinks)
+            if result is not None:
+                if result.disposition == "violation": return result
+                unknown = result
         if name == "cd":
             target = operands[0] if len(operands) == 1 else ""
             cwd = Path(os.path.abspath(cwd / target)) if cwd and target and not any(c in target for c in "$`*?[~") else None
-    return None
+    return unknown
 
 
 
@@ -412,28 +453,30 @@ def _classify_bash(command, root, paths, scratch, resolve_symlinks):
     if protected_text: return _violation("protected-path", next(str(path) for path in paths if str(path) in command))
     for name in AGENT_CONFIG_LOCATIONS:
         if name in command: return _violation("protected-name", name)
+    opaque = False
     try:
         words = _shell_words(command, scratch)
     except ValueError:
+        opaque = True
         indirect = re.search(r"(?<![\w.-])(?:eval|source)(?![\w-])|(?<![\w.-])(?:ba|z|fi|da)?sh\s+-\w*c", command)
         if indirect: return _violation("indirect-exec", indirect.group())
         if re.search(r"(?<![\w.-])git(?![\w-])", command):
             opaque_git = _opaque_git_violation(command)
             if opaque_git is not None: return _violation("opaque:git-not-read-only", opaque_git)
-        # A write target whose expansion or current directory cannot be bound
-        # is outside the granted authority; interpreter programs remain allowed.
-        if any(item.operator and ">" in item.value for item in inspected) or re.search(r"(?:^|[;&|]\s*)(?:cp|mv|ln|tee|rm|touch|mkdir|chmod|rsync|install)\b", command): return _violation("opaque-write", command)
-        return _tolerated("opaque-harmless", command)
+        try:
+            words = _shell_words(command, scratch, allow_unknown=True)
+        except ValueError:
+            words = [item.value for item in inspected]
     for word in words:
         if Path(word).name in {"eval", "sh", "bash", "dash", "zsh", "fish", "source"}: return _violation("indirect-exec", word)
     rejected = _write_boundary(words, root, paths, scratch, resolve_symlinks)
-    if rejected: return rejected
+    if rejected is not None and rejected.disposition == "violation": return rejected
     for index, word in enumerate(words):
         if Path(word).name != "git": continue
         tail = words[index+1:]
         tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&"}), len(tail))]
         if not _read_only_git(tail): return _violation("git-write", " ".join(_git_arguments(tail)) or "git")
-    return _tolerated("within-boundary", command)
+    return rejected or _tolerated("opaque-harmless" if opaque else "within-boundary", command)
 
 
 def explain_implementer_denial(denial: object, repository_root: Path | None, protected_paths: tuple[Path, ...] | None,

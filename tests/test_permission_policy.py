@@ -28,7 +28,7 @@ def boundary(tmp_path):
     ('Bash', {'command': 'cp *.js .gi[t]/hooks/'}, 'glob-protected', '.gi[t]'),
     ('Bash', {'command': r'echo escaped\ word; g\it commit'}, 'indirect-exec', r'g\it'),
     ('Bash', {'command': "cat <<'EOF'\nbody"}, 'heredoc-ambiguous', 'unterminated heredoc'),
-    ('Bash', {'command': 'echo x > $UNKNOWN'}, 'opaque-write', '$UNKNOWN'),
+    ('Bash', {'command': 'echo x > $UNKNOWN'}, 'opaque-unknown-target', '$UNKNOWN'),
     ('Bash', {}, 'invalid-input', 'invalid command'),
     ('Read', {'path': '\x00'}, 'inspection-error', 'null'),
     ('Write', {'file_path': 'docs/x'}, 'within-boundary', 'docs/x'),
@@ -46,6 +46,94 @@ def test_denial_diagnostic_names_the_actual_rule(boundary, tool, data, rule, fra
 
 def test_unbound_denial_has_a_reason(boundary):
     assert explain_implementer_denial({}, None, None).rule == 'unbound'
+
+
+@pytest.mark.parametrize('command,expected', [
+    ('node tests/run-single.mjs tests/balance-expenses-table-layout.test.mjs 2>&1 | tail -15; echo "exit=$?"; git diff --name-only; git status --porcelain -- app css tests', 'tolerated'),
+    ('''S=$TMPDIR/repro.mjs && sed -n '229,380p' tests/balance-expenses-table-layout.test.mjs > $S && cat >> $S <<'EOF'
+console.log(`n=${x}`, `backtick string`);
+EOF
+node $S''', 'tolerated'),
+    ('for f in a b; do node t.mjs "$f" > "$TMPDIR/$f.log" 2>&1; done; echo "exit=$?"', 'tolerated'),
+    ('rm -f "$TMPDIR/x"; echo $?', 'tolerated'),
+    ('echo x > $HOME/.bashrc; echo $?', 'violation'),
+    ('rm -rf "$D"/.git', 'violation'),
+    ('cp x /etc/$F', 'violation'),
+    ('f=.git; touch $f/x', 'violation'),
+    ('cat ~/.ssh/id_rsa; echo $?', 'violation'),
+    ('echo $? > .orchestrator/x', 'violation'),
+    ('eval "$X"', 'violation'),
+])
+def test_round18_real_commands_and_counterexamples(boundary, command, expected):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == expected
+
+
+@pytest.mark.parametrize('parameter', ['?', '!', '$', '#', '-', '@', '*', *map(str, range(10))])
+def test_special_parameters_do_not_make_shell_opaque(boundary, parameter):
+    from permission_policy import _shell_words
+    command = f'node t.mjs "${parameter}"; echo "exit=${parameter}"'
+    assert _shell_words(command, boundary[2])
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'tolerated'
+    assert result.rule == 'within-boundary'
+
+
+def test_function_positional_argument_rule_is_preserved(boundary):
+    from permission_policy import _shell_words
+    words = _shell_words('run() { node -e "$1"; }; node -e "$1"', boundary[2])
+    assert '/function-argument' in words
+    assert '$1' in words
+
+
+@pytest.mark.parametrize('redirect', ['2>&1', '3>&2', '>&2', '4<&0', '>&-',
+    '>/dev/null', '>>/dev/null', '&>/dev/null', '2>/dev/null',
+    '>/dev/stdout', '>>/dev/stderr', '&>/dev/stdout', '2>/dev/stderr'])
+@pytest.mark.parametrize('opaque', [False, True])
+def test_channel_duplications_and_output_devices_are_not_writes(boundary, redirect, opaque):
+    command = f'node t.mjs {redirect}; echo ' + ('"$UNBOUND"' if opaque else '"$?"')
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'tolerated'
+    assert result.rule != 'opaque-unknown-target'
+
+
+@pytest.mark.parametrize('command', [
+    'echo x > "$f"', 'node t.mjs >> $OUT/x', 'cp x "$OUT"', 'mv x "$OUT"',
+    'ln -s x "$OUT"', 'tee "$OUT"', 'rm -f "$OUT/x"', 'touch "$OUT/x"',
+    'mkdir "$OUT/x"', 'chmod 600 "$OUT/x"', 'rsync x "$OUT/x"', 'install x "$OUT/x"',
+    'node t.mjs > "$TMPDIR/$f.log"',
+    'echo x > "$f"; echo y > local',
+])
+def test_unknown_targets_are_tolerated_with_explicit_diagnostic(boundary, command):
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'tolerated'
+    assert result.rule == 'opaque-unknown-target'
+    assert '$' in result.fragment
+
+
+@pytest.mark.parametrize('command', [
+    'node t.mjs "$unknown" > /etc/$F', 'cp x /etc/$F; echo "$unknown"',
+    'echo x > "$unknown"; touch /etc/passwd',
+    'echo x > "$unknown"; G=git; $G push',
+    'X=eval; $X "$unknown"', 'echo x >& /etc/$F',
+    'node t.mjs "$unknown" > ${HOME}/.bashrc',
+    'node t.mjs "$unknown" > ~/.bashrc',
+    'cd /etc\ntouch passwd',
+    'while touch /etc/passwd; do true; done',
+    'until touch /etc/passwd; do true; done',
+])
+def test_visible_violation_wins_over_unknown_targets(boundary, command):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
+@pytest.mark.parametrize('route', ['literal-parent-traversal', 'literal-link'])
+def test_unknown_filename_does_not_hide_visible_outside_prefix(boundary, route):
+    root, paths, scratch = boundary
+    if route == 'literal-link':
+        (scratch / 'link').symlink_to(paths[-1], target_is_directory=True)
+        target = '$TMPDIR/link/$F'
+    else:
+        target = '$TMPDIR/../git-common/$F'
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': f'cp x "{target}"'}}, *boundary) == 'violation'
 
 
 @pytest.mark.parametrize("tool,data,expected", [
@@ -246,8 +334,8 @@ def test_tmpdir_expansion_uses_actual_bound_scratch_for_protection(boundary, rou
     "cat > /tmp/safe <<EOF\n$UNKNOWN\nEOF", "cat > /tmp/safe <<'EOF'\nunterminated",
     '''M="$TMPDIR/mut" && rm -rf "$M" && mkdir -p "$M/tests" && cp tests/simulator-tab-panel-pairing.test.mjs "$M/tests/" && run() { name="$1"; shift; cp Simulator.html "$M/Simulator.html"; node -e "$1" "$M/Simulator.html"; (cd "$M" && node --test tests/) >/dev/null 2>&1 && echo "$name: survived" || echo "$name: killed"; }; run missing-panel "const fs=require(\\"fs\\");const p=process.argv[1];fs.writeFileSync(p,fs.readFileSync(p,\\"utf8\\").replace(/id=\\"tab-a\\"/,\\"id=\\\\\\"tab-x\\\\\\"\\"))"''',
 ])
-def test_opaque_scratch_work_requires_bound_write_targets(boundary, command):
-    expected = "violation" if any(word in command for word in ("mkdir", "cat >")) else "tolerated"
+def test_opaque_scratch_work_only_stops_visible_outside_targets(boundary, command):
+    expected = "violation" if "cat >" in command else "tolerated"
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == expected
     root, paths, _ = boundary
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, root, paths) == expected

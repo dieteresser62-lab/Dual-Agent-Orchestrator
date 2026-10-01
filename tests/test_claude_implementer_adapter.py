@@ -59,6 +59,24 @@ def _prepared(tmp_path: Path):
     return root, adapter, bundle, prepared
 
 
+def test_unknown_write_target_denial_is_tolerated_and_logged(tmp_path, caplog):
+    root, adapter, bundle, _ = _prepared(tmp_path)
+    try:
+        output = adapter.extract_output(_stream({'is_error': False, 'permission_denials': [{
+            'tool_name': 'Bash', 'tool_use_id': 'toolu_unknown',
+            'tool_input': {'command': 'node t.mjs > "$OUT/x"; echo "exit=$?"'},
+        }], 'structured_output': {'result': _valid_plan(bundle)}}), '', {})
+        assert json.loads(output)['request_id'] == bundle.bound_context.request_id
+        summary = adapter.metadata['permission_denials'][0]
+        assert summary['disposition'] == 'tolerated'
+        assert summary['rule'] == 'opaque-unknown-target'
+        assert summary['fragment'] == '$OUT/x'
+        assert 'disposition=tolerated rule=opaque-unknown-target' in caplog.text
+        assert not (root / '.orchestrator' / 'logs' / 'permission-denials').exists()
+    finally:
+        adapter.cleanup()
+
+
 @pytest.mark.parametrize('violation', [False, True])
 def test_denial_diagnostics_and_full_private_input(tmp_path, monkeypatch, caplog, violation):
     import stat
