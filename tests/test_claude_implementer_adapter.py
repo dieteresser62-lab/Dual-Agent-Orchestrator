@@ -59,6 +59,80 @@ def _prepared(tmp_path: Path):
     return root, adapter, bundle, prepared
 
 
+@pytest.mark.parametrize('violation', [False, True])
+def test_denial_diagnostics_and_full_private_input(tmp_path, monkeypatch, caplog, violation):
+    import stat
+    from agent_adapters import AgentPermissionError
+    from provider_metrics import permission_denial_summaries
+    root, adapter, bundle, _ = _prepared(tmp_path)
+    monkeypatch.setenv('DAO_SECRET_TOKEN', 'fixture-secret-value')
+    adapter.bind_process_evidence(root / '.orchestrator' / 'attempt-123.process.json')
+    command = 'echo "TOKEN=fixture-secret-value"\n' + ('# retained line\n' * 100)
+    command += 'git checkout -- tests/x' if violation else 'npm test'
+    data = {'command': command, 'nested': {'api_key': 'also-private'}}
+    denial = {'tool_name': 'Bash', 'tool_use_id': 'toolu_diagnostic', 'tool_input': data}
+    # The real live form omits input on permission_denied; recover it from tool_use.
+    events = [
+        {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': denial['tool_use_id'], 'name': 'Bash', 'input': data}]}},
+        {'type': 'system', 'subtype': 'permission_denied', 'tool_name': 'Bash', 'tool_use_id': denial['tool_use_id']},
+    ]
+    stream = '\n'.join(json.dumps(event) for event in events) + '\n' + _stream({
+        'is_error': False, 'structured_output': {'result': _valid_plan(bundle)}})
+    try:
+        if violation:
+            with pytest.raises(AgentPermissionError) as caught:
+                adapter.extract_output(stream, '', {})
+        else:
+            adapter.extract_output(stream, '', {})
+        summary = adapter.metadata['permission_denials'][0]
+        expected_rule = 'git-write' if violation else 'within-boundary'
+        assert summary['rule'] == expected_rule
+        assert f'disposition={summary["disposition"]} rule={expected_rule}' in caplog.text
+        assert 'fixture-secret-value' not in caplog.text
+        assert len(summary['fragment']) <= 201
+        assert permission_denial_summaries([summary])[0]['rule'] == expected_rule
+        directory = root / '.orchestrator' / 'logs' / 'permission-denials'
+        if violation:
+            files = list(directory.glob('*.json'))
+            assert len(files) == 1
+            assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+            private = json.loads(files[0].read_text())
+            assert private['tool_input']['command'].endswith('git checkout -- tests/x')
+            assert private['tool_input']['command'].count('# retained line\n') == 100
+            assert '[redacted]' in private['tool_input']['command']
+            assert private['tool_input']['nested']['api_key'] == '[redacted]'
+            assert 'fixture-secret-value' not in files[0].read_text()
+            assert str(files[0]) in str(caught.value)
+            assert str(files[0]) in caught.value.technical_text
+            assert 'tool_input' not in json.dumps(adapter.metadata)
+            assert str(files[0]) not in json.dumps(adapter.metadata)
+            snapshot = agent_runtime._review_snapshot_paths(root)
+            assert snapshot is not None
+            assert files[0].relative_to(root).as_posix() not in [path.as_posix() for path in snapshot]
+        else:
+            assert not directory.exists()
+    finally:
+        adapter.cleanup()
+
+
+def test_private_denial_does_not_follow_a_directory_symlink(tmp_path, caplog):
+    from agent_adapters import AgentPermissionError
+    root, adapter, bundle, _ = _prepared(tmp_path)
+    outside = tmp_path / 'outside'
+    try:
+        outside.mkdir()
+        (root / '.orchestrator').mkdir(exist_ok=True)
+        (root / '.orchestrator' / 'logs').symlink_to(outside, target_is_directory=True)
+        with pytest.raises(AgentPermissionError, match='private denial input unavailable'):
+            adapter.extract_output(_stream({'is_error': False, 'permission_denials': [{
+                'tool_name': 'Bash', 'tool_use_id': '../../escape', 'tool_input': {'command': 'git stash'},
+            }], 'structured_output': {'result': _valid_plan(bundle)}}), '', {})
+        assert not list(outside.iterdir())
+        assert 'Cannot save private permission denial input' in caplog.text
+    finally:
+        adapter.cleanup()
+
+
 def test_native_implementer_settings_and_measurement_are_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAO_DECOY_TOKEN", "must-not-pass")
     root, adapter, bundle, prepared = _prepared(tmp_path)
@@ -753,6 +827,9 @@ def test_violation_beyond_bounded_diagnostic_is_still_classified(tmp_path):
         with pytest.raises(AgentPermissionError):
             adapter.extract_output(_stream({"is_error": False, "permission_denials": denials,
                                             "structured_output": {"result": _valid_plan(bundle)}}), "", {})
+        assert len(adapter.metadata['permission_denials']) == 16
+        assert adapter.metadata['permission_denials'][-1]['rule'] == 'git-write'
+        assert adapter.metadata['permission_denials'][-1]['tool_use_id'] == 'toolu_bad'
     finally:
         adapter.cleanup()
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from permission_policy import GIT_WRITES, classify_implementer_denial
+from permission_policy import GIT_WRITES, classify_implementer_denial, explain_implementer_denial
 
 
 @pytest.fixture
@@ -15,6 +15,37 @@ def boundary(tmp_path):
     scratch = tmp_path / "scratch"
     scratch.mkdir(mode=0o700)
     return root, paths, scratch
+
+
+@pytest.mark.parametrize('tool,data,rule,fragment', [
+    ('Bash', {'command': 'git -C /fixture/repo checkout -- tests/x'}, 'git-write', 'checkout'),
+    ('Bash', {'command': 'echo x > .git/hooks/x'}, 'protected-name', '.git'),
+    ('Write', {'file_path': '.git/hooks/x'}, 'protected-path', '.git/hooks/x'),
+    ('Bash', {'command': 'cp x /etc/passwd'}, 'outside-write', '/etc/passwd'),
+    ('Read', {'file_path': '~/.ssh/id_rsa'}, 'credential-read', '~/.ssh'),
+    ('Bash', {'command': 'echo $UNKNOWN; git commit -m "$UNKNOWN"'}, 'opaque:git-not-read-only', 'git commit'),
+    ('Bash', {'command': 'echo "$(echo ok)" .git'}, 'substitution', '$(echo ok)'),
+    ('Bash', {'command': 'cp *.js .gi[t]/hooks/'}, 'glob-protected', '.gi[t]'),
+    ('Bash', {'command': r'echo escaped\ word; g\it commit'}, 'indirect-exec', r'g\it'),
+    ('Bash', {'command': "cat <<'EOF'\nbody"}, 'heredoc-ambiguous', 'unterminated heredoc'),
+    ('Bash', {'command': 'echo x > $UNKNOWN'}, 'opaque-write', '$UNKNOWN'),
+    ('Bash', {}, 'invalid-input', 'invalid command'),
+    ('Read', {'path': '\x00'}, 'inspection-error', 'null'),
+    ('Write', {'file_path': 'docs/x'}, 'within-boundary', 'docs/x'),
+    ('Read', {'file_path': '/usr/share/example'}, 'harmless-read', '/usr/share'),
+    ('Bash', {'command': 'ls -la'}, 'read-only', 'ls'),
+    ('Bash', {'command': 'echo "unterminated'}, 'opaque-harmless', 'unterminated'),
+])
+def test_denial_diagnostic_names_the_actual_rule(boundary, tool, data, rule, fragment):
+    denial = {'tool_name': tool, 'tool_input': data}
+    result = explain_implementer_denial(denial, *boundary)
+    assert result.disposition == classify_implementer_denial(denial, *boundary)
+    assert result.rule == rule
+    assert fragment in result.fragment
+
+
+def test_unbound_denial_has_a_reason(boundary):
+    assert explain_implementer_denial({}, None, None).rule == 'unbound'
 
 
 @pytest.mark.parametrize("tool,data,expected", [

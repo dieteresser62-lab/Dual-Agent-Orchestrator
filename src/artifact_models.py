@@ -1981,6 +1981,8 @@ class PermissionDenialSummary:
     tool_name: str
     tool_use_id: str
     input_excerpt: str
+    rule: str | None = dataclass_field(default=None, kw_only=True)
+    fragment: str | None = dataclass_field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         for name, maximum in (("tool_name", 65), ("tool_use_id", 101), ("input_excerpt", 201)):
@@ -1988,6 +1990,11 @@ class PermissionDenialSummary:
             if (not isinstance(value, str) or not value or len(value) > maximum
                 or any(ord(char) < 32 or ord(char) == 127 for char in value)):
                 raise ArtifactValidationError("permission denial summary is invalid or unbounded")
+        for name, maximum in (("rule", 81), ("fragment", 201)):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value or len(value) > maximum
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                raise ArtifactValidationError("permission denial diagnostic is invalid or unbounded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2523,6 +2530,11 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         raw.pop("native_implementer_retry_round", None)
     if isinstance(payload, ProviderAttemptPayload) and not payload.permission_denials:
         raw.pop("permission_denials", None)
+    if isinstance(payload, (ProviderAttemptPayload, InvocationFailurePayload)):
+        for denial in raw.get("permission_denials", []):
+            for field in ("rule", "fragment"):
+                if denial[field] is None:
+                    denial.pop(field)
     if isinstance(payload, ProviderAttemptPayload):
         raw["binary_identity"] = payload.binary_identity.to_dict()
         if not payload.actual_models:

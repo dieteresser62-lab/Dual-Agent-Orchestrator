@@ -5,6 +5,23 @@ from pathlib import Path
 from toolchain_paths import CREDENTIAL_LOCATIONS, AGENT_CONFIG_LOCATIONS
 import re
 import shlex
+import fnmatch
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class DenialClassification:
+    disposition: str
+    rule: str
+    fragment: str
+
+
+def _violation(rule, fragment):
+    return DenialClassification("violation", rule, str(fragment))
+
+
+def _tolerated(rule, fragment):
+    return DenialClassification("tolerated", rule, str(fragment))
 
 
 GIT_WRITES = frozenset({
@@ -34,7 +51,7 @@ def _read_only_branch(arguments: list[str]) -> bool:
     return True
 
 
-def _read_only_git(arguments: list[str]) -> bool:
+def _git_arguments(arguments: list[str]) -> list[str]:
     while arguments:
         if arguments[0] in {"--no-pager", "--paginate", "--literal-pathspecs", "--no-optional-locks", "--no-replace-objects"}:
             arguments = arguments[1:]
@@ -44,6 +61,11 @@ def _read_only_git(arguments: list[str]) -> bool:
             arguments = arguments[1:]
         else:
             break
+    return arguments
+
+
+def _read_only_git(arguments: list[str]) -> bool:
+    arguments = _git_arguments(arguments)
     if not arguments or any(value == "--output" or value.startswith("--output=") for value in arguments):
         return False
     return (_read_only_branch(arguments[1:]) if arguments[0] == "branch" else arguments[0] in GIT_READS)
@@ -137,7 +159,7 @@ def _read_only_shell(command: str) -> bool:
     return bool(commands)
 
 
-def _opaque_git_reads(command: str) -> bool:
+def _opaque_git_violation(command: str) -> str | None:
     lexer = shlex.shlex(_shell_layout(command), posix=True, punctuation_chars=";&|()<>")
     lexer.whitespace_split = True
     lexer.commenters = ""
@@ -148,12 +170,17 @@ def _opaque_git_reads(command: str) -> bool:
         tail = words[index + 1:]
         tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&", ")"}), len(tail))]
         if not _read_only_git(tail):
-            return False
+            return "git " + " ".join(_git_arguments(tail))
     # Quoted command substitutions remain single lexer tokens.
     for inner in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", command):
-        if not _opaque_git_reads(inner[0] or inner[1]):
-            return False
-    return True
+        violation = _opaque_git_violation(inner[0] or inner[1])
+        if violation is not None:
+            return violation
+    return None
+
+
+def _opaque_git_reads(command: str) -> bool:
+    return _opaque_git_violation(command) is None
 
 
 def _protected(value: str, root: Path, paths: tuple[Path, ...], *, ancestors: bool = False, resolve_symlinks: bool = True) -> bool:
@@ -235,17 +262,19 @@ def _credential(value, root, *, resolve_symlinks=True):
 
 def _credential_text(command, root, resolve_symlinks):
     text = command.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home())).replace("~/", str(Path.home()) + "/")
-    if re.search(r"/proc/(?:[^/\s]+/)*environ(?:$|[\s/\"'])", text):
-        return True
-    if any(str(Path.home() / name) in text for name in CREDENTIAL_LOCATIONS):
-        return True
+    match = re.search(r"/proc/(?:[^/\s]+/)*environ(?:$|[\s/\"'])", text)
+    if match:
+        return match.group()
+    for name in CREDENTIAL_LOCATIONS:
+        if str(Path.home() / name) in text:
+            return str(Path.home() / name)
     from shell_inspection import tokens
     cwd, start, directory_next = root, True, False
     for item in tokens(command):
         if item.operator:
             start, directory_next = True, False
             continue
-        if _credential(item.value, cwd or root, resolve_symlinks=resolve_symlinks): return True
+        if _credential(item.value, cwd or root, resolve_symlinks=resolve_symlinks): return item.value
         if directory_next:
             value = item.value.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
             value = str(Path.home()) + value[1:] if value.startswith("~") else value
@@ -254,7 +283,7 @@ def _credential_text(command, root, resolve_symlinks):
         if start:
             directory_next = item.value == "cd"
             start = False
-    return False
+    return None
 
 
 def _safe_write(value, root, paths, scratch, *, resolve_symlinks=True):
@@ -268,6 +297,16 @@ def _safe_write(value, root, paths, scratch, *, resolve_symlinks=True):
     resolved = candidate.resolve(strict=False) if resolve_symlinks else candidate
     return any(candidate.is_relative_to(bound) and resolved.is_relative_to(bound.resolve(strict=False) if resolve_symlinks else Path(os.path.abspath(bound)))
                for bound in (root, scratch) if bound is not None)
+
+
+def _write_violation(value, root, paths, scratch, resolve_symlinks):
+    if root is not None and _safe_write(value, root, paths, scratch, resolve_symlinks=resolve_symlinks):
+        return None
+    if root is not None and value and not any(char in value for char in "$`*?[\\"):
+        if _protected(value, root, (*paths, *(root / name for name in AGENT_CONFIG_LOCATIONS)), ancestors=True,
+                      resolve_symlinks=resolve_symlinks):
+            return _violation("protected-path", value)
+    return _violation("outside-write", value)
 
 
 def _write_boundary(words, root, paths, scratch, resolve_symlinks):
@@ -292,10 +331,10 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
                 index += 1
                 word = segment[index]
             if word in {">", ">>", "&>", "&>>", "<", ">&", "<&"}:
-                if index+1 >= len(segment): return False
+                if index+1 >= len(segment): return _violation("opaque-write", word)
                 target = segment[index+1]
                 if word in {">", ">>", "&>", "&>>"}: targets.append(target)
-                elif word == ">&" and not (index and segment[index-1] == "2" and target == "1"): return False
+                elif word == ">&" and not (index and segment[index-1] == "2" and target == "1"): return _violation("opaque-write", target)
                 index += 2
             else:
                 arguments.append(word)
@@ -306,15 +345,18 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
             for index, word in enumerate(segment[1:], 1):
                 if word in {"-t", "--target-directory"} and index+1 < len(segment): targets.append(segment[index+1])
                 elif word.startswith("--target-directory="): targets.append(word.split("=",1)[1])
-            if not targets: return False
+            if not targets: return _violation("opaque-write", name)
         elif name in {"mv", "rm", "touch", "mkdir", "chmod", "tee"}:
             targets += operands
-            if not targets: return False
-        if targets and (cwd is None or any(not _safe_write(str(cwd / (os.path.expanduser(value) if value.startswith("~") else value)), root, paths, scratch, resolve_symlinks=resolve_symlinks) for value in targets)): return False
+            if not targets: return _violation("opaque-write", name)
+        for value in targets:
+            if cwd is None: return _violation("outside-write", value)
+            rejected = _write_violation(str(cwd / (os.path.expanduser(value) if value.startswith("~") else value)), root, paths, scratch, resolve_symlinks)
+            if rejected: return rejected
         if name == "cd":
             target = operands[0] if len(operands) == 1 else ""
             cwd = Path(os.path.abspath(cwd / target)) if cwd and target and not any(c in target for c in "$`*?[~") else None
-    return True
+    return None
 
 
 
@@ -325,7 +367,9 @@ def _subcommands_violate(items, root, paths, scratch, resolve_symlinks):
             start, next_directory = True, False
             continue
         prefix = "cd " + (shlex.quote(str(cwd)) if cwd is not None else "$UNBOUND") + "; "
-        if any(_classify_bash(prefix + inner, root, paths, scratch, resolve_symlinks) == "violation" for inner in item.subcommands): return True
+        for inner in item.subcommands:
+            rejected = _classify_bash(prefix + inner, root, paths, scratch, resolve_symlinks)
+            if rejected.disposition == "violation": return rejected
         if next_directory:
             value = item.value.replace("${TMPDIR}", str(scratch)).replace("$TMPDIR", str(scratch)) if scratch else item.value
             cwd = Path(os.path.abspath(cwd / value)) if cwd and not item.substitution and not any(char in value for char in "$`*?[~") else None
@@ -333,69 +377,94 @@ def _subcommands_violate(items, root, paths, scratch, resolve_symlinks):
         if start:
             next_directory = item.value == "cd"
             start = False
-    return False
+    return None
 
 def _classify_bash(command, root, paths, scratch, resolve_symlinks):
-    from shell_inspection import tokens, protected_glob, command_indirection, HeredocError
+    from shell_inspection import tokens, protected_glob, indirect_command, HeredocError
     names = {path.name for path in paths} | set(AGENT_CONFIG_LOCATIONS)
     try:
         inspected = tokens(command)
-        if command_indirection(inspected) or protected_glob(inspected, names): return "violation"
-        if _credential_text(command, root, resolve_symlinks): return "violation"
-        if _subcommands_violate(inspected, root, paths, scratch, resolve_symlinks): return "violation"
+        indirect = indirect_command(inspected)
+        if indirect is not None:
+            return _violation("indirect-exec", indirect.raw)
+        if protected_glob(inspected, names):
+            return _violation("glob-protected", next(item.raw for item in inspected
+                if any(fnmatch.fnmatchcase(name, component) for component in item.globs for name in names)))
+        credential = _credential_text(command, root, resolve_symlinks)
+        if credential: return _violation("credential-read", credential)
+        rejected = _subcommands_violate(inspected, root, paths, scratch, resolve_symlinks)
+        if rejected: return rejected
         substitution = any(item.substitution for item in inspected)
-    except HeredocError:
-        return "violation"
+    except HeredocError as error:
+        return _violation("heredoc-ambiguous", str(error))
     except (ValueError, IndexError):
         inspected, substitution = [], True
-        if any(str(Path.home() / name) in command for name in CREDENTIAL_LOCATIONS): return "violation"
+        for name in CREDENTIAL_LOCATIONS:
+            if str(Path.home() / name) in command: return _violation("credential-read", str(Path.home() / name))
     protected_names = re.search(r"(?<![\w.-])(?:\./)?(?:\.git|\.orchestrator|inbox|outbox)(?:[/\s\"';`)\}]|$)", command)
     protected_text = protected_names or any(str(path) in command for path in paths)
-    if substitution and (protected_text or inspected and not _opaque_git_reads(command)): return "violation"
+    if substitution and (protected_text or inspected and not _opaque_git_reads(command)):
+        return _violation("substitution", next((item.raw for item in inspected if item.substitution), command))
     try:
-        if _read_only_shell(command): return "tolerated"
+        if _read_only_shell(command): return _tolerated("read-only", command)
     except (ValueError, IndexError): pass
-    if protected_text or any(name in command for name in AGENT_CONFIG_LOCATIONS): return "violation"
+    if protected_names: return _violation("protected-name", protected_names.group().rstrip())
+    if protected_text: return _violation("protected-path", next(str(path) for path in paths if str(path) in command))
+    for name in AGENT_CONFIG_LOCATIONS:
+        if name in command: return _violation("protected-name", name)
     try:
         words = _shell_words(command, scratch)
     except ValueError:
-        if re.search(r"(?<![\w.-])(?:eval|source)(?![\w-])|(?<![\w.-])(?:ba|z|fi|da)?sh\s+-\w*c", command): return "violation"
-        if re.search(r"(?<![\w.-])git(?![\w-])", command) and not _opaque_git_reads(command): return "violation"
+        indirect = re.search(r"(?<![\w.-])(?:eval|source)(?![\w-])|(?<![\w.-])(?:ba|z|fi|da)?sh\s+-\w*c", command)
+        if indirect: return _violation("indirect-exec", indirect.group())
+        if re.search(r"(?<![\w.-])git(?![\w-])", command):
+            opaque_git = _opaque_git_violation(command)
+            if opaque_git is not None: return _violation("opaque:git-not-read-only", opaque_git)
         # A write target whose expansion or current directory cannot be bound
         # is outside the granted authority; interpreter programs remain allowed.
-        if any(item.operator and ">" in item.value for item in inspected) or re.search(r"(?:^|[;&|]\s*)(?:cp|mv|ln|tee|rm|touch|mkdir|chmod|rsync|install)\b", command): return "violation"
-        return "tolerated"
-    if any(Path(word).name in {"eval", "sh", "bash", "dash", "zsh", "fish", "source"} for word in words): return "violation"
-    if not _write_boundary(words, root, paths, scratch, resolve_symlinks): return "violation"
+        if any(item.operator and ">" in item.value for item in inspected) or re.search(r"(?:^|[;&|]\s*)(?:cp|mv|ln|tee|rm|touch|mkdir|chmod|rsync|install)\b", command): return _violation("opaque-write", command)
+        return _tolerated("opaque-harmless", command)
+    for word in words:
+        if Path(word).name in {"eval", "sh", "bash", "dash", "zsh", "fish", "source"}: return _violation("indirect-exec", word)
+    rejected = _write_boundary(words, root, paths, scratch, resolve_symlinks)
+    if rejected: return rejected
     for index, word in enumerate(words):
         if Path(word).name != "git": continue
         tail = words[index+1:]
         tail = tail[:next((i for i, part in enumerate(tail) if part in {";", "&&", "||", "|", "&"}), len(tail))]
-        if not _read_only_git(tail): return "violation"
-    return "tolerated"
+        if not _read_only_git(tail): return _violation("git-write", " ".join(_git_arguments(tail)) or "git")
+    return _tolerated("within-boundary", command)
 
 
-def classify_implementer_denial(denial: object, repository_root: Path | None, protected_paths: tuple[Path, ...] | None,
-    scratch: Path | None = None, *, resolve_symlinks: bool = True) -> str:
+def explain_implementer_denial(denial: object, repository_root: Path | None, protected_paths: tuple[Path, ...] | None,
+    scratch: Path | None = None, *, resolve_symlinks: bool = True) -> DenialClassification:
     """Denied writes outside the bound repo/scratch and credential reads stop."""
-    if not isinstance(denial, dict) or repository_root is None or not protected_paths: return "violation"
+    if not isinstance(denial, dict) or repository_root is None or not protected_paths: return _violation("unbound", "denial or boundary unavailable")
     tool, data = denial.get("tool_name"), denial.get("tool_input", denial.get("input"))
-    if not isinstance(data, dict): return "violation"
+    if not isinstance(data, dict): return _violation("invalid-input", "tool input is not an object")
     try:
         if tool in {"Edit", "Write", "NotebookEdit"}:
             value = data.get("notebook_path") if tool == "NotebookEdit" else data.get("file_path", data.get("path"))
-            if not isinstance(value, str) or not value or "\x00" in value: return "violation"
-            return "tolerated" if _safe_write(value, repository_root, protected_paths, scratch, resolve_symlinks=resolve_symlinks) else "violation"
+            if not isinstance(value, str) or not value or "\x00" in value: return _violation("invalid-input", "missing or invalid write path")
+            return _write_violation(value, repository_root, protected_paths, scratch, resolve_symlinks) or _tolerated("within-boundary", value)
         if tool in {"Read", "Glob", "Grep"}:
             value = data.get("file_path", data.get("path", str(repository_root)))
             pattern = data.get("pattern") if tool == "Glob" else data.get("glob")
             if pattern is not None:
-                if not isinstance(value, str) or not isinstance(pattern, str): return "violation"
+                if not isinstance(value, str) or not isinstance(pattern, str): return _violation("invalid-input", "invalid search path or pattern")
                 pattern = pattern.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
                 if pattern.startswith("~"): pattern = str(Path.home()) + pattern[1:]
                 value = str(Path(value) / pattern)
-            return "violation" if not isinstance(value, str) or _credential(value, repository_root, resolve_symlinks=resolve_symlinks) else "tolerated"
+            if not isinstance(value, str): return _violation("invalid-input", "invalid read path")
+            return _violation("credential-read", value) if _credential(value, repository_root, resolve_symlinks=resolve_symlinks) else _tolerated("harmless-read", value)
         command = data.get("command")
-        if tool != "Bash" or not isinstance(command, str) or not command.strip() or "\x00" in command: return "violation"
+        if tool != "Bash" or not isinstance(command, str) or not command.strip() or "\x00" in command: return _violation("invalid-input", "unsupported tool or invalid command")
         return _classify_bash(command, repository_root, protected_paths, scratch, resolve_symlinks)
-    except (ValueError, OSError, RuntimeError, TypeError): return "violation"
+    except (ValueError, OSError, RuntimeError, TypeError) as error: return _violation("inspection-error", str(error))
+
+
+def classify_implementer_denial(denial: object, repository_root: Path | None, protected_paths: tuple[Path, ...] | None,
+    scratch: Path | None = None, *, resolve_symlinks: bool = True) -> str:
+    """Compatibility API; diagnostics use the same decision path."""
+    return explain_implementer_denial(denial, repository_root, protected_paths, scratch,
+                                     resolve_symlinks=resolve_symlinks).disposition

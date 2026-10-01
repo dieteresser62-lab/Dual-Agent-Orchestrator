@@ -57,7 +57,8 @@ def test_denials_are_bounded_redacted_and_preserved_in_failure_data(adapter_type
                       for item in adapter.metadata["permission_denials"]]
 
 
-def test_denial_summary_survives_authoritative_record_roundtrip_without_retry():
+@pytest.mark.parametrize('diagnosed', [False, True])
+def test_denial_summary_survives_authoritative_record_roundtrip_without_retry(diagnosed):
     from types import SimpleNamespace
     from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
     from contracts import AgentRole
@@ -70,6 +71,8 @@ def test_denial_summary_survives_authoritative_record_roundtrip_without_retry():
     state = init_workflow_state(run_id="denials", task_file="/tmp/task.md", branch="feature/denials",
         branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1)
     summaries = [{"tool_name": "Bash", "tool_use_id": "toolu_123", "input_excerpt": "npm test"}]
+    if diagnosed:
+        summaries[0].update(rule='git-write', fragment='checkout -- tests/x')
     error = classify_agent_failure("provider", AgentPermissionError("denied", provider_data={"permission_denials": summaries}),
                                    invocation_id="denial-roundtrip")
     classified = classify_exception(error)
@@ -89,7 +92,8 @@ def test_denial_summary_survives_authoritative_record_roundtrip_without_retry():
 
 
 @pytest.mark.parametrize("field,value", [("tool_name", "x" * 66), ("tool_use_id", "x" * 102),
-                                         ("input_excerpt", "x" * 202), ("input_excerpt", "bad\ninput")])
+                                         ("input_excerpt", "x" * 202), ("input_excerpt", "bad\ninput"),
+                                         ('rule', 'x' * 82), ('fragment', 'x' * 202), ('fragment', 'bad\nfragment')])
 def test_denial_record_rejects_unbounded_or_control_input(field, value):
     from artifact_models import PermissionDenialSummary, ArtifactValidationError
     data = {"tool_name": "Bash", "tool_use_id": "toolu_id", "input_excerpt": "npm test"}
@@ -155,7 +159,8 @@ def test_live_stream_real_fields_are_compact_redacted_and_hide_results(monkeypat
     assert _compact_stream_text(adapter, "stdout", '[]', state) is None
 
 
-def test_success_attempt_denials_reach_terminal_callback_and_roundtrip():
+@pytest.mark.parametrize('diagnosed', [False, True])
+def test_success_attempt_denials_reach_terminal_callback_and_roundtrip(diagnosed):
     from dataclasses import replace
     from agent_runtime import ProviderAttemptLifecycle, _ProviderAttemptInvocation
     from artifact_models import ArtifactRecord, AttemptPermissionDenial, Role
@@ -165,6 +170,8 @@ def test_success_attempt_denials_reach_terminal_callback_and_roundtrip():
         start=lambda *args: "handle", terminal=lambda *args, **kwargs: captured.append((args, kwargs)), monotonic_fn=lambda: 1.0))
     invocation.begin(None, None)
     summary = {"tool_name": "Bash", "tool_use_id": "toolu_x", "input_excerpt": "npm test", "disposition": "tolerated"}
+    if diagnosed:
+        summary.update(rule='within-boundary', fragment='npm test')
     invocation.finish(None, {"permission_denials": [summary]})
     invocation.finish(None, {"permission_denials": [summary]})
     assert len(captured) == 1

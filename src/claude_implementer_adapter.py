@@ -10,6 +10,8 @@ import stat
 import subprocess
 import shutil
 import tempfile
+import re
+import uuid
 from pathlib import Path
 
 from agent_adapters import (
@@ -19,8 +21,8 @@ from agent_adapters import (
 from provider_metrics import failure_metrics, log_permission_denials, actual_model_metrics
 from agent_config import AgentSettings
 from toolchain_paths import validate_toolchain_read_roots, validate_private_scratch, AGENT_CONFIG_LOCATIONS
-from permission_policy import classify_implementer_denial
-from provider_metrics import permission_denial_summaries
+from permission_policy import explain_implementer_denial
+from provider_metrics import permission_denial_summaries, redact_permission_input
 from agent_roles import AgentRoleName
 from workflow_state import AgentFailureKind
 from native_implementer_contract import NativeImplementerContractError, NativeImplementerErrorCode, canonical_native_implementer_json
@@ -206,6 +208,34 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
 
     def bind_process_evidence(self, path: Path) -> None:
         self._process_evidence_path = path
+
+    def _save_permission_denial(self, denial, classification) -> Path | None:
+        if self._repository_root is None:
+            logging.getLogger(__name__).warning("Private permission denial input unavailable: repository boundary unbound")
+            return None
+        directory = self._repository_root / ".orchestrator" / "logs" / "permission-denials"
+        # Never follow a provider-created link when saving local diagnostics.
+        for parent in reversed((directory, *directory.parents)):
+            if parent.is_relative_to(self._repository_root):
+                if parent.is_symlink(): raise OSError("private denial directory is a symlink")
+                parent.mkdir(mode=0o700, exist_ok=True)
+        denial = denial if isinstance(denial, dict) else {}
+        call_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(denial.get("tool_use_id", "unknown")))[:100]
+        attempt = self._process_evidence_path.stem if self._process_evidence_path else "unbound-attempt"
+        attempt = re.sub(r"[^A-Za-z0-9_-]", "_", attempt)[:100]
+        path = directory / f"{attempt}-{call_id}-{uuid.uuid4().hex}.json"
+        document = redact_permission_input({
+            "tool_name": denial.get("tool_name"), "tool_use_id": denial.get("tool_use_id"),
+            "tool_input": denial.get("tool_input", denial.get("input")),
+            "disposition": classification.disposition, "rule": classification.rule,
+            "fragment": classification.fragment,
+        })
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(document, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        return path
 
     def before_provider_process(self) -> None:
         from protected_tree import fingerprint
@@ -420,19 +450,35 @@ class NativeClaudeImplementerAdapter(_BaseAdapter):  # allowlist:provider -- tra
             if call is not None and call["tool_name"] == event.get("tool_name"):
                 event = {**event, "tool_input": call["tool_input"]}
             denials.append(event)
-        dispositions = [classify_implementer_denial(denial, self._repository_root, self._protected_paths, self._scratch)
-                        for denial in denials]
-        summaries = permission_denial_summaries(denials)
+        classifications = [explain_implementer_denial(denial, self._repository_root, self._protected_paths, self._scratch)
+                           for denial in denials]
+        dispositions = [item.disposition for item in classifications]
+        diagnosed = [{**(denial if isinstance(denial, dict) else {}), "rule": item.rule, "fragment": item.fragment}
+                     for denial, item in zip(denials, classifications)]
+        selected = list(range(min(16, len(diagnosed))))
+        # Preserve a stopping denial even when it follows the summary limit.
+        if "violation" in dispositions and not any(dispositions[index] == "violation" for index in selected):
+            selected[-1] = dispositions.index("violation")
+        summaries = permission_denial_summaries([diagnosed[index] for index in selected])
         self.metadata["permission_denials"] = [
             {**summary, "disposition": disposition}
-            for summary, disposition in zip(summaries, dispositions)
+            for summary, disposition in zip(summaries, (dispositions[index] for index in selected))
         ]
         log_permission_denials(self.metadata)
         if "violation" in dispositions:
+            private_paths = []
+            for denial, item in zip(denials, classifications):
+                if item.disposition != "violation": continue
+                try:
+                    path = self._save_permission_denial(denial, item)
+                    if path is not None: private_paths.append(str(path))
+                except OSError as error:
+                    logging.getLogger(__name__).warning("Cannot save private permission denial input: %s", error)
+            private_detail = "; private denial input: " + ", ".join(private_paths) if private_paths else "; private denial input unavailable"
             raise AgentPermissionError("implementer attempted a denied protected action: "
-                                       + json.dumps(self.metadata["permission_denials"], ensure_ascii=False),
+                                       + json.dumps(self.metadata["permission_denials"], ensure_ascii=False) + private_detail,
                                        provider_data=self.metadata,
-                                       technical_text="implementer attempted a denied protected action")
+                                       technical_text="implementer attempted a denied protected action" + private_detail)
         safe_envelope = {**envelope, **self.metadata}
         fallbacks = [event for event in events if event.get("type") == "system" and event.get("subtype") == "model_refusal_fallback"]
         initial = self.metadata.get("init_model")

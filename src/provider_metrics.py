@@ -68,9 +68,8 @@ def stream_model_metrics(stdout: str, *, warn: bool = True) -> dict[str, object]
     return actual_model_metrics(events, warn=warn)
 
 
-def _redacted_excerpt(value: object, limit: int = 200) -> str:
-    if not isinstance(value, str):
-        return "[input unavailable]"
+def redact_sensitive_text(value: str) -> str:
+    """Apply the known secret redactions without truncating or folding lines."""
     for name, secret in os.environ.items():
         if re.search(r"token|secret|password|credential|api.?key", name, re.I) and len(secret) >= 4:
             value = value.replace(secret, "[redacted]")
@@ -83,6 +82,23 @@ def _redacted_excerpt(value: object, limit: int = 200) -> str:
                    r"\1[redacted]", value)
     value = re.sub(r"(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]+", "[redacted]", value)
     value = re.sub(r"(https?://)[^/\s@]+@", r"\1[redacted]@", value)
+    return value
+
+
+def redact_permission_input(value: object) -> object:
+    """Redact complete structured tool input for local private diagnostics."""
+    if isinstance(value, dict):
+        return {key: "[redacted]" if re.search(r"token|secret|password|credential|api.?key", str(key), re.I)
+                else redact_permission_input(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [redact_permission_input(child) for child in value]
+    return redact_sensitive_text(value) if isinstance(value, str) else value
+
+
+def _redacted_excerpt(value: object, limit: int = 200) -> str:
+    if not isinstance(value, str):
+        return "[input unavailable]"
+    value = redact_sensitive_text(value)
     value = " ".join(value.split())
     value = "".join(char if ord(char) >= 32 and ord(char) != 127 else "?" for char in value)
     if not value:
@@ -99,11 +115,15 @@ def permission_denial_summaries(value: object) -> list[dict[str, str]]:
         data = denial.get("tool_input", denial.get("input", {}))
         data = data if isinstance(data, dict) else {}
         excerpt = data.get("file_path", data.get("path", data.get("command", denial.get("input_excerpt"))))
-        summaries.append({
+        summary = {
             "tool_name": _redacted_excerpt(denial.get("tool_name"), 64),
             "tool_use_id": _redacted_excerpt(denial.get("tool_use_id"), 100),
             "input_excerpt": _redacted_excerpt(excerpt),
-        })
+        }
+        for key, limit in (("rule", 80), ("fragment", 200)):
+            if isinstance(denial.get(key), str):
+                summary[key] = _redacted_excerpt(denial[key], limit)
+        summaries.append(summary)
     return summaries
 
 
@@ -116,8 +136,8 @@ def log_permission_denials(metrics: dict[str, object]) -> None:
     from logging import getLogger
     for denial in metrics.get("permission_denials", []):
         if "disposition" in denial:
-            getLogger(__name__).warning("[PERMISSION_DENIAL] %s disposition=%s",
-                                       json.dumps(denial, ensure_ascii=False), denial["disposition"])
+            getLogger(__name__).warning("[PERMISSION_DENIAL] %s disposition=%s rule=%s",
+                                       json.dumps(denial, ensure_ascii=False), denial["disposition"], denial.get("rule", "unknown"))
         else:
             getLogger(__name__).warning("[PERMISSION_DENIAL] %s", json.dumps(denial, ensure_ascii=False))
 

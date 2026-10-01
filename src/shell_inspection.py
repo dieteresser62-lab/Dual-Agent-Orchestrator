@@ -218,13 +218,17 @@ def protected_glob(items, names):
     return any(fnmatch.fnmatchcase(name, component) for item in items for component in item.globs for name in names)
 
 
-def command_indirection(items):
+def indirect_command(items):
     start = True
     for item in items:
         if item.operator:
             if item.value in {';', '&&', '||', '|', '&', '('}: start = True
             continue
         if start and (item.value in {'if', 'then', 'else', 'elif', '!', 'fi'} or re.match(r"^[A-Za-z_]\w*=", item.value) and not item.indirect): continue
-        if start and item.indirect: return True
+        if start and item.indirect: return item
         start = False
-    return False
+    return None
+
+
+def command_indirection(items):
+    return indirect_command(items) is not None

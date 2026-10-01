@@ -3035,6 +3035,16 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 201
+              },
+              "rule": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 81
+              },
+              "fragment": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 201
               }
             }
           }
@@ -3710,6 +3720,16 @@
                 "maxLength": 101
               },
               "input_excerpt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 201
+              },
+              "rule": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 81
+              },
+              "fragment": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 201
