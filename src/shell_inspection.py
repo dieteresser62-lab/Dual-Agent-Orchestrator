@@ -17,6 +17,26 @@ class Token:
     subcommands: tuple[str, ...] = ()
 
 
+class HeredocError(ValueError):
+    """A heredoc cannot be interpreted unambiguously without executing it."""
+
+
+def _heredoc_subcommands(body):
+    # Quotes in an unquoted heredoc body are data, not shell quoting. Only
+    # backslash escapes suppress expansion there (Bash's here-document rules).
+    commands, index = [], 0
+    while index < len(body):
+        if body[index] == '\\' and index + 1 < len(body) and body[index + 1] in '\\$`\n':
+            index += 2
+        elif body[index] == '`' or body[index:index + 2] == '$(':
+            end = _substitution_end(body, index)
+            commands.append(body[index + (1 if body[index] == '`' else 2):end - 1])
+            index = end
+        else:
+            index += 1
+    return tuple(commands)
+
+
 def _substitution_end(text, start):
     if text[start] == '`':
         index = start + 1
@@ -65,10 +85,14 @@ def _glob_components(raw):
     return tuple(components)
 
 
-def tokens(text):
+def _inspect(text):
     result, word, subcommands, quote, index, substitution, indirect = [], [], [], None, 0, False, False
+    pending, spans, delimiter = [], [], None
+    def invalid(message):
+        return (HeredocError if pending or delimiter is not None else ValueError)(message)
+
     def flush():
-        nonlocal substitution, indirect
+        nonlocal substitution, indirect, delimiter
         if not word: return
         raw = ''.join(word)
         if substitution:
@@ -77,9 +101,20 @@ def tokens(text):
             # ANSI-C quotes are decoded as data, never executed.
             import re
             cooked = re.sub(r"\$'((?:[^'\\]|\\.)*)'", lambda m: shlex.quote(codecs.decode(m[1], 'unicode_escape')), raw)
-            values = shlex.split(cooked)
-            if len(values) != 1: raise ValueError('ambiguous shell word')
+            try:
+                values = shlex.split(cooked)
+            except ValueError as error:
+                raise invalid('ambiguous shell word') from error
+            if len(values) != 1: raise invalid('ambiguous shell word')
             value = values[0]
+        if delimiter is not None:
+            if substitution or not value or '\n' in raw:
+                raise HeredocError('ambiguous heredoc delimiter')
+            start, strip_tabs = delimiter
+            quoted = any(char in raw for char in "'\"\\")
+            pending.append((value, strip_tabs, quoted))
+            spans.append((start, index, quoted))
+            delimiter = None
         result.append(Token(value, raw, substitution=substitution, indirect=indirect, globs=_glob_components(raw), subcommands=tuple(subcommands)))
         word.clear()
         subcommands.clear()
@@ -87,10 +122,14 @@ def tokens(text):
     while index < len(text):
         char = text[index]
         if char == '\\' and quote != "'":
-            if index + 1 >= len(text): raise ValueError('incomplete escape')
+            if index + 1 >= len(text): raise invalid('incomplete escape')
             word.extend(text[index:index+2]); indirect = True; index += 2; continue
         if quote != "'" and (char == '`' or text[index:index+2] in {'$(', '<(', '>('}):
-            end = _substitution_end(text, index)
+            if delimiter is not None: raise HeredocError('ambiguous heredoc delimiter')
+            try:
+                end = _substitution_end(text, index)
+            except ValueError as error:
+                raise invalid('unterminated substitution') from error
             subcommands.append(text[index + (1 if char == "`" else 2):end - 1])
             word.append(text[index:end]); substitution = indirect = True; index = end; continue
         if quote is None and text[index:index+2] == "$'":
@@ -104,7 +143,7 @@ def tokens(text):
             end, depth = index + 2, 1
             while end < len(text) and depth:
                 depth += (text[end] == '{') - (text[end] == '}'); end += 1
-            if depth: raise ValueError('incomplete expansion')
+            if depth: raise invalid('incomplete expansion')
             word.append(text[index:end]); index = end; continue
         elif char == '#' and not word:
             end = text.find('\n', index)
@@ -112,17 +151,67 @@ def tokens(text):
             index = end; continue
         elif char.isspace():
             flush()
-            if char == '\n': result.append(Token(';', ';', operator=True))
+            if char == '\n':
+                if delimiter is not None: raise HeredocError('missing heredoc delimiter')
+                cursor = index + 1
+                for marker, strip_tabs, quoted in pending:
+                    start = cursor
+                    while cursor < len(text):
+                        end = text.find('\n', cursor)
+                        end = len(text) if end == -1 else end
+                        line = text[cursor:end]
+                        if (line.lstrip('\t') if strip_tabs else line) == marker:
+                            body = text[start:cursor]
+                            cursor = end + (end < len(text))
+                            spans.append((start, cursor, quoted))
+                            if not quoted:
+                                try:
+                                    commands = _heredoc_subcommands(body)
+                                except ValueError as error:
+                                    raise HeredocError('ambiguous expanding heredoc') from error
+                                if commands:
+                                    result.append(Token(body, body, substitution=True, subcommands=commands))
+                            break
+                        cursor = end + (end < len(text))
+                    else:
+                        raise HeredocError('unterminated heredoc')
+                pending.clear()
+                index = cursor - 1
+                result.append(Token(';', ';', operator=True))
         elif char in ';&|()<>':
-            flush(); end = index + 1
-            while end < len(text) and text[end] in ';&|()<>': end += 1
+            flush()
+            if delimiter is not None: raise HeredocError('missing heredoc delimiter')
+            end = index + 1
+            if text[index:index + 2] == '<<' and text[index:index + 3] != '<<<':
+                end = index + (3 if text[index:index + 3] == '<<-' else 2)
+                delimiter = (index, end - index == 3)
+            else:
+                while end < len(text) and text[end] in ';&|()<>': end += 1
             result.append(Token(text[index:end], text[index:end], operator=True)); index = end; continue
         else:
             word.append(char)
         index += 1
-    if quote is not None: raise ValueError('unterminated quote')
+    if quote is not None:
+        if delimiter is not None or pending: raise HeredocError('unterminated heredoc quote')
+        raise ValueError('unterminated quote')
     flush()
-    return result
+    if pending or delimiter is not None: raise HeredocError('unterminated heredoc')
+    return result, spans
+
+
+def tokens(text):
+    return _inspect(text)[0]
+
+
+def quoted_heredoc_layout(text):
+    """Remove validated quoted heredoc redirects/data, retaining offsets."""
+    _, spans = _inspect(text)
+    if any(not quoted for _, _, quoted in spans):
+        raise HeredocError('expanding heredoc requires separate inspection')
+    layout = list(text)
+    for start, end, _ in spans:
+        layout[start:end] = ['\n' if char == '\n' else ' ' for char in text[start:end]]
+    return ''.join(layout)
 
 
 def protected_glob(items, names):

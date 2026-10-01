@@ -176,24 +176,10 @@ def _shell_words(command: str, scratch: Path | None) -> list[str]:
     arguments. Quoted program text and quoted heredoc bodies are inert shell
     data; the caller has already checked their literal protected-path names.
     """
-    from shell_inspection import tokens
+    from shell_inspection import tokens, quoted_heredoc_layout
     if any(item.substitution for item in tokens(command)):
         raise ValueError("active substitution requires separate inspection")
-    lines = iter(command.splitlines(keepends=True))
-    headers = []
-    for line in lines:
-        headers.append(line)
-        if "<<" not in line:
-            continue
-        marker = re.search(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z_0-9]*)\1", line)
-        if marker is None:
-            raise ValueError("unbound heredoc")
-        for body in lines:
-            if body.strip() == marker.group(2):
-                break
-        else:
-            raise ValueError("unterminated heredoc")
-    plain = "".join(headers)
+    plain = quoted_heredoc_layout(command)
     # Mask single-quoted data without changing offsets used by the bindings.
     layout = re.sub(r"'[^']*'", lambda m: "'" + " " * (len(m.group(0)) - 2) + "'", plain)
     functions = tuple(match.span() for match in re.finditer(r"\b\w+\s*\(\s*\)\s*\{[^{}]*\}", layout))
@@ -350,7 +336,7 @@ def _subcommands_violate(items, root, paths, scratch, resolve_symlinks):
     return False
 
 def _classify_bash(command, root, paths, scratch, resolve_symlinks):
-    from shell_inspection import tokens, protected_glob, command_indirection
+    from shell_inspection import tokens, protected_glob, command_indirection, HeredocError
     names = {path.name for path in paths} | set(AGENT_CONFIG_LOCATIONS)
     try:
         inspected = tokens(command)
@@ -358,6 +344,8 @@ def _classify_bash(command, root, paths, scratch, resolve_symlinks):
         if _credential_text(command, root, resolve_symlinks): return "violation"
         if _subcommands_violate(inspected, root, paths, scratch, resolve_symlinks): return "violation"
         substitution = any(item.substitution for item in inspected)
+    except HeredocError:
+        return "violation"
     except (ValueError, IndexError):
         inspected, substitution = [], True
         if any(str(Path.home() / name) in command for name in CREDENTIAL_LOCATIONS): return "violation"

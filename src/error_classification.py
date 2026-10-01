@@ -67,6 +67,7 @@ from review_packets import ReviewPacketError
 from role_certification import CertificationError
 from schema_validation import SchemaDefinitionError, SchemaMismatch
 from semantic_markdown import SemanticMarkdownError
+from shell_inspection import HeredocError
 from side_effects import SideEffectReconciliationError
 from state_io import (
     ActiveV2StateError,
@@ -128,7 +129,7 @@ _REJECT = FailureClass.TERMINAL_REJECTION
 _RECORD_BACKED_TERMINAL_REJECTIONS = frozenset({"ACCEPTANCE-REVIEW-LIMIT"})
 
 
-# Authoritative inventory: all 50 ``*Error`` classes currently defined in
+# Authoritative inventory: all 51 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
 # the seven project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
@@ -137,6 +138,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     AgentConfigError: _entry(_HALT, "AGENT-CONFIG"),
     AgentOutputError: _entry(_HALT, "AGENT-OUTPUT"),
     AgentPermissionError: _entry(_HALT, "AGENT-PERMISSION"),
+    HeredocError: _entry(_HALT, "AGENT-PERMISSION"),
     AgentBudgetError: _entry(_HALT, "AGENT-BUDGET"),
     CertificationError: _entry(_HALT, "ROLE-CERTIFICATION"),
     ReviewerInputError: _entry(_HALT, "REVIEWER-INPUT"),

@@ -103,6 +103,88 @@ def test_smoke_shell_assignments_functions_and_quoted_heredoc_are_tolerated(boun
     assert classify_implementer_denial({"tool_name": "Bash", "tool_input": {"command": command}}, *boundary) == "tolerated"
 
 
+@pytest.mark.parametrize("redirect", ["<<'EOF'", '<<"EOF"', r"<<\EOF", "<<-'EOF'"])
+def test_scratch_reproduction_with_inert_heredoc_substitutions(boundary, redirect):
+    from shell_inspection import tokens
+    # Reconstruction of the real follow-up: JS quotes, template strings and
+    # backticks are data even when they would be invalid shell substitutions.
+    body = '''console.log(collectProfileCellCssViolations('.profile-cell { --marker: "("; display: flex; }'));
+const x = 1;
+console.log(`n=${x}`, `backtick string`, '$(not shell)', '`unterminated', '<(not shell)');'''
+    if redirect.startswith('<<-'):
+        body = '\t' + body.replace('\n', '\n\t')
+    command = (
+        "S=$TMPDIR/repro.mjs && sed -n '229,380p' tests/balance-expenses-table-layout.test.mjs > $S "
+        f"&& cat >> $S {redirect}\n{body}\n"
+        + ('\tEOF\n' if redirect.startswith('<<-') else 'EOF\n') + 'node $S'
+    )
+    assert not any(item.substitution or item.subcommands for item in tokens(command))
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'tolerated'
+
+
+@pytest.mark.parametrize('body', [
+    '`rm -rf .orchestrator`', '$(rm -rf .orchestrator)',
+    "'$(git push)'", '"`git push`"',
+])
+def test_unquoted_heredoc_substitutions_remain_active(boundary, body):
+    from shell_inspection import tokens
+    command = f'cat > "$TMPDIR/repro.mjs" <<EOF\n{body}\nEOF\nnode "$TMPDIR/repro.mjs"'
+    assert any(item.substitution and item.subcommands for item in tokens(command))
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
+@pytest.mark.parametrize('second,body,expected', [
+    ("'TWO'", '`not shell` $(also not shell)', 'tolerated'),
+    ('TWO', '`git push`', 'violation'),
+])
+def test_multiple_heredocs_in_one_command(boundary, second, body, expected):
+    command = f'''cat > "$TMPDIR/repro.mjs" <<'ONE' <<{second}
+console.log(`n=${{x}}`);
+ONE
+{body}
+TWO
+node "$TMPDIR/repro.mjs"'''
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == expected
+
+
+@pytest.mark.parametrize('redirect,body', [
+    ("<<'EOF'", '.orchestrator/state.json'),
+    ('<<"EOF"', '.git/hooks/pre-commit'),
+    (r'<<\EOF', 'inbox/task.md'),
+    ("<<-'EOF'", '\toutbox/result.md'),
+])
+def test_protected_names_in_inert_heredocs_still_stop(boundary, redirect, body):
+    command = f'cat > "$TMPDIR/repro.mjs" {redirect}\n{body}\nEOF'
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
+@pytest.mark.parametrize('command', [
+    "cat <<'EOF'\nbody", 'cat <<EOF\nbody', 'cat <<\nbody',
+    "cat <<'EOF\nbody\nEOF", "cat <<'ONE' <<'TWO'\nbody\nONE",
+    "cat <<'EOF'\nbody\n EOF", "cat <<-'EOF'\nbody\n EOF",
+    'cat <<$(echo EOF)\nbody\nEOF', 'cat <<EOF\n$(unterminated\nEOF',
+    'cat <<\\', 'cat <<${EOF',
+])
+def test_ambiguous_or_incomplete_heredocs_fail_closed(boundary, command):
+    from shell_inspection import HeredocError, tokens
+    with pytest.raises(HeredocError):
+        tokens(command)
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
+@pytest.mark.parametrize('command', [
+    "echo '<<EOF `literal`'", 'echo "<<EOF"',
+])
+def test_quoted_heredoc_operator_text_is_not_a_redirect(boundary, command):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'tolerated'
+
+
+@pytest.mark.parametrize('following', ['git push', '$(echo g)it commit -am x'])
+def test_commands_after_quoted_heredoc_are_still_inspected(boundary, following):
+    command = f'cat > "$TMPDIR/repro.mjs" <<\'EOF\'\n`inert`\nEOF\n{following}'
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
 @pytest.mark.parametrize("command", [
     "'git' 'add' src/file.py", 'true;git add src/file.py', 'printf x&&git push', "git 'commit'", 'G=git; $G push', 'A=g; B=it; $A$B reset',
     'M="$TMPDIR/../repo/.git"; touch "$M/index"', 'rm -rf .',
