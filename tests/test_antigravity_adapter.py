@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -12,10 +13,13 @@ import threading
 
 import agent_runtime
 import antigravity_adapter
+import test_agent_adapters as structured_support
+import test_codex_review_adapter as last_message_support  # allowlist:provider -- transport: fake reviewer support
 
 import pytest
 
 from agent_adapters import AgentOutputError, create_agent_pair
+from agent_adapters import NativeClaudeReviewAdapter  # allowlist:provider -- transport: Claude reviewer adapter
 from agent_config import AgentSettings
 from agent_roles import AgentRoleName, AgentSlot
 from antigravity_adapter import (
@@ -23,7 +27,7 @@ from antigravity_adapter import (
     _expected_settings, _agent_markdown,
     classify_agy_stderr, strict_json_object,
 )
-from native_review_contract import NativeReviewContext
+from native_review_contract import NativeReviewContext, NativeReviewContractError, NativeReviewErrorCode
 from native_review_request import (
     NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec,
     build_native_review_request,
@@ -279,7 +283,7 @@ def test_native_result_uses_only_structured_output_and_bound_request() -> None:
     assert json.loads(adapter.extract_output(text, "", {"exit_code": "0"})) == result
     assert adapter.metadata["usage"]["total_tokens"] == 82374
     adapter._request_id = "native-review-request-" + "0" * 64
-    with pytest.raises(AgentOutputError, match="request binding"):
+    with pytest.raises(AgentOutputError, match="request_id must be exactly"):
         adapter.extract_output(text, "", {"exit_code": "0"})
     adapter._request_id = result["request_id"]
     changed = {**envelope, "json_schema": {"wrong": True}}
@@ -1036,3 +1040,57 @@ def test_a_new_attempt_never_reports_the_previous_attempts_usage(tmp_path: Path)
     with pytest.raises(AgentOutputError, match="not prepared"):
         adapter.prepare_native_provider_input(object())  # type: ignore[arg-type]
     assert adapter.metadata == {}
+
+
+@pytest.mark.parametrize("provider", (
+    "codex", "claude", "antigravity",  # allowlist:provider -- transport: fake reviewer adapters
+))
+@pytest.mark.parametrize("field,code", (
+    ("request_id", NativeReviewErrorCode.REQUEST_MISMATCH),
+    ("schema_version", NativeReviewErrorCode.SCHEMA_INVALID),
+    ("reviewer", NativeReviewErrorCode.REVIEWER_MISMATCH),
+))
+def test_reviewer_binding_error_is_a_retryable_response_contract_error(
+    tmp_path: Path, provider: str, field: str, code: NativeReviewErrorCode,
+) -> None:
+    result = copy.deepcopy(last_message_support.CASES["F1"]["envelope"]["structured_output"]["result"])
+    if provider == "codex":  # allowlist:provider -- transport: fake last-message envelope
+        adapter, repo, bundle = last_message_support._prepared(tmp_path, last_message_support._bundle(case="F1"))
+        boundary = adapter.review_execution_boundary(repo, None)
+        boundary.__enter__()
+        adapter.prepare_native_provider_input(bundle)
+        result["request_id"] = bundle.bound_context.request_id
+        envelope = {"result": result}
+    elif provider == "claude":  # allowlist:provider -- transport: fake structured envelope
+        adapter = NativeClaudeReviewAdapter(structured_support._settings(provider))  # allowlist:provider -- transport: fake reviewer
+        bundle = structured_support._review_bundle()
+        adapter.prepare_native_provider_input(bundle)
+        result["request_id"] = bundle.bound_context.request_id
+        envelope = {"type": "result", "subtype": "success", "is_error": False,
+                    "structured_output": {"result": result}}
+    else:
+        envelope = copy.deepcopy(_cases()["valid_s6"]["envelope"])
+        result = envelope["structured_output"]["result"]
+        adapter = NativeAntigravityReviewAdapter(_settings())
+        adapter._writer_json = json.dumps(envelope["json_schema"])
+        adapter._request_id = result["request_id"]
+    expected = result[field]
+    result[field] = "wrong-bound-value"
+    try:
+        if provider == "codex":  # allowlist:provider -- transport: fake last-message output
+            adapter.invocation.last_message_file.write_text(json.dumps(envelope))
+        with pytest.raises(AgentOutputError, match=f"{field} must be exactly {expected}") as caught:
+            adapter.extract_output(json.dumps(envelope), "", {"exit_code": "0"})
+        rejection = caught.value.__cause__
+        assert isinstance(rejection, NativeReviewContractError)
+        assert rejection.code is code
+        failure = agent_runtime.classify_agent_failure(provider, caught.value, invocation_id="binding-error")
+        assert failure.kind is AgentFailureKind.OUTPUT
+        assert failure.native_review_rejection is code
+        assert failure.native_review_response_retryable is True
+        assert "classified-halt" not in failure.readable_orchestrator_diagnostic
+    finally:
+        if provider == "codex":  # allowlist:provider -- transport: fake review boundary cleanup
+            boundary.__exit__(None, None, None)
+        else:
+            adapter.cleanup()

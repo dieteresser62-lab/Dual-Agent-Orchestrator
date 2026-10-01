@@ -1015,6 +1015,38 @@ def test_resume_loop_dispatches_next_provider_attempt_in_same_invocation(
     assert attempts == [2]
 
 
+def _interrupted_implementer_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str,
+) -> ProtocolBinding:
+    protocol = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3")
+    if profile == "codex":  # allowlist:provider -- profile configuration: baseline interruption
+        return protocol
+    from test_orchestrator_decoupling import _fake_certifications
+    from agent_roles import AgentSlot, role_for_slot
+    import role_certification
+    _fake_certifications(tmp_path / "qualification", monkeypatch)
+    profiles = {}
+    for slot, provider, model in (
+        ("implementer", "claude", "opus"),  # allowlist:provider -- profile configuration: interrupted implementer
+        ("reviewer", "codex", "gpt-6.1-sol"),  # allowlist:provider -- profile configuration: bound reviewer
+        ("final_reviewer", "codex", "gpt-6.1-sol"),  # allowlist:provider -- profile configuration: bound final reviewer
+    ):
+        cert = role_certification.load_role_certifications().require(
+            provider, role_for_slot(AgentSlot(slot)), AgentSlot(slot), model=model,
+        )
+        baseline = getattr(protocol, f"{slot}_profile")
+        profiles[f"{slot}_profile"] = replace(
+            baseline, provider=provider, binary=provider, model=model, profile_name=slot,
+            manufacturer=cert.manufacturer, capability_sha256=cert.capability_sha256,
+            transport_sha256=cert.transport_sha256, rights_sha256=cert.rights_sha256,
+            policy_sha256=cert.policy_sha256, certification_sha256=cert.digest,
+        )
+    return replace(protocol, **profiles)
+
+
+@pytest.mark.parametrize("profile", (
+    "codex", "claude-implementer",  # allowlist:provider -- profile configuration: interruption profiles
+))
 @pytest.mark.parametrize(
     ("step", "partial_edit"),
     (
@@ -1025,9 +1057,9 @@ def test_resume_loop_dispatches_next_provider_attempt_in_same_invocation(
         (WorkflowStep.IMPLEMENTER_CORRECTION, True),
     ),
 )
-def test_ended_codex_attempt_resumes_through_native_dispatch(
+def test_ended_implementer_attempt_resumes_through_native_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    step: WorkflowStep, partial_edit: bool,
+    step: WorkflowStep, partial_edit: bool, profile: str,
 ) -> None:
     branch = "feature/native-crashed-dispatch"
     repository = _repository(tmp_path, branch)
@@ -1035,15 +1067,19 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
     _write_task(task, branch, "src/runtime.py")
     head = _git(repository, "rev-parse", "HEAD")
     digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    protocol = _interrupted_implementer_protocol(tmp_path, monkeypatch, profile)
+    provider = protocol.implementer_profile.provider
+    policy = default_provider_input_budget_policy(tuple(
+        (slot, "implementer" if slot == "implementer" else "reviewer",
+         getattr(protocol, f"{slot}_profile").provider)
+        for slot in ("implementer", "reviewer", "final_reviewer")
+    ))
     state = init_workflow_state(
         run_id="native-crashed-dispatch", task_file=str(task), branch=branch,
         branch_base=head, first_slice_start_commit=head, slice_count=1,
         task_digest=digest, task_scope_patterns=("src/runtime.py",),
         target_branch=branch,
-        protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V2, "3",
-            codex_result_transport="native-codex-v3",
-        ),
+        protocol_binding=protocol,
     )
     finding = FindingRecord(
         finding_id="R-01", finding_class=FindingClass.FINDING,
@@ -1075,8 +1111,8 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
-        agents={"codex": SimpleNamespace(model="test", effort="high")},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        agents={"implementer": SimpleNamespace(model="test", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository, provider_input_budget=policy),
         allowed_roots=(repository,),
     )
     driver.bind_work_unit(state)
@@ -1089,6 +1125,7 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
     context = WorkflowContext("Implement runtime.", "plan", "slice")
     _, _, invocation, _, _ = engine._prepare_agent_dispatch(state, context, history)
     assert invocation.native_request is not None
+    assert invocation.native_request.capability_profile == profile
     driver._persist_native_agent_request_bundle(invocation)
     fingerprint = invocation.native_request.bound_context.context.current_fingerprint
     measurement = measure_provider_input(
@@ -1099,9 +1136,9 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
                 "stdin_prompt", invocation.native_request.canonical_json,
             ),),
         ),
-        provider="codex", role="implementer", operation=step.value,
+        provider=provider, role="implementer", operation=step.value,
         binding_fingerprint=fingerprint,
-        policy=default_provider_input_budget_policy(),
+        policy=policy,
     )
     bootstrap = driver._persist_provider_bootstrap(measurement)
     started = driver._start_provider_attempt(
@@ -1147,9 +1184,9 @@ def test_ended_codex_attempt_resumes_through_native_dispatch(
                     "stdin_prompt", next_invocation.native_request.canonical_json,
                 ),),
             ),
-            provider="codex", role="implementer", operation=step.value,
+            provider=provider, role="implementer", operation=step.value,
             binding_fingerprint=current_fingerprint,
-            policy=default_provider_input_budget_policy(),
+            policy=policy,
         )
         next_bootstrap = driver._persist_provider_bootstrap(next_measurement)
         next_started = driver._start_provider_attempt(

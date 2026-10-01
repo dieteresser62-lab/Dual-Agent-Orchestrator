@@ -31,7 +31,7 @@ from native_provider_schema import (
     NativeProviderSchemaError, assert_provider_capabilities,
     exact_cli_version_pattern, normalize_transport_profile,
 )
-from native_review_contract import NativeReviewContractError, canonical_native_review_json
+from native_review_contract import NativeReviewContractError, canonical_native_review_json, validate_native_review_transport_binding
 from native_review_request import NativeReviewRequestBundle
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from reviewer_input import (
@@ -647,14 +647,18 @@ class NativeAntigravityReviewAdapter(_BaseAdapter):
         result = structured.get("result") if isinstance(structured, dict) else None
         if not isinstance(structured, dict) or set(structured) != {"result"} or not isinstance(result, dict):
             raise AgentOutputError("antigravity structured output lacks its sole result object", kind_hint=AgentFailureKind.OUTPUT)
-        if result.get("request_id") != self._request_id:
-            raise AgentOutputError("antigravity response request binding differs", kind_hint=AgentFailureKind.OUTPUT)
-        if result.get("schema_version") != self.role_binding.contract:
-            raise AgentOutputError("antigravity response role contract differs", kind_hint=AgentFailureKind.OUTPUT)
         try:
+            validate_native_review_transport_binding(
+                result, request_id=self._request_id,
+                schema_version=self.role_binding.contract, reviewer=self.role_binding.role.value,
+            )
             return canonical_native_review_json(result)
         except NativeReviewContractError as exc:
-            raise AgentOutputError("antigravity response violates local result schema", kind_hint=AgentFailureKind.OUTPUT) from exc
+            raise AgentOutputError(
+                f"antigravity response violates local result schema: {exc.detail}",
+                kind_hint=AgentFailureKind.OUTPUT,
+                technical_text=str(exc), orchestrator_diagnostic=exc.orchestrator_diagnostic,
+            ) from exc
 
     def cleanup(self) -> None:
         super().cleanup()

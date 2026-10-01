@@ -26,6 +26,7 @@ from role_certification import (
 from native_review_contract import (
     NativeReviewContractError,
     canonical_native_review_json,
+    validate_native_review_transport_binding,
 )
 from native_review_request import (
     NativeReviewRequestBundle,
@@ -855,15 +856,15 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
             )
         if self.invocation.request_id is None:
             raise AgentOutputError("native Claude adapter has no bound request id")
-        if result.get("request_id") != self.invocation.request_id:
-            raise AgentOutputError("native Claude response request_id differs from request")
-        if result.get("schema_version") != self.role_binding.contract:
-            raise AgentOutputError("native Claude response differs from role contract")
         try:
+            validate_native_review_transport_binding(
+                result, request_id=self.invocation.request_id,
+                schema_version=self.role_binding.contract, reviewer=self.role_binding.role.value,
+            )
             return canonical_native_review_json(result)
         except NativeReviewContractError as exc:
             raise AgentOutputError(
-                "native Claude response violates the local result schema",
+                f"native Claude response violates the local result schema: {exc.detail}",
                 provider_data=result,
                 technical_text=f"{exc.code.value}: {exc.detail}",
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,

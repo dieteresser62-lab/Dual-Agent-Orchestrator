@@ -1555,6 +1555,7 @@ class ProductionWorkflowDriver:
                 ),
                 provider_response_schema_json=document["provider_response_schema"],
                 evidence_assets=assets,
+                capability_profile=rebuilt.capability_profile,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise WorkflowExecutionError(

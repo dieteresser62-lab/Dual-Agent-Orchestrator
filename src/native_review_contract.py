@@ -309,6 +309,32 @@ class NativeReviewContractError(ValueError):
         super().__init__(f"{code.value}: {detail}")
 
 
+def validate_native_review_transport_binding(
+    document: Mapping[str, Any], *, request_id: str | None,
+    schema_version: str, reviewer: str,
+) -> None:
+    """Reject model binding errors before generic transport classification."""
+    if request_id is None:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID, "bound request_id must contain request_digest"
+        )
+    if document.get("request_id") != request_id:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.REQUEST_MISMATCH,
+            f"response request_id differs; request_id must be exactly {request_id}",
+        )
+    if document.get("schema_version") != schema_version:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            f"response role contract differs; schema_version must be exactly {schema_version}",
+        )
+    if document.get("reviewer") != reviewer:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.REVIEWER_MISMATCH,
+            f"response reviewer differs; reviewer must be exactly {reviewer}",
+        )
+
+
 def find_native_review_contract_error(
     error: BaseException,
 ) -> NativeReviewContractError | None:

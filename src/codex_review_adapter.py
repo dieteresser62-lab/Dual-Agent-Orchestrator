@@ -22,7 +22,7 @@ from native_provider_schema import (
     assert_provider_capabilities, codex_review_permission_config,  # allowlist:provider -- transport: reviewer CLI binding
     exact_cli_version_pattern, normalize_transport_profile, validate_codex_review_package_root,  # allowlist:provider -- transport: package boundary
 )
-from native_review_contract import NativeReviewContractError, canonical_native_review_json
+from native_review_contract import NativeReviewContractError, canonical_native_review_json, validate_native_review_transport_binding
 from native_review_request import NativeReviewRequestBundle
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from reviewer_input import (
@@ -268,15 +268,15 @@ class NativeCodexReviewAdapter(_BaseAdapter):  # allowlist:provider -- transport
         if not isinstance(envelope, dict) or set(envelope) != {"result"} or not isinstance(envelope["result"], dict):
             raise AgentOutputError("Codex reviewer response lacks its sole result object")  # allowlist:provider -- transport: reviewer CLI binding
         result = envelope["result"]
-        if result.get("request_id") != self.invocation.request_id:
-            raise AgentOutputError("Codex reviewer response request_id differs")  # allowlist:provider -- transport: reviewer CLI binding
-        if result.get("schema_version") != self.role_binding.contract:
-            raise AgentOutputError("Codex reviewer response role contract differs")  # allowlist:provider -- transport: reviewer CLI binding
         try:
+            validate_native_review_transport_binding(
+                result, request_id=self.invocation.request_id,
+                schema_version=self.role_binding.contract, reviewer=self.role_binding.role.value,
+            )
             return canonical_native_review_json(result)
         except NativeReviewContractError as exc:
             raise AgentOutputError(
-                "Codex reviewer response violates the local result schema",  # allowlist:provider -- transport: reviewer CLI binding
+                f"Codex reviewer response violates the local result schema: {exc.detail}",  # allowlist:provider -- transport: reviewer CLI binding
                 provider_data=result,
                 technical_text=f"{exc.code.value}: {exc.detail}",
                 orchestrator_diagnostic=exc.orchestrator_diagnostic,

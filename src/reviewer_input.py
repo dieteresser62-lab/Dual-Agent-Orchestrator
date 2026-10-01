@@ -187,6 +187,15 @@ def build_reviewer_input(
             "reconstructed native request and return only the schema-bound JSON result."
         )
 
+    feedback = bundle.document.get("retry_feedback")
+    if feedback is not None and feedback["rejection_code"] == "request-mismatch":
+        # The corrective request has a new ID. Supply it only after the
+        # canonical request/schema digests have been bound, avoiding a cycle.
+        directive += (
+            f" The response request_id must be exactly {bundle.bound_context.request_id}."
+            " Copy it unchanged; do not reuse the rejected response's ID."
+        )
+
     runtime_path = str(runtime_dir)
     # Use the actual directory prefix, including any non-default adapter name.
     if measured_path_placeholder is not None:

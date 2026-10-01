@@ -253,6 +253,36 @@ def test_topology_plan_slice_final_review_and_resume(
     implementer: str, reviewer: str, work_plan: str | None,
     interruption: WorkflowStep | None,
 ) -> None:
+    _topology_journey(tmp_path, monkeypatch, implementer, reviewer, work_plan, interruption)
+
+
+@pytest.mark.parametrize("binding_failures", (1, 3))
+def test_reviewer_request_id_rejection_uses_contract_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding_failures: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+    caplog.set_level(logging.INFO)
+    _topology_journey(tmp_path, monkeypatch, "claude", "codex", None, None, binding_failures=binding_failures)  # allowlist:provider -- profile configuration: reviewer contract retry
+    assert f"contract_rejections={binding_failures}/3" in caplog.text
+    assert "failure_kind=output" in caplog.text
+    if binding_failures == 3:
+        assert "exhausted_budget=max_contract_rejections" in caplog.text
+
+
+@pytest.mark.parametrize("step", (WorkflowStep.IMPLEMENTER_PLAN, WorkflowStep.IMPLEMENTER_IMPLEMENTATION))
+def test_implementer_sigint_resume_preserves_writer_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: WorkflowStep,
+) -> None:
+    _topology_journey(tmp_path, monkeypatch, "claude", "codex", None, None, implementer_interrupt=step)  # allowlist:provider -- profile configuration: interrupted implementer journey
+
+
+def _topology_journey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    implementer: str, reviewer: str, work_plan: str | None,
+    interruption: WorkflowStep | None, *, binding_failures: int = 0,
+    implementer_interrupt: WorkflowStep | None = None,
+) -> None:
     import test_orchestrator_runtime as fixture
     from agent_adapters import build_slot_agent_registry
     from artifact_store import ArtifactStore
@@ -292,6 +322,8 @@ def test_topology_plan_slice_final_review_and_resume(
     steps: list[WorkflowStep] = []
     expected_review = None
     expected_implementer = None
+    rejected_ids = 0
+    interrupted_implementer = False
     if implementer == "claude":  # allowlist:provider -- transport: reviewer fake process boundary
         import agent_runtime
         from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: real reviewer adapter
@@ -305,13 +337,44 @@ def test_topology_plan_slice_final_review_and_resume(
         entry.write_text("fake")
 
         def fake_provider_process(adapter, prompt, *, prepared_provider_input, **_kwargs):
+            nonlocal rejected_ids, interrupted_implementer
             if isinstance(adapter, NativeCodexReviewAdapter):  # allowlist:provider -- transport: real reviewer adapter
                 assert prepared_provider_input.stdin_text.startswith(adapter.role_binding.policy)
+                if binding_failures and _kwargs["operation"] == "reviewer_slice_review" and rejected_ids:
+                    assert f"request_id must be exactly {adapter.invocation.request_id}" in prepared_provider_input.stdin_text
                 adapter.before_provider_process()
-                adapter.invocation.last_message_file.write_text(json.dumps({"result": json.loads(expected_review.canonical_json)}))
+                document = json.loads(expected_review.canonical_json)
+                if binding_failures and "reviewer_slice_review" == _kwargs["operation"] and rejected_ids < binding_failures:
+                    rejected_ids += 1
+                    document["request_id"] = document["request_id"][:-1] + ("0" if document["request_id"][-1] != "0" else "1")
+                adapter.invocation.last_message_file.write_text(json.dumps({"result": document}))
                 return adapter.extract_output("", "", {})
             assert isinstance(adapter, NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: real implementer journey
             assert prepared_provider_input.command[prepared_provider_input.command.index("--settings") + 1]
+            if implementer_interrupt is not None:
+                from provider_input_budget import measure_provider_input
+                attempt = _kwargs["attempt_invocation"]
+                measured = measure_provider_input(
+                    prepared_provider_input, provider=adapter.name, role="implementer",
+                    operation=_kwargs["operation"], binding_fingerprint=_kwargs["binding_fingerprint"],
+                    policy=_kwargs["config"].provider_input_budget,
+                )
+                attempt.begin(measured, _kwargs["pre_start_callback"](measured))
+                if _kwargs["operation"] == implementer_interrupt.value and not interrupted_implementer:
+                    import signal
+                    import subprocess
+                    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+                    try:
+                        attempt.process_started(process.pid)
+                        process.send_signal(signal.SIGINT)
+                        process.wait(timeout=5)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                        adapter.cleanup()
+                    interrupted_implementer = True
+                    raise KeyboardInterrupt
             envelope = {"type": "result", "subtype": "success", "is_error": False,
                         "structured_output": {"result": json.loads(expected_implementer.canonical_json)}}
             try:
@@ -332,11 +395,12 @@ def test_topology_plan_slice_final_review_and_resume(
                 plan.write_text("# Work plan\n\n### Slice 1 - Implement one value\n\n"
                                 "**Exakter Änderungspfad**\n\n- `src/one.py`\n\n"
                                 "**Akzeptanzkriterien**\n\n- value equals one.\n", encoding="utf-8")  # allowlist:german -- contract fixture: canonical plan heading
-            else:
+            elif not (implementer_interrupt is invocation.step and not interrupted_implementer):
                 target.write_text("value = 0\n", encoding="utf-8")
             expected = fixture._native_plan_output(invocation, summary="add implementation", scope_paths=(work_plan or "src/one.py",))
         else:
-            target.write_text("value = 1\n", encoding="utf-8")
+            if not (implementer_interrupt is invocation.step and not interrupted_implementer):
+                target.write_text("value = 1\n", encoding="utf-8")
             expected = fixture._native_implementation_output(invocation)
         if implementer != "claude":  # allowlist:provider -- transport: baseline fake implementer
             return expected
@@ -345,6 +409,8 @@ def test_topology_plan_slice_final_review_and_resume(
         assert isinstance(adapter, NativeClaudeImplementerAdapter)  # allowlist:provider -- transport: real implementer journey
         nonlocal expected_implementer
         expected_implementer = expected
+        if implementer_interrupt is not None:
+            return original_implement(_driver, invocation)
         return run_native_implementer_agent(
             adapter, invocation.native_request, config=_driver.config,
             shorten=lambda value, _limit: value or "", operation=invocation.step.value,
@@ -359,7 +425,7 @@ def test_topology_plan_slice_final_review_and_resume(
             expected = fixture._native_review_approval(invocation)
         if implementer != "claude":  # allowlist:provider -- transport: existing baseline fake reviews
             return expected
-        from agent_runtime import OrchestratorConfig, run_native_review_agent
+        from agent_runtime import run_native_review_agent_checked
         from codex_review_adapter import NativeCodexReviewAdapter  # allowlist:provider -- transport: real reviewer adapter
         adapter = driver._adapter_for_slot("final_reviewer" if invocation.step is WorkflowStep.REVIEWER_FINAL_REVIEW else "reviewer")
         assert isinstance(adapter, NativeCodexReviewAdapter)  # allowlist:provider -- transport: real reviewer adapter
@@ -369,17 +435,20 @@ def test_topology_plan_slice_final_review_and_resume(
         nonlocal expected_review
         expected_review = expected
         driver._persist_native_agent_request_bundle(invocation)
-        driver._write_native_agent_raw_response(
-            driver._native_reviewer_response_path(invocation), expected.canonical_json
-        )
-        return run_native_review_agent(
-            adapter, invocation.native_request,
-            config=OrchestratorConfig(repo_root=repository),
+        if invocation.request_sequence > 1 and binding_failures:
+            assert "request_id" in invocation.native_request.document["retry_feedback"]["correction_instruction"]
+        return run_native_review_agent_checked(
+            adapter=adapter, bundle=invocation.native_request,
+            config=driver.config, log_prefix=f"fake-review-{invocation.request_sequence}", log_dir=driver.log_dir,
+            raw_response_path=driver._native_reviewer_response_path(invocation),
+            write_file=driver._write_native_agent_raw_response,
+            pre_start_callback=None, provider_attempt_lifecycle=None,
             shorten=lambda value, _limit: value or "",
             reviewer_manifest_paths=invocation.review_packet.manifest.snapshot_paths if invocation.review_packet else None,
             operation=invocation.step.value, binding_fingerprint=invocation.fingerprint,
         )
 
+    original_implement = ProductionWorkflowDriver.invoke_implementer
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_implementer", implement)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", review)
     monkeypatch.chdir(repository)
@@ -397,6 +466,13 @@ def test_topology_plan_slice_final_review_and_resume(
     monkeypatch.setattr(ProductionWorkflowDriver, "persist_native_review_contract", persist_then_interrupt)
 
     def run_with_recovery(task, arguments, expected_step):
+        if implementer_interrupt is not None:
+            with pytest.raises(KeyboardInterrupt):
+                run_production_workflow(task, arguments)
+            assert interrupted_implementer
+            resumed_args = fixture._args(repository, task)
+            resumed_args.resume = True
+            return run_production_workflow(task, resumed_args)
         if interruption is not expected_step:
             return run_production_workflow(task, arguments)
         with pytest.raises(RuntimeError, match="review decision persisted before interruption"):
@@ -407,6 +483,18 @@ def test_topology_plan_slice_final_review_and_resume(
         return run_production_workflow(task, resumed_args)
 
     result = run_with_recovery(task, args, WorkflowStep.REVIEWER_PLAN_REVIEW)
+    if binding_failures:
+        from workflow_state import AgentFailureKind
+        failures = tuple(
+            item for unit in result.state.work_units for item in unit.invocation_failures
+        )
+        assert len(failures) == binding_failures
+        assert all(item.failure_kind is AgentFailureKind.OUTPUT and item.native_review_rejection == "request-mismatch" for item in failures)
+        assert all(item.automatic_resume for item in failures[:2])
+        if binding_failures == 3:
+            assert not result.workflow_completed
+            assert not failures[-1].automatic_resume
+            return
     assert result.workflow_completed, result.state.current_work_unit.gate.detail
     if work_plan:
         task = task.with_name("task-implement.md")
