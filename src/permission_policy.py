@@ -7,6 +7,7 @@ import re
 import shlex
 import fnmatch
 from dataclasses import dataclass
+from shell_inspection import REDIRECTIONS, WRITE_REDIRECTIONS
 
 
 @dataclass(frozen=True)
@@ -120,16 +121,16 @@ def _read_only_shell(command: str) -> bool:
         while index < len(segment):
             raw, operator = segment[index]
             fd = None
-            if raw.isdigit() and index + 1 < len(segment) and segment[index + 1] in {(value, True) for value in (">", ">>", "<", ">&", "<&")}:
+            if raw.isdigit() and index + 1 < len(segment) and segment[index + 1] in {(value, True) for value in REDIRECTIONS}:
                 fd, index = raw, index + 1
                 raw, operator = segment[index]
-            if operator and raw in {">", ">>", "<", ">&", "<&", "&>", "&>>"}:
+            if operator and raw in REDIRECTIONS:
                 if index + 1 >= len(segment):
                     return False
                 target, target_operator = segment[index + 1]
                 if target_operator:
                     return False
-                if not (raw in {">", ">>", "&>", "&>>"} and target in SHELL_OUTPUT_DEVICES
+                if not (raw in WRITE_REDIRECTIONS and target in SHELL_OUTPUT_DEVICES
                         or raw == "<" and target == "/dev/null" or _channel_duplication(raw, target)):
                     return False
                 index += 2
@@ -212,7 +213,8 @@ def _shell_words(command: str, scratch: Path | None, *, allow_unknown: bool = Fa
     arguments. Quoted program text and quoted heredoc bodies are inert shell
     data; the caller has already checked their literal protected-path names.
     """
-    from shell_inspection import tokens, quoted_heredoc_layout
+    from shell_inspection import tokens, quoted_heredoc_layout, assignment_substitution_layout
+    command = assignment_substitution_layout(command)
     if any(item.substitution for item in tokens(command)):
         raise ValueError("active substitution requires separate inspection")
     plain = quoted_heredoc_layout(command)
@@ -220,7 +222,7 @@ def _shell_words(command: str, scratch: Path | None, *, allow_unknown: bool = Fa
     layout = re.sub(r"'[^']*'", lambda m: "'" + " " * (len(m.group(0)) - 2) + "'", plain)
     functions = tuple(match.span() for match in re.finditer(r"\b\w+\s*\(\s*\)\s*\{[^{}]*\}", layout))
     plain = re.sub(r"'[^']*'", lambda m: m.group(0).replace("$", "_").replace("`", "_").replace("\\", "_"), plain)
-    bindings = {"HOME": [(-1, str(Path.home()))]}
+    bindings = {"HOME": [(-1, str(Path.home()))], "XDG_CONFIG_HOME": [(-1, str(_xdg_config_home()))]}
     if scratch is not None:
         bindings["TMPDIR"] = [(-1, str(scratch))]
     variable = re.compile(r"\$(?:\{([A-Za-z_]\w*|[1-9])\}|([A-Za-z_]\w*|[1-9]))")
@@ -255,13 +257,22 @@ def _shell_words(command: str, scratch: Path | None, *, allow_unknown: bool = Fa
     return list(lexer)
 
 
+def _xdg_config_home():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+
+
+def _home_locations(value):
+    return (value.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
+            .replace("${XDG_CONFIG_HOME}", str(_xdg_config_home())).replace("$XDG_CONFIG_HOME", str(_xdg_config_home())))
+
+
 def _credential(value, root, *, resolve_symlinks=True):
     home = str(Path.home())
-    value = value.replace("${HOME}", home).replace("$HOME", home)
+    value = _home_locations(value)
     if value.startswith("~"):
         value = home + value[1:]
     candidate = Path(value) if value.startswith("/") else root / value
-    locations = tuple(Path.home() / name for name in CREDENTIAL_LOCATIONS)
+    locations = (*tuple(Path.home() / name for name in CREDENTIAL_LOCATIONS), _xdg_config_home())
     if any(char in value for char in '*?['):
         import fnmatch
         if any(fnmatch.fnmatchcase(str(location), str(part)) for part in (candidate, *candidate.parents) for location in locations): return True
@@ -275,13 +286,13 @@ def _credential(value, root, *, resolve_symlinks=True):
 
 
 def _credential_text(command, root, resolve_symlinks):
-    text = command.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home())).replace("~/", str(Path.home()) + "/")
+    text = _home_locations(command).replace("~/", str(Path.home()) + "/")
     match = re.search(r"/proc/(?:[^/\s]+/)*environ(?:$|[\s/\"'])", text)
     if match:
         return match.group()
-    for name in CREDENTIAL_LOCATIONS:
-        if str(Path.home() / name) in text:
-            return str(Path.home() / name)
+    for location in (*tuple(Path.home() / name for name in CREDENTIAL_LOCATIONS), _xdg_config_home()):
+        if str(location) in text:
+            return str(location)
     from shell_inspection import tokens
     cwd, start, directory_next = root, True, False
     for item in tokens(command):
@@ -290,7 +301,7 @@ def _credential_text(command, root, resolve_symlinks):
             continue
         if _credential(item.value, cwd or root, resolve_symlinks=resolve_symlinks): return item.value
         if directory_next:
-            value = item.value.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
+            value = _home_locations(item.value)
             value = str(Path.home()) + value[1:] if value.startswith("~") else value
             cwd = Path(os.path.abspath(cwd / value)) if cwd and not any(char in value for char in "$`*?[") else None
             directory_next = False
@@ -361,19 +372,26 @@ def _write_boundary(words, root, paths, scratch, resolve_symlinks):
         while segment and (segment[0] in {"then", "if", "elif", "else", "!", "do", "while", "until"} or re.match(r"^[A-Za-z_]\w*=", segment[0])):
             segment = segment[1:]
         if not segment: continue
-        name = Path(segment[0]).name
-        targets, arguments, index = [], [], 1
+        redirect_only = (re.fullmatch(r"[<>&|]+", segment[0]) and any(char in segment[0] for char in "<>")
+                         or segment[0].isdigit() and len(segment) > 1 and segment[1] in REDIRECTIONS)
+        name = "" if redirect_only else Path(segment[0]).name
+        targets, arguments, index = [], [], 0 if redirect_only else 1
         while index < len(segment):
             word = segment[index]
-            if word.isdigit() and index+1 < len(segment) and segment[index+1] in {">", ">>", ">&", "<", "<&"}:
+            if word.isdigit() and index+1 < len(segment) and segment[index+1] in REDIRECTIONS:
                 index += 1
                 word = segment[index]
-            if word in {">", ">>", "&>", "&>>", "<", ">&", "<&"}:
+            if re.fullmatch(r"[<>&|]+", word) and any(char in word for char in "<>"):
                 if index+1 >= len(segment):
                     unknown = _tolerated("opaque-unknown-target", word)
                     break
                 target = segment[index+1]
-                if not _channel_duplication(word, target) and word in {">", ">>", "&>", "&>>", ">&"}:
+                if word not in REDIRECTIONS:
+                    result = _bash_write_target(target, cwd, root, paths, scratch, resolve_symlinks)
+                    if result is None or result.disposition == "violation":
+                        return result or _violation("opaque-write", word + " " + target)
+                    unknown = result
+                elif not _channel_duplication(word, target) and word in WRITE_REDIRECTIONS:
                     if target not in SHELL_OUTPUT_DEVICES: targets.append(target)
                 index += 2
             else:
@@ -411,6 +429,8 @@ def _subcommands_violate(items, root, paths, scratch, resolve_symlinks):
         for inner in item.subcommands:
             rejected = _classify_bash(prefix + inner, root, paths, scratch, resolve_symlinks)
             if rejected.disposition == "violation": return rejected
+        if start and re.match(r"^[A-Za-z_]\w*=", item.value):
+            continue
         if next_directory:
             value = item.value.replace("${TMPDIR}", str(scratch)).replace("$TMPDIR", str(scratch)) if scratch else item.value
             cwd = Path(os.path.abspath(cwd / value)) if cwd and not item.substitution and not any(char in value for char in "$`*?[~") else None

@@ -6,6 +6,10 @@ import shlex
 import re
 
 
+WRITE_REDIRECTIONS = frozenset({'>', '>>', '>|', '&>', '&>>', '<>', '>&'})
+REDIRECTIONS = WRITE_REDIRECTIONS | {'<', '<&', '<<', '<<-', '<<<'}
+
+
 @dataclass(frozen=True)
 class Token:
     value: str
@@ -15,6 +19,8 @@ class Token:
     indirect: bool = False
     globs: tuple[str, ...] = ()
     subcommands: tuple[str, ...] = ()
+    start: int = 0
+    end: int = 0
 
 
 class HeredocError(ValueError):
@@ -115,7 +121,7 @@ def _inspect(text):
             pending.append((value, strip_tabs, quoted))
             spans.append((start, index, quoted))
             delimiter = None
-        result.append(Token(value, raw, substitution=substitution, indirect=indirect, globs=_glob_components(raw), subcommands=tuple(subcommands)))
+        result.append(Token(value, raw, substitution=substitution, indirect=indirect, globs=_glob_components(raw), subcommands=tuple(subcommands), start=index - len(raw), end=index))
         word.clear()
         subcommands.clear()
         substitution, indirect = False, False
@@ -218,13 +224,53 @@ def protected_glob(items, names):
     return any(fnmatch.fnmatchcase(name, component) for item in items for component in item.globs for name in names)
 
 
+def substitution_assignment(item):
+    """Visible command substitutions in ordinary assignment values are data.
+
+    Keep the existing indirect-execution guard for assignments that can alter
+    command lookup or Git authority. Process substitutions remain indirect.
+    """
+    match = re.match(r'([A-Za-z_]\w*)=', item.raw)
+    if match is None or not item.subcommands:
+        return False
+    name = match[1]
+    if name in {'PATH', 'BASH_ENV', 'ENV', 'LD_PRELOAD', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_EXEC_PATH'} or name.startswith('GIT_CONFIG'):
+        return False
+    # Exempt only substitution-induced indirection. Escapes, ANSI-C quotes
+    # and process substitutions outside the inspected subcommand stay guarded.
+    index, quote = match.end(), None
+    while index < len(item.raw):
+        char = item.raw[index]
+        if quote != "'" and (char == '`' or item.raw[index:index + 2] == '$('):
+            index = _substitution_end(item.raw, index)
+            continue
+        if quote != "'" and (char == '\\' or item.raw[index:index + 2] in {'<(', '>(', "$'"}):
+            return False
+        if char in {'"', "'"}:
+            quote = None if quote == char else char if quote is None else quote
+        index += 1
+    return True
+
+
+def assignment_substitution_layout(text):
+    """Mask inspected substitution results as unknown, never guessed values."""
+    items = tokens(text)
+    for item in reversed(items):
+        if substitution_assignment(item):
+            name = item.raw.split('=', 1)[0]
+            # The space makes this an unresolved value in _shell_words, so a
+            # previous literal binding cannot survive this reassignment.
+            text = text[:item.start] + name + '="unknown substitution"' + text[item.end:]
+    return text
+
+
 def indirect_command(items):
     start = True
     for item in items:
         if item.operator:
             if item.value in {';', '&&', '||', '|', '&', '('}: start = True
             continue
-        if start and (item.value in {'if', 'then', 'else', 'elif', '!', 'fi'} or re.match(r"^[A-Za-z_]\w*=", item.value) and not item.indirect): continue
+        if start and (item.value in {'if', 'then', 'else', 'elif', '!', 'fi'} or re.match(r"^[A-Za-z_]\w*=", item.value) and (not item.indirect or substitution_assignment(item))): continue
         if start and item.indirect: return item
         start = False
     return None

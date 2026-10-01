@@ -48,6 +48,147 @@ def test_unbound_denial_has_a_reason(boundary):
     assert explain_implementer_denial({}, None, None).rule == 'unbound'
 
 
+@pytest.mark.parametrize('command', [
+    'x=$(node -p "1+1"); echo $x',
+    'out=$(npm test 2>&1); echo "$out" | tail -20',
+    'n=$(grep -c "@media" css/app.css); echo "media=$n"',
+    'x="$(node -p \'1+1\')"; echo "$x"',
+    'x=`node -p "1+1"`; echo $x',
+    'x="`node -p \'1+1\'`"; echo "$x"',
+    'x=$(pwd) y=$(node -p "1+1")',
+    'FOO=$(pwd) node t.mjs',
+    'FOO="$(pwd)" BAR=`pwd` node t.mjs',
+    'x=$(echo "$(node -p \'1+1\')"); echo "$x"',
+    'x=$(pwd); $G commit',
+    '$G commit',
+    '"$G" commit',
+    'GIT_PAGER=cat git diff',
+    'GIT_PAGER=$(printf cat) git diff',
+    'NODE_ENV=test node t.mjs',
+])
+def test_visible_assignment_substitutions_are_not_indirect_commands(boundary, command):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'tolerated'
+
+
+@pytest.mark.parametrize('command,rule', [
+    ('$(echo git) commit', 'indirect-exec'),
+    ('`which git` checkout', 'indirect-exec'),
+    ('FOO=$(pwd) $(echo git) commit', 'indirect-exec'),
+    ('FOO=$(pwd) g\\it commit', 'indirect-exec'),
+    ('x=git; $x commit -m wip', 'git-write'),
+    ('x=git; y=$(pwd); $x commit -m wip', 'git-write'),
+    ('x=$(cat ~/.ssh/id_rsa)', 'credential-read'),
+    ('x=$(git checkout -- a)', 'git-write'),
+    ('x=$(eval "$Y")', 'indirect-exec'),
+    ('x=$(source "$Y")', 'indirect-exec'),
+    ('x=$(sh -c "node t.mjs")', 'indirect-exec'),
+    ('x=$(echo "$(eval \'$Y\')")', 'indirect-exec'),
+    ('x=$(touch /etc/x)', 'outside-write'),
+    ('x=$(echo x > .orchestrator/x)', 'protected-name'),
+    ('FOO=$(git push) node t.mjs', 'git-write'),
+    ('cat <<EOF\n$(git checkout -- a)\nEOF', 'git-write'),
+    ('cat <<EOF\n`touch /etc/x`\nEOF', 'outside-write'),
+    ('x=<(node t.mjs)', 'indirect-exec'),
+    (r'x=g\it$(pwd); $x commit', 'indirect-exec'),
+    ("x=$'git'$(pwd); $x commit", 'indirect-exec'),
+])
+def test_assignment_subcommands_keep_the_inner_violation_reason(boundary, command, rule):
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'violation'
+    assert result.rule == rule
+
+
+@pytest.mark.parametrize('name', ['PATH', 'BASH_ENV', 'ENV', 'LD_PRELOAD',
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_EXEC_PATH', 'GIT_CONFIG',
+    'GIT_CONFIG_COUNT', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_KEY_0'])
+@pytest.mark.parametrize('value,expected', [('/tmp/value', 'tolerated'), ('$(pwd)', 'violation'), ('`pwd`', 'violation')])
+def test_resolution_assignment_classification_is_not_relaxed(boundary, name, value, expected):
+    command = f'{name}={value} node t.mjs'
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == expected
+    if expected == 'violation':
+        assert result.rule == 'indirect-exec'
+
+
+def test_substitution_result_does_not_reuse_an_earlier_literal_binding(boundary):
+    from permission_policy import _shell_words
+    command = 'x=git; x=$(pwd); $x commit -m wip'
+    assert '$x' in _shell_words(command, boundary[2], allow_unknown=True)
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'tolerated'
+
+
+@pytest.mark.parametrize('command,expected', [
+    ('FOO=$(pwd) cd /etc; x=$(touch passwd)', 'violation'),
+    ('FOO=$(pwd) cd docs; x=$(touch local)', 'tolerated'),
+    ('x=$(pwd) >| /etc/x', 'violation'),
+    ('x=$(pwd) >| "$TMPDIR/x"', 'tolerated'),
+    ('x=$(pwd) 3<>/etc/x', 'violation'),
+    ('x=$(pwd) 3<>"$TMPDIR/fifo"', 'tolerated'),
+])
+def test_substitution_assignments_keep_cwd_and_redirection_authority(boundary, command, expected):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == expected
+
+
+@pytest.mark.parametrize('operator', ['>', '>>', '>|', '&>', '&>>', '<>', '>&'])
+@pytest.mark.parametrize('fd', ['', '2'])
+@pytest.mark.parametrize('ending', ['', '; echo $?', '; echo "$UNKNOWN"'])
+def test_all_write_redirections_check_visible_outside_files(boundary, operator, fd, ending):
+    from shell_inspection import tokens
+    command = f'echo x {fd}{operator} /etc/x{ending}'
+    assert any(item.operator and item.value == operator for item in tokens(command))
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'violation'
+    assert result.rule == 'outside-write'
+
+
+@pytest.mark.parametrize('command', [
+    'echo x >| /etc/passwd', 'echo x >| /etc/passwd; echo $?',
+    'echo x 2>| /etc/x', 'exec 3<>/etc/x; echo $?',
+    'x=$(pwd) >| /etc/x',
+])
+def test_round19_redirection_regressions(boundary, command):
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'violation'
+
+
+@pytest.mark.parametrize('operator', ['>|', '<>'])
+@pytest.mark.parametrize('ending', ['; echo $?', '; echo "$UNKNOWN"'])
+def test_additional_write_redirections_accept_scratch_targets(boundary, operator, ending):
+    command = f'exec 3{operator}"$TMPDIR/fifo"{ending}'
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == 'tolerated'
+
+
+@pytest.mark.parametrize('operator', ['>', '>>', '>|', '&>', '&>>', '<>', '>&'])
+@pytest.mark.parametrize('target', ['/dev/null', '/dev/stdout', '/dev/stderr'])
+def test_read_only_fast_path_checks_all_output_operator_forms(boundary, operator, target):
+    from permission_policy import _read_only_shell
+    assert _read_only_shell(f'echo x {operator} {target}')
+    assert not _read_only_shell(f'echo x {operator} /etc/x')
+
+
+@pytest.mark.parametrize('operator', ['><', '>>>', '<&>'])
+@pytest.mark.parametrize('target,expected', [('local', 'violation'), ('/etc/x', 'violation'), ('"$OUT"', 'tolerated')])
+def test_unknown_redirect_forms_stop_only_when_a_file_target_is_visible(boundary, operator, target, expected):
+    command = f'node t.mjs {operator} {target}; echo $?'
+    assert classify_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary) == expected
+
+
+@pytest.mark.parametrize('custom', [False, True])
+@pytest.mark.parametrize('parameter', ['$XDG_CONFIG_HOME', '${XDG_CONFIG_HOME}'])
+def test_xdg_config_home_is_bound_to_the_orchestrator_environment(boundary, monkeypatch, custom, parameter):
+    root, paths, scratch = boundary
+    if custom:
+        location = root.parent / 'operator-config'
+        monkeypatch.setenv('XDG_CONFIG_HOME', str(location))
+    else:
+        home = root.parent / 'operator-home'
+        monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+        monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+    command = f'printf x > {parameter}/claude/settings.json; echo $?'  # allowlist:provider -- profile configuration: credential path fixture
+    result = explain_implementer_denial({'tool_name': 'Bash', 'tool_input': {'command': command}}, *boundary)
+    assert result.disposition == 'violation'
+    assert result.rule == 'credential-read'
+
+
 @pytest.mark.parametrize('command,expected', [
     ('node tests/run-single.mjs tests/balance-expenses-table-layout.test.mjs 2>&1 | tail -15; echo "exit=$?"; git diff --name-only; git status --porcelain -- app css tests', 'tolerated'),
     ('''S=$TMPDIR/repro.mjs && sed -n '229,380p' tests/balance-expenses-table-layout.test.mjs > $S && cat >> $S <<'EOF'
