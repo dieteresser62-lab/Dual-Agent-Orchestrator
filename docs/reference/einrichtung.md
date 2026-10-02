@@ -54,7 +54,9 @@ nach, während Codex in seiner Sandbox meist keinen Netzzugang hat.
 - das Projekt steht auf dem Hauptbranch, `git status --short` ist leer;
 - `.gitignore`, `orchestrator.toml` und `AGENTS.md` sind committet;
 - der Testbefehl – und jeder zusätzliche Prüfbefehl aus 2.3 – ist grün;
-- die Werkzeugversionen und nötigen `toolchain_read_roots` sind nach 2.3 geprüft;
+- `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`
+  wurde im Projekt ausgeführt; Werkzeugversionen und nötige
+  `toolchain_read_roots` sind nach 2.3 geprüft und Warnungen geklärt;
 - `AGENTS.md` ist rollenneutral; vorhandene Rollendateien sind als
   Handbetrieb-Dateien gekennzeichnet (2.4);
 - lokaler Merge und mögliche `post-merge`-Hooks sind bewusst gewählt (2.10);
@@ -127,8 +129,8 @@ npm install -g @anthropic-ai/claude-code
 
 Die gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit
 0.159.2 gemessen. Führen Sie nach CLI-Updates den Offline-Quicktest aus 2.3
-aus. Fehlende Pflichtschalter werden abgewiesen; für Rechteprofile gibt es
-keine eigene Vorabprüfung (Details in 4.3).
+aus. Fehlende Pflichtschalter werden abgewiesen. Die Projekt-Vorabprüfung
+aus 2.3 ergänzt dies mit den Messgrenzen aus 4.3.
 
 Der Orchestrator committet unter der Git-Identität des Projekts. Fehlt sie,
 scheitert schon der erste Commit mit `Author identity unknown`. Einmalig
@@ -475,18 +477,93 @@ Die vollständigen Schutz- und Messregeln stehen in der
 [Implementer-Zertifizierung](implementer-certification.md) und
 [Reviewer-Zertifizierung](reviewer-certification.md).
 
+#### Vorab prüfen
+
+Starten Sie im **Projektordner**, in derselben Shell wie später die Wache:
+
+```bash
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node --tool npm
+```
+
+Das Werkzeug lädt Ihre `orchestrator.toml` samt mitgelieferten Profilen und
+prüft ausschließlich den gewählten Implementer. Ohne `--tool` nimmt es das
+erste Argument des Testbefehls und aller Regelbefehle; bei `npm` kommt `node`
+dazu. Für zusammengesetzte Shellbefehle nennen Sie die benötigten Werkzeuge
+ausdrücklich mit `--tool`. Es braucht keinen Modellaufruf, keine Anmeldung
+und kein Netz. Codex muss als unterstützte npm-Installation verfügbar sein,
+wie beim Laufstart. Die Prüfung gibt Pfad und `--version` im Host-PATH sowie
+in der Sandbox aus. Beispielsweise (HOME hier als `~` verkürzt):
+
+```text
+node:
+  Host: ~/.nvm/versions/node/v24.0.0/bin/node | v24.0.0
+  Sandbox: /usr/bin/node | v22.23.2
+WARNUNG: node: Version weicht vom Host ab.
+Exit: 1
+```
+
+Hier würde ein gezielter Test still die System-Node verwenden. Geben Sie die
+konkrete nvm-Installation als `toolchain_read_roots` frei, aktivieren Sie sie
+im Eltern-PATH und wiederholen Sie die Prüfung. Bei gleicher Version und
+anderem Pfad entsteht dagegen nur ein Hinweis, etwa bei der von der Steuerung
+gemessenen Node v22.23.2:
+
+```text
+node:
+  Host: ~/.nvm/versions/node/v22.23.2/bin/node | v22.23.2
+  Sandbox: /usr/bin/node | v22.23.2
+HINWEIS: node: andere Installation, gleiche Version.
+Exit: 0
+```
+
+Der Hinweis zeigt eine andere Installation an und ändert den Exitcode nicht.
+Eine abweichende Version, ein fehlendes Werkzeug oder ein gescheitertes
+`--version` erzeugt eine Warnung und Exit `1`. Kontrollieren Sie zusätzlich
+Repository-Schreibrechte, `.git`-Schreibschutz, sichtbare Home-Einträge und
+aufgelöste externe Symlink-Ziele von `node_modules` und `.venv`. Die Suche
+überspringt Verzeichnisse, die Ihre `[paths] generated`-Muster als erzeugt
+kennzeichnen; die beiden Symlinks selbst werden noch am Elternordner erkannt.
+
+Ein gezielter Befehl ist optional:
+
+```bash
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node -- node --version
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --json
+```
+
+**Achtung:** Der Zusatzbefehl darf im Repository schreiben, wie der
+Implementer. Verwenden Sie gezielte, nicht verändernde Befehle. Ausgabe und
+Exitcode des Befehls stehen im Bericht; ein Fehler ergibt eine Warnung.
+`--timeout 120` setzt bei Bedarf das Zeitlimit pro Prüfung oder Zusatzbefehl
+auf 120 Sekunden (Standard: 60). Der private Scratch wird auch nach Fehlern
+entfernt. Bei einem Timeout nennt die Textausgabe nur Zeitlimit und Prüfung,
+etwa „Zeitlimit von 3 s überschritten bei: Zusatzbefehl `sh -c …`“.
+Mit `--json` stehen die vollständige Kommandozeile einschließlich Rechteprofil
+unter `error_details`. Exit `0` bedeutet passende Ergebnisse, `1` Warnungen und `2`
+Konfigurations- oder Werkzeugfehler. Die Textausgabe nennt nur die Anzahl der
+PATH-Einträge. `--json` enthält den vollständigen PATH und getrennte Listen
+`notes` (Hinweise) und `warnings` (Warnungen). Die Prüfung liest keine Zugangsdaten.
+
+**Messgrenze:** Codex führt `codex sandbox` mit dem produktiv erzeugten
+Rechteprofil aus; das ist eine Näherung für die Werkzeugbefehle von `exec`.
+Bei Claude werden nur die Werkzeugauflösung mit dem festen PATH und die
+konfigurierten Lesefreigaben gezeigt. Schreibrechte und Home-Sichtbarkeit
+bleiben dort ungemessen; ein Zusatzbefehl wird abgewiesen. Die Ausgabe nennt
+diese Näherung ausdrücklich. Details stehen in 4.3.
+
 Nach jedem CLI-Update führt der Operator den konto- und kontingentfreien
 Offline-Quicktest aus dem Orchestrator-Checkout aus. Er startet echte CLIs
 gegen lokale Fake-Server mit Attrappen und prüft die produktiv erzeugten
 Schutzbefehle; es gibt keinen Modellaufruf:
 
 ```bash
-python3 scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
 ```
 
 Für zusätzliche Werkzeugwurzeln lässt sich `--toolchain-root
 /absolute/node-root` ergänzen. Derselbe Einstieg ist
-`python3 scripts/qualification/offline_boundary.py --pair all`. Der Test
+`python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/qualification/offline_boundary.py --pair all`. Der Test
 ersetzt keine Phase-0-Live-Messung oder Zertifizierung; die Versionspolitik
 akzeptiert neue CLI-Versionen ohne Neuzertifizierung je Update, der
 Laufzeitschutz bleibt verpflichtend.
@@ -891,8 +968,10 @@ Sie haben zwei Wege:
   (`stall_timeout_seconds`, `tool_timeout_seconds`). Prüfen Sie Gesamtlimit,
   Rollenbesetzung, Basisbranch, Pfadklassen und vollständige Prüfbefehle.
 - [ ] Prüfen Sie Toolchain-Pfade, Versionen und externe Symlink-Ziele nach
-  2.3 und 4.3 für den tatsächlich gewählten Implementer. Ein grüner Host-Test
-  beweist keine Sichtbarkeit in dessen Sandbox.
+  2.3 und 4.3 für den tatsächlich gewählten Implementer mit
+  `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`
+  im Projektordner. Klären Sie Warnungen und beachten Sie die ausgewiesene
+  Messgrenze. Ein grüner Host-Test beweist keine Sandbox-Sichtbarkeit.
 - [ ] Entscheiden Sie über lokalen Merge und prüfen Sie `core.hooksPath`,
   Hook-Zulässigkeit, Laufzeit und Folgen eines Timeouts nach 2.10.
 - [ ] Führen Sie den Testbefehl und alle zusätzlichen Prüfbefehle aus 2.3
@@ -1210,8 +1289,40 @@ gezielter Node-Test war grün. `.git` meldete `Read-only file system`.
 Das ist eine Messung dieses Hosts, keine Garantie für andere Installationen:
 Eine abweichende Systemversion kann still anstelle Ihrer Home-Toolchain
 laufen. Die Paketfreigabe für Codex macht Home-Werkzeuge nicht allgemein
-sichtbar. Die Pfadbefehle aus 2.3 laufen auf dem Host; eine Prüfung Ihres
-Projekts in der Agenten-Sandbox ersetzen sie nicht.
+sichtbar. Die Pfadbefehle aus 2.3 laufen auf dem Host; ergänzen Sie sie durch
+die dort beschriebene Projekt-Vorabprüfung.
+
+**Messgrenze der Vorabprüfung:** Das Werkzeug startet bei Codex
+`codex sandbox -c "<erzeugtes Rechteprofil>" -P dao-implementer -C <projekt> -- …`.
+Es verwendet dieselbe CLI-Identitätsauflösung, Paketfreigabe, Schutzpfade,
+Toolchain-Wurzeln, privaten Scratch und Umgebungs-Positivliste mit Eltern-PATH
+wie der Implementer. Der produktive `codex exec`-Aufruf bindet dasselbe
+Rechteprofil über `default_permissions="dao-implementer"`. Aus dem
+Orchestratorcode folgt die Gleichheit der Rechtekonfiguration, keine Garantie
+identischer CLI-interner Ausführung: `exec` schaltet zusätzlich
+Benutzerkonfiguration, Ausführungsregeln und Features aus und setzt
+`shell_environment_policy.inherit="core"`. `sandbox` startet den angegebenen
+Befehl direkt mit der erlaubten Elternumgebung; Shellinitialisierung oder
+CLI-Änderungen können andere Ergebnisse verursachen. Die Vorabprüfung ist
+deshalb eine **Näherung**, kein Beweis für den gesamten Agentenlauf.
+
+**Platzhalter bei Abbruch (Messung: CLI 0.159.2, 02.10.2026):** Während der
+Prüfung legt die Codex-CLI für fehlende Schutzpfade leere Dateien oder
+Verzeichnisse im Host-Repository an. Beim normalen Ende und nach SIGTERM
+entfernt sie diese; nach SIGKILL bleiben sie liegen. Das Werkzeug sendet bei
+Zeitlimit oder Abbruch deshalb zunächst SIGTERM und wartet bis zu fünf Sekunden
+vor SIGKILL. Danach entfernt es erkannte Platzhalter nur an vorher fehlenden
+Schutzpfaden, wenn die gestarteten Prozessgruppen sicher beendet sind: eigene
+leere reguläre Dateien oder leere Verzeichnisse, keine Symlinks. Die Entfernung
+steht im Bericht und in `--json`. Unerwartete Inhalte bleiben erhalten und
+führen mit einem Prüfhinweis zu Exit `2`.
+
+Bei Claude gibt es hier keinen modellfreien Zugang zur selben Bash-Sandbox.
+Das Werkzeug zeigt nur die **Auflösungsnäherung** im festen PATH samt
+vorangestellten `<wurzel>/bin` und die konfigurierten Lesefreigaben und
+Schutzpfade. Es misst weder die tatsächliche Home-Sichtbarkeit noch
+Repository-Schreibrechte oder `.git`-Schreibschutz. Exit `0` bestätigt dort
+nur passende Auflösung; der Messhinweis bleibt im Bericht.
 
 Der Codex-Implementer nutzt das Rechteprofil `dao-implementer` ohne `--sandbox`: Repository und privater Scratch pro Aufruf (0700, TMPDIR) sind beschreibbar, die gebundenen Schutzpfade einschließlich externer Worktree-Gitverzeichnisse schreibgeschützt. Der Katalog wird für alle Codex-Slots gehärtet und über den ausgewählten Modelleintrag beim Laufstart und Resume gebunden. Benutzerkonfiguration, benutzerweite und projektweite Ausführungsregeln, Websuche, Apps, Plugins, MCP aus der Benutzerkonfiguration und Unteragenten werden ausgeschaltet; die Projektanweisungen in `AGENTS.md` bleiben wirksam. Der Prozess erhält nur PATH, HOME, CODEX_HOME, LANG, LC_*, TERM und TMPDIR; Shellbefehle erben `core`. Persönliche Home-Dateien und Zugangsdaten werden nicht als Lesewurzeln freigegeben. Für Codex-Werkzeugbefehle ist `/tmp` ein privater Sandbox-Bereich: Schreiben dort ist zulässig, sofern die Host-Datei unverändert bleibt. Der private Scratch (`TMPDIR`) bleibt der vorgesehene Ort für Zwischendateien. Die Grenzprüfung weist diese Unterscheidung im Bericht aus. Details und der Befund der Steuerung stehen in der [Implementer-Zertifizierung](implementer-certification.md).
 

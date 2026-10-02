@@ -96,6 +96,7 @@ passenden Werkzeuge unter `/usr` oder im Repository, entfällt die zusätzliche
 Wurzel; externe Symlink-Ziele von `node_modules` oder `.venv` brauchen sie
 ebenfalls. Der Orchestrator-Testbefehl läuft außerhalb der Agenten-Sandbox
 in der Startumgebung; dessen Erfolg beweist deren Toolchain-Sichtbarkeit nicht.
+Prüfen Sie vorher im Projektordner mit `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`; Beispiele und Messgrenzen stehen unter [Vorab prüfen](docs/reference/einrichtung.md#vorab-prüfen).
 HOME und Credential-Verzeichnisse dürfen nicht freigegeben werden. Die Claude-Bash-
 Sandbox braucht **socat und bubblewrap** und startet mit `failIfUnavailable`
 bei fehlenden Voraussetzungen nicht. Details und Zertifizierungsnachweise:
@@ -108,11 +109,11 @@ konto- und kontingentfreien Offline-Quicktest aus; echte CLIs arbeiten dabei
 gegen lokale Fake-Server, ohne Modellaufruf:
 
 ```bash
-python3 scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
 ```
 
 Bei Bedarf ergänzt `--toolchain-root /absolute/node-root` die konkrete
-Toolchain. Alternativ gilt `python3 scripts/qualification/offline_boundary.py
+Toolchain. Alternativ gilt `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/qualification/offline_boundary.py
 --pair all`. Neue CLI-Versionen brauchen nach der Operatorpolitik keine
 Neuzertifizierung je Update; der Quicktest ersetzt weder Live-Phase 0 noch
 die Pflichtprüfung der gebundenen Rechte je Aufruf.

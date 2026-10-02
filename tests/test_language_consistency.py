@@ -742,6 +742,15 @@ def test_generated_audit_frame_guard_ignores_english_provider_evidence() -> None
 
 def test_readme_documents_exactly_the_public_long_cli_options() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    # Independent diagnostic tools have their own CLI; validate those flags
+    # against their parser rather than requiring them on run_task.
+    from scripts.check_implementer_sandbox import build_parser as diagnostic_parser
+    readme, separator, diagnostics = readme.partition("### Diagnosewerkzeuge\n")
+    assert separator
+    diagnostic_options = set(re.findall(r"(?<![A-Za-z0-9_])--[a-z][a-z0-9-]+", diagnostics))
+    assert diagnostic_options <= {
+        option for action in diagnostic_parser()._actions for option in action.option_strings
+    }
     documented = set(re.findall(r"(?<![A-Za-z0-9_])--[a-z][a-z0-9-]+", readme))
     public = {
         option
@@ -2407,6 +2416,35 @@ def test_readme_inventory_covers_every_heading_and_existing_symbol_and_proof() -
 
 def _fenced_examples(text: str, language: str) -> list[str]:
     return re.findall(rf"^```{language}\n(.*?)^```", text, re.M | re.S)
+
+
+def _orchestrator_script_installation_hits(text: str, installation: str) -> list[str]:
+    paths = re.findall(r"\bpython3\s+([^\s`]*scripts/[A-Za-z0-9_./-]+\.py)", text)
+    return [path for path in paths if not path.startswith(installation + "/scripts/")]
+
+
+def test_documented_script_commands_use_part_one_installation_path() -> None:
+    import shlex
+    setup = (ROOT / "docs/reference/einrichtung.md").read_text()
+    download = setup.split("### 1.2 Herunterladen", 1)[1].split("### 1.3", 1)[0]
+    clones = [line for block in _fenced_examples(download, "bash")
+              for line in block.replace("\\\n", " ").splitlines()
+              if line.strip().startswith("git clone ")]
+    assert len(clones) == 1
+    installation = shlex.split(clones[0])[-1]
+    assert installation.startswith("~/")
+    for name in ("docs/reference/einrichtung.md", "Quickstart.md"):
+        source = (ROOT / name).read_text()
+        assert "python3 " + installation + "/scripts/" in source
+        assert not _orchestrator_script_installation_hits(source, installation), name
+    # README has other diagnostics intended for a checkout; check the new tool.
+    readme = (ROOT / "README.md").read_text()
+    paths = re.findall(r"\bpython3\s+([^\s`]*check_implementer_sandbox\.py)", readme)
+    assert paths and all(path == installation + "/scripts/check_implementer_sandbox.py" for path in paths)
+    wrong = "python3 ~/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py"
+    assert _orchestrator_script_installation_hits(wrong, installation)
+    assert _orchestrator_script_installation_hits("python3 scripts/probe_reviewer.py", installation)
+    assert not _orchestrator_script_installation_hits(wrong.replace("~/Dual-Agent-Orchestrator", installation), installation)
 
 
 def test_documented_toml_and_start_examples_use_real_loader_and_parser(tmp_path: Path) -> None:

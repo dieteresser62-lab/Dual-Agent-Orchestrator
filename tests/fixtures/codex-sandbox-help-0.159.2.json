@@ -1,0 +1,40 @@
+{
+  "source": {
+    "kind": "operator_measurement_excerpt",
+    "cli_version": "codex-cli 0.159.2",
+    "measured_at": "2026-10-02 11:05",
+    "command": ["codex", "sandbox", "--help"],
+    "provenance": "Hilfezeilen aus der Echtmessung der Steuerung, im E2-Korrekturauftrag vom 02.10.2026 mitgeteilt; kein vollständiger Hilfetext."
+  },
+  "help_excerpt": "  -P, --permission-profile <NAME>\n          Named permissions profile to apply from the active configuration stack\n  -C, --cd <DIR>\n          Working directory used for profile resolution and command execution\n",
+  "execution_measurement": {
+    "source": {
+      "kind": "operator_measurement_excerpt",
+      "cli_version": "codex-cli 0.159.2",
+      "measured_at": "2026-10-02 11:26",
+      "provenance": "Gemessen durch die Steuerung, im zweiten E2-Korrekturauftrag vom 02.10.2026 mitgeteilt; die Befehle liefen mit dem produktiv erzeugten Rechteprofil."
+    },
+    "exit_codes": [
+      {"argv": ["sh", "-c", "exit 1"], "returncode": 1},
+      {"argv": ["sh", "-c", "exit 2"], "returncode": 2},
+      {"argv": ["sh", "-c", "exit 7"], "returncode": 7},
+      {"argv": ["sh", "-c", "exit 127"], "returncode": 127}
+    ],
+    "missing_tool": {"argv": ["sh", "-c", "command -v gibtsnicht"], "returncode": 127, "stdout": "", "stderr": ""},
+    "separate_streams": {"argv": ["sh", "-c", "echo OUT; echo ERR >&2; exit 3"], "returncode": 3, "stdout": "OUT\n", "stderr": "ERR\n", "additional_cli_output": false},
+    "timeout": {"timeout_seconds": 3, "command_excerpt": "sh -c '…; exec sleep 40'", "checker_exit_code": 2, "elapsed_seconds_approx": 4, "sleep_process_remaining": false, "scratch_removed": true}
+  },
+  "placeholder_measurement": {
+    "source": {
+      "kind": "operator_measurement_excerpt",
+      "cli_version": "codex-cli 0.159.2",
+      "measured_at": "2026-10-02 11:41",
+      "provenance": "Gemessen durch die Steuerung, im dritten E2-Korrekturauftrag vom 02.10.2026 mitgeteilt; frischer Projektklon ohne die sechs Schutzpfade, produktives Rechteprofil, eigene Sitzung (setsid)."
+    },
+    "regular_files": {"paths": [".gemini", ".orchestrator", "inbox", "outbox"], "size_bytes": 0, "mode": "0444"},
+    "directories": {"paths": [".agents", ".codex"], "empty": true},
+    "normal_exit": {"placeholders_removed": true, "confirmed_runs": 3},
+    "sigterm_group": {"placeholders_removed": true, "returncode": 0},
+    "sigkill_group": {"placeholders_removed": false, "remaining_paths": [".gemini", ".orchestrator", "inbox", "outbox", ".agents", ".codex"], "sandbox_process_remaining": false}
+  }
+}

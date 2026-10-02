@@ -114,8 +114,8 @@ gemessen. Deren Unterstützung durch 0.156.1 ist ungeprüft. Verwenden Sie den
 gemessenen oder einen neueren Stand und führen Sie nach CLI-Updates den
 Offline-Quicktest aus Abschnitt 2.3
 der [Einrichtung](docs/reference/einrichtung.md) aus. Fehlende Pflichtschalter
-werden über `exec --help` abgewiesen; die Unterstützung von Rechteprofilen
-wird nicht separat vorab geprüft (Abschnitt 4.3).
+werden über `exec --help` abgewiesen; die Projekt-Vorabprüfung aus Abschnitt
+2.3 zeigt Werkzeugauflösung und Rechte mit den Messgrenzen aus 4.3.
 
 Nach einem Orchestrator-Update gehören `run_task --help` und die
 Projekt-Prüfliste aus [Abschnitt 2.11 der Einrichtung](docs/reference/einrichtung.md#211-den-orchestrator-aktualisieren-und-ein-projekt-nachziehen)
@@ -708,7 +708,23 @@ erzwingt dieses Betreiber-Gate nicht.
 
 ### Diagnosewerkzeuge
 
-Das verbleibende Werkzeug arbeitet ausschließlich lesend auf einer vorhandenen Recordkette.
+Prüfen Sie vor dem ersten Lauf im Projektordner die Werkzeuge des
+konfigurierten Implementers ohne Modellaufruf und ohne Netz:
+
+```bash
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node --tool npm
+```
+
+Ohne `--tool` werden Test- und Regelbefehle berücksichtigt; `--json` liefert
+einen maschinenlesbaren Bericht. Codex misst mit `codex sandbox` als
+Näherung, Claude zeigt nur die Auflösungsnäherung und Lesefreigaben. Ein
+optionaler Befehl nach `--` darf im Repository schreiben; verwenden Sie
+gezielte, nicht verändernde Befehle. Exitcodes: `0` passend, `1` Warnungen,
+`2` Konfigurations- oder Werkzeugfehler. Siehe
+[Vorab prüfen](docs/reference/einrichtung.md#vorab-prüfen) für Beispiele und
+[Messgrenzen](docs/reference/einrichtung.md#43-modelle-und-cli-versionen).
+
+Das folgende Werkzeug arbeitet ausschließlich lesend auf einer vorhandenen Recordkette.
 
 ```bash
 python3 scripts/baseline_findingfluss.py <artefaktverzeichnis>

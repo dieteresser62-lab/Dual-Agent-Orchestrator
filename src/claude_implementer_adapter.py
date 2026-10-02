@@ -97,6 +97,19 @@ IMPLEMENTER_DENIED_ENV_VARS = (
 )
 
 
+def implementer_process_environment(tool_roots: tuple[str, ...], scratch: Path) -> dict[str, str]:
+    """The fixed, credential-free environment shared with offline diagnostics."""
+    return {
+        "HOME": str(Path.home().resolve()),
+        "USER": os.environ.get("USER", ""),
+        "LOGNAME": os.environ.get("LOGNAME", ""),
+        "PATH": ":".join([*(str(Path(root) / "bin") for root in tool_roots
+                           if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"]),
+        "LANG": "C.UTF-8", "TERM": "dumb", "TMPDIR": str(scratch),
+        "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "1",  # allowlist:provider -- profile configuration: fixed implementer environment
+    }
+
+
 def implementer_disallowed_tools(settings: dict[str, object]) -> str:
     """Repeat the protected-path Edit rules on the command line.
 
@@ -244,15 +257,7 @@ class NativeClaudeImplementerAdapter(ClaudeToolActivity, ProtectedTreeGuard, _Ba
             self._scratch = create_private_scratch()
             validate_private_scratch(self._scratch, self._repository_root, self._protected_paths,
                                      self.settings.toolchain_read_roots)
-            self.env = {
-                "HOME": str(Path.home().resolve()),
-                "USER": os.environ.get("USER", ""),
-                "LOGNAME": os.environ.get("LOGNAME", ""),
-                "PATH": ":".join([*(str(Path(root) / "bin") for root in self.settings.toolchain_read_roots
-                                   if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"]),
-                "LANG": "C.UTF-8", "TERM": "dumb", "TMPDIR": str(self._scratch),
-                "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "1",  # allowlist:provider -- profile configuration: fixed environment or sandbox placeholder
-            }
+            self.env = implementer_process_environment(self.settings.toolchain_read_roots, self._scratch)
             settings_json = _canonical(implementer_settings(self._protected_paths, self._repository_root, self.settings.toolchain_read_roots, scratch=self._scratch))
             for asset in bundle.evidence_assets:
                 target = self._repository_root.joinpath(*Path(asset.path).parts)
