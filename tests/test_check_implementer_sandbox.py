@@ -584,7 +584,41 @@ def test_optional_command_output_and_exit(project, capsys, exit_code):
     assert report["command"]["exit_code"] == exit_code
     assert report["command"]["stdout"] == "optional stdout\n"
     assert report["command"]["stderr"] == "optional stderr\n"
-    assert "darf im Repository schreiben" in report["command"]["warning"]
+    assert "darf im Repository schreiben" in report["command"]["notice"]
+
+
+@pytest.mark.parametrize("message, detected", [
+    ("spawnSync /usr/bin/node EPERM", True),
+    ("Operation not permitted", True),
+    ("test failed", False),
+    ("AssertionError: expected 2, got 3", False),
+    ("EPERMISSION", False),
+])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_optional_command_sandbox_boundary_hint(project, capsys, message, detected, stream, exit_code):
+    replacement = f"print({message!r}" + (", file=sys.stderr)" if stream == "stderr" else ")")
+    source = project.entry.read_text().replace(
+        "print('optional stdout')" if stream == "stdout" else "print('optional stderr', file=sys.stderr)",
+        replacement)
+    project.entry.write_text(source)
+    command = "dao-success" if exit_code == 0 else "dao-test"
+    code, report = invoke(capsys, "--", command)
+    assert code == (1 if exit_code else 0)
+    assert report["command"]["sandbox_boundary_hint"] == (
+        "mögliche Sandbox-Grenze, siehe 2.3" if detected else None)
+    assert message in report["command"][stream]
+    assert report["warnings"] == (["Zusatzbefehl: Exit 7."] if exit_code else [])
+    rendered = probe.render(report)
+    assert ("HINWEIS: mögliche Sandbox-Grenze, siehe 2.3" in rendered) == detected
+
+
+def test_successful_optional_command_notice_is_not_warning(project, capsys):
+    assert probe.main(["--", "dao-success"]) == 0
+    output = capsys.readouterr()
+    assert output.err.startswith("HINWEIS: Der Zusatzbefehl darf im Repository schreiben")
+    assert "HINWEIS: Der Zusatzbefehl darf im Repository schreiben" in output.out
+    assert "WARNUNG:" not in output.out + output.err
 
 
 def test_execution_fixture_records_operator_provenance():

@@ -30,7 +30,9 @@ passenden alten Stand oder einen bewusst begonnenen neuen Lauf.
 Das Codex-Registerminimum bleibt 0.156.1; die gehärtete
 Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit 0.159.2 gemessen.
 Die Unterstützung durch 0.156.1 ist ungeprüft; verwenden Sie den
-gemessenen oder einen neueren Stand und beachten Sie die Prüfgrenzen in Abschnitt 4.3.
+gemessenen oder einen neueren Stand. Nach Updates beider CLIs und bei einer
+neueren Erstinstallation gehört der Offline-Quicktest aus Abschnitt 2.3 der
+Einrichtung dazu; die Prüfgrenzen stehen in Abschnitt 4.3.
 
 Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** Reviewer-Option für private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Die beiden Live-Canaries sind seit dem 29.09.2026 bestanden; beide AGY-Slots sind `experimental`. Bei AGY wird der vollständige Review-Snapshot samt Anfrage und Evidenz an Google gesendet. Die [Antigravity-Anleitung](docs/reference/antigravity-reviewer.md) beschreibt Nachweise und Auswahl. Die Standardbelegung bleibt Codex / Claude / Claude.
 

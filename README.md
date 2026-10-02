@@ -111,7 +111,7 @@ Beide Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend m�
 Das Codex-Fähigkeitsregister nennt 0.156.1 als Mindestversion; die
 gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit 0.159.2
 gemessen. Deren Unterstützung durch 0.156.1 ist ungeprüft. Verwenden Sie den
-gemessenen oder einen neueren Stand und führen Sie nach CLI-Updates den
+gemessenen oder einen neueren Stand und führen Sie nach Updates beider CLIs und bei einer neueren Erstinstallation den
 Offline-Quicktest aus Abschnitt 2.3
 der [Einrichtung](docs/reference/einrichtung.md) aus. Fehlende Pflichtschalter
 werden über `exec --help` abgewiesen; die Projekt-Vorabprüfung aus Abschnitt
@@ -127,7 +127,8 @@ Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten
 verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle. Die
 Versionspolitik akzeptiert jede wohlgeformte Version ab dem Registerminimum,
 auch neue Hauptversionen. Die erforderlichen CLI-Flags müssen weiterhin
-vorhanden sein; nach CLI-Updates gehört der Offline-Quicktest zur Operatorprüfung.
+vorhanden sein; nach Updates beider CLIs und bei einer neueren Erstinstallation gehört der
+Offline-Quicktest zur Prüfung vor dem Lauf (Messstände: Einrichtung 1.1).
 
 ## Schnellstart
 

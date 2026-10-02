@@ -6,6 +6,7 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -36,8 +37,9 @@ from protected_tree import outermost_protected_paths, missing_protected_paths, c
 from toolchain_paths import create_private_scratch, validate_private_scratch
 
 
-COMMAND_WARNING = ("Der Zusatzbefehl darf im Repository schreiben, wie der Implementer. "
+COMMAND_NOTICE = ("Der Zusatzbefehl darf im Repository schreiben, wie der Implementer. "
                    "Verwenden Sie gezielte, nicht verändernde Befehle.")
+SANDBOX_BOUNDARY_HINT = "mögliche Sandbox-Grenze, siehe 2.3"
 STOP_GRACE_SECONDS = 5.0
 STOP_DRAIN_SECONDS = 2.0
 
@@ -347,7 +349,10 @@ def check(args, repo, cleanup):
             context = f"Zusatzbefehl `{short_command(args.command)}`"
             rc, out, err = launch(args.command)
             report["command"] = {"argv": args.command, "stdout": out, "stderr": err, "exit_code": rc,
-                                 "warning": COMMAND_WARNING}
+                                 "notice": COMMAND_NOTICE,
+                                 "sandbox_boundary_hint": (SANDBOX_BOUNDARY_HINT if
+                                     re.search(r"\bEPERM\b|Operation not permitted", out + "\n" + err)
+                                     else None)}
             if rc:
                 report["warnings"].append(f"Zusatzbefehl: Exit {rc}.")
         report["exit_code"] = 1 if report["warnings"] else 0
@@ -398,7 +403,9 @@ def render(report):
     lines.extend("WARNUNG: " + warning for warning in report["warnings"])
     if report["command"]:
         result = report["command"]
-        lines.extend([result["warning"], result["stdout"], result["stderr"], f"Zusatzbefehl Exit: {result['exit_code']}"])
+        if result["sandbox_boundary_hint"]:
+            lines.append("HINWEIS: " + result["sandbox_boundary_hint"])
+        lines.extend(["HINWEIS: " + result["notice"], result["stdout"], result["stderr"], f"Zusatzbefehl Exit: {result['exit_code']}"])
     lines.append(f"Exit: {report['exit_code']}")
     return "\n".join(lines)
 
@@ -409,7 +416,7 @@ def build_parser():
     parser.add_argument("--profile", help="Muss dem konfigurierten Implementer entsprechen; keine Reviewprofile")
     parser.add_argument("--json", action="store_true", help="Maschinenlesbarer Bericht")
     parser.add_argument("--timeout", type=int, default=60, help="Zeitlimit pro Prüfung/Zusatzbefehl in Sekunden (Standard: 60)")
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="Nach --: Sandboxbefehl. " + COMMAND_WARNING)
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="Nach --: Sandboxbefehl. " + COMMAND_NOTICE)
     return parser
 
 
@@ -424,7 +431,7 @@ def main(argv=None):
             if args.timeout <= 0:
                 raise ValueError("--timeout muss positiv sein.")
             if args.command:
-                print("WARNUNG: " + COMMAND_WARNING, file=sys.stderr, flush=True)
+                print("HINWEIS: " + COMMAND_NOTICE, file=sys.stderr, flush=True)
             report = check(args, Path.cwd().resolve(strict=True), cleanup)
         except CheckTimeout as exc:
             report = {"exit_code": 2, "error": str(exc), "error_details": exc.details,
