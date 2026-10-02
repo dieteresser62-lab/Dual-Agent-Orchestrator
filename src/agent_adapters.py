@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -553,7 +554,16 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
                 time.sleep(0.05)
                 ended = process_group_ended(*self._sandbox_process)
         result = self._sandbox_placeholders.remove(process_groups_ended=ended)
+        previous = self.metadata.get("sandbox_placeholder_cleanup")
         self.metadata["sandbox_placeholder_cleanup"] = result
+        if result != previous and (result["removed"] or result["retained"]):
+            def display(paths):
+                return [os.path.relpath(path, self._repository_root) for path in paths]
+            logger = logging.getLogger(__name__)
+            logger.info("[SANDBOX_PLACEHOLDER_CLEANUP] removed=%s retained=%s",
+                        display(result["removed"]), display(result["retained"]))
+            if result["retained"]:
+                logger.warning("Sandbox placeholders retained; inspect paths: %s", display(result["retained"]))
         # Idempotent postcheck and final cleanup keep the invocation's receipt.
         if ended:
             self._sandbox_placeholders.close()

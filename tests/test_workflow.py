@@ -6080,14 +6080,17 @@ def test_contract_unclear_stop_request_becomes_a_policy_gate() -> None:
     )
 
 
-def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically() -> None:
+@pytest.mark.parametrize("rationale", [
+    "npm run test:browser scheitert vor Browserstart beim Binden des lokalen Testservers mit listen EPERM auf 127.0.0.1",  # allowlist:german -- measured sandbox error
+    "Sandbox: spawnSync /usr/bin/node EPERM; tests must run outside the sandbox",
+    "Sandbox: spawnSync /usr/bin/node Operation not permitted",
+])
+def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically(rationale) -> None:
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[
             "TEST_FILES_TOUCHED: tests/test_workflow.py\n"
-            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | npm run test:browser "
-            "scheitert vor Browserstart beim Binden des lokalen Testservers mit "
-            "listen EPERM auf 127.0.0.1\n"
+            f"STOP_REQUESTED: VALIDATION-UNAVAILABLE | {rationale}\n"
             "STATUS: DONE",
             _codex_ready(),
         ],
@@ -6107,6 +6110,21 @@ def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically() -> N
     assert advanced.current_work_unit.has_completed_side_effect(
         "agent-sandbox-validation-handoff"
     )
+
+
+@pytest.mark.parametrize("rule,rationale", [
+    ("VALIDATION-UNAVAILABLE", "spawnSync /usr/bin/node assertion failed: expected 0 got 1"),
+    ("VALIDATION-UNAVAILABLE", "spawnSync /usr/bin/node ENOENT"),
+    ("VALIDATION-UNAVAILABLE", "spawnSync /usr/bin/node EACCES"),
+    ("VALIDATION-UNAVAILABLE", "file write EPERM"),
+    ("VALIDATION-UNAVAILABLE", "spawnSync succeeded\nfile write EPERM"),
+    ("VALIDATION-UNAVAILABLE", "spawnSync succeeded; file write EPERM"),
+    ("CONTRACT-UNCLEAR", "Sandbox: spawnSync /usr/bin/node EPERM"),
+])
+def test_subprocess_handoff_requires_bound_stop_and_start_error(rule, rationale):
+    assert WorkflowEngine._handoff_agent_sandbox_validation(
+        _slice_state(), StopRequest(rule, rationale)
+    ) is None
 
 
 def test_repeated_agent_sandbox_validation_stop_still_fails_closed() -> None:

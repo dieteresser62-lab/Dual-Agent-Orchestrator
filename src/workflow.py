@@ -141,7 +141,9 @@ AGENT_SANDBOX_VALIDATION_PATTERN = re.compile(
     r"(?:listen|bind(?:ing|en)?|testserver|test server|browserstart|browser start)"
     r".{0,200}(?:eperm|eacces|eaddrinuse|operation not permitted|permission denied)"
     r"|(?:eperm|eacces|eaddrinuse|operation not permitted|permission denied)"
-    r".{0,200}(?:listen|bind(?:ing|en)?|testserver|test server|browserstart|browser start)",
+    r".{0,200}(?:listen|bind(?:ing|en)?|testserver|test server|browserstart|browser start)"
+    r"|\bspawnSync[^\S\r\n]+(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s]+)"
+    r"[^\S\r\n]+(?:EPERM\b|Operation not permitted\b)",
     re.IGNORECASE | re.DOTALL,
 )
 

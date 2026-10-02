@@ -233,6 +233,8 @@ class WorkflowAudit:
             return resolve_repository_path(path, root)
 
         def write(path: str | Path, markdown: str) -> None:
+            from document_paths import home_relative_document
+            markdown = home_relative_document(markdown)
             target = audit_target(path)
             if target.exists() and not target.is_file():
                 raise WorkflowExecutionError("audit target must be a regular file")

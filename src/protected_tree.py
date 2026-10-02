@@ -5,10 +5,12 @@ import logging
 import os
 from pathlib import Path
 import stat
+import struct
 
 
-def fingerprint(roots, excluded=()):
+def fingerprint(roots, excluded=(), *, git_indexes=()):
     excluded = set(excluded)
+    git_indexes = set(git_indexes)
     rows = {}
     def visit(path):
         if path in excluded: return
@@ -19,9 +21,20 @@ def fingerprint(roots, excluded=()):
             return
         kind = ('link' if stat.S_ISLNK(info.st_mode) else 'dir' if stat.S_ISDIR(info.st_mode)
                 else 'file' if stat.S_ISREG(info.st_mode) else 'other')
-        content = (hashlib.sha256(path.read_bytes()).hexdigest() if kind == 'file'
+        data = path.read_bytes() if kind == 'file' else None
+        content = (hashlib.sha256(data).hexdigest() if kind == 'file'
                    else os.readlink(path) if kind == 'link' else '')
         rows[str(path)] = (kind, stat.S_IMODE(info.st_mode), info.st_dev, info.st_ino, info.st_nlink, content)
+        if path in git_indexes and kind == 'file':
+            from git_index import index_content
+            try:
+                content = index_content(data)
+            except (OSError, ValueError, struct.error):
+                # An invalid snapshot can never authorize an index replacement.
+                pass
+            else:
+                # Git refresh replaces the index atomically, changing its inode.
+                rows[str(path)] = (kind, stat.S_IMODE(info.st_mode), info.st_dev, info.st_nlink, content)
         if kind == 'dir':
             for child in sorted(path.iterdir()): visit(child)
     for root in roots: visit(Path(root))
@@ -185,12 +198,28 @@ class ProtectedTreeGuard:
             for handler in logger.handlers:
                 if isinstance(handler, logging.FileHandler):
                     self._fingerprint_excluded.add(Path(handler.baseFilename))
-        self._protected_before = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
+        # Derive only the active Gitdir from the repository's own .git entry;
+        # another protected directory containing HEAD is not a Gitdir authority.
+        gitdir = self._repository_root / '.git'
+        self._git_indexes = set()
+        try:
+            if not gitdir.is_symlink():
+                if gitdir.is_file():
+                    pointer = gitdir.read_text(encoding='utf-8').strip()
+                    if pointer.startswith('gitdir: '):
+                        gitdir = (self._repository_root / pointer[8:]).resolve(strict=True)
+                if gitdir.is_dir() and gitdir in self._protected_paths:
+                    self._git_indexes.add(gitdir / 'index')
+        except (OSError, UnicodeError, RuntimeError):
+            pass  # No exemption when the Gitdir cannot be established.
+        self._protected_before = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded,
+                                             git_indexes=self._git_indexes)
 
     def after_provider_process(self) -> None:
         if self._protected_before is None: return
         self.remove_sandbox_placeholders()
-        after = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded)
+        after = fingerprint(outermost_protected_paths(self._protected_paths), self._fingerprint_excluded,
+                            git_indexes=self._git_indexes)
         changed = differences(self._protected_before, after)
         self._protected_before = None
         if changed:

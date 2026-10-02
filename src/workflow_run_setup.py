@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -13,6 +14,7 @@ from agent_config import isolation_options_digest
 from agent_roles import AgentSlot, role_for_slot
 from role_certification import load_role_certifications, CertificationError
 from git_service import (
+    _git,
     inspect_repository,
     require_committed_file_at_head,
     resolve_base_branch,
@@ -303,10 +305,15 @@ def _fresh_state(
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
+        exists = _git(repository_root, "show-ref", "--verify", "--quiet",
+                      f"refs/heads/{task_contract.target_branch}", accepted_exit_codes=(0, 1))
+        command = "git switch " + ("" if exists.returncode == 0 else "-c ") + shlex.quote(task_contract.target_branch)
         raise StateSchemaError(
             "TARGET_BRANCH mismatch: task requires "
             f"{task_contract.target_branch!r}, active branch is {identity.branch!r}; "
-            "create/switch the branch before starting the orchestrator"
+            f"prepare the target branch before starting: {command}; "
+            "alternatively use --watch for automatic branch preparation of new Inbox tasks; "
+            "resume never creates or switches branches"
         )
     if branch_base_override is not None and branch_base_override != identity.head:
         raise StateSchemaError(

@@ -24,6 +24,7 @@ from audit_document_contract import (
     managed_section,
 )
 from finding_order import finding_id_sort_key
+from document_paths import home_relative_document
 from finding_reducer import project_record_finding_statuses
 
 
@@ -351,7 +352,7 @@ def render_slice(facts: AuditFacts, slice_id: int, *, implementation: str = "Noc
             pieces.append(managed_section(key, heading, body=bodies[key]))
         if key == "scope":
             pieces.extend(("## Umsetzung", "", _quote(implementation.strip() or "Noch nicht dokumentiert."), "", "## Abweichungen vom Plan", "", _quote(deviations.strip() or "Keine."), ""))
-    return "\n".join(pieces).rstrip() + "\n"
+    return home_relative_document("\n".join(pieces).rstrip() + "\n")
 
 
 def render_plan_appendix(facts: AuditFacts) -> str:
@@ -364,7 +365,7 @@ def render_plan_appendix(facts: AuditFacts) -> str:
     parts = [f"## {PLAN_APPENDIX_HEADING}", ""]
     for key, heading in PLAN_SECTIONS:
         parts.append(managed_section(key, heading, level=3, body=bodies[key]))
-    return "\n".join(parts).rstrip() + "\n"
+    return home_relative_document("\n".join(parts).rstrip() + "\n")
 
 
 def render_overall(facts: AuditFacts, *, task: str, branch: str) -> str:
@@ -440,7 +441,7 @@ def render_overall(facts: AuditFacts, *, task: str, branch: str) -> str:
     pieces = [f"# Gesamtaudit – {task}", ""]
     for key, heading in OVERALL_SECTIONS:
         pieces.append(managed_section(key, heading, body=bodies[key]))
-    return "\n".join(pieces).rstrip() + "\n"
+    return home_relative_document("\n".join(pieces).rstrip() + "\n")
 
 
 def read_approved_plan(repository_root: object, commit: str, path: str) -> str:

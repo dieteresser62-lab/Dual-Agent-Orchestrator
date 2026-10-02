@@ -224,10 +224,11 @@ def test_parent_path_keeps_env_node_identity_through_run_agent(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("end", ["normal", "timeout", "silence", "abort"])
-def test_marked_fake_placeholders_cleaned_on_every_process_exit(tmp_path, end):
+def test_marked_fake_placeholders_cleaned_on_every_process_exit(tmp_path, end, caplog):
     import os
     import sys
     import agent_runtime
+    caplog.set_level("INFO", logger="agent_adapters")
     adapter, paths, _, _ = prepared(tmp_path)
     entry = paths["repo"] / "placeholder-fake.py"
     entry.write_text("# dao-probe-fake-v1\nfrom pathlib import Path\nimport time\n"
@@ -262,6 +263,9 @@ def test_marked_fake_placeholders_cleaned_on_every_process_exit(tmp_path, end):
         assert receipt["process_groups_ended"]
         assert set(receipt["removed"]) == {str(paths["repo"] / name) for name in (".agents", ".gemini")}
         assert not receipt["retained"]
+        cleanup_lines = [record.message for record in caplog.records if "[SANDBOX_PLACEHOLDER_CLEANUP]" in record.message]
+        assert cleanup_lines == ["[SANDBOX_PLACEHOLDER_CLEANUP] removed=['.agents', '.gemini'] retained=[]"]
+        assert not any(record.levelname == "WARNING" and "placeholders retained" in record.message for record in caplog.records)
         assert adapter.remove_sandbox_placeholders() == ()
         assert not (paths["repo"] / ".agents").exists() and not (paths["repo"] / ".gemini").exists()
     finally:
@@ -269,7 +273,7 @@ def test_marked_fake_placeholders_cleaned_on_every_process_exit(tmp_path, end):
 
 
 @pytest.mark.parametrize("kind", ["file", "directory", "symlink", "dangling", "foreign", "live", "unknown", "changed-signature"])
-def test_cleanup_retains_unexpected_content_and_unproven_end(tmp_path, monkeypatch, kind):
+def test_cleanup_retains_unexpected_content_and_unproven_end(tmp_path, monkeypatch, kind, caplog):
     import os
     import protected_tree
     adapter, paths, _, _ = prepared(tmp_path)
@@ -306,6 +310,8 @@ def test_cleanup_retains_unexpected_content_and_unproven_end(tmp_path, monkeypat
         assert os.path.lexists(candidate)
         assert outside.read_bytes() == b""
         assert str(candidate) in adapter.metadata["sandbox_placeholder_cleanup"]["retained"]
+        assert "Sandbox placeholders retained; inspect paths:" in caplog.text
+        assert candidate.name in caplog.text
     finally:
         adapter.cleanup()
 

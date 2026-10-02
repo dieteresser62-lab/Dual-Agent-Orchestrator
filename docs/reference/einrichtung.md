@@ -653,10 +653,14 @@ Für Python ersetzen Sie `--tool node` durch `--tool python3`.
    zählt dazu; andere Abweichungen, falsche Ergebnisse oder ein roter Host-Test
    sind echte Testfehler.
 
-Bei belegter Grenze ergänzen Sie die **optionale Regel aus 2.4**. Der Implementer
-berichtet die Einschränkung und übergibt seine Arbeit; der Orchestrator prüft
-den vollständigen Testbefehl außerhalb der Sandbox. Ein `EPERM` allein beweist
-die Grenze nicht und löst keine automatische Übergabe aus.
+Bei einem Stopp mit `VALIDATION-UNAVAILABLE` und einer eindeutigen Meldung
+zum Port- oder Browserstart oder `spawnSync <programm> EPERM` beziehungsweise
+`spawnSync <programm> Operation not permitted` fordert diese Version den
+Implementer einmal automatisch zur Übergabe der fertigen Arbeit auf. Danach
+prüft der Orchestrator den konfigurierten Testbefehl außerhalb der Sandbox.
+Ein erneuter Stopp hält den Lauf an. Ein `EPERM` allein, ein anderer Stoppgrund
+oder ein echter Testfehler löst diese Übergabe nicht aus. Die optionale Regel
+aus 2.4 benötigen Sie für andere Startmuster oder ältere Versionen.
 
 **Fester Hinweis:** Zusatzbefehle dürfen im Repository schreiben; wählen Sie
 gezielte, nicht verändernde Befehle. Der Hinweis erscheint auch bei Exit `0`
@@ -726,8 +730,9 @@ Tests: `python3 -m pytest tests/ -q` – jede Änderung braucht Tests.
 - `orchestrator.toml` und `AGENTS.md` – nur mit ausdrücklichem Änderungsauftrag.
 ```
 
-**Optional bei belegten Sandbox-Grenzen** (Vorabprüfung aus 2.3): Ergänzen Sie
-unter „Regeln“ diese Zeile, etwa für Projekte mit Unterprozess-Tests:
+**Optional für andere Startmuster oder ältere Versionen**: Diese Version
+erkennt die eindeutigen Stopps aus 2.3 bereits automatisch. Für Projekte mit
+anderen belegten Sandbox-Grenzen können Sie unter „Regeln“ diese Zeile ergänzen:
 
 ```markdown
 - Ein nur in der Agenten-Sandbox gescheiterter Port-, Browser- oder Unterprozessstart (etwa `spawnSync … EPERM` bei Tests mit `node` als Kindprozess) ist kein Grund zum Anhalten: Diese Prüfungen im Bericht als in der Sandbox nicht ausführbar nennen und die fertige Arbeit übergeben; der Orchestrator führt den konfigurierten Testbefehl außerhalb der Sandbox aus.
@@ -864,11 +869,13 @@ Shellbefehlen wieder die nötigen `--tool`-Argumente aus 2.3 verwenden.
 | Plan und Prüfberichte | `docs/internal/` im Projekt, auf dem Zielbranch |
 
 **Während eines Laufs keine Git-Schreibbefehle im Projekt ausführen.** Auch
-ein gewöhnliches `git status` kann den Index auffrischen. Der Schutzwächter
-meldet das als `implementer changed protected trees: …/.git/index` und hält
-den Lauf mit `AGENT-PERMISSION` an. Verwenden Sie beim Zusehen stets
-`GIT_OPTIONAL_LOCKS=0 git status`, um diese Index-Aktualisierung zu vermeiden.
-Bei einem bereits ausgelösten Halt folgen Sie 2.9.
+ein gewöhnliches `git status` kann den Index auffrischen. Eine reine
+Auffrischung seiner Dateimetadaten wird toleriert, solange Einträge, Flags und
+Erweiterungen unverändert bleiben. `GIT_OPTIONAL_LOCKS=0 git status` bleibt
+empfohlen, ist dafür aber nicht mehr zwingend. Bei inhaltlichen Indexänderungen,
+unlesbarem oder beschädigtem Index sowie Änderungen anderer geschützter
+Git-Dateien hält der Lauf weiterhin mit `AGENT-PERMISSION` an. Für Split-Indizes
+gilt die Ausnahme nicht. Bei einem Halt folgen Sie 2.9.
 
 Der Orchestrator arbeitet ohne Rückfragen durch: Plan, jedes Arbeitspaket mit
 Test und Prüfung, am Ende eine Abnahme des gesamten Branches. Findet die
@@ -877,6 +884,12 @@ Abnahme noch etwas, legt er selbst eine Folgeaufgabe in den Eingang
 ist.
 
 ### 2.9 Wenn er anhält
+
+Ein Halt wegen `…/.git/index` kann eine inhaltliche Änderung oder einen nicht
+sicher vergleichbaren Index bedeuten. Bei unterstützten Indizes löst eine reine
+Auffrischung der Dateimetadaten keinen Halt aus. Prüfen Sie auch `git diff --cached`; ein
+inhaltlicher Indexwechsel bleibt geschützt. Verwenden Sie zur Prüfung weiterhin
+vorzugsweise `GIT_OPTIONAL_LOCKS=0 git status --short`.
 
 Das Protokoll nennt am Ende einen Exitcode und einen Grund. Eindeutige Provider-Überlastung (etwa „model is at capacity“ oder HTTP 503/529) wird ohne Modellwechsel über `max_transport_failures` wiederholt und wartet je Versuch `maximum_delay_seconds` (Standard 30 s); nach Ausschöpfen des Budgets hält der Lauf resumefähig mit „provider overloaded“ an.
 
@@ -976,6 +989,13 @@ Den Orchestrator beenden Sie in seiner tmux-Sitzung mit <kbd>Strg</kbd>+<kbd>C</
 Ein späterer Start mit `run_task --watch` setzt fort.
 
 ### 2.10 Abschließen
+
+Neu erzeugte Audit-Berichte, Arbeitspläne und Slice-Berichte kürzen Pfade unter
+Ihrem HOME zu `~/…`, auch in eingebetteten Ausgaben; die Archivierung übernimmt
+diese Dokumente. Die unversionierten Records behalten die vollständigen Pfade.
+Andere absolute Pfade und bereits vorhandene Archive werden nicht bereinigt.
+Prüfen Sie die Dokumente vor einer Veröffentlichung weiterhin auf persönliche
+Angaben aus anderen Quellen.
 
 Die Merge-Wahl und Hook-Prüfung erledigen Sie vor dem Einrichtungscommit
 (2.4). Hier folgen die Einzelheiten zum Abschluss.
@@ -1703,7 +1723,9 @@ run_task --task-file task.md
 sein**, auch bei einer bloßen Idee. Existiert der
 Branch schon, verwenden Sie `git switch feature/mein-vorhaben` statt `-c`.
 Ohne passenden aktiven Branch hält der Start mit `STATE-SCHEMA … TARGET_BRANCH
-mismatch` an. Nur die Wache legt den Zielbranch für neue Aufgaben selbst an;
+mismatch` an und nennt den passenden Befehl `git switch -c <zielbranch>` oder
+`git switch <zielbranch>`. Die Meldung weist auch auf `--watch` hin. Nur die
+Wache bereitet den Zielbranch für neue Aufgaben automatisch vor;
 Resume legt keinen Branch an und repariert keinen Branchwechsel.
 
 Sobald eine Datei einen formalen Marker enthält, muss der ganze formale Vertrag

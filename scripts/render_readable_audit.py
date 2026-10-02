@@ -60,6 +60,8 @@ def main() -> int:
         results: list[dict[str, object]] = []
 
         def emit(relative: str, markdown: str) -> None:
+            from document_paths import home_relative_document
+            markdown = home_relative_document(markdown)
             parse_semantic_markdown(markdown, path=relative, require_managed=True)
             target = output / relative
             target.parent.mkdir(parents=True, exist_ok=True)

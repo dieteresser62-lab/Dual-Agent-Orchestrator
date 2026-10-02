@@ -34,6 +34,29 @@ def _write_config(repo: Path, text: str) -> Path:
     return path
 
 
+@pytest.mark.parametrize("exists,command", [(0, "git switch feature/new"), (1, "git switch -c feature/new")])
+def test_single_task_branch_mismatch_names_exact_command(tmp_path, monkeypatch, exists, command):
+    from types import SimpleNamespace
+    import workflow_run_setup
+    from state_io import StateSchemaError
+
+    monkeypatch.setattr(workflow_run_setup, "inspect_repository", lambda _root: SimpleNamespace(branch="main"))
+    calls = []
+    def read_ref(root, *args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=exists)
+    monkeypatch.setattr(workflow_run_setup, "_git", read_ref)
+    with pytest.raises(StateSchemaError) as caught:
+        workflow_run_setup._fresh_state(
+            task_file=tmp_path / "idea.md", run_id="test", repository_root=tmp_path,
+            task_contract=SimpleNamespace(target_branch="feature/new"),
+        )
+    assert command in str(caught.value)
+    assert "--watch" in str(caught.value)
+    assert "resume never creates or switches branches" in str(caught.value)
+    assert calls == [("show-ref", "--verify", "--quiet", "refs/heads/feature/new")]
+
+
 def test_repository_config_loads_complete_provider_input_budget_table() -> None:
     config = load_repo_config(Path(__file__).resolve().parents[1] / "orchestrator.toml")
 

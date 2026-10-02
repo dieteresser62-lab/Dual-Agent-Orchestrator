@@ -139,6 +139,47 @@ def test_overall_audit_names_the_bound_final_attempt_profile_and_identity() -> N
     assert f"| final_reviewer | reviewer | {provider} | final | sonnet | xhigh | dry_run: dry-run:final_reviewer (`{identity.digest}`) |" in overall
 
 
+def test_all_document_renderers_hide_home_without_changing_records(monkeypatch):
+    home = Path("/home/render-operator")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    facts = _facts(plan_only=True)
+    identity = replace(ProviderIdentity.dry_run("final_reviewer"),
+                       entry_path=str(home / ".local/bin/tool"),
+                       real_path=str(home / ".local/bin/tool"), kind="verified")
+    attempt = ProviderAttemptPayload(
+        scripted_profile_binding("final_reviewer").provider, Role.REVIEWER,
+        "reviewer_final_review", "1", "final-attempt", "a" * 64,
+        "measurement-1", "b" * 64, 1, "started", "2026-09-24T12:00:00+00:00",
+        None, None, None, None, slot="final_reviewer", binary_identity=identity,
+    )
+    facts.records = (*facts.records, SimpleNamespace(payload=attempt))
+    original = tuple(record.to_dict() for record in facts.records[:-1])
+    digest = identity.digest
+    facts.round_history = lambda _sid: f"Test output: {home}/project/test.py; /opt/shared/test.py\nat file://{home}/test.mjs:3:2"
+    documents = (render_overall(facts, task="Task", branch="feature/test"),
+                 render_plan_appendix(facts),
+                 render_slice(facts, 1, implementation=f"Read {home}/project"))
+    for document in documents:
+        assert str(home) not in document
+        assert "~/" in document
+        parse_semantic_markdown(document, require_managed=True)
+    assert "/opt/shared/test.py" in documents[1]
+    assert "at ~/test.mjs:3:2" in documents[1]
+    assert f"verified: ~/.local/bin/tool (`{digest}`)" in documents[0]
+    assert identity.entry_path == str(home / ".local/bin/tool")
+    assert identity.digest == digest
+    assert tuple(record.to_dict() for record in facts.records[:-1]) == original
+
+
+def test_home_path_display_preserves_other_absolute_paths(monkeypatch):
+    from document_paths import home_relative_document
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/operator"))
+    text = '`/home/operator/a` /home/operator-other/a /opt/a prefix/home/operator/a "(/home/operator)"'
+    assert home_relative_document(text) == '`~/a` /home/operator-other/a /opt/a prefix/home/operator/a "(~)"'
+    assert home_relative_document("file:///home/operator/a file://localhost/home/operator/b") == "~/a ~/b"
+    assert home_relative_document("HOME is /home/operator. Next: /home/operator.config/a") == "HOME is ~. Next: /home/operator.config/a"
+
+
 def test_readable_documents_preserve_plan_and_slice_ownership() -> None:
     facts = _facts()
     one = render_slice(facts, 1)

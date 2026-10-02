@@ -54,6 +54,7 @@ def test_archived_audit_is_not_regenerated_when_merged_run_resumes(
 EXPECTED_INTERNAL_IMPORTS = {
     "artifact_bridge",
     "audit_document_contract",
+    "document_paths",
     "artifact_resume",
     "artifact_replay",
     "artifact_store",
@@ -67,6 +68,44 @@ EXPECTED_INTERNAL_IMPORTS = {
     "workflow",
     "workflow_state",
 }
+
+
+@pytest.mark.parametrize("kind", ["plan", "slice"])
+def test_authored_document_bodies_hide_home_before_write(tmp_path, monkeypatch, kind):
+    import readable_audit
+    import workflow_audit
+    from test_readable_audit import _facts, PLAN
+
+    home = Path("/home/audit-operator")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    relative = "docs/internal/plan.md" if kind == "plan" else "docs/internal/slice-test-01-test.md"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    text = PLAN + f"\nLocal evidence: {home}/test.py\n" if kind == "plan" else f"# Slice\n\n## Umsetzung\nRead {home}/test.py\n"
+    target.write_text(text)
+    facts = _facts(plan_only=kind == "plan")
+    monkeypatch.setattr(readable_audit, "AuditFacts", lambda *_args, **_kwargs: facts)
+    monkeypatch.setattr(workflow_audit, "resolve_resume_state", lambda *_args, **_kwargs: SimpleNamespace(replay_result=facts.replay))
+    dependencies = WorkflowAuditDependencies(
+        root=lambda: tmp_path,
+        artifact_bridge=lambda: SimpleNamespace(store=SimpleNamespace(read_blob=lambda _ref: b"")),
+        assert_structured_decision_context=lambda: None,
+        mark_completed_side_effect=lambda _key: None,
+        side_effect_executor=lambda _bridge: None,
+        side_effect_spec=lambda *_args, **_kwargs: None,
+        bound_task_control_paths=lambda *_args: (),
+    )
+    state = SimpleNamespace(
+        protocol_binding=SimpleNamespace(mode=ProtocolMode.STRUCTURED_V2),
+        run_id="readable-test-run", audit_report_path=None,
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.PLAN if kind == "plan" else WorkUnitKind.SLICE),
+        current_slice=SimpleNamespace(commit_ref=None, scope_paths=(relative,)),
+        current_slice_id=1, work_plan_path=relative if kind == "plan" else None,
+        planned_slices=(),
+    )
+    WorkflowAudit(dependencies).project_audit(state, WorkflowHistory(1))
+    assert str(home) not in target.read_text()
+    assert "~/test.py" in target.read_text()
 
 EXPECTED_DEPENDENCY_EDGES = {
     "artifact_bridge",
