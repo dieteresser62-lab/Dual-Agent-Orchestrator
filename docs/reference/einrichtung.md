@@ -304,6 +304,8 @@ EOF
 **Der Testbefehl** läuft nach jedem Arbeitspaket **außerhalb der Agenten-Sandbox**
 in der Startumgebung des Orchestrators. Er muss grün sein, belegt aber keine
 passende Toolchain für gezielte Prüfungen des Implementers in der Sandbox.
+Der Implementer führt gezielte Tests des geänderten Bereichs selbst aus und
+berichtet die Ergebnisse; die vollständige Validierung übernimmt der Orchestrator.
 
 Legen Sie im Projektordner eine Datei `orchestrator.toml` an. Eine Vorlage für
 ein Python-Projekt:
@@ -656,11 +658,17 @@ Für Python ersetzen Sie `--tool node` durch `--tool python3`.
 Bei einem Stopp mit `VALIDATION-UNAVAILABLE` und einer eindeutigen Meldung
 zum Port- oder Browserstart oder `spawnSync <programm> EPERM` beziehungsweise
 `spawnSync <programm> Operation not permitted` fordert diese Version den
-Implementer einmal automatisch zur Übergabe der fertigen Arbeit auf. Danach
-prüft der Orchestrator den konfigurierten Testbefehl außerhalb der Sandbox.
-Ein erneuter Stopp hält den Lauf an. Ein `EPERM` allein, ein anderer Stoppgrund
-oder ein echter Testfehler löst diese Übergabe nicht aus. Die optionale Regel
-aus 2.4 benötigen Sie für andere Startmuster oder ältere Versionen.
+Implementer im laufenden Arbeitspaket einmal automatisch zur Übergabe der
+fertigen Arbeit auf. Nennt der Stopp betroffene Dateipfade, müssen alle bereits
+im freigegebenen Umfang dieses Arbeitspakets liegen. Ein Pfad außerhalb bleibt
+im bisherigen Verfahren für Umfangserweiterungen oder führt zum Halt.
+Der Implementer erhält erneut einen Auftrag: Restarbeiten abschließen,
+Bereitschaft melden und den vollständigen Testbefehl nicht erneut in der Sandbox
+ausführen. Erst nach dieser Rückmeldung führt der Orchestrator den konfigurierten
+Testbefehl außerhalb der Sandbox aus, bevor der Reviewer prüft. Ein erneuter
+solcher Stopp hält den Lauf an. Ein `EPERM` allein, ein anderer Stoppgrund oder
+ein echter Testfehler löst diese Übergabe nicht aus. Die optionale Regel aus 2.4
+benötigen Sie für andere Startmuster oder ältere Versionen.
 
 **Fester Hinweis:** Zusatzbefehle dürfen im Repository schreiben; wählen Sie
 gezielte, nicht verändernde Befehle. Der Hinweis erscheint auch bei Exit `0`
@@ -719,7 +727,10 @@ Tests: `python3 -m pytest tests/ -q` – jede Änderung braucht Tests.
 ## Regeln
 - Diese Projektregeln gelten unabhängig von Anbieter und Rollenbesetzung.
 - Planung und Umsetzung gehören zum Implementer, Prüfung zum Reviewer;
-  Validierung, lokale Commits und der konfigurierte lokale Merge zum Orchestrator.
+  lokale Commits und der konfigurierte lokale Merge zum Orchestrator.
+- Der Implementer führt gezielte Tests des geänderten Bereichs selbst aus und
+  berichtet die Ergebnisse. Die vollständige Validierung mit dem konfigurierten
+  Testbefehl führt der Orchestrator außerhalb der Sandbox aus.
 - Agenten führen keine Git-Schreibbefehle aus.
 - Keine neuen Abhängigkeiten ohne Grund.
 - Keine Netzwerkaufrufe zur Laufzeit.

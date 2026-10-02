@@ -284,7 +284,7 @@ def _attestation(changes: WorkflowChanges) -> ValidationAttestation:
     )
 
 
-def _codex_ready(
+def _implementer_ready(
     *finding_ids: str, plan: bool = False, slice_id: str = "01"
 ) -> str:
     lines = [
@@ -301,6 +301,9 @@ def _codex_ready(
         )
     lines.append("STATUS: DONE")
     return "\n".join(lines)
+
+
+_codex_ready = _implementer_ready
 
 
 def _codex_stop(rule_id: str) -> str:
@@ -496,6 +499,10 @@ class FakeDriver:
     convergence_calls: list[tuple[int, int]] = field(default_factory=list)
     paths_existing_at_commits: set[tuple[str, str]] = field(default_factory=set)
     snapshot_index: int = -1
+
+    @property
+    def implementer_calls(self) -> list[ImplementerInvocation]:
+        return self.codex_calls
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         self.active_state = state
@@ -6084,19 +6091,28 @@ def test_contract_unclear_stop_request_becomes_a_policy_gate() -> None:
     "npm run test:browser scheitert vor Browserstart beim Binden des lokalen Testservers mit listen EPERM auf 127.0.0.1",  # allowlist:german -- measured sandbox error
     "Sandbox: spawnSync /usr/bin/node EPERM; tests must run outside the sandbox",
     "Sandbox: spawnSync /usr/bin/node Operation not permitted",
+    "… Der Pflichtlauf `node --test test/cli.test.js` endet mit Exitcode 1 … Der Diagnoselauf zeigt bei allen vier CLI-Tests `spawnSync /usr/bin/node EPERM`: Die Umgebung verweigert Kindprozessstarts. …",  # allowlist:german -- measured native stop rationale
 ])
-def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically(rationale) -> None:
+@pytest.mark.parametrize("remediation_paths", ((), ("test/cli.test.js",)))
+def test_agent_sandbox_validation_stop_is_handed_back_automatically(
+    rationale, remediation_paths
+) -> None:
+    remediation = (
+        f"REMEDIATION_PATHS: {', '.join(remediation_paths)}\n"
+        if remediation_paths else ""
+    )
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[
             "TEST_FILES_TOUCHED: tests/test_workflow.py\n"
             f"STOP_REQUESTED: VALIDATION-UNAVAILABLE | {rationale}\n"
+            f"{remediation}"
             "STATUS: DONE",
             _codex_ready(),
         ],
         reviewer_outputs=[],
     )
-    state = _slice_state()
+    state = _slice_state(scope_paths=("test/cli.test.js", TEST_FILE))
 
     advanced, _ = WorkflowEngine(driver)._run_implementer(
         state, _context(), WorkflowHistory(state.current_work_unit_id)
@@ -6110,6 +6126,76 @@ def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically(ration
     assert advanced.current_work_unit.has_completed_side_effect(
         "agent-sandbox-validation-handoff"
     )
+    assert advanced.current_slice.scope_paths == state.current_slice.scope_paths
+    assert not driver.validation_calls
+    assert WorkflowEngine._handoff_agent_sandbox_validation(
+        advanced, StopRequest("VALIDATION-UNAVAILABLE", rationale, remediation_paths)
+    ) is None
+
+
+@pytest.mark.parametrize("remediation_paths,handed_off", [
+    (("test/cli.test.js",), True),
+    (("test/outside.test.js",), False),
+    (("test/cli.test.js", "test/outside.test.js"), False),
+    (("test/cli.test.js.extra",), False),
+])
+def test_sandbox_handoff_uses_exact_slice_scope(remediation_paths, handed_off) -> None:
+    stop = (
+        "STOP_REQUESTED: VALIDATION-UNAVAILABLE | spawnSync /usr/bin/node EPERM\n"
+        f"REMEDIATION_PATHS: {', '.join(remediation_paths)}\n"
+        "STATUS: DONE"
+    )
+    driver = FakeDriver(
+        [], [stop, _implementer_ready()] if handed_off else [stop], [],
+    )
+    state = replace(
+        _slice_state(scope_paths=("test/cli.test.js", TEST_FILE)),
+        task_scope_patterns=("**",),
+    )
+    # Neither broader task patterns nor a stale context grants another path.
+    context = replace(
+        _context(), task_scope_patterns=("**",),
+        current_scope_paths=tuple(sorted((
+            *state.current_slice.scope_paths, "test/outside.test.js",
+        ))),
+    )
+
+    advanced, _ = WorkflowEngine(driver)._run_implementer(
+        state, context, WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert len(driver.implementer_calls) == (2 if handed_off else 1)
+    assert advanced.current_slice.scope_paths == state.current_slice.scope_paths
+    if handed_off:
+        assert advanced.current_step is WorkflowStep.REVIEWER_SLICE_REVIEW
+    else:
+        assert advanced.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+
+
+def test_sandbox_handoff_validates_after_readiness_before_review() -> None:
+    changes = _changes("b", TEST_FILE)
+    driver = FakeDriver(
+        [changes, changes],
+        [
+            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | spawnSync /usr/bin/node EPERM\n"
+            f"REMEDIATION_PATHS: {TEST_FILE}\nSTATUS: DONE",
+            _implementer_ready(),
+        ],
+        [_review_approval(AgentRole.REVIEWER)],
+        require_checkpointed_attestation=True,
+    )
+    state = _slice_state()
+    engine = WorkflowEngine(driver)
+    advanced, history = engine._run_implementer(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+    assert not driver.validation_calls
+    assert not driver.reviewer_calls
+
+    engine._run_review(advanced, _context(), history, AgentRole.REVIEWER)
+
+    assert driver.validation_calls == [changes.fingerprint]
+    assert len(driver.reviewer_calls) == 1
 
 
 @pytest.mark.parametrize("rule,rationale", [
@@ -6127,10 +6213,12 @@ def test_subprocess_handoff_requires_bound_stop_and_start_error(rule, rationale)
     ) is None
 
 
-def test_repeated_agent_sandbox_validation_stop_still_fails_closed() -> None:
+@pytest.mark.parametrize("remediation_paths", ((), (TEST_FILE,)))
+def test_repeated_agent_sandbox_validation_stop_still_fails_closed(remediation_paths) -> None:
     stop = (
         "STOP_REQUESTED: VALIDATION-UNAVAILABLE | local test server listen EACCES\n"
-        "STATUS: DONE"
+        + (f"REMEDIATION_PATHS: {', '.join(remediation_paths)}\n" if remediation_paths else "")
+        + "STATUS: DONE"
     )
     driver = FakeDriver(
         snapshots=[],
@@ -6147,7 +6235,43 @@ def test_repeated_agent_sandbox_validation_stop_still_fails_closed() -> None:
     assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
 
 
-def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_slice() -> None:
+def test_in_scope_sandbox_stop_does_not_use_prior_slice_remediation_retry() -> None:
+    path = "test/cli.test.js"
+    state = _scope_extension_state(path, "current").complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_work_unit(
+        slice_id=2, kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.IMPLEMENTER_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="b" * 40, scope_paths=("src/future.py",),
+        start_fingerprint="1" * 64,
+    ).approve_current_slice_scope_extension((path,))
+    stop = (
+        "STOP_REQUESTED: VALIDATION-UNAVAILABLE | spawnSync /usr/bin/node EPERM\n"
+        f"REMEDIATION_PATHS: {path}\nSTATUS: DONE"
+    )
+    driver = FakeDriver([], [stop, stop], [])
+
+    halted, _ = WorkflowEngine(driver)._run_implementer(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert len(driver.implementer_calls) == 2
+    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" in driver.implementer_calls[1].native_request.canonical_json
+    assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert halted.current_work_unit.completed_side_effects == (
+        "agent-sandbox-validation-handoff",
+    )
+
+
+@pytest.mark.parametrize("rationale", (
+    "prior adapter needs normalization",
+    "spawnSync /usr/bin/node EPERM",
+))
+def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_slice(
+    rationale,
+) -> None:
     prior_productive = tuple(f"src/prior_{index}.py" for index in range(14))
     prior_scope = tuple(sorted((*prior_productive, "tests/prior.py")))
     current_scope = ("src/current.py", "tests/current.py")
@@ -6190,7 +6314,7 @@ def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_sli
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[
-            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | prior adapter needs normalization\n"
+            f"STOP_REQUESTED: VALIDATION-UNAVAILABLE | {rationale}\n"
             f"REMEDIATION_PATHS: {remediation_paths}\n"
             "STATUS: DONE",
             "TEST_FILES_TOUCHED: tests/current.py,tests/prior.py\n"

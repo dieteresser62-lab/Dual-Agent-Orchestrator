@@ -3922,6 +3922,10 @@ class WorkflowEngine:
         stop_request: StopRequest,
     ) -> ApprovedScopeExtension | None:
         """Approve one exact, policy-safe scope request or fail closed to a gate."""
+        # Already authorized sandbox stops use their own once-only handoff,
+        # even when the named paths also belong to a completed Slice.
+        if self._is_in_scope_sandbox_validation_stop(state, stop_request):
+            return None
         if (
             stop_request.rule_id
             not in {
@@ -4036,17 +4040,29 @@ class WorkflowEngine:
         return frozenset(protected)
 
     @staticmethod
+    def _is_in_scope_sandbox_validation_stop(
+        state: WorkflowState,
+        stop_request: StopRequest,
+    ) -> bool:
+        # Slice change-boundary validation uses this persisted exact allowlist,
+        # not the broader task patterns or the request context's scope mirror.
+        return (
+            stop_request.rule_id == VALIDATION_UNAVAILABLE_RULE_ID
+            and state.current_work_unit.kind is WorkUnitKind.SLICE
+            and set(stop_request.remediation_paths).issubset(
+                state.current_slice.scope_paths
+            )
+            and AGENT_SANDBOX_VALIDATION_PATTERN.search(stop_request.rationale)
+            is not None
+        )
+
+    @staticmethod
     def _handoff_agent_sandbox_validation(
         state: WorkflowState,
         stop_request: StopRequest,
     ) -> WorkflowState | None:
         """Re-prompt once when only the agent sandbox blocked orchestrator-owned tests."""
-        if (
-            stop_request.rule_id != VALIDATION_UNAVAILABLE_RULE_ID
-            or stop_request.remediation_paths
-            or state.current_work_unit.kind is not WorkUnitKind.SLICE
-            or AGENT_SANDBOX_VALIDATION_PATTERN.search(stop_request.rationale) is None
-        ):
+        if not WorkflowEngine._is_in_scope_sandbox_validation_stop(state, stop_request):
             return None
         retry_key = "agent-sandbox-validation-handoff"
         if state.current_work_unit.has_completed_side_effect(retry_key):
