@@ -2,6 +2,18 @@
 
 Diese Anleitung beschreibt den Claude-Implementer mit dem Profil `claude-implementer`. Die ausgelieferte Standardbelegung bleibt Codex / Claude / Claude; Claude / Codex / Codex ist ausdrücklich per TOML wählbar. Claude/Implementer und beide Codex-Reviewslots sind seit dem 01.10.2026 nach Operatorentscheidung `experimental`, mit gebundener Qualifikation und bestandenen Role-Canaries. Andere `candidate`-Paare starten weiterhin nicht. Die Herstellertrennung gilt immer: Der Implementer muss von einem anderen Hersteller als beide Reviewslots stammen. Die Rolle kommt aus dem laufgebundenen Profil, nicht aus `CLAUDE.md` oder `CODEX.md`.
 
+## Codex-Implementer (gehärtet, Task D)
+
+Der [geschwärzte Nachweis](../evidence/codex/implementer-hardening-v1.json) dokumentiert die Messung vom 02.10.2026 auf Orchestrator-Commit `03091d7`: Die Offline-Grenzprüfung mit echten CLIs gegen einen Loopback-Fake besteht für Codex/Implementer 62/62, Codex/Reviewer 23/23 und Claude/Implementer 83/83 benannte Prüfungen. Im echten Lauf der Standardbelegung Codex / Claude / Claude wurden Plan und Slice freigegeben, beide Umsetzungsvalidierungen bestanden und das Final-Review ohne neue Findings oder Folgeauftrag abgeschlossen (Exit 0). Gemessen wurden codex-cli 0.159.2 mit `gpt-6.1-sol`/`high` sowie Claude Code 2.1.287 mit `opus`/`high`. Das historische Transportprofil nennt weiterhin sein Basismodell; die tatsächlich gebundenen Laufmodelle stehen gesondert in der Evidenz.
+
+Das Log zeigt keine Berechtigungsablehnung, höchstens 65 Sekunden Modellstille und nach jedem Prozessende null verbleibende Providerprozesse. Die Stillezahl ist das Maximum der protokollierten Stichproben bei ausgenommenen laufenden Werkzeugbefehlen. Der erste Startversuch scheiterte vor jedem Provideraufruf am fehlenden lokalen `main` im Klon; dieser Vorfall der Steuerung ist ausdrücklich kein Produktbefund. Plancommit `6f129ee`, Slicecommit `048b538` und lokaler Merge `777154c` entstanden ausschließlich im isolierten Klon.
+
+Die Messgrenze ist **ein echter Lauf, eine Aufgabe, ein Repository** (isolierter RuhestandsApp-Klon). Das belegt den erfolgreichen Ablauf auf diesem Stand, keine allgemeine Zuverlässigkeit oder weitere Aufgabenklassen. Die Offline-Prüfung misst Grenzen mit Attrappen und ersetzt keine Live-Messung.
+
+Die Baseline-Zeile Implementer/Codex bleibt gemäß Operatorentscheidung `certified`. Ihr neuer [Evidenzindex](../evidence/codex/implementer/role-certification-v1.json) bindet die unveränderte historische Task-A-Evidenz, den Task-D-Nachweis und dessen [eigenes Schwärzungsmanifest](../evidence/codex/implementer-hardening-redaction-manifest-v1.json) über Datei-SHA-256. Das eigene Indexverzeichnis erhält die eindeutige historische Evidenzauflösung je Verzeichnis. Das separate Manifest hält den unabhängigen Task-D-Export reproduzierbar, ohne ältere Exporte und deren Bindungen zu verändern. Es dokumentiert die Projektion auf Betriebsdaten und Digests der privaten Quellen; Konto-, Kontingent- und Nutzungsmetadaten werden ausgelassen. Die Record-Ketten werden beim Export vollständig lesend validiert; öffentliche Projektionen sind keine Resume-Artefakte. Fehlende oder ersetzte Nachweise stoppen Start und Resume mit `EVIDENCE_INVALID` (`evidence-invalid`). Der geänderte Zertifizierungsdigest hält ältere Laufprofile mit `AGENT-PROFILE-DIFF` an.
+
+Ein Beispiel für die ausdrückliche Node-Lesefreigabe steht bereits in der [Einrichtung](einrichtung.md#43-modelle-und-cli-versionen): `provider_options.codex.toolchain_read_roots`. Der gemessene Klon gab zusätzlich das externe Ziel seines `node_modules`-Symlinks ausschließlich lesend frei.
+
 ## Codex-Implementer: Härtung D1
 
 Die Zeile Implementer/Codex bleibt gemäß Operatorentscheidung `certified`. Ihr eigenes Capability-Profil `codex-implementer` bindet den gehärteten Transport und das Rechteprofil `dao-implementer`; das historische Profil `codex` bleibt als Schemaquelle erhalten. Die unveränderte Implementer-Policy bleibt gebunden, Capability-, Transport- und Rechtedigests ändern sich. Alte Läufe halten vor jeder Binärprüfung mit `AGENT-PROFILE-DIFF` und dem Hinweis auf die passende ältere Orchestratorversion oder einen neuen Lauf an. Es gibt keine automatische Anpassung bestehender Läufe.
@@ -22,7 +34,7 @@ python3 scripts/qualification/offline_boundary.py --pair codex-implementer --too
 python3 scripts/qualification/offline_boundary.py --pair all --out /home/operator/dao-logs/d1-all-offline
 ```
 
-Die Gesamtdauer von `all` bleibt auf 60 Sekunden begrenzt. Prüfen Sie `report.json`, `requests.jsonl`, `protected-before.json`, `protected-after.json` und die separate Ergebnisextraktion. Erst die echte CLI misst effektive Mount- und Netzwerkgrenzen. Danach folgt der ausdrücklich beschlossene echte Lauf Codex / Claude / Claude im isolierten RuhestandsApp-Klon.
+Die Gesamtdauer von `all` bleibt auf 60 Sekunden begrenzt. Prüfen Sie `report.json`, `requests.jsonl`, `protected-before.json`, `protected-after.json` und die separate Ergebnisextraktion. Erst die echte CLI misst effektive Mount- und Netzwerkgrenzen. Die Offline-Messung und der ausdrücklich beschlossene echte Lauf Codex / Claude / Claude im isolierten RuhestandsApp-Klon sind im Task-D-Nachweis oben dokumentiert.
 
 ## 1. Schreibgrenze und CLI-Vertrag
 

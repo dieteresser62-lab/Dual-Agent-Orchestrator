@@ -20,9 +20,85 @@ from role_certification import CertificationError, CertificationErrorCode, load_
 from workflow_run_setup import _apply_resumed_agent_profiles
 
 ROOT = probe.ROOT
+HARDENING = 'docs/evidence/codex/implementer-hardening-v1.json'  # allowlist:provider -- certification data: standard implementer proof
+HARDENING_MANIFEST = 'docs/evidence/codex/implementer-hardening-redaction-manifest-v1.json'  # allowlist:provider -- certification data: separate provenance
 REVIEW = ROOT / 'docs/evidence' / PROVIDERS[0]
 IMPLEMENT = ROOT / 'docs/evidence' / PROVIDERS[1]
 LEGACY_PROVIDER = provider_capability(probe.LEGACY_CAPABILITIES[probe.LEGACY_CANDIDATE])['provider']
+
+
+@pytest.mark.parametrize('path', (HARDENING, HARDENING_MANIFEST))
+@pytest.mark.parametrize('mutation', ('delete', 'replace'))
+def test_hardened_baseline_evidence_fails_closed_at_start_and_resume(tmp_path, monkeypatch, path, mutation):
+    _copy_sources(tmp_path)
+    table = load_role_certifications(root=tmp_path)
+    selected = table.entries[0]
+    assert selected.status == 'certified'
+    assert selected.evidence_path.endswith('/implementer/role-certification-v1.json')
+    file = tmp_path/path
+    if mutation == 'delete':
+        file.unlink()
+    else:
+        file.write_bytes(b'{}\n')
+    with pytest.raises(CertificationError) as start:
+        load_role_certifications(root=tmp_path)
+    assert start.value.code is CertificationErrorCode.EVIDENCE_INVALID
+    monkeypatch.setattr('workflow_run_setup.load_role_certifications', lambda: load_role_certifications(root=tmp_path))
+    slots = {slot.value: SimpleNamespace() for slot in AgentSlot}
+    state = SimpleNamespace(protocol_binding=SimpleNamespace())
+    with pytest.raises(CertificationError) as resume:
+        _apply_resumed_agent_profiles(Namespace(slot_settings=slots), state)
+    assert resume.value.code is CertificationErrorCode.EVIDENCE_INVALID
+
+
+def test_hardened_baseline_cannot_drop_shared_binding_or_restore_old_index(tmp_path):
+    _copy_sources(tmp_path)
+    path = tmp_path / load_role_certifications(root=tmp_path).entries[0].evidence_path
+    index = json.loads(path.read_bytes())
+    index['shared_evidence'] = [ref for ref in index['shared_evidence'] if ref['path'] != HARDENING]
+    path.write_text(json.dumps(index))
+    table_path = tmp_path/'schemas/role-provider-certifications-v1.json'
+    table = json.loads(table_path.read_bytes())
+    table['certifications'][0]['evidence']['sha256'] = probe.sha(path.read_bytes())
+    table_path.write_text(json.dumps(table))
+    with pytest.raises(CertificationError) as missing:
+        load_role_certifications(root=tmp_path)
+    assert missing.value.code is CertificationErrorCode.EVIDENCE_INVALID
+    historical = tmp_path/'docs/evidence/role-certification-v1.json'
+    assert probe.sha(historical.read_bytes()) == 'cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa'
+    table['certifications'][0]['evidence'] = {
+        'path': str(historical.relative_to(tmp_path)), 'sha256': probe.sha(historical.read_bytes())}
+    table_path.write_text(json.dumps(table))
+    with pytest.raises(CertificationError) as old:
+        load_role_certifications(root=tmp_path)
+    assert old.value.code is CertificationErrorCode.EVIDENCE_INVALID
+
+
+def test_hardening_export_retains_checks_decisions_record_commitments_and_limits():
+    document = probe.read_evidence(ROOT/HARDENING)
+    assert document['orchestrator_commit'] == '03091d7e9e59b84a16b70420ed6569621f3126ba'
+    pairs = document['offline']['pairs']
+    assert [row['total_checks'] for row in pairs] == [62, 23, 83]
+    assert all(row['passed'] and len(row['checks']) == row['passed_checks'] == row['total_checks']
+               and all(check['status'] == 'passed' for check in row['checks']) for row in pairs)
+    assert all(row['effort'] == 'high' for row in pairs)
+    live = document['live']
+    assert live['rejections'] == live['remaining_provider_processes'] == live['new_followup_tasks'] == 0
+    assert live['max_observed_model_silence_seconds'] == 65
+    assert [row['exit_code'] for row in live['process_results']] == [1, 0, 0]
+    assert live['incidents'][0]['classification'] == 'operator-prerequisite'
+    assert live['incidents'][0]['provider_calls'] == 0 and live['incidents'][0]['product_finding'] is False
+    assert [len(run['records']) for run in live['runs']] == [48, 85]
+    steps = [step for run in live['runs'] for step in run['steps']]
+    assert [s['payload']['verdict'] for s in steps if s['record_type'] == 'review'] == ['approved', 'approved']
+    final = next(s['payload'] for s in steps if s['record_type'] == 'final_review_completed')
+    assert final['scan_complete'] and final['new_findings'] == []
+    assert live['local_merge_commit'].startswith('777154c')
+    for run in live['runs']:
+        assert len({r['record_id'] for r in run['records']}) == len(run['records'])
+        assert all(redact.SHA.fullmatch(row['sha256']) for row in run['records'])
+    assert all(redact.SHA.fullmatch(row['sha256']) for row in document['source_commitments'])
+    assert [document['measurement_scope'][key] for key in ('live_runs', 'tasks', 'repositories')] == [1, 1, 1]
 
 
 def bound_paths():

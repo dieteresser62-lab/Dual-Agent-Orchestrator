@@ -1,0 +1,29 @@
+{
+ "files": [
+  {
+   "changes": [],
+   "derived_sha256": "31dee26504b5e49b9a7c8ee109d8c639fbb02ea0bf1fe650723a6d03983f1c96",
+   "outcomes_sha256": "f6f9ce7e635dfaf706061da439025ef00888fc093d1eafcaa4e4c97a2af70c5e",
+   "path": "implementer-hardening-v1.json",
+   "source_id": "task-d-hardening-projection",
+   "source_sha256": "e769f42c5f7c2866087a3514705b81bbadd71f094440339294d9bd17669822bf"
+  }
+ ],
+ "generated_files": [],
+ "notes": {
+  "projection": "Select operational outcomes and check names; omit private paths, account, usage and quota metadata before redaction. Byte digests commit to complete private logs and records.",
+  "separate_manifest": "Task D is an independent export; historical Task A and reviewer manifests remain unchanged."
+ },
+ "rules": {
+  "account": "Remove account, organization, subscription and quota fields, including embedded JSON streams; retain operational random session/event IDs.",
+  "digest": "Recompute a declared public JSON or file binding after redaction.",
+  "email": "Replace email addresses by <email>.",
+  "home": "Replace the runtime home by <HOME>; other /home/<name> prefixes by /home/<user>.",
+  "hostname": "Replace runtime host names at token boundaries by <host>.",
+  "report-reference": "Use bundle-relative report paths instead of private absolute paths.",
+  "temporary": "Replace private temporary-directory prefixes by <TMP>/ and <VAR_TMP>/.",
+  "username": "Replace runtime account names at token boundaries by <user>."
+ },
+ "schema_version": "redaction-manifest-v1",
+ "source_commitments": "Git/blob/record IDs and byte digests still identify private source evidence; these public report projections are not resume artifacts."
+}

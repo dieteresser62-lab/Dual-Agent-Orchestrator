@@ -27,7 +27,7 @@ from state_io import StateSchemaError
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = "schemas/role-provider-certifications-v1.json"
-EVIDENCE = "docs/evidence/role-certification-v1.json"
+EVIDENCE = "docs/evidence/codex/implementer/role-certification-v1.json"  # allowlist:provider -- certification data: hardened baseline index
 REVIEWER_EVIDENCE = "docs/evidence/role-certification-reviewer-restricted-v1.json"
 AGY_EVIDENCE = "docs/evidence/antigravity/capability-v1.json"
 CANARY_EVIDENCE = "docs/evidence/antigravity/canary-v1.json"

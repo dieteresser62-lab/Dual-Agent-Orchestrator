@@ -1,0 +1,53 @@
+{
+  "schema_version": "role-certification-evidence-v1",
+  "slots": {
+    "implementer": [
+      {
+        "node_id": "tests/test_agent_adapters.py::test_transport_command_environment_and_components_match_start_head",
+        "proves": "Current implementer command, environment and input bytes match the baseline."
+      },
+      {
+        "node_id": "tests/test_native_contract_differential.py::test_implementer_request_and_response_bytes_match_pre_rename_baseline",
+        "proves": "Implementer request and response bytes match the reviewed baseline."
+      },
+      {
+        "node_id": "tests/test_certification_evidence_binding.py::test_hardened_baseline_evidence_fails_closed_at_start_and_resume",
+        "proves": "Hardened baseline proof and independent redaction manifest are mandatory byte bindings at start and resume."
+      }
+    ],
+    "reviewer": [
+      {
+        "node_id": "tests/test_agent_adapters.py::test_reviewer_budget_includes_manifest_pages_and_all_evidence_parts",
+        "proves": "Reviewer manifest pages and evidence parts are included in the input budget."
+      },
+      {
+        "node_id": "tests/test_native_review_request.py::test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests",
+        "proves": "Plan and Slice review contexts bind their writer digests."
+      }
+    ],
+    "final_reviewer": [
+      {
+        "node_id": "tests/test_native_review_request.py::test_final_review_request_binds_default_and_hard_capacity",
+        "proves": "Final review binds its own finding capacity."
+      },
+      {
+        "node_id": "tests/test_native_review_request.py::test_plan_slice_convergence_and_final_review_bind_distinct_writer_digests",
+        "proves": "Final review binds a distinct writer digest."
+      }
+    ]
+  },
+  "shared_evidence": [
+    {
+      "path": "docs/evidence/role-certification-v1.json",
+      "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+    },
+    {
+      "path": "docs/evidence/codex/implementer-hardening-v1.json",
+      "sha256": "31dee26504b5e49b9a7c8ee109d8c639fbb02ea0bf1fe650723a6d03983f1c96"
+    },
+    {
+      "path": "docs/evidence/codex/implementer-hardening-redaction-manifest-v1.json",
+      "sha256": "104a75e2caf60862ab76ca189df4d5414fb5b3e97bf1fb14517a60eab1482fe0"
+    }
+  ]
+}

@@ -256,6 +256,25 @@ def _validate_role_shared_evidence(root: Path, document: dict[str, Any], *, prov
             _read_file(root, base + str(relative), expected_digest=report.get("sha256"))
 
 
+def _validate_implementer_hardening_evidence(root: Path, document: dict[str, Any]) -> None:
+    """Bind the hardened baseline independently of historical qualification exports."""
+    expected = {
+        "docs/evidence/role-certification-v1.json",
+        "docs/evidence/codex/implementer-hardening-v1.json",  # allowlist:provider -- certification data: baseline hardening proof
+        "docs/evidence/codex/implementer-hardening-redaction-manifest-v1.json",  # allowlist:provider -- certification data: independent export provenance
+    }
+    shared = document.get("shared_evidence")
+    if not isinstance(shared, list) or len(shared) != len(expected):
+        raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "implementer hardening evidence is incomplete")
+    seen = set()
+    for ref in shared:
+        if (not isinstance(ref, dict) or set(ref) != {"path", "sha256"}
+            or not isinstance(ref["path"], str) or ref["path"] not in expected or ref["path"] in seen):
+            raise CertificationError(CertificationErrorCode.EVIDENCE_INVALID, "implementer hardening reference differs")
+        seen.add(ref["path"])
+        _read_file(root, ref["path"], expected_digest=ref["sha256"])
+
+
 def _validate_agy_canaries(root: Path, reference: dict[str, Any], *, model_family_pattern: str,
                           redactions: dict[str, tuple[str, str]] | None = None) -> None:
     ref = _require_keys(reference, {"path", "sha256"}, "canary reference")
@@ -568,6 +587,8 @@ def _load_role_certifications(
             evidence_cache[evidence_path] = _parse_json(raw_evidence, evidence_path)
             _validate_evidence_slots(evidence_cache[evidence_path])
         document = evidence_cache[evidence_path]
+        if key == (AgentSlot.IMPLEMENTER, "codex"):  # allowlist:provider -- certification data: hardened baseline occupancy
+            _validate_implementer_hardening_evidence(root, document)
         redactions = None
         if document["schema_version"] == "antigravity-capability-v1":
             redactions = _validate_redaction_binding(root, document["measurements"].get("redaction_manifest", {}), evidence_path)

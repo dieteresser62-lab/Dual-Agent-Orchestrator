@@ -36,7 +36,7 @@ from scripts.qualification.profiles import BOUNDARY_IMPLEMENTER, BOUNDARY_REVIEW
 
 
 def _before_d1_hardening(raw: str) -> str:
-    """Freeze unrelated rows; D1's authorized row has its own boundary tests."""
+    """Freeze unrelated rows; D1 transport and D3 proof have dedicated tests."""
     document = json.loads(raw)
     if "providers" in document:
         document["providers"] = [row for row in document["providers"] if row["profile_id"] != "codex-implementer"]  # allowlist:provider -- certification data: exclude authorized new profile from historical guard
@@ -44,7 +44,9 @@ def _before_d1_hardening(raw: str) -> str:
         row = next(row for row in document["certifications"] if row["slot"] == "implementer" and row["provider"] == "codex")  # allowlist:provider -- certification data: restore historical certified row for byte guard
         row.update(capability_profile="codex",  # allowlist:provider -- certification data: historical profile
             capability_sha256="19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
-            rights_sha256="a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8")
+            rights_sha256="a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",
+            evidence={"path": "docs/evidence/role-certification-v1.json",
+                      "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"})
         row["probe_profile"]["semantic_flags"] = ["exec", "--skip-git-repo-check", "--ephemeral", "--color=never", "--json", "--output-last-message=<runtime-file>", "stdin=-"]
     return json.dumps(document, indent=2) + "\n"
 

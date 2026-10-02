@@ -20,8 +20,8 @@
       "policy_sha256": "101b8b8f71aca3178e9607c4fe66214ca49675aa85cb1f54f1358050e74a9dda",
       "rights_sha256": "35a883f6726abf65cc7ab5ffb7f8241f63d6f7f910c14835b8b91165f2266f33",
       "evidence": {
-        "path": "docs/evidence/role-certification-v1.json",
-        "sha256": "cb28369f17cc4c8ad66442cc0afd3488cc042fe72693e9bf4d5c7b2f4f2f78fa"
+        "path": "docs/evidence/codex/implementer/role-certification-v1.json",
+        "sha256": "8679cbd85c907afdbba013ec1e21c473d13f6c819f39263d3e7e422dab78fb1e"
       },
       "probe_profile": {
         "provider": "codex",

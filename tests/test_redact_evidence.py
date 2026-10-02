@@ -192,9 +192,50 @@ def test_experimental_topology_starts_and_standard_remains_default(tmp_path):
 
 def test_public_evidence_has_no_personal_or_account_patterns():
     red = redact.Redactor.runtime()
+    checked = set()
     for path in (ROOT/'docs/evidence').rglob('*'):
         if not path.is_file() or path.suffix not in {'.json', '.gz'}: continue
         red.check(probe.read_evidence(path))
+        checked.add(path.relative_to(ROOT).as_posix())
+    assert 'docs/evidence/codex/implementer-hardening-v1.json' in checked  # allowlist:provider -- certification data: privacy coverage of standard proof
+
+
+def test_independent_hardening_redaction_manifest_binds_export(tmp_path):
+    directory = ROOT/'docs/evidence'/PROVIDERS[0]
+    manifest = probe.read_evidence(directory/'implementer-hardening-redaction-manifest-v1.json')
+    (tmp_path/'redaction-manifest-v1.json').write_bytes(redact.encoded(manifest))
+    for item in manifest['files']:
+        (tmp_path/item['path']).write_bytes((directory/item['path']).read_bytes())
+    assert redact.verify(tmp_path) == manifest
+    assert len(manifest['files']) == 1
+    assert manifest['files'][0]['path'] == 'implementer-hardening-v1.json'
+    assert manifest['notes']['separate_manifest']
+    assert '/home/' not in (directory/'implementer-hardening-v1.json').read_text()
+
+
+def test_hardening_export_redacts_before_publication_and_is_reproducible(tmp_path):
+    from scripts.qualification.implementer_hardening_evidence import export, EVIDENCE, MANIFEST
+    document = {'status': 'completed', 'count': 62, 'checks': [{'check': 'boundary', 'status': 'passed'}],
+                'private_path': str(Path.home()/'private-control'), 'email': 'operator@example.invalid',
+                'account_id': 'private-account', 'daily_quota': 123}
+    source, output = tmp_path/'projection.json', tmp_path/'public'
+    export(document, source, output)
+    private_bytes = source.read_bytes()
+    first = {p.name: p.read_bytes() for p in output.iterdir()}
+    export(document, source, output)
+    assert first == {p.name: p.read_bytes() for p in output.iterdir()}
+    assert source.read_bytes() == private_bytes
+    public = probe.read_evidence(output/EVIDENCE)
+    assert public['count'] == 62 and public['checks'] == document['checks']
+    assert public['private_path'].startswith('<HOME>/') and public['email'] == '<email>'
+    assert 'account_id' not in public and 'daily_quota' not in public
+    entry = probe.read_evidence(output/MANIFEST)['files'][0]
+    assert entry['source_sha256'] == probe.sha(private_bytes)
+    assert entry['derived_sha256'] == probe.sha(first[EVIDENCE])
+    assert {'home', 'email', 'account'} <= {rule for change in entry['changes'] for rule in change['rules']}
+    with pytest.raises(FileExistsError, match='intermediate source differs'):
+        export(document | {'count': 61}, source, output)
+    assert first == {p.name: p.read_bytes() for p in output.iterdir()}
 
 
 def test_frozen_prerequisites_and_legacy_source_commitments_remain_bound():
