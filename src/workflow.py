@@ -110,6 +110,7 @@ from validation_matrix import (
     ValidationRequest,
 )
 from workflow_state import (
+    AGENT_SANDBOX_VALIDATION_HANDOFF_KEY,
     AgentFailureKind,
     GateDecisionRecord,
     GateReason,
@@ -2365,21 +2366,9 @@ class WorkflowEngine:
                 "authoritative matrix back to the orchestrator for Slice %02d.",
                 validation_handoff.current_slice_id,
             )
-            handoff_context = replace(
-                context,
-                slice_summary=(
-                    f"{context.slice_summary}\n\n"
-                    "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF\n"
-                    f"Agent-local failure: {stop_request.rationale}\n"
-                    "The implementation itself is not blocked. Do not rerun the "
-                    "configured full validation matrix inside the agent sandbox. "
-                    "Complete any remaining implementation bookkeeping and emit the "
-                    "normal readiness record; the orchestrator will execute the "
-                    "authoritative matrix immediately afterward. Request a stop only "
-                    "for a genuine implementation blocker or product decision."
-                ),
-            )
-            return self._run_implementer(validation_handoff, handoff_context, history)
+            # The request builder reconstructs the notice from the durable
+            # marker, including after a crash before the follow-up dispatch.
+            return self._run_implementer(validation_handoff, context, history)
         state = self._halt_for_stop_request(state, context, stop_request)
         self.driver.checkpoint(state, history)
         return state, history
@@ -4064,10 +4053,10 @@ class WorkflowEngine:
         """Re-prompt once when only the agent sandbox blocked orchestrator-owned tests."""
         if not WorkflowEngine._is_in_scope_sandbox_validation_stop(state, stop_request):
             return None
-        retry_key = "agent-sandbox-validation-handoff"
+        retry_key = AGENT_SANDBOX_VALIDATION_HANDOFF_KEY
         if state.current_work_unit.has_completed_side_effect(retry_key):
             return None
-        return state.mark_side_effect_completed(retry_key)
+        return state.mark_side_effect_completed(retry_key).start_recomposed_request()
 
     @staticmethod
     def _latest_anchor_approval(state: WorkflowState) -> GateDecisionRecord | None:

@@ -1018,7 +1018,18 @@ def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None
             return {key: active_names(item) for key, item in value.items()}
         return value
 
-    assert _static_document()["layers"] == active_names(baseline["layers"])
+    expected_layers = active_names(baseline["layers"])
+    # The handoff notice now comes from the durable marker in the request
+    # builder. Preserve the historical corpus and adapt only this known
+    # return argument; every other control-flow boundary remains exact.
+    handoff_return = expected_layers[0]["returns"][2]
+    assert handoff_return["expression"] == (
+        "self._run_implementer(validation_handoff, handoff_context, history)"
+    )
+    handoff_return["expression"] = (
+        "self._run_implementer(validation_handoff, context, history)"
+    )
+    assert _static_document()["layers"] == expected_layers
     for key in ("schema_version", "source_commit", "source_blob"):
         assert _static_document()[key] == baseline[key]
     codex, review = baseline["layers"]

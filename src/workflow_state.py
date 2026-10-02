@@ -23,6 +23,7 @@ from provider_identity import ProviderIdentity
 
 STATE_VERSION = 3
 DEFAULT_LOOP_ROUND_LIMIT = 6
+AGENT_SANDBOX_VALIDATION_HANDOFF_KEY = "agent-sandbox-validation-handoff"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 TECHNICAL_TEXT_MARKER_PATTERN = re.compile(
     r"^\[technical text redacted; sha256=[0-9a-f]{64}; "

@@ -63,6 +63,7 @@ from review_packets import (
 )
 from slice_exit import slice_commit_decision_finding_ids
 from workflow_state import (
+    AGENT_SANDBOX_VALIDATION_HANDOFF_KEY,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -175,6 +176,7 @@ def native_implementer_request(
         )
     else:
         effective_work_context = context.distilled_context
+    effective_work_context += _sandbox_validation_handoff_notice(state)
     if additional_authorized_paths:
         effective_work_context += (
             "\n\nFINGERPRINT-BOUND ORCHESTRATOR PATH AUTHORIZATION\n"
@@ -284,6 +286,26 @@ def native_implementer_request(
             retry_feedback=retry_feedback,
         ),
         profile=_bound_provider(state, "implementer", execution_error),
+    )
+
+
+def _sandbox_validation_handoff_notice(state: WorkflowState) -> str:
+    """Rebuild the handoff instruction from its replayed once-only marker."""
+    if (
+        state.current_work_unit.kind is not WorkUnitKind.SLICE
+        or not state.current_work_unit.has_completed_side_effect(
+            AGENT_SANDBOX_VALIDATION_HANDOFF_KEY
+        )
+    ):
+        return ""
+    return (
+        "\n\nAUTOMATIC ORCHESTRATOR VALIDATION HANDOFF\n"
+        "The agent-local validation start was blocked by its sandbox. "
+        "Do not rerun the configured full validation matrix inside the agent sandbox. "
+        "Complete any remaining implementation bookkeeping and emit the "
+        "normal readiness record; the orchestrator will execute the "
+        "authoritative matrix immediately afterward. Request a stop only "
+        "for a genuine implementation blocker or product decision."
     )
 
 

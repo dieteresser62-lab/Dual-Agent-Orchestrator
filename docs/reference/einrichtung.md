@@ -664,7 +664,10 @@ im freigegebenen Umfang dieses Arbeitspakets liegen. Ein Pfad außerhalb bleibt
 im bisherigen Verfahren für Umfangserweiterungen oder führt zum Halt.
 Der Implementer erhält erneut einen Auftrag: Restarbeiten abschließen,
 Bereitschaft melden und den vollständigen Testbefehl nicht erneut in der Sandbox
-ausführen. Erst nach dieser Rückmeldung führt der Orchestrator den konfigurierten
+ausführen. Dieser Auftrag erhält eine eigene Kennung. Nach einer Unterbrechung
+wird derselbe Auftrag fortgesetzt oder seine bereits gespeicherte Antwort
+wiederhergestellt; der Übergabehinweis bleibt erhalten.
+Erst nach der Bereitschaftsmeldung führt der Orchestrator den konfigurierten
 Testbefehl außerhalb der Sandbox aus, bevor der Reviewer prüft. Ein erneuter
 solcher Stopp hält den Lauf an. Ein `EPERM` allein, ein anderer Stoppgrund oder
 ein echter Testfehler löst diese Übergabe nicht aus. Die optionale Regel aus 2.4

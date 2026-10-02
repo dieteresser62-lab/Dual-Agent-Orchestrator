@@ -29,6 +29,11 @@ from test_orchestrator_runtime import (
 from test_workflow_completion import (
     test_each_completion_boundary_resumes_to_same_result as completion_boundary_proof,
 )
+from test_sandbox_validation_handoff import (
+    CRASH_BOUNDARIES as HANDOFF_CRASH_BOUNDARIES,
+    START_ERRORS as HANDOFF_START_ERRORS,
+    prove_sandbox_handoff as handoff_boundary_proof,
+)
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     Fingerprint,
@@ -52,6 +57,22 @@ from crash_harness import (
 
 
 MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v2.json"
+
+
+@pytest.mark.parametrize("boundary", HANDOFF_CRASH_BOUNDARIES)
+@pytest.mark.parametrize("rationale", HANDOFF_START_ERRORS)
+def test_sandbox_handoff_request_and_response_boundaries_converge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, rationale: str,
+) -> None:
+    handoff_boundary_proof(tmp_path, monkeypatch, rationale, boundary)
+
+
+@pytest.mark.parametrize("boundary", ("after-checkpoint", "after-response"))
+@pytest.mark.parametrize("rationale", HANDOFF_START_ERRORS)
+def test_resumed_second_sandbox_stop_keeps_the_once_only_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, rationale: str,
+) -> None:
+    handoff_boundary_proof(tmp_path, monkeypatch, rationale, boundary, repeated=True)
 
 
 @pytest.mark.parametrize("role", ("codex", "claude"))

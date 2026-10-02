@@ -49,6 +49,7 @@ from artifact_models import (
     ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
+    SideEffectPayload,
     SliceBoundaryPayload,
     ScopeExtensionPayload,
     TransientRetryPayload,
@@ -60,6 +61,7 @@ from artifact_models import (
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     stable_record_id,
+    stable_side_effect_key,
 )
 from artifact_replay import (
     ReplayedWorkflowCursor,
@@ -83,6 +85,7 @@ from review_packets import ReviewPacket
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from workflow import WorkflowExecutionError
 from workflow_state import (
+    AGENT_SANDBOX_VALIDATION_HANDOFF_KEY,
     AgentFailureKind,
     GateDecisionRecord,
     NATIVE_CLAUDE_REVIEW_TRANSPORT as NATIVE_REVIEW_TRANSPORT,
@@ -545,13 +548,53 @@ class WorkflowPersistence:
             ),
             default=0,
         )
-        bridge.append(
-            policy,
-            logical_id=logical_id,
-            idempotency_key=idempotency_key,
-            fingerprint_sha256=state.task_digest,
-            fingerprint_kind=FingerprintKind.CONTRACT,
-        )
+        handoff_operation = (AGENT_SANDBOX_VALIDATION_HANDOFF_KEY,)
+        if unit.has_completed_side_effect(handoff_operation[0]) and (
+            bridge.side_effect_result(
+                effect_class="internal", work_unit_id=work_unit_id,
+                operation=handoff_operation,
+            ) is None
+        ):
+            # Neither the new request cursor nor its once-only handoff may
+            # become authoritative alone. The preceding transition is safe
+            # to replay with the old cursor if this batch has not published.
+            effect_key = stable_side_effect_key(
+                "internal", work_unit_id, handoff_operation
+            )
+            effect_digest = hashlib.sha256(effect_key.encode("utf-8")).hexdigest()
+            effect_logical_id = f"side-effect-{effect_digest[:32]}"
+            bridge.append_batch(
+                (
+                    (
+                        policy, logical_id, idempotency_key,
+                        state.task_digest, FingerprintKind.CONTRACT,
+                    ),
+                    (
+                        SideEffectPayload(
+                            effect_key, "internal", work_unit_id,
+                            handoff_operation, "intent", None,
+                        ),
+                        effect_logical_id, f"side-effect-intent:{effect_digest}",
+                        state.task_digest, FingerprintKind.CONTRACT,
+                    ),
+                    (
+                        SideEffectPayload(
+                            effect_key, "internal", work_unit_id,
+                            handoff_operation, "result", "completed",
+                        ),
+                        effect_logical_id, f"side-effect-result:{effect_digest}",
+                        state.task_digest, FingerprintKind.CONTRACT,
+                    ),
+                )
+            )
+        else:
+            bridge.append(
+                policy,
+                logical_id=logical_id,
+                idempotency_key=idempotency_key,
+                fingerprint_sha256=state.task_digest,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
 
     def _persist_slice_boundaries(self, state: WorkflowState) -> None:
         """Append exact Slice Git/scope facts before any guarded side effect."""

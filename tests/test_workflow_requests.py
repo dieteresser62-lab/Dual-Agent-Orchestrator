@@ -42,10 +42,12 @@ from prompts import GERMAN_DOCUMENT_LANGUAGE_RULE, NATIVE_IMPLEMENTER_SYSTEM_POL
 from task_contract import TaskMode, parse_task_contract
 from validation_matrix import ValidationCommand, ValidationMatrix
 from workflow_state import (
+    AGENT_SANDBOX_VALIDATION_HANDOFF_KEY,
     AgentFailureKind,
     InvocationFailureRecord,
     WorkflowState,
     WorkflowStep,
+    WorkUnitKind,
     ProtocolBinding,
     ProtocolMode,
     scripted_profile_binding,
@@ -243,6 +245,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
     assert declarations == {
         "_bound_provider",
         "_native_implementer_retry_feedback",
+        "_sandbox_validation_handoff_notice",
         "_native_review_acceptance_criteria",
         "_native_review_retry_feedback",
         "_review_request_finding_inputs",
@@ -428,6 +431,65 @@ def test_oversized_branch_diff_is_replaced_by_an_explicit_digest_bound_notice() 
         "Never treat the request as complete diff evidence" in criterion
         for criterion in bundle.document["acceptance_criteria"]
     )
+
+
+@pytest.mark.parametrize("kind", (
+    NativeImplementerRequestKind.IMPLEMENTATION,
+    NativeImplementerRequestKind.CORRECTION,
+))
+def test_sandbox_handoff_notice_is_bound_in_implementation_and_correction_requests(kind) -> None:
+    finding = FindingRecord(
+        "R-01", FindingClass.FINDING, FindingStatus.OPEN,
+        "Repair the runtime behavior.", "Cover the corrected runtime behavior.",
+        FindingOrigin("01", 1, AgentRole.REVIEWER),
+    )
+    step = (
+        WorkflowStep.IMPLEMENTER_CORRECTION
+        if kind is NativeImplementerRequestKind.CORRECTION
+        else WorkflowStep.IMPLEMENTER_IMPLEMENTATION
+    )
+    state = init_workflow_state(
+        run_id="request-handoff", task_file="/repo/task.md",
+        branch="feature/backlog-followups", branch_base="a" * 40,
+        first_slice_start_commit="a" * 40, slice_count=1,
+        task_digest="b" * 64, task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/backlog-followups",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "3"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1, kind=WorkUnitKind.SLICE, step=step,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40, scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    if kind is NativeImplementerRequestKind.CORRECTION:
+        state = replace(state, work_units=(
+            *state.work_units[:-1], replace(state.current_work_unit, open_findings=("R-01",)),
+        ))
+    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
+
+    def request(current):
+        return workflow_requests.native_implementer_request(
+            state=current, context=_context(), history=history,
+            contract=ImplementerStepContract(
+                "handoff-request", ReadinessMarker.IMPLEMENTATION, "01", 1,
+                request_sequence=current.current_work_unit.request_sequence,
+            ),
+            request_kind=kind, execution_error=WorkflowExecutionError,
+            current_slice_diff="diff --git a/src/runtime.py b/src/runtime.py\n-old\n+new\n",
+            correction_fingerprint="d" * 64, correction_findings=(finding,),
+        )
+
+    original = request(state)
+    followup = request(state.mark_side_effect_completed(
+        AGENT_SANDBOX_VALIDATION_HANDOFF_KEY
+    ).start_recomposed_request())
+    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" not in original.canonical_json
+    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" in followup.canonical_json
+    assert "Do not rerun the configured full validation matrix" in followup.canonical_json
+    assert original.bound_context.request_id != followup.bound_context.request_id
+    assert original.bound_context.context.current_fingerprint == followup.bound_context.context.current_fingerprint
+    assert followup.bound_context.context.contract.round_number == 1
+    assert followup.bound_context.context.contract.request_sequence == 2
 
 
 def test_canonical_request_anchor_detects_omitted_and_reordered_fields() -> None:
