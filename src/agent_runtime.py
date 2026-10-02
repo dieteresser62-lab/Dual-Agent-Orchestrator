@@ -1502,6 +1502,7 @@ def _run_agent_process(
                 identity = capture_process_identity(process.pid)
             except (OSError, ValueError, IndexError, UnicodeError):
                 pass
+            getattr(adapter, "bind_sandbox_process", lambda pid, identity: None)(process.pid, identity)
             if process_started is not None:
                 process_started(process.pid)
         if read_lines:

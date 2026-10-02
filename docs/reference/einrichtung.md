@@ -1306,10 +1306,24 @@ Befehl direkt mit der erlaubten Elternumgebung; Shellinitialisierung oder
 CLI-Änderungen können andere Ergebnisse verursachen. Die Vorabprüfung ist
 deshalb eine **Näherung**, kein Beweis für den gesamten Agentenlauf.
 
-**Platzhalter bei Abbruch (Messung: CLI 0.159.2, 02.10.2026):** Während der
-Prüfung legt die Codex-CLI für fehlende Schutzpfade leere Dateien oder
-Verzeichnisse im Host-Repository an. Beim normalen Ende und nach SIGTERM
-entfernt sie diese; nach SIGKILL bleiben sie liegen. Das Werkzeug sendet bei
+**Platzhalter (Messung: CLI 0.159.2, 02.10.2026):** Für fehlende Schutzpfade
+legt die Codex-CLI leere Dateien oder Verzeichnisse im Host-Repository an.
+Bei `codex sandbox` entfernt sie diese beim normalen Ende und nach SIGTERM;
+nach SIGKILL bleiben sie liegen. Bei `codex exec` wurden dagegen auch nach
+Exit `0` verbleibende Platzhalter gemessen. Der Implementer-Adapter bereinigt
+sie deshalb vor dem Schutzbaumvergleich auf allen Endpfaden, ausschließlich
+nach nachgewiesenem Ende der gestarteten Prozessgruppe. Die gemeinsame
+Bereinigung von Adapter und Vorabprüfung ist an ursprünglichen
+Elternverzeichnissen per Dateideskriptor verankert und prüft Eigentümer,
+Signatur und Leere; vorhandene Pfade, Symlinks und unerwartete Inhalte bleiben
+erhalten und führen bei einer Schutzbaumänderung zum Halt.
+Die Offline-Grenzprüfung verwendet für ihren zusätzlichen Normalaufruf einen
+schreibfreien Shellbefehl (`printf DAO_NORMAL_OK`), damit auch dieser Aufruf
+die Werkzeug-Sandbox benutzt. Sie prüft dessen sichtbare Ausgabe und hält die
+Schutzbäume vor dem Lauf, vor der Bereinigung und danach fest. Der Bericht
+weist entstandene Platzhalter, entfernte Pfade und verbleibende Änderungen
+gesondert aus. Ein Aufruf ohne Werkzeugbefehl belegt diese Sandbox-Grenze nicht.
+Das Werkzeug sendet bei
 Zeitlimit oder Abbruch deshalb zunächst SIGTERM und wartet bis zu fünf Sekunden
 vor SIGKILL. Danach entfernt es erkannte Platzhalter nur an vorher fehlenden
 Schutzpfaden, wenn die gestarteten Prozessgruppen sicher beendet sind: eigene

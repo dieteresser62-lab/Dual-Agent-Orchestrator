@@ -6,6 +6,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -502,6 +503,8 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         self._scratch = None
         self._protected_before = None
         self._process_evidence_path = None
+        self._sandbox_placeholders = None
+        self._sandbox_process = None
 
     def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id) -> None:
         self._production_boundary_bound = False
@@ -529,14 +532,44 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         except (OSError, TypeError, ValueError) as exc:
             raise AgentOutputError("implementer isolation changed before start", technical_text=str(exc)) from exc
         super().before_provider_process()
+        from protected_tree import SandboxPlaceholders
+        if self._sandbox_placeholders is not None:
+            self._sandbox_placeholders.close()
+        self._sandbox_placeholders = SandboxPlaceholders(self._protected_paths)
+        self._sandbox_process = None
+
+    def bind_sandbox_process(self, pid, identity) -> None:
+        self._sandbox_process = (pid, identity)
 
     def remove_sandbox_placeholders(self) -> tuple[Path, ...]:
-        # Codex has no authorized host-placeholder cleanup contract.
-        return ()
+        from protected_tree import process_group_ended
+        if self._sandbox_placeholders is None:
+            return ()
+        ended = self._sandbox_process is not None and process_group_ended(*self._sandbox_process)
+        if self._sandbox_process is not None and not ended:
+            # KILL is asynchronous; allow the bounded session stop to settle.
+            deadline = time.monotonic() + 2.0
+            while not ended and time.monotonic() < deadline:
+                time.sleep(0.05)
+                ended = process_group_ended(*self._sandbox_process)
+        result = self._sandbox_placeholders.remove(process_groups_ended=ended)
+        self.metadata["sandbox_placeholder_cleanup"] = result
+        # Idempotent postcheck and final cleanup keep the invocation's receipt.
+        if ended:
+            self._sandbox_placeholders.close()
+            self._sandbox_placeholders = None
+        return tuple(Path(path) for path in result["removed"])
 
     def cleanup(self) -> None:
         self._protected_before = None
         self._process_evidence_path = None
+        try:
+            self.remove_sandbox_placeholders()
+        finally:
+            if self._sandbox_placeholders is not None:
+                self._sandbox_placeholders.close()
+                self._sandbox_placeholders = None
+            self._sandbox_process = None
         if self._scratch is not None:
             shutil.rmtree(self._scratch, ignore_errors=True)
             self._scratch = None
@@ -687,7 +720,7 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         self, stdout: str, stderr: str, extra_files: dict[str, str]
     ) -> str:
         # run_agent owns the protected-tree postcheck.
-        self.metadata = event_usage(stdout)
+        self.metadata.update(event_usage(stdout))
         _ = stderr
         _ = extra_files
         if self.invocation.last_message_file is None or not self.invocation.last_message_file.is_file():

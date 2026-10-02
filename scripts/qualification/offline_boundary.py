@@ -15,8 +15,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -239,7 +241,7 @@ def offline_overrides(inv: Invocation, pair: str, port: int) -> tuple[list[str],
     return command, env
 
 
-def execute(command, *, env, cwd, stdin, timeout=60):
+def execute(command, *, env, cwd, stdin, timeout=60, process_started=None):
     """Bounded process group, including timeout cleanup; no inherited stdin."""
     if timeout <= 0:
         return {"exit_code": -1, "stdout": "", "stderr": "probe time budget exhausted", "timed_out": True}
@@ -248,6 +250,9 @@ def execute(command, *, env, cwd, stdin, timeout=60):
                              text=True, start_new_session=True)
     timed_out = False
     try:
+        from provider_process import capture_process_identity
+        if process_started is not None:
+            process_started(child.pid, capture_process_identity(child.pid))
         stdout, stderr = child.communicate(stdin, timeout=max(.1, timeout))
     except subprocess.TimeoutExpired:
         timed_out = True
@@ -260,6 +265,13 @@ def execute(command, *, env, cwd, stdin, timeout=60):
         except ProcessLookupError:
             pass
     return {"exit_code": child.returncode, "stdout": stdout, "stderr": stderr, "timed_out": timed_out}
+
+
+def execute_invocation(inv, *, command, env, timeout):
+    """Bind cleanup authority to this process, including exceptional exits."""
+    bind = getattr(inv.adapter, "bind_sandbox_process", None)
+    kwargs = {"process_started": bind} if bind is not None else {}
+    return execute(command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text, timeout=timeout, **kwargs)
 
 
 def _sse(events):
@@ -585,6 +597,48 @@ def checks_passed(checks: list[dict]) -> bool:
     return bool(checks) and all(c["status"] in {"passed", "skipped"} for c in checks)
 
 
+def proven_protected_writes(api, expectations, inv):
+    """A guard change alone cannot distinguish a mount placeholder from a write."""
+    outputs = api.outputs()
+    changed = inv.adapter.metadata.get("protected_tree_changes", [])
+    proven = set()
+    for item in expectations:
+        if item.get("kind") != "missing-protected":
+            continue
+        root, target = Path(item["root"]), Path(item["target"])
+        if not any(Path(path).is_relative_to(root) for path in changed):
+            continue
+        if "WRITE_ESCAPED" not in (outputs.get(item["id"]) or ""):
+            continue
+        try:
+            if (not root.is_symlink() and stat.S_ISREG(target.lstat().st_mode)
+                    and target.read_bytes() == b"BOUNDARY_ESCAPE"):
+                proven.add(root)
+        except OSError:
+            pass
+    return proven
+
+
+def placeholder_check(inv, before, raw, after, removed, *, check_name="sandbox-placeholders-cleaned"):
+    """Record empty creations separately from deliberately injected write data."""
+    empty_hash = hashlib.sha256(b"").hexdigest()
+    def placeholders(snapshot):
+        found = []
+        for path, entry in snapshot.items():
+            if before.get(path) != ("absent",):
+                continue
+            if entry[0] == "file" and entry[1] == empty_hash:
+                found.append(path)
+            elif entry[0] == "directory" and not any(other.startswith(path + "/") for other in snapshot):
+                found.append(path)
+        return sorted(found)
+    remaining = placeholders(after)
+    return {"check": check_name, "status": "failed" if remaining else "passed",
+            "evidence": {"created": placeholders(raw), "removed": [str(path) for path in removed],
+                         "remaining": remaining,
+                         "cleanup": inv.adapter.metadata.get("sandbox_placeholder_cleanup")}}
+
+
 def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
     from permission_policy import classify_implementer_denial
     import re
@@ -600,7 +654,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
             changed = inv.adapter.metadata.get("protected_tree_changes", [])
             guarded = any(Path(path) == root or Path(path).is_relative_to(root) for path in changed)
             blocked = observed is not None and any(word in observed for word in ("WRITE_BLOCKED", "MKDIR_BLOCKED")) and not root.exists() and not root.is_symlink()
-            passed = blocked or (observed is not None and any(word in observed for word in ("WRITE_ESCAPED", "WRITE_BLOCKED")) and guarded)
+            passed = blocked or root in proven_protected_writes(api, expectations, inv)
             evidence = {"output": observed, "attempt": item["call"]["input"], "blocked": blocked,
                         "guard_stopped": guarded, "host_root": str(root)}
         elif kind == "credential-denial":
@@ -649,7 +703,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
                 inv.adapter._repository_root, inv.adapter._protected_paths, inv.adapter._scratch)
             checks.append({"check": item["label"] + "-classification", "status": "passed" if disposition == item["disposition"] else "failed", "evidence": disposition})
     guarded_targets = {Path(item["target"]) for item in expectations if item.get("kind") == "missing-protected"
-                       and any(Path(path).is_relative_to(Path(item["root"])) for path in inv.adapter.metadata.get("protected_tree_changes", []))}
+                       and Path(item["root"]) in proven_protected_writes(api, expectations, inv)}
     for target in set(forbidden):
         safe = target_unchanged(target, paths) or target in guarded_targets
         checks.append({"check": "unchanged:" + str(target), "status": "passed" if safe else "failed", "evidence": "guard stopped protected creation" if target in guarded_targets else "fixture target retained" if safe else "fixture target changed"})
@@ -664,8 +718,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
     else:
         for name in ("inbox", "outbox"):
             checks.append({"check": "missing-protection-remains-absent:" + name,
-                           "status": "passed" if not (inv.cwd / name).exists() or any(
-                               Path(path).is_relative_to(inv.cwd / name) for path in inv.adapter.metadata.get("protected_tree_changes", []))
+                           "status": "passed" if not (inv.cwd / name).exists() or inv.cwd / name in proven_protected_writes(api, expectations, inv)
                            else "failed", "evidence": str(inv.cwd / name)})
     return checks
 
@@ -785,9 +838,9 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                     if selected.role == "implementer":
                         inv.adapter.before_provider_process()
                     before_protected = protected_snapshot(inv.cwd)
-                    run = execute(command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text,
-                                  timeout=deadline - time.monotonic())
-                    # The production adapter removes the sandbox's empty config.worktree placeholders.
+                    run = execute_invocation(inv, command=command, env=env, timeout=deadline - time.monotonic())
+                    raw_protected = protected_snapshot(inv.cwd)
+                    # Use the same process-bound cleanup as the production postcheck.
                     placeholders = getattr(inv.adapter, "remove_sandbox_placeholders", lambda: ())()
                     after_protected = protected_snapshot(inv.cwd)
                 (out / "sandbox-placeholders-removed.json").write_text(json_text([str(path) for path in placeholders]) + "\n")
@@ -803,13 +856,14 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                         inv.adapter.after_provider_process()
                     except AgentPermissionError:
                         guard_stopped = True
-                missing_roots = [Path(item["root"]) for item in expectations if item.get("kind") == "missing-protected"]
-                guarded_missing_only = guard_stopped and all(
-                    any(Path(path).is_relative_to(root) for root in missing_roots)
+                proven_roots = proven_protected_writes(api, expectations, inv)
+                guarded_missing_only = guard_stopped and bool(proven_roots) and all(
+                    any(Path(path).is_relative_to(root) for root in proven_roots)
                     for path in inv.adapter.metadata.get("protected_tree_changes", []))
                 checks.extend(evaluate(api, expectations, forbidden, inv, paths))
                 changes = protected_changes(before_protected, after_protected)
-                checks.append({"check": "protected-trees-unchanged", "status": "passed" if not changes or guarded_missing_only else "failed",
+                checks.append(placeholder_check(inv, before_protected, raw_protected, after_protected, placeholders))
+                checks.append({"check": "protected-trees-unchanged", "status": "passed" if (not changes and not guard_stopped) or guarded_missing_only else "failed",
                                "evidence": {"changes": changes, "guard_stopped": guard_stopped, "guarded_missing_only": guarded_missing_only, "baseline": "after adapter preparation, immediately before CLI start"}})
                 if selected.role == "implementer":
                     checks.append({"check": "parent-decoy-filtered", "status": "passed" if "DAO_DECOY_TOKEN" not in inv.env else "failed", "evidence": sorted(inv.env)})
@@ -829,15 +883,53 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                         checks.append({"check": "protected-denials-stop-adapter", "status": "passed" if guard_stopped else "failed",
                                        "evidence": {"guard_stopped": guard_stopped, **inv.adapter.metadata}})
             if selected.role == "implementer":
-                with adapter_invocation(pair, paths["repo"], identity, "Finish with the request-bound native result.", roots) as inv:
-                    api = FakeAPI(pair, [], valid_implementer_result(inv.bundle))
+                with adapter_invocation(pair, paths["repo"], identity, "Execute the supplied read-only shell command, then finish with the request-bound native result.", roots) as inv:
+                    normal_call = ({"name": "exec_command", "input": {"cmd": "printf DAO_NORMAL_OK", "max_output_tokens": 1200}}
+                                   if pair in CODEX_BOUNDARIES else  # allowlist:provider -- transport: normal shell call uses the selected provider tool
+                                   {"name": "Bash", "input": {"command": "printf DAO_NORMAL_OK"}})
+                    api = FakeAPI(pair, [normal_call], valid_implementer_result(inv.bundle))
                     with api.serve() as port:
                         command, env = offline_overrides(inv, pair, port)
-                        run = execute(command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text,
-                                      timeout=deadline - time.monotonic())
+                        before_protected = protected_snapshot(inv.cwd)
+                        run = execute_invocation(inv, command=command, env=env, timeout=deadline - time.monotonic())
+                        raw_protected = protected_snapshot(inv.cwd)
+                        placeholders = getattr(inv.adapter, "remove_sandbox_placeholders", lambda: ())()
+                        after_protected = protected_snapshot(inv.cwd)
+                    # Preserve the raw measurement even if the postcheck rejects
+                    # real content left by this otherwise read-only invocation.
+                    for name, snapshot in (("before", before_protected), ("raw", raw_protected), ("after", after_protected)):
+                        (out / f"e2e-protected-{name}.json").write_text(json_text(snapshot) + "\n")
+                    (out / "e2e-sandbox-placeholders-removed.json").write_text(json_text([str(path) for path in placeholders]) + "\n")
                     (out / "e2e-requests.jsonl").write_text("".join(json_text(b) + "\n" for b in api.bodies))
                     (out / "e2e-stdout.jsonl").write_text(run["stdout"])
                     (out / "e2e-stderr.txt").write_text(run["stderr"])
+                    observed = api.outputs().get("probe_0")
+                    tool_exit_codes = [int(match) for match in re.findall(
+                        r"(?:Process exited with code|Exit code:)\s*(-?\d+)", observed or "", re.I)]
+                    ran = (observed is not None and "DAO_NORMAL_OK" in [line.strip() for line in observed.splitlines()]
+                           and all(code == 0 for code in tool_exit_codes)
+                           and not api.errors().get("probe_0", False)
+                           and run["exit_code"] == 0 and not run["timed_out"])
+                    checks.append({"check": "normal-tool-call-ran", "status": "passed" if ran else "failed",
+                                   "evidence": {"call": normal_call, "output": observed,
+                                                "tool_exit_codes": tool_exit_codes,
+                                                "cli_exit_code": run["exit_code"], "timed_out": run["timed_out"]}})
+                    changes = protected_changes(before_protected, after_protected)
+                    cleaned = placeholder_check(inv, before_protected, raw_protected, after_protected, placeholders,
+                                                check_name="normal-placeholders-cleaned")
+                    cleaned["evidence"]["raw_changes"] = protected_changes(before_protected, raw_protected)
+                    if changes:
+                        cleaned["status"] = "failed"
+                    checks.append(cleaned)
+                    from agent_adapters import AgentPermissionError
+                    guard_stopped = False
+                    try:
+                        inv.adapter.after_provider_process()
+                    except AgentPermissionError:
+                        guard_stopped = True
+                    checks.append({"check": "protected-trees-unchanged", "status": "passed" if not changes and not guard_stopped else "failed",
+                                   "evidence": {"changes": changes, "guard_stopped": guard_stopped,
+                                                "baseline": "normal invocation with one read-only tool call"}})
                     checks.append(end_to_end_check(inv, run))
     except Exception as exc:
         checks.append({"check": "execution", "status": "failed", "evidence": f"{type(exc).__name__}: {exc}"})

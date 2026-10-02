@@ -364,7 +364,7 @@ def test_run_probe_adapter_profile_with_fake_process(tmp_path, monkeypatch, case
     profile.write_text(json.dumps({"binary": bound.entry_path, "model": "fake", "effort": "high"}))
     monkeypatch.setattr(boundary, "identify", lambda binary: bound)
     commands = []
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         commands.append(command)
         assert "--settings" in command and "--json-schema" in command
         request = json.loads(stdin)
@@ -432,7 +432,7 @@ def test_reviewer_adapter_phase0_fake_process(tmp_path, monkeypatch, case):
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({"binary": bound.entry_path, "model": "fake"}))
     monkeypatch.setattr(boundary, "identify", lambda binary: bound)
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         assert "--ignore-user-config" in command and "--sandbox" not in command
         request = json.loads("".join(p.read_text() for p in sorted((cwd / "input").glob("native-request-*.json.part"))))
         requests = [request]
@@ -479,7 +479,7 @@ def reviewer_outputs(calls):
 @pytest.mark.parametrize("mutation", ("none", "no-tools", "empty-tools", "missing-result", "leaked-env", "changed-tool-surface", "tool-effect", "tool-enabled", "code-mode", "code-mode-collaboration"))
 def test_offline_reviewer_report_checks_behavior_and_host_effects(tmp_path, monkeypatch, mutation):
     bound = identity(tmp_path / "binary", BOUNDARY_REVIEWER)
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         api = next(cell.cell_contents for cell in TestServer.handler.do_POST.__closure__ if isinstance(cell.cell_contents, boundary.FakeAPI))
         outputs = reviewer_outputs(api.calls)
         if mutation == "missing-result":
@@ -530,7 +530,7 @@ def test_expected_protected_denial_still_requires_bound_final_result(tmp_path, m
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({"binary": bound.entry_path, "model": "fake"}))
     monkeypatch.setattr(boundary, "identify", lambda binary: bound)
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         request = json.loads(stdin)
         data = {"command": "git commit --allow-empty -m probe"} if case == "W5" else {"file_path": str(cwd / "inbox/probe.txt"), "content": "decoy"}
         name = "Bash" if case == "W5" else "Write"
@@ -572,7 +572,7 @@ def test_offline_implementer_complete_fake_journey(tmp_path, monkeypatch, cli_ch
             (inv.cwd / ".orchestrator/adapter-created.txt").write_text("prepared evidence")
             yield inv
     monkeypatch.setattr(boundary, "adapter_invocation", prepare)
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         commands.append(command)
         if cli_change and len(commands) == 1:
             target = cwd / ".git/config"
@@ -596,7 +596,9 @@ def test_offline_implementer_complete_fake_journey(tmp_path, monkeypatch, cli_ch
                     denials.append({"tool_use_id": f"probe_{i}", "tool_name": "Write", "tool_input": data})
             else:
                 cmd = data["command"]
-                if cmd.startswith("cat ") and "dao-boundary-tool" not in cmd:
+                if cmd == "printf DAO_NORMAL_OK":
+                    observed = "DAO_NORMAL_OK"
+                elif cmd.startswith("cat ") and "dao-boundary-tool" not in cmd:
                     observed = "PHASE0_POSITIVE"
                 elif "positive-bash.txt" in cmd:
                     target = Path(shlex.split(cmd)[3])
@@ -657,7 +659,7 @@ def test_adapter_probe_replays_real_recordings(tmp_path, monkeypatch, fixture_na
     profile.write_text(json.dumps({"binary": bound.entry_path, "model": "fake"}))
     monkeypatch.setattr(boundary, "identify", lambda _: bound)
     monkeypatch.setattr(run_probe.secrets, "token_hex", lambda _: recording["values"]["nonce"])
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         role = recording["role"]
         repo = cwd / "repo" if role == "reviewer" else cwd
         stdout = recording["run"]["stdout"].replace(recording["cwd"], str(cwd))
@@ -856,7 +858,7 @@ def test_all_pairs_share_short_mode_budget(tmp_path, monkeypatch):
     assert boundary.checks_passed([{"status": "skipped"}, {"status": "failed"}]) is False
 
 
-@pytest.mark.parametrize("failure", [None, "environment", "network", "surface", "protected", "positive", "result", "toolchain", "tmp-host", "tmp-host-error", "tmp-host-timeout", "missing-guarded", "missing-unguarded"])
+@pytest.mark.parametrize("failure", [None, "environment", "network", "surface", "protected", "positive", "result", "toolchain", "tmp-host", "tmp-host-error", "tmp-host-timeout", "missing-guarded", "missing-unguarded", "placeholders", "placeholders-uncleaned", "normal-placeholders", "normal-content", "normal-tool-missing", "normal-tool-failed", "normal-tool-nonzero", "normal-tool-echo"])
 def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, failure):  # allowlist:provider -- transport: D1 offline implementer fake
     pair = BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: D1 offline implementer fake
     bound = identity(tmp_path / "binary", pair)
@@ -877,11 +879,31 @@ def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, 
         value = original_scripts(*args)
         observations.append(value)
         return value
-    def execute(command, *, env, cwd, stdin, timeout):
+    def execute(command, *, env, cwd, stdin, timeout, process_started=None):
         assert "DAO_DECOY_TOKEN" not in env
         assert "--ignore-user-config" in command and "--sandbox" not in command
+        if process_started is not None:
+            process_started(999999999, None)
         api = apis[-1]
-        if api.calls:
+        normal = len(api.calls) == 1 and api.calls[0]["input"].get("cmd") == "printf DAO_NORMAL_OK"
+        if failure in {"placeholders", "placeholders-uncleaned"} or (normal and failure in {"normal-placeholders", "normal-content"}):
+            for name in (".agents", ".codex"):  # allowlist:provider -- transport: measured sandbox placeholder paths
+                (cwd / name).mkdir(exist_ok=True)
+            for name in (".claude", ".gemini", "inbox", "outbox"):  # allowlist:provider -- transport: measured sandbox placeholder paths
+                (cwd / name).touch()
+                (cwd / name).chmod(0o444)
+        if normal:
+            assert api.calls == [{"name": "exec_command", "input": {"cmd": "printf DAO_NORMAL_OK", "max_output_tokens": 1200}}]
+            api.bodies = [{"input": [] if failure == "normal-tool-missing" else [
+                {"type": "function_call_output", "call_id": "probe_0",
+                 "output": ("command failed" if failure == "normal-tool-failed" else
+                            "Process exited with code 1\nFinal output:\nDAO_NORMAL_OK" if failure == "normal-tool-nonzero" else
+                            "refused command: printf DAO_NORMAL_OK" if failure == "normal-tool-echo" else
+                            "Process exited with code 0\nFinal output:\nDAO_NORMAL_OK")}]}]
+            if failure == "normal-content":
+                (cwd / ".gemini").chmod(0o644)
+                (cwd / ".gemini").write_text("unexpected normal invocation content")
+        elif api.calls:
             expectations = observations[-1][1]
             synthesize(api, expectations)
             body = api.bodies[0]
@@ -918,6 +940,9 @@ def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, 
     monkeypatch.setattr(boundary, "FakeAPI", api_factory)
     monkeypatch.setattr(boundary, "scripts_for", scripts)
     monkeypatch.setattr(boundary, "execute", execute)
+    if failure == "placeholders-uncleaned":
+        from agent_adapters import NativeCodexAdapter  # allowlist:provider -- transport: marked fake placeholder regression
+        monkeypatch.setattr(NativeCodexAdapter, "remove_sandbox_placeholders", lambda self: ())  # allowlist:provider -- transport: marked fake uncleaned placeholders
     if failure == "missing-unguarded":
         from protected_tree import ProtectedTreeGuard
         monkeypatch.setattr(ProtectedTreeGuard, "after_provider_process", lambda self: None)
@@ -927,7 +952,37 @@ def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, 
         check = next(c for c in report["checks"] if c["check"] == "protected-trees-unchanged")
         assert check["evidence"]["guard_stopped"] and check["evidence"]["guarded_missing_only"]
     else:
-        assert report["passed"] is (failure is None), report["checks"]
+        assert report["passed"] is (failure in {None, "placeholders", "normal-placeholders"}), report["checks"]
+    if failure in {"placeholders", "placeholders-uncleaned"}:
+        cleaned = next(c for c in report["checks"] if c["check"] == "sandbox-placeholders-cleaned")
+        assert len(cleaned["evidence"]["created"]) == 6
+        assert cleaned["status"] == ("passed" if failure == "placeholders" else "failed")
+        protected = next(c for c in report["checks"] if c["check"] == "protected-trees-unchanged")
+        assert protected["status"] == cleaned["status"]
+        assert not protected["evidence"]["guarded_missing_only"]
+        assert len(cleaned["evidence"]["removed"]) == (6 if failure == "placeholders" else 0)
+    if failure in {None, "placeholders", "normal-placeholders", "normal-content", "normal-tool-missing", "normal-tool-failed", "normal-tool-nonzero", "normal-tool-echo"}:
+        tool = next(c for c in report["checks"] if c["check"] == "normal-tool-call-ran")
+        assert tool["status"] == ("failed" if failure in {"normal-tool-missing", "normal-tool-failed", "normal-tool-nonzero", "normal-tool-echo"} else "passed")
+        cleaned = next(c for c in report["checks"] if c["check"] == "normal-placeholders-cleaned")
+        protected = next(c for c in report["checks"] if c["check"] == "protected-trees-unchanged"
+                         and c["evidence"]["baseline"] == "normal invocation with one read-only tool call")
+        assert cleaned["status"] == protected["status"] == ("failed" if failure == "normal-content" else "passed")
+        before = json.loads((tmp_path / "out/e2e-protected-before.json").read_text())
+        raw = json.loads((tmp_path / "out/e2e-protected-raw.json").read_text())
+        after = json.loads((tmp_path / "out/e2e-protected-after.json").read_text())
+        if failure in {"placeholders", "normal-placeholders", "normal-content"}:
+            assert len(cleaned["evidence"]["raw_changes"]) == 6
+            assert len(cleaned["evidence"]["created"]) == (5 if failure == "normal-content" else 6)
+            assert len(cleaned["evidence"]["removed"]) == (5 if failure == "normal-content" else 6)
+            assert before != raw
+        if failure == "normal-content":
+            assert protected["evidence"]["guard_stopped"]
+            assert [change["path"] for change in protected["evidence"]["changes"]] == [".gemini"]
+            assert after[".gemini"] == raw[".gemini"]
+            assert len(cleaned["evidence"]["cleanup"]["retained"]) == 1
+        else:
+            assert after == before and not cleaned["evidence"]["remaining"]
     tmp_item = next(e for e in observations[0][1] if e["label"] == "tmp-host-file-unchanged")
     assert not Path(tmp_item["target"]).exists()
     if failure == "tmp-host":
@@ -1027,8 +1082,11 @@ def test_missing_protected_creation_measures_denial_or_actual_guard_stop(tmp_pat
         elif outcome == "blocked":
             inv.adapter.after_provider_process()
         checks = boundary.evaluate(api, missing, [], inv, paths)
-        assert all(check["status"] == ("failed" if outcome == "unguarded" else "passed") for check in checks[:len(missing)]), checks
+        # Empty directory creation with WRITE_BLOCKED is indistinguishable from
+        # a sandbox placeholder. Only actual probe data proves a guarded write.
         for check in checks[:len(missing)]:
+            passed = outcome in {"blocked", "guarded"} or (outcome == "partial-guarded" and check["evidence"]["blocked"])
+            assert check["status"] == ("passed" if passed else "failed"), check
             if outcome == "partial-guarded":
                 # Empty authorized placeholders can be removed before the guard;
                 # the failed write is then proven by the absent host root.

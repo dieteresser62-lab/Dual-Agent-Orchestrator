@@ -10,7 +10,6 @@ from pathlib import Path
 import shlex
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import threading
@@ -32,8 +31,8 @@ from native_provider_schema import (  # allowlist:provider -- transport: product
     codex_implementer_permission_config, compatible_cli_version,  # allowlist:provider -- transport: production permission helper
 )
 from provider_identity import capture_provider_identity, executable_candidates
-from provider_process import capture_process_identity, observe_identity, ProcessStatus, signal_process_group
-from protected_tree import outermost_protected_paths
+from provider_process import capture_process_identity, signal_process_group
+from protected_tree import outermost_protected_paths, missing_protected_paths, cleanup_sandbox_placeholders, process_group_ended
 from toolchain_paths import create_private_scratch, validate_private_scratch
 
 
@@ -62,18 +61,7 @@ def interrupted(signum, frame):
 
 
 def group_ended(group):
-    identity = group["identity"]
-    if identity is not None:
-        return observe_identity(identity).status is ProcessStatus.ENDED
-    # A fast command may exit before /proc identity capture. ESRCH proves its
-    # group is gone; any live/foreign/unknown group vetoes placeholder removal.
-    try:
-        os.killpg(group["pid"], 0)
-    except ProcessLookupError:
-        return True
-    except OSError:
-        pass
-    return False
+    return process_group_ended(group["pid"], group["identity"])
 
 
 def signal_command_group(child, group, sig):
@@ -107,82 +95,11 @@ def stop_command(child, group):
             raise RuntimeError("Prozessgruppe nicht sicher beendet; keine Platzhalterbereinigung möglich.")
 
 
-@contextmanager
-def parent_directory(repo_fd, relative):
-    """Anchor all metadata and removals to the original repo, without links."""
-    fd = os.dup(repo_fd)
-    parts = Path(relative).parts
-    try:
-        for part in parts[:-1]:
-            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = next_fd
-        yield fd, parts[-1]
-    finally:
-        os.close(fd)
-
-
-def missing_protected_paths(repo, repo_fd, protected):
-    missing = []
-    # These are the effective mounts used by the production permission helper;
-    # nested absent paths under the same mount do not create extra placeholders.
-    for path in outermost_protected_paths(protected):
-        if path == repo or not path.is_relative_to(repo):
-            continue
-        relative = path.relative_to(repo).as_posix()
-        try:
-            with parent_directory(repo_fd, relative) as (fd, name):
-                os.stat(name, dir_fd=fd, follow_symlinks=False)
-        except FileNotFoundError:
-            missing.append(relative)
-    return tuple(missing)
-
-
 def placeholder_cleanup(repo_fd, candidates, groups):
-    result = {"missing_before": list(candidates), "removed": [], "retained": [], "warnings": [],
-              "process_groups_ended": all(group["drained"] and group_ended(group) for group in groups)}
-    if not result["process_groups_ended"]:
-        result["retained"] = list(candidates)
-        result["warnings"].append("Prozessgruppe noch aktiv oder Ende unbekannt; Platzhalter nicht entfernt; bitte selbst prüfen.")
-        return result
-    for relative in candidates:
-        try:
-            with parent_directory(repo_fd, relative) as (fd, name):
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                if info.st_uid != os.getuid():
-                    raise ValueError("foreign owner")
-                if stat.S_ISDIR(info.st_mode):
-                    directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-                    try:
-                        opened = os.fstat(directory)
-                        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-                            raise ValueError("directory changed")
-                        with os.scandir(directory) as entries:
-                            if next(entries, None) is not None:
-                                raise ValueError("nonempty directory")
-                    finally:
-                        os.close(directory)
-                elif not (stat.S_ISREG(info.st_mode) and info.st_size == 0):
-                    raise ValueError("not an empty regular file or directory")
-                # Recheck metadata immediately before removal. rmdir also
-                # atomically refuses any directory populated in the meantime.
-                current = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                signature = lambda entry: (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_uid,
-                                           entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns)
-                if signature(current) != signature(info):
-                    raise ValueError("placeholder changed")
-                if stat.S_ISDIR(info.st_mode):
-                    os.rmdir(name, dir_fd=fd)
-                else:
-                    os.unlink(name, dir_fd=fd)
-                result["removed"].append(relative)
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError):
-            result["retained"].append(relative)
-            result["warnings"].append(f"unerwarteter Inhalt an Schutzpfad {relative} nach der Prüfung; bitte selbst prüfen")
-    return result
-
+    return cleanup_sandbox_placeholders(
+        repo_fd, candidates,
+        process_groups_ended=all(group["drained"] and group_ended(group) for group in groups),
+    )
 
 class CheckTimeout(RuntimeError):
     """A short operator message with technical details reserved for JSON."""

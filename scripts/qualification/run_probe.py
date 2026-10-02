@@ -552,8 +552,8 @@ def _run_adapter_case(*, case_id, profile_name, profile_file, output, live, fake
             for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):  # allowlist:provider -- transport: credential environment or existence-only Home check
                 if name in os.environ:
                     env[name] = os.environ[name]
-        run = boundary.execute(inv.command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text,
-                               timeout=profile.get("timeout_seconds", 600))
+        run = boundary.execute_invocation(inv, command=inv.command, env=env,
+                                          timeout=profile.get("timeout_seconds", 600))
         getattr(inv.adapter, "remove_sandbox_placeholders", lambda: ())()
         after = _semantic_capture(observed)
         native_valid = False

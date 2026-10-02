@@ -221,3 +221,159 @@ def test_parent_path_keeps_env_node_identity_through_run_agent(tmp_path, monkeyp
         assert postchecks == [True]
     finally:
         adapter.cleanup()
+
+
+@pytest.mark.parametrize("end", ["normal", "timeout", "silence", "abort"])
+def test_marked_fake_placeholders_cleaned_on_every_process_exit(tmp_path, end):
+    import os
+    import sys
+    import agent_runtime
+    adapter, paths, _, _ = prepared(tmp_path)
+    entry = paths["repo"] / "placeholder-fake.py"
+    entry.write_text("# dao-probe-fake-v1\nfrom pathlib import Path\nimport time\n"
+                     "Path('.agents').mkdir()\nPath('.gemini').touch()\nPath('.gemini').chmod(0o444)\n"
+                     + ("time.sleep(30)\n" if end != "normal" else ""))
+    adapter.stall_timeout_seconds = 0.2 if end == "silence" else 0
+    adapter.tool_timeout_seconds = 0
+    adapter.before_provider_process()
+    def abort(pid):
+        if end == "abort":
+            import time
+            deadline = time.monotonic() + 5
+            while not (paths["repo"] / ".gemini").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert (paths["repo"] / ".gemini").exists()
+            raise KeyboardInterrupt
+    try:
+        try:
+            result = agent_runtime._run_agent_process(
+                adapter, [sys.executable, str(entry)], None,
+                config=agent_runtime.OrchestratorConfig(repo_root=paths["repo"], agent_live_stream=False),
+                env=os.environ.copy(), execution_root=paths["repo"],
+                timeout_seconds=0.2 if end == "timeout" else 5, agent_key="marked-fake",
+                process_started=abort,
+            )
+        except (agent_runtime.AgentProcessError, agent_runtime.subprocess.TimeoutExpired, KeyboardInterrupt):
+            assert end != "normal"
+        else:
+            assert end == "normal" and result.returncode == 0
+        adapter.after_provider_process()
+        receipt = adapter.metadata["sandbox_placeholder_cleanup"]
+        assert receipt["process_groups_ended"]
+        assert set(receipt["removed"]) == {str(paths["repo"] / name) for name in (".agents", ".gemini")}
+        assert not receipt["retained"]
+        assert adapter.remove_sandbox_placeholders() == ()
+        assert not (paths["repo"] / ".agents").exists() and not (paths["repo"] / ".gemini").exists()
+    finally:
+        adapter.cleanup()
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink", "dangling", "foreign", "live", "unknown", "changed-signature"])
+def test_cleanup_retains_unexpected_content_and_unproven_end(tmp_path, monkeypatch, kind):
+    import os
+    import protected_tree
+    adapter, paths, _, _ = prepared(tmp_path)
+    root = paths["repo"]
+    outside = tmp_path / "outside"
+    outside.touch()
+    try:
+        adapter.before_provider_process()
+        candidate = root / ".gemini"
+        if kind == "file": candidate.write_text("operator data")
+        elif kind == "directory":
+            candidate.mkdir()
+            (candidate / "keep").touch()
+        elif kind in {"symlink", "dangling"}: candidate.symlink_to(outside if kind == "symlink" else tmp_path / "absent")
+        else: candidate.touch()
+        monkeypatch.setattr(protected_tree, "process_group_ended", lambda *args: kind not in {"live", "unknown"})
+        adapter.bind_sandbox_process(999999999, None)
+        if kind in {"foreign", "changed-signature"}:
+            original = os.stat
+            calls = 0
+            def altered(name, **kwargs):
+                nonlocal calls
+                info = original(name, **kwargs)
+                if name == ".gemini" and kwargs.get("dir_fd") is not None:
+                    calls += 1
+                    values = {field: getattr(info, field) for field in dir(info) if field.startswith("st_")}
+                    if kind == "foreign": values["st_uid"] += 1
+                    elif calls > 1: values["st_ino"] += 1
+                    return SimpleNamespace(**values)
+                return info
+            monkeypatch.setattr(protected_tree.os, "stat", altered)
+        with pytest.raises(AgentPermissionError, match="protected trees"):
+            adapter.after_provider_process()
+        assert os.path.lexists(candidate)
+        assert outside.read_bytes() == b""
+        assert str(candidate) in adapter.metadata["sandbox_placeholder_cleanup"]["retained"]
+    finally:
+        adapter.cleanup()
+
+
+def test_cleanup_preserves_preexisting_empty_paths_and_external_mounts(tmp_path, monkeypatch):
+    import protected_tree
+    adapter, paths, _, _ = prepared(tmp_path)
+    root = paths["repo"]
+    present = root / ".gemini"
+    present.touch()
+    external = tmp_path / "external-protected"
+    adapter._protected_paths += (external,)
+    try:
+        adapter.before_provider_process()
+        external.mkdir()
+        adapter.bind_sandbox_process(999999999, None)
+        monkeypatch.setattr(protected_tree, "process_group_ended", lambda *args: True)
+        adapter.after_provider_process()
+        assert present.exists() and present.read_bytes() == b""
+        assert not external.exists()
+        assert str(present) not in adapter.metadata["sandbox_placeholder_cleanup"]["missing_before"]
+        assert str(external) in adapter.metadata["sandbox_placeholder_cleanup"]["removed"]
+    finally:
+        adapter.cleanup()
+
+
+def test_placeholder_cleanup_keeps_replaced_parent_and_symlink_ancestors(tmp_path):
+    from protected_tree import SandboxPlaceholders
+    parent = tmp_path / "original"
+    parent.mkdir()
+    candidate = parent / "missing"
+    placeholders = SandboxPlaceholders((candidate,))
+    moved = tmp_path / "moved"
+    parent.rename(moved)
+    parent.mkdir()
+    candidate.write_text("new parent data")
+    (moved / "missing").touch()
+    try:
+        result = placeholders.remove(process_groups_ended=True)
+        assert result["removed"] == [str(candidate)]
+        assert candidate.read_text() == "new parent data"
+        assert not (moved / "missing").exists()
+    finally:
+        placeholders.close()
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent, target_is_directory=True)
+    linked = SandboxPlaceholders((alias / "other",))
+    (parent / "other").touch()
+    try:
+        assert linked.remove(process_groups_ended=True)["removed"] == []
+        assert (parent / "other").exists()
+    finally:
+        linked.close()
+
+
+@pytest.mark.parametrize("status", ["running", "unknown", "ended"])
+def test_placeholder_process_proof_requires_ended_session(monkeypatch, status):
+    from protected_tree import process_group_ended
+    import provider_process
+    monkeypatch.setattr(provider_process, "observe_identity", lambda _: SimpleNamespace(status=provider_process.ProcessStatus(status)))
+    assert process_group_ended(123, object()) is (status == "ended")
+
+
+@pytest.mark.parametrize("error", [ProcessLookupError, PermissionError, None])
+def test_placeholder_fast_exit_fallback_requires_esrch(monkeypatch, error):
+    import protected_tree
+    def killpg(pid, sig):
+        assert (pid, sig) == (123, 0)
+        if error is not None: raise error
+    monkeypatch.setattr(protected_tree.os, "killpg", killpg)
+    assert protected_tree.process_group_ended(123, None) is (error is ProcessLookupError)
