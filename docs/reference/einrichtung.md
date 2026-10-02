@@ -43,7 +43,11 @@ Prüfe vor dem Einrichtungscommit die globale und die im Projekt wirksame
 Git-Identität nach 1.1; fehlt sie, frage nach Name, E-Mail und Geltungsbereich.
 Führe die Vorabprüfung aus 2.3 ohne parallelen Lauf aus, bei Unterprozess-Tests
 auch einen gezielten Test; ergänze bei belegter Sandbox-Grenze die optionale
-Regel aus 2.4.
+Regel aus 2.4. Führe nach jedem Update einer der beiden CLIs oder bei einer
+Erstinstallation oberhalb der Messstände aus 1.1 den Offline-Quicktest aus:
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/probe_reviewer.py boundary-check --pair all --out /tmp/boundary-update
+Ein belegter erfolgreicher Test derselben installierten CLI-Versionen genügt;
+Teil 1 allein als erledigt zu übernehmen genügt nicht. Prüfe auch 1.4.
 ```
 
 Für einen **Neuanfang** lautet der mittlere Satz stattdessen: *„Lege nach
@@ -56,20 +60,25 @@ nach, während Codex in seiner Sandbox meist keinen Netzzugang hat.
 
 **Fertig ist die Einrichtung**, wenn der Bericht des Agenten zeigt:
 
-- `run_task --help` funktioniert und das aufgelöste Ziel stimmt mit 1.3 überein;
+- `run_task --help` funktioniert, das aufgelöste Ziel stimmt mit 1.3 überein
+  und der Probelauf aus 1.4 endet mit Exit `0`;
 - die im Projekt wirksame Git-Identität ist vor dem Commit geprüft (1.1);
 - das Projekt steht auf dem Hauptbranch, `git status --short` ist leer;
 - `.gitignore`, `orchestrator.toml` und `AGENTS.md` sind committet;
-- der Testbefehl – und jeder zusätzliche Prüfbefehl aus 2.3 – ist grün;
+- der Testbefehl und jeder zusätzliche Prüfbefehl aus 2.3 sind auf dem Host
+  in der späteren Startumgebung grün;
 - `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`
   wurde im Projekt ausgeführt; Werkzeugversionen und nötige
   `toolchain_read_roots` sind nach 2.3 geprüft und Warnungen geklärt;
 - bei Unterprozess-Tests ist ein gezielter Test geprüft; bei belegter
-  Sandbox-Grenze ist die optionale Regel aus 2.4 ergänzt;
+  Sandbox-Grenze ist die optionale Regel aus 2.4 ergänzt und der Host-Test grün.
+  Der gezielte Sandbox-Test darf dann mit Exit `1` bleiben: Die Warnung ist geklärt;
 - `AGENTS.md` ist rollenneutral; vorhandene Rollendateien sind als
   Handbetrieb-Dateien gekennzeichnet (2.4);
-- Merge-Wahl und mögliche `post-merge`-Hooks sind mit Ihnen geklärt;
-  `merge_completed_branch` hält die Wahl ausdrücklich fest (2.10);
+- Merge-Wahl und mögliche `post-merge`-Hooks sind vor dem Einrichtungscommit
+  mit Ihnen geklärt; `merge_completed_branch` hält die Wahl fest (2.4/2.10);
+- der Offline-Quicktest aus 2.3 ist bei CLI-Updates oder einer Erstinstallation
+  oberhalb der Messstände aus 1.1 erfolgreich belegt, sonst als nicht nötig begründet;
 - der Ordner `inbox/` existiert.
 
 Die erste Idee (2.6) und den Start (2.7) übernehmen Sie selbst. Diese
@@ -116,7 +125,7 @@ Merge können Sie in der Konfiguration abschalten.
 | Linux oder Windows mit WSL2 und lesbarem `/proc` | – | `uname -s` (Linux), `cat /proc/version` (unter WSL2 mit `microsoft-standard-WSL2`), `test -r /proc/self/status && echo /proc-lesbar` |
 | Python | 3.11 | `python3 --version` |
 | Git | – | `git --version` |
-| eine Git-Identität | – | `git config user.name` und `git config user.email` |
+| eine Git-Identität | – | global jetzt, im Projekt vor dem ersten Commit prüfen (siehe unten) |
 | Codex CLI | **0.159.2 empfohlen** (Registerminimum 0.156.1; dessen Unterstützung der gehärteten Aufrufform ist ungeprüft) | `codex --version` |
 | Claude Code | 2.1.283 | `claude --version` |
 | ein ChatGPT-Konto mit Zugriff auf die **Modellfamilie Sol** (derzeit `gpt-6.1-sol`, Auflösung beim Laufstart) | – | `codex login` |
@@ -145,19 +154,29 @@ mit `readlink -f "$(command -v codex)"`.
 
 Die gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit
 0.159.2 gemessen, Claude Code mit 2.1.283. Führen Sie nach jedem Update
-beider CLIs den Offline-Quicktest aus 2.3 aus, ebenso bei einer Erstinstallation
-mit einer neueren Version als diesen Messständen. Fehlende Pflichtschalter werden abgewiesen. Die Projekt-Vorabprüfung
+einer der beiden CLIs den Offline-Quicktest aus 2.3 aus, ebenso bei einer
+Erstinstallation mit einer neueren Version als diesen Messständen. Fehlende Pflichtschalter werden abgewiesen. Die Projekt-Vorabprüfung
 aus 2.3 ergänzt dies mit den Messgrenzen aus 4.3.
 
 Der Orchestrator committet unter der Git-Identität des Projekts. Prüfen Sie
-im Projektordner sowohl die globale als auch die dort wirksame Identität:
+in Teil 1 zunächst nur die globale Konfiguration:
 
 ```bash
 git config --global --get user.name
 git config --global --get user.email
+```
+
+Die wirksame Identität prüfen Sie erst im vorhandenen oder in 3.1 angelegten
+Git-Projektordner, vor dessen erstem Commit:
+
+```bash
 git config --get user.name
 git config --get user.email
 ```
+
+Ein fehlender Wert zeigt **keine Ausgabe und Exit `1`** (`echo $?` direkt
+nach dem jeweiligen Befehl). Fehlende globale Werte sind in Ordnung, wenn
+beide Werte im Projekt wirksam sind.
 
 Der Orchestrator committet im gestarteten Projekt-Checkout; er erstellt dafür
 keinen weiteren Klon oder Worktree. Eine lokale Identität genügt dort und wird
@@ -332,8 +351,13 @@ merge_completed_branch = true  # mit Ihnen wählen: false für manuellen Merge (
 
 </details>
 
-Passen Sie die Pfade an Ihr Projekt an, etwa `test/` statt `tests/`. Bei
-Überlappung gilt: **generated vor tests vor documentation vor productive**;
+Passen Sie die Pfade an Ihr Projekt an, etwa `test/` statt `tests/`; entfernen
+Sie ungenutzte Vorlageneinträge. Bewusst künftig erwartete Dateien dürfen bleiben.
+Muster gelten relativ zur Projektwurzel. `*` erfasst hier auch `/`: `*.md`
+trifft also `README.md` **und** `src/notes.md`. `docs/**` trifft Dateien beliebig
+tief unter `docs/`, nicht den Ordner selbst; ein führendes `**/` darf auch fehlen,
+etwa bei `**/__pycache__/**`. Bei Überlappung gilt:
+**generated vor tests vor documentation vor productive**;
 `src/**/*.test.*` zählt also als Test. Nicht erfasste Pfade sind Produktivcode.
 Fehlklassifikation kann den Schutz bestehender Tests bei Umfangserweiterungen
 verfehlen (4.2); zusätzliche Prüfungen richten sich nach ihren eigenen Mustern.
@@ -354,6 +378,17 @@ default_command = ["sh", "-c", "cd app && flutter test"]
 
 Dasselbe gilt für `product_command` und das `command` einer Regel. Die alten
 Shell-Schlüssel werden schon beim Start und beim Trockenlauf abgewiesen.
+
+**Projekt-TOML ohne echten Lauf prüfen**, im Projektordner:
+
+```bash
+run_task --dry-run --config ./orchestrator.toml --task-file ~/werkzeuge/Dual-Agent-Orchestrator/example-task.md --quiet
+echo $?
+```
+
+Exit `0` bestätigt das Laden durch den echten Konfigurationsloader und den
+modellfreien Probelauf; Projektbefehle werden dabei nicht ausgeführt. Auch die
+Vorabprüfung unten lädt dieselbe Konfiguration, bevor sie Werkzeuge startet.
 
 **Zusätzliche Prüfungen:** Fehlen Typprüfung oder Build im Testbefehl, ergänzen
 Sie Regeln. Sie laufen, wenn ein Arbeitspaket einen passenden Pfad ändert:
@@ -455,16 +490,39 @@ Kein automatischer Anbieterwechsel. Schutz- und Messregeln:
 Starten Sie im **Projektordner**, in derselben Shell wie später die Wache:
 
 **Nie parallel zu einem Orchestrator in diesem Projekt prüfen.** Suchen Sie
-Prozesse und prüfen Sie deren Arbeitsverzeichnis:
+Hauptprozesse mit dem Arbeitsverzeichnis dieses Projekts; die eigene PID und
+Elternkette werden ausgeschlossen:
 
 ```bash
-pgrep -af '[r]un_task|[o]rchestrator|[c]li.py'
-readlink -f /proc/<PID>/cwd   # <PID> durch die gefundene Prozessnummer ersetzen
+python3 - <<'PYTHON'
+import os
+from pathlib import Path
+own, pid = set(), os.getpid()
+while pid and pid not in own:
+    own.add(pid)
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+        pid = int(next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:")))
+    except (OSError, StopIteration):
+        break
+project = Path.cwd().resolve()
+for proc in Path("/proc").iterdir():
+    if not proc.name.isdecimal() or int(proc.name) in own:
+        continue
+    try:
+        args = proc.joinpath("cmdline").read_bytes().split(b"\0")
+        if any(Path(os.fsdecode(arg)).name in {"run_task", "cli.py"} for arg in args if arg):
+            if proc.joinpath("cwd").resolve(strict=True) == project:
+                print(proc.name, " ".join(os.fsdecode(arg) for arg in args if arg))
+    except OSError:
+        continue
+PYTHON
 ```
 
-Die Liste kann fremde Projekte enthalten; vergleichen Sie mit `pwd -P`.
-Bei Zweifel über Kindprozesse die zugehörige Wache beenden und deren
-Prozessende abwarten. Ein vorhandenes `.orchestrator/` allein bedeutet keinen
+Ein breites `pgrep`-Muster kann die eigene aufrufende Shell oder fremde Prozesse
+treffen. Obige Suche vergleicht `/proc/<pid>/cwd` mit dem Projekt; nicht lesbare
+Prozesse bleiben ungeprüft. Bei Zweifel über Kindprozesse die zugehörige Wache
+beenden und deren Prozessende abwarten. Ein vorhandenes `.orchestrator/` allein bedeutet keinen
 laufenden Prozess. `codex sandbox` kann kurzzeitig
 Platzhalter für fehlende Schutzpfade im Projekt anlegen; ein paralleler Lauf
 würde diese Änderungen seinem Implementer zuschreiben.
@@ -474,8 +532,10 @@ python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node --tool npm
 ```
 
-Das Werkzeug lädt Ihre `orchestrator.toml` samt mitgelieferten Profilen und
-prüft ausschließlich den gewählten Implementer. Ohne `--tool` nimmt es das
+Das Werkzeug lädt Ihre `orchestrator.toml` mit demselben strengen Loader wie
+`run_task`, einschließlich `[paths]`, `[workflow]` und Profilen; unbekannte
+Schlüssel und ungültige Werte werden abgewiesen. Danach prüft es ausschließlich
+den gewählten Implementer. Ohne `--tool` nimmt es das
 erste Argument des Testbefehls und aller Regelbefehle; bei `npm` kommt `node`
 dazu. Für zusammengesetzte Shellbefehle nennen Sie die benötigten Werkzeuge
 ausdrücklich mit `--tool`. Es braucht keinen Modellaufruf, keine Anmeldung
@@ -508,7 +568,9 @@ Der Hinweis zeigt eine andere Installation an und ändert den Exitcode nicht.
 Eine abweichende Version, ein fehlendes Werkzeug oder ein gescheitertes
 `--version` erzeugt eine Warnung und Exit `1`. Kontrollieren Sie zusätzlich
 Repository-Schreibrechte, `.git`-Schreibschutz, sichtbare Home-Einträge und
-aufgelöste externe Symlink-Ziele von `node_modules` und `.venv`. Die Suche
+aufgelöste externe Symlink-Ziele von `node_modules` und `.venv`. Text zeigt
+solche Ziele nur, wenn welche gefunden wurden; mit `--json` bedeutet
+`"dependency_links": []`: keine gefunden. Die Suche
 überspringt Verzeichnisse, die Ihre `[paths] generated`-Muster als erzeugt
 kennzeichnen; die beiden Symlinks selbst werden noch am Elternordner erkannt.
 
@@ -525,8 +587,11 @@ python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py
 ```
 
 Ersetzen Sie die Pfade durch Ihren Projekt-Elternordner und einen auf dem Host
-nachweislich vorhandenen Geschwisterordner. Sichtbar sein darf nur der Weg zu
-den erlaubten Wurzeln, nicht der Geschwisterordner.
+nachweislich vorhandenen Geschwisterordner. Bei tieferen Projekten prüfen Sie
+**jede Ebene zwischen HOME und Projekt**: Für `~/projekte/team/mein-projekt`
+listen Sie `~`, `~/projekte` und `~/projekte/team` und prüfen vorhandene
+Geschwister auf jeder Ebene mit `test ! -e`. Sichtbar sein darf nur der Weg zu
+den erlaubten Wurzeln, nicht ein unfreigegebener Geschwisterordner.
 
 Ein gezielter Befehl ist optional:
 
@@ -535,9 +600,17 @@ python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --json
 ```
 
-Bei Tests mit Unterprozess-, Port- oder Browserstart prüfen Sie zusätzlich
-einen solchen Einzeltest. Ersetzen Sie `<einzeltest-befehl>` durch den
-passenden Aufruf Ihres Projekts; Beispiele:
+Suchen Sie in Ihren Testdateien nach Startaufrufen, etwa:
+
+```bash
+rg -n 'spawn|exec|subprocess|child_process|Popen|fork|listen|createServer|socket|puppeteer|playwright' test/
+```
+
+Ersetzen Sie `test/` durch Ihre Testpfade und lesen Sie die Treffer samt
+aufgerufenen Hilfsfunktionen. Prüfen Sie je vorhandener Startart (Unterprozess,
+Port, Browser) einen kleinen Einzeltest mit den tatsächlich genutzten Werkzeugen.
+Ersetzen Sie `<einzeltest-befehl>` durch den passenden Aufruf Ihres Projekts:
+
 
 | Projekt | Einzeltest-Befehl | Fehlerdetails sichtbar machen |
 |---|---|---|
@@ -561,10 +634,24 @@ Für Python ersetzen Sie `--tool node` durch `--tool python3`.
    Prüfen Sie im Traceback, ob der Fehler tatsächlich beim Unterprozess-, Port-
    oder Browserstart entsteht. Der Werkzeughinweis „mögliche Sandbox-Grenze,
    siehe 2.3“ und das JSON-Feld `command.sandbox_boundary_hint` sind nur Indizien.
+   Der Startfehler kann als Assertion erscheinen: etwa `error` gesetzt oder
+   `status: null`. Fehlt dabei ein sichtbares `EPERM`, führen Sie die
+   Host-Gegenprobe aus und geben testweise das Fehlerobjekt aus (Teständerung
+   danach zurücknehmen), oder starten Sie den Unterprozess über den Zusatzbefehl
+   direkt mit gleichem Programm und Argumenten. Beispiel zur Fehlerausgabe:
+
+   ```bash
+   python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node -- node -e 'const {spawnSync} = require("node:child_process"); console.log(spawnSync(process.execPath, ["--version"]));'
+   ```
+
+   Ersetzen Sie den Beispielstart durch den aus Ihrem Test. `status: null`
+   allein belegt keine Grenze.
 3. Führen Sie denselben Detailaufruf außerhalb der Sandbox in derselben
    Projektumgebung aus. Erst wenn er dort grün ist und in der Sandbox allein
-   der Start an fehlenden Rechten scheitert, ist die Grenze belegt. Weitere
-   Assertions, falsche Ergebnisse oder ein roter Host-Test sind Testfehler.
+   der Start selbst mit `EPERM` beziehungsweise „Operation not permitted“
+   scheitert, ist die Grenze belegt. Die Assertion, die diesen Startfehler meldet,
+   zählt dazu; andere Abweichungen, falsche Ergebnisse oder ein roter Host-Test
+   sind echte Testfehler.
 
 Bei belegter Grenze ergänzen Sie die **optionale Regel aus 2.4**. Der Implementer
 berichtet die Einschränkung und übergibt seine Arbeit; der Orchestrator prüft
@@ -612,8 +699,8 @@ Laufzeitschutz bleibt verpflichtend.
 Die ersten **12.000 Zeichen** aus `AGENTS.md` (oder `--agents-file`) ergänzen den
 Implementer-Auftrag und liegen den Prüfern als Evidenz vor. Codex/Implementer
 lädt die Datei zusätzlich nativ; beim Codex-Prüfer verhindert
-`project_doc_max_bytes=0` dieses Laden. Die Datei ist optional. Schreiben Sie
-sie **rollenneutral**:
+`project_doc_max_bytes=0` dieses Laden. Technisch kann sie fehlen; für diese
+Einrichtung gehört sie dazu. Schreiben Sie sie **rollenneutral**:
 
 ```markdown
 # Mein Projekt
@@ -665,11 +752,32 @@ Abnahmen und damit den Abschluss verhindern. Legen Sie auch keine festen
 Anbieterrollen fest: Die Besetzung kommt aus `orchestrator.toml`, und die
 Agenten dürfen selbst weder committen noch mergen oder pushen.
 
+#### Merge-Wahl und Hooks
+
+**Vor dem Einrichtungscommit wählen:** Soll der Orchestrator nach befundfreier Abnahme
+lokal mergen (`true`) oder möchten Sie selbst mergen (`false`)? Halten Sie die
+Antwort ausdrücklich als `merge_completed_branch` unter `[workflow]` in Ihrer
+TOML fest (Vorlagen in 2.3). Prüfen Sie vorher die Hooks im Projekt:
+
+```bash
+git config --get core.hooksPath   # keine Ausgabe: Git-Hook-Verzeichnis gilt
+git rev-parse --git-path hooks    # auch für verknüpfte Worktrees
+ls -la "$(git rev-parse --git-path hooks)"
+# Bei gesetztem core.hooksPath stattdessen dessen Verzeichnis prüfen:
+ls -la "$(git config --get core.hooksPath)"
+```
+
+Die letzte Zeile nur bei gesetztem Wert ausführen; relative Pfade gelten ab
+der Projektwurzel. Lesen Sie besonders `post-merge` (nicht `*.sample`) und
+klären Sie dessen Nebenwirkungen und Laufzeit vor Ihrer Wahl.
+
+Details zu Hooks und Abschluss stehen in 2.10.
+
 ### 2.5 Einrichtung festschreiben
 
 Vor dem Commit müssen die wirksame Git-Identität (1.1), die Vorabprüfung
 inklusive Unterprozess-Test und gegebenenfalls optionaler Regel (2.3/2.4) sowie
-Ihre Merge-Wahl und Hooks (2.10) geklärt sein. Prüfen Sie nochmals:
+Ihre Merge-Wahl und Hooks (2.4/2.10) geklärt sein. Prüfen Sie nochmals:
 
 ```bash
 git config --get user.name
@@ -869,22 +977,8 @@ Ein späterer Start mit `run_task --watch` setzt fort.
 
 ### 2.10 Abschließen
 
-**Vor dem ersten Lauf wählen:** Soll der Orchestrator nach befundfreier Abnahme
-lokal mergen (`true`) oder möchten Sie selbst mergen (`false`)? Halten Sie die
-Antwort ausdrücklich als `merge_completed_branch` unter `[workflow]` in Ihrer
-TOML fest (Vorlagen in 2.3). Prüfen Sie vorher die Hooks im Projekt:
-
-```bash
-git config --get core.hooksPath   # keine Ausgabe: Git-Hook-Verzeichnis gilt
-git rev-parse --git-path hooks    # auch für verknüpfte Worktrees
-ls -la "$(git rev-parse --git-path hooks)"
-# Bei gesetztem core.hooksPath stattdessen dessen Verzeichnis prüfen:
-ls -la "$(git config --get core.hooksPath)"
-```
-
-Die letzte Zeile nur bei gesetztem Wert ausführen; relative Pfade gelten ab
-der Projektwurzel. Lesen Sie besonders `post-merge` (nicht `*.sample`) und
-klären Sie dessen Nebenwirkungen und Laufzeit vor Ihrer Wahl.
+Die Merge-Wahl und Hook-Prüfung erledigen Sie vor dem Einrichtungscommit
+(2.4). Hier folgen die Einzelheiten zum Abschluss.
 
 **Vor einem Push, besonders bei öffentlichen Repositorys:** Die Audit-Berichte
 können derzeit absolute Home-Pfade der CLI-Binaries enthalten (gemessen am
@@ -1127,7 +1221,8 @@ Regel aus 2.4. Prüfe Audit-Berichte und Historie auf persönliche Pfade nach 2.
 Frag mich bei fehlenden Projektentscheidungen und vor Installationen,
 Commits oder dem Aufgeben eines Laufs. Ändere keine Laufrecords von Hand.
 Führe run_task --help und die Projekt-Prüfbefehle aus; nach CLI-Updates
-auch den Offline-Quicktest aus 2.3. Starte keinen Agentenlauf. Zeig mir
+oder bei einer Erstinstallation oberhalb der Messstände aus 1.1 auch den
+Offline-Quicktest aus 2.3. Starte keinen Agentenlauf. Zeig mir
 alle Änderungen, Ergebnisse und verbleibenden ungeprüften Annahmen.
 ```
 
@@ -1221,7 +1316,8 @@ Die vollständige Projektbeschreibung steht in `docs/spezifikation.md`. Sie ist
 verbindlich; weicht eine Aufgabe davon ab, gilt die Aufgabe.
 ```
 
-Dann alles als ersten Commit festschreiben:
+Vor dem ersten Commit die wirksame Git-Identität (1.1), die Prüfungen aus 2.3
+und die Merge-Wahl samt Hooks (2.4/2.10) klären. Dann alles festschreiben:
 
 ```bash
 git add -A
