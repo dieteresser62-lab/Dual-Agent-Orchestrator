@@ -883,6 +883,27 @@ def test_state_projection_preserves_bound_stall_policy(tmp_path, monkeypatch, st
         assert getattr(binding, f"{slot}_profile").stall_timeout_seconds == stall_seconds
 
 
+@pytest.mark.parametrize("tool_seconds", [0, 17, 3600])
+def test_state_projection_preserves_bound_tool_policy(tmp_path, monkeypatch, tool_seconds):
+    bridge = _state_projection_bridge(tmp_path, f"stall-policy-{tool_seconds}")
+    append = ArtifactBridge.append
+
+    def bind_tool_policy(self, payload, **kwargs):
+        if isinstance(payload, RunProfilePayload):
+            payload = replace(payload, **{
+                slot: replace(getattr(payload, slot), tool_timeout_seconds=tool_seconds)
+                for slot in ("implementer", "reviewer", "final_reviewer")
+            })
+        return append(self, payload, **kwargs)
+
+    monkeypatch.setattr(ArtifactBridge, "append", bind_tool_policy)
+    chain = _journey(bridge)
+    projection = project_workflow_state(replay_artifacts(chain, RUN_ID)).state
+    binding = projection.protocol_binding
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        assert getattr(binding, f"{slot}_profile").tool_timeout_seconds == tool_seconds
+
+
 def _load_state_projection_baseline() -> dict[str, object]:
     document = json.loads(STATE_PROJECTION_BASELINE.read_text(encoding="utf-8"))
     assert set(document) == {

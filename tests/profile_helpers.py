@@ -38,7 +38,7 @@ def historical_reviewer_state_profile(
     }[slot]
     return replace(
         scripted_profile_binding(slot),
-        model=model, effort=effort, stall_timeout_seconds=None,
+        model=model, effort=effort, stall_timeout_seconds=None, tool_timeout_seconds=None,
         capability_sha256="3492500ce735ee5a236aa474bb322c32c02287421bf5ed15f04dfa2f41a2cc3e",
         transport_sha256="2ea6376d95c6e012529277f7907a91d52907a43ee5835155a9e1f15da1a61cc4",
         rights_sha256="d58b1c96b18baa35c24c9daf74da0625eb8d682f48061561fd4d67f71cfcac5c",
@@ -49,7 +49,7 @@ def historical_reviewer_state_profile(
 def historical_implementer_state_profile(model: str, effort: str) -> AgentProfileBinding:
     """Pre-D1 qualification for frozen historical records, never for new runs."""
     return replace(
-        scripted_profile_binding("implementer"), model=model, effort=effort, stall_timeout_seconds=None,
+        scripted_profile_binding("implementer"), model=model, effort=effort, stall_timeout_seconds=None, tool_timeout_seconds=None,
         capability_sha256="19040e1f2f2eec773e1e99132c544fe8d003db569cf8d663547fdde3e5077500",
         transport_sha256="97479378d347198221372b5e1adce013f4187fd8811178225fe60564c1047c02",
         rights_sha256="a678bf59677c0f9d05040dfacd7e618d00e806cd30253b82c432cd2f117af3c8",

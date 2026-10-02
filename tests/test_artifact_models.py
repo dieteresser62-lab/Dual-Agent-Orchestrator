@@ -373,6 +373,18 @@ def test_run_profile_persists_stall_policy_in_all_slots(stall_seconds):
     assert ArtifactRecord.from_dict(document).payload == profile
 
 
+@pytest.mark.parametrize("tool_seconds", [0, 17, 3600])
+def test_run_profile_persists_tool_policy_in_all_slots(tool_seconds):
+    profile = bound_run_profile(
+        bound_role_profile("implementer-model", "high", tool_timeout_seconds=tool_seconds),
+        bound_role_profile("reviewer-model", "high", tool_timeout_seconds=tool_seconds),
+    )
+    document = _record(profile).to_dict()
+    for slot in ("implementer", "reviewer", "final_reviewer"):
+        assert document["payload"][slot]["tool_timeout_seconds"] == tool_seconds
+    assert ArtifactRecord.from_dict(document).payload == profile
+
+
 def test_run_profile_archive_pattern_wire_compatibility() -> None:
     legacy = bound_run_profile(
         bound_role_profile("implementer-model", "medium"),

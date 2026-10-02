@@ -227,6 +227,7 @@ class AgentProfileBinding:
     max_budget_usd: float | None = None
     profile_name: str = field(kw_only=True)
     isolation_options_sha256: str | None = field(default=None, kw_only=True)
+    tool_timeout_seconds: int | None = field(default=None, kw_only=True)
     stall_timeout_seconds: int | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -246,6 +247,8 @@ class AgentProfileBinding:
             raise WorkflowStateValidationError("agent profile binary is invalid")
         if self.stall_timeout_seconds is not None and (isinstance(self.stall_timeout_seconds, bool) or not isinstance(self.stall_timeout_seconds, int) or self.stall_timeout_seconds < 0):
             raise WorkflowStateValidationError("agent profile stall timeout is invalid")
+        if self.tool_timeout_seconds is not None and (isinstance(self.tool_timeout_seconds, bool) or not isinstance(self.tool_timeout_seconds, int) or self.tool_timeout_seconds < 0):
+            raise WorkflowStateValidationError("agent profile tool timeout is invalid")
         if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
             raise WorkflowStateValidationError("agent profile timeout is invalid")
         if self.max_budget_usd is not None and (isinstance(self.max_budget_usd, bool) or not isinstance(self.max_budget_usd, (int, float)) or not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0):
@@ -275,16 +278,20 @@ class AgentProfileBinding:
         }
         if self.isolation_options_sha256 is None:
             result.pop("isolation_options_sha256")
+        if self.tool_timeout_seconds is None:
+            result.pop("tool_timeout_seconds")
         if self.stall_timeout_seconds is None:
             result.pop("stall_timeout_seconds")
         return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
-        if not (set(cls.__dataclass_fields__) - {"max_budget_usd", "isolation_options_sha256", "stall_timeout_seconds"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
+        if not (set(cls.__dataclass_fields__) - {"max_budget_usd", "isolation_options_sha256", "stall_timeout_seconds", "tool_timeout_seconds"}).issubset(raw) or set(raw) - set(cls.__dataclass_fields__):
             raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
         if "stall_timeout_seconds" in raw and raw["stall_timeout_seconds"] is None:
             raise WorkflowStateValidationError(f"{label} stall timeout is invalid")
+        if "tool_timeout_seconds" in raw and raw["tool_timeout_seconds"] is None:
+            raise WorkflowStateValidationError(f"{label} tool timeout is invalid")
         try:
             return cls(**{**raw, "binary_identity": ProviderIdentity.from_dict(raw["binary_identity"])})
         except (TypeError, ValueError) as exc:
@@ -315,6 +322,7 @@ def scripted_profile_binding(slot: str) -> AgentProfileBinding:
         config.max_budget_usd,
         profile_name=config.profile_name,
         stall_timeout_seconds=config.stall_timeout_seconds,
+        tool_timeout_seconds=config.tool_timeout_seconds,
     )
 
 

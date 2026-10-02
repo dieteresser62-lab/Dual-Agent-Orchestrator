@@ -1375,19 +1375,50 @@ def _finish_exited_leader_group(
 @dataclass
 class _ModelSilence:
     last_activity: float
-    active_tools: set[str] = field(default_factory=set)
+    active_tools: dict[str, float] = field(default_factory=dict)
+    _observer_warned: bool = field(default=False, repr=False)
     _lock: LockType = field(default_factory=threading.Lock, repr=False)
 
     def observe(self, adapter: AgentAdapter, line: str, now: float) -> None:
-        started, completed = adapter.tool_activity(line)
+        # Observer failures are neutral stdout activity; never discard a line.
+        try:
+            started, completed = adapter.tool_activity(line)
+            started, completed = tuple(started), tuple(completed)
+            if any(not isinstance(identity, str) for identity in (*started, *completed)):
+                raise ValueError("tool identities must be strings")
+        except Exception:
+            if not self._observer_warned:
+                logger.warning("[AGENT] tool activity observer failed; treating stdout as neutral activity")
+                self._observer_warned = True
+            started, completed = (), ()
         with self._lock:
-            self.active_tools.update(started)
-            self.active_tools.difference_update(completed)
+            for identity in started:
+                self.active_tools.setdefault(identity, now)
+            for identity in completed:
+                self.active_tools.pop(identity, None)
             self.last_activity = now
 
     def duration(self, now: float) -> float:
         with self._lock:
             return 0.0 if self.active_tools else max(0.0, now - self.last_activity)
+
+    def tool_duration(self, now: float) -> float:
+        with self._lock:
+            return max((max(0.0, now - start) for start in self.active_tools.values()), default=0.0)
+
+
+def _safe_stdout_observer(callback: Callable[[str], None]) -> Callable[[str], None]:
+    """Keep optional observation failures outside the reader's pipe lifecycle."""
+    warned = False
+    def observe(line: str) -> None:
+        nonlocal warned
+        try:
+            callback(line)
+        except Exception:
+            if not warned:
+                logger.warning("[AGENT] stdout observer failed; retaining neutral output line")
+                warned = True
+    return observe
 
 
 def _start_provider_stream_readers(
@@ -1401,11 +1432,13 @@ def _start_provider_stream_readers(
     stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
     writer_errors: queue.Queue[BaseException] = queue.Queue()
 
+    observe_stdout = _safe_stdout_observer(stdout_observer) if stdout_observer is not None else None
+
     def read_stream(stream: TextIO, channel: str) -> None:
         try:
             while line := stream.readline():
-                if channel == "stdout" and stdout_observer is not None:
-                    stdout_observer(line)
+                if channel == "stdout" and observe_stdout is not None:
+                    observe_stdout(line)
                 stream_queue.put((channel, line))
         except (OSError, ValueError):
             # Forced bounded cleanup may replace an outstanding pipe read.
@@ -1449,7 +1482,9 @@ def _run_agent_process(
     start = time.monotonic()
     stall_limit = (getattr(adapter, "stall_timeout_seconds", 900)
                    if getattr(adapter, "supports_stall_detection", False) else 0)
-    read_lines = config.agent_live_stream or bool(stall_limit)
+    tool_limit = (getattr(adapter, "tool_timeout_seconds", 3600)
+                  if getattr(adapter, "supports_stall_detection", False) else 0)
+    read_lines = config.agent_live_stream or bool(stall_limit or tool_limit)
     silence = _ModelSilence(start)
     finished = False
     group_cleanup_done = False
@@ -1472,7 +1507,7 @@ def _run_agent_process(
         if read_lines:
             stream_queue, threads, writer, writer_errors = _start_provider_stream_readers(
                 process, stdin_text,
-                (lambda line: silence.observe(adapter, line, time.monotonic())) if stall_limit else None,
+                (lambda line: silence.observe(adapter, line, time.monotonic())) if stall_limit or tool_limit else None,
             )
             stdout_chunks: list[str] = []
             stderr_chunks: list[str] = []
@@ -1502,10 +1537,14 @@ def _run_agent_process(
                         kind_hint=AgentFailureKind.PROCESS,
                     )
                 duration = silence.duration(now)
-                if stall_limit and duration >= stall_limit and process.poll() is None:
+                tool_duration = silence.tool_duration(now)
+                tool_stalled = bool(tool_limit and tool_duration >= tool_limit)
+                if (tool_stalled or (stall_limit and duration >= stall_limit)) and process.poll() is None:
                     role = getattr(adapter, "bound_slot", "reviewer" if getattr(adapter, "reviewer", False) else "implementer")
                     detail = (f"provider stalled: {duration / 60:.2f} minutes of model silence; "
                               f"last activity at elapsed {silence.last_activity - start:.1f}s")
+                    if tool_stalled:
+                        detail = f"provider stalled: tool open {tool_duration:.1f} s (limit {tool_limit} s)"
                     logger.warning("[AGENT] provider=%s role=%s operation=%s model silence=%.1fs; %s",
                                    agent_key, role, operation or "unspecified", duration, detail)
                     raise AgentProcessError(detail, kind_hint=AgentFailureKind.NETWORK,
@@ -1674,7 +1713,7 @@ def run_agent(
     prepared_provider_input: PreparedProviderInput | None = None,
     execution_root_override: Path | None = None,
 ) -> str:
-    """Run an adapter command once, with optional live streaming and strict output checks."""
+    """Run once and own both protected-tree hooks, including the sole postcheck."""
     agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)

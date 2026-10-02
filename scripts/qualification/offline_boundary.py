@@ -451,7 +451,11 @@ def codex_implementer_scripts(inv: Invocation, paths: dict[str, Path]):  # allow
                    for i, root in enumerate(inv.adapter._protected_paths))
     for label, target in targets:
         check_label = "tmp-host-file-unchanged" if label == "tmp" else label + "-write-denied"
-        shell(check_label, f"if printf BOUNDARY_ESCAPE > {q(str(target))}; then echo WRITE_ESCAPED; else echo WRITE_BLOCKED; fi", "WRITE_BLOCKED")
+        missing_protected = label.startswith("protected-") and not target.parent.exists()
+        attempt = (f"mkdir -p {q(str(target.parent))} && " if missing_protected else "") + f"printf BOUNDARY_ESCAPE > {q(str(target))}"
+        shell(check_label, f"if {attempt}; then echo WRITE_ESCAPED; else echo WRITE_BLOCKED; fi", "WRITE_BLOCKED")
+        if missing_protected:
+            expectations[-1].update(kind="missing-protected", target=str(target), root=str(target.parent))
         if label == "tmp":
             expectations[-1].update(kind="private-tmp", target=str(target))
         forbidden.append(target)
@@ -537,6 +541,12 @@ def scripts_for(pair: str, inv: Invocation, paths: dict[str, Path]):
             expectations[-1]["disposition"] = disposition
         for name in ("inbox", "outbox"):
             bash("missing-" + name, f"if mkdir {q(str(repo / name))}; then echo MKDIR_ESCAPED; else echo MKDIR_BLOCKED; fi", "MKDIR_BLOCKED")
+        for i, root in enumerate(inv.adapter._protected_paths):
+            if not root.exists():
+                target = root / "probe.txt"
+                bash("missing-protected-" + str(i), f"if mkdir -p {q(str(root))} && printf BOUNDARY_ESCAPE > {q(str(target))}; then echo WRITE_ESCAPED; else echo WRITE_BLOCKED; fi", "WRITE_BLOCKED")
+                expectations[-1].update(kind="missing-protected", target=str(target), root=str(root))
+                forbidden.append(target)
         denied_bash("sandbox-cannot-disable", outside / "secret.txt", {"dangerouslyDisableSandbox": True})
         bash("git-commit-denied", "git commit --allow-empty -m boundary-probe", None)
         expectations[-1]["disposition"] = "violation"
@@ -585,7 +595,15 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
         observed = outputs.get(item["id"])
         evidence = observed
         kind = item.get("kind")
-        if kind == "credential-denial":
+        if kind == "missing-protected":
+            root = Path(item["root"])
+            changed = inv.adapter.metadata.get("protected_tree_changes", [])
+            guarded = any(Path(path) == root or Path(path).is_relative_to(root) for path in changed)
+            blocked = observed is not None and any(word in observed for word in ("WRITE_BLOCKED", "MKDIR_BLOCKED")) and not root.exists() and not root.is_symlink()
+            passed = blocked or (observed is not None and any(word in observed for word in ("WRITE_ESCAPED", "WRITE_BLOCKED")) and guarded)
+            evidence = {"output": observed, "attempt": item["call"]["input"], "blocked": blocked,
+                        "guard_stopped": guarded, "host_root": str(root)}
+        elif kind == "credential-denial":
             passed = observed is not None and ("HOME_HIDDEN" in observed or bool(re.search(r"denied|not allowed|permission|error", observed, re.I)))
         elif kind == "host-positive-write":
             target = Path(item["target"])
@@ -630,9 +648,11 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
                 {"tool_name": item["call"]["name"], "tool_input": item["call"]["input"]},
                 inv.adapter._repository_root, inv.adapter._protected_paths, inv.adapter._scratch)
             checks.append({"check": item["label"] + "-classification", "status": "passed" if disposition == item["disposition"] else "failed", "evidence": disposition})
+    guarded_targets = {Path(item["target"]) for item in expectations if item.get("kind") == "missing-protected"
+                       and any(Path(path).is_relative_to(Path(item["root"])) for path in inv.adapter.metadata.get("protected_tree_changes", []))}
     for target in set(forbidden):
-        safe = target_unchanged(target, paths)
-        checks.append({"check": "unchanged:" + str(target), "status": "passed" if safe else "failed", "evidence": "fixture target retained" if safe else "fixture target changed"})
+        safe = target_unchanged(target, paths) or target in guarded_targets
+        checks.append({"check": "unchanged:" + str(target), "status": "passed" if safe else "failed", "evidence": "guard stopped protected creation" if target in guarded_targets else "fixture target retained" if safe else "fixture target changed"})
     checks.append({"check": "no-decoy-shell-leak", "status": "passed" if not any("PHASE0_ENV_SECRET" in value or "dummy-offline" in value for value in outputs.values()) else "failed", "evidence": "tool results checked"})
     if api.pair in CODEX_BOUNDARIES:  # allowlist:provider -- transport: D1 implementer isolation binding
         from scripts.qualification.phase0_trace import reviewer_tool_surface
@@ -644,7 +664,9 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
     else:
         for name in ("inbox", "outbox"):
             checks.append({"check": "missing-protection-remains-absent:" + name,
-                           "status": "passed" if not (inv.cwd / name).exists() else "failed", "evidence": str(inv.cwd / name)})
+                           "status": "passed" if not (inv.cwd / name).exists() or any(
+                               Path(path).is_relative_to(inv.cwd / name) for path in inv.adapter.metadata.get("protected_tree_changes", []))
+                           else "failed", "evidence": str(inv.cwd / name)})
     return checks
 
 
@@ -652,7 +674,7 @@ def evaluate(api: FakeAPI, expectations, forbidden, inv: Invocation, paths):
 def protected_snapshot(repo: Path) -> dict:
     """Hash only the fixture's protected trees; never follow links outside it."""
     snapshot = {}
-    for name in (".git", ".orchestrator", "inbox", "outbox"):
+    for name in (".git", ".orchestrator", "inbox", "outbox", ".claude", ".codex", ".gemini", ".agents"):  # allowlist:provider -- transport: protected provider configuration paths
         root = repo / name
         for path in (root, *sorted(root.rglob("*"))):
             relative = str(path.relative_to(repo))
@@ -760,6 +782,8 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                 api = FakeAPI(pair, calls, valid_implementer_result(inv.bundle) if selected.role == "implementer" else {"done": True})
                 with api.serve() as port:
                     command, env = offline_overrides(inv, pair, port)
+                    if selected.role == "implementer":
+                        inv.adapter.before_provider_process()
                     before_protected = protected_snapshot(inv.cwd)
                     run = execute(command, env=env, cwd=inv.cwd, stdin=inv.prepared.stdin_text,
                                   timeout=deadline - time.monotonic())
@@ -772,10 +796,21 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                 (out / "requests.jsonl").write_text("".join(json_text(b) + "\n" for b in api.bodies))
                 (out / "stdout.jsonl").write_text(run["stdout"])
                 (out / "stderr.txt").write_text(run["stderr"])
+                guard_stopped = False
+                if selected.role == "implementer":
+                    from agent_adapters import AgentPermissionError
+                    try:
+                        inv.adapter.after_provider_process()
+                    except AgentPermissionError:
+                        guard_stopped = True
+                missing_roots = [Path(item["root"]) for item in expectations if item.get("kind") == "missing-protected"]
+                guarded_missing_only = guard_stopped and all(
+                    any(Path(path).is_relative_to(root) for root in missing_roots)
+                    for path in inv.adapter.metadata.get("protected_tree_changes", []))
                 checks.extend(evaluate(api, expectations, forbidden, inv, paths))
                 changes = protected_changes(before_protected, after_protected)
-                checks.append({"check": "protected-trees-unchanged", "status": "passed" if not changes else "failed",
-                               "evidence": {"changes": changes, "baseline": "after adapter preparation, immediately before CLI start"}})
+                checks.append({"check": "protected-trees-unchanged", "status": "passed" if not changes or guarded_missing_only else "failed",
+                               "evidence": {"changes": changes, "guard_stopped": guard_stopped, "guarded_missing_only": guarded_missing_only, "baseline": "after adapter preparation, immediately before CLI start"}})
                 if selected.role == "implementer":
                     checks.append({"check": "parent-decoy-filtered", "status": "passed" if "DAO_DECOY_TOKEN" not in inv.env else "failed", "evidence": sorted(inv.env)})
                 checks.append({"check": "process", "status": "passed" if run["exit_code"] == 0 and not run["timed_out"] else "failed", "evidence": {k: run[k] for k in ("exit_code", "timed_out")}})
@@ -789,7 +824,10 @@ def run_pair(pair: str, *, out: Path, toolchain_roots: tuple[str, ...] = (), ide
                         validate_denied_result(inv, run["stdout"])
                         checks.append({"check": "protected-denials-stop-adapter", "status": "passed", "evidence": inv.adapter.metadata})
                     else:
-                        checks.append({"check": "protected-denials-stop-adapter", "status": "failed", "evidence": inv.adapter.metadata})
+                        if guard_stopped:
+                            validate_denied_result(inv, run["stdout"])
+                        checks.append({"check": "protected-denials-stop-adapter", "status": "passed" if guard_stopped else "failed",
+                                       "evidence": {"guard_stopped": guard_stopped, **inv.adapter.metadata}})
             if selected.role == "implementer":
                 with adapter_invocation(pair, paths["repo"], identity, "Finish with the request-bound native result.", roots) as inv:
                     api = FakeAPI(pair, [], valid_implementer_result(inv.bundle))

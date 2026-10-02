@@ -262,6 +262,7 @@ class RoleProfilePayload:
     max_budget_usd: float | None = None
     profile_name: str = dataclass_field(kw_only=True)
     isolation_options_sha256: str | None = dataclass_field(default=None, kw_only=True)
+    tool_timeout_seconds: int | None = dataclass_field(default=None, kw_only=True)
     stall_timeout_seconds: int | None = dataclass_field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -279,6 +280,8 @@ class RoleProfilePayload:
             _require_sha256(value, label)
         if self.stall_timeout_seconds is not None and (isinstance(self.stall_timeout_seconds, bool) or not isinstance(self.stall_timeout_seconds, int) or self.stall_timeout_seconds < 0):
             raise ArtifactValidationError("agent profile stall timeout is invalid")
+        if self.tool_timeout_seconds is not None and (isinstance(self.tool_timeout_seconds, bool) or not isinstance(self.tool_timeout_seconds, int) or self.tool_timeout_seconds < 0):
+            raise ArtifactValidationError("agent profile tool timeout is invalid")
         if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds < 0:
             raise ArtifactValidationError("profile timeout is invalid")
         if not isinstance(self.binary_identity, ProviderIdentity):
@@ -2459,6 +2462,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     if isinstance(payload, RunProfilePayload):
         for slot in ("implementer", "reviewer", "final_reviewer"):
             raw[slot]["binary_identity"] = getattr(payload, slot).binary_identity.to_dict()
+            if raw[slot]["tool_timeout_seconds"] is None:
+                raw[slot].pop("tool_timeout_seconds")
             if raw[slot]["stall_timeout_seconds"] is None:
                 raw[slot].pop("stall_timeout_seconds")
             if raw[slot]["isolation_options_sha256"] is None:

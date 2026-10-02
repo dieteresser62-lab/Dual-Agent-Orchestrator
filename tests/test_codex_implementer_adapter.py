@@ -156,3 +156,68 @@ def test_marked_fake_process_and_its_shell_do_not_inherit_parent_token(tmp_path,
         assert "TOKEN_HIDDEN" in result["stdout"] and "TOKEN_VISIBLE" not in result["stdout"]
         assert "DAO_DECOY_TOKEN" not in result["stdout"]
     finally: adapter.cleanup()
+
+
+def test_canary_binding_cannot_authorize_production(tmp_path):
+    adapter, paths, bundle, _ = prepared(tmp_path)
+    try:
+        canary_root = tmp_path / "canary"
+        canary_root.mkdir()
+        adapter.prepare_native_provider_input(bundle, NativeCodexExecutionBoundary.canary(  # allowlist:provider -- transport: canary reuse regression
+            paths["repo"], execution_root=canary_root, evidence_asset_root=canary_root))
+        with pytest.raises(AgentOutputError, match="boundary is unbound"):
+            adapter.prepare_native_provider_input(bundle, NativeCodexExecutionBoundary.production(paths["repo"]))  # allowlist:provider -- transport: production requires full fresh binding
+        adapter.bind_implementer_boundary(paths["repo"], paths["repo"] / "inbox", paths["repo"] / "outbox", "boundary-probe")
+        adapter.prepare_native_provider_input(bundle, NativeCodexExecutionBoundary.production(paths["repo"]))  # allowlist:provider -- transport: explicit full rebinding accepted
+        assert len(adapter._protected_paths) > 4
+    finally:
+        adapter.cleanup()
+
+
+def test_parent_path_keeps_env_node_identity_through_run_agent(tmp_path, monkeypatch):
+    import agent_runtime
+    from provider_identity import capture_provider_identity
+    adapter, paths, bundle, _ = prepared(tmp_path)
+    adapter.cleanup()
+    adapter.settings = replace(adapter.settings, toolchain_read_roots=())
+    entry = Path(adapter.provider_identity.entry_path)
+    entry.write_text("#!/usr/bin/env node\n// dao-probe-fake-v1\n")
+    entry.chmod(0o755)
+    node_dirs = [tmp_path / "nvm/bin", tmp_path / "system/bin"]
+    for i, root in enumerate(node_dirs):
+        root.mkdir(parents=True)
+        node = root / "node"
+        node.write_text(f"dao-probe-fake-v1 native node {i}\n")
+        node.chmod(0o755)
+    path = ":".join(str(root) for root in node_dirs) + ":/usr/bin:/bin"
+    monkeypatch.setenv("PATH", path)
+    version = "codex-cli 0.159.2"  # allowlist:provider -- transport: identity probe fixture
+    def probe(command, timeout=20):
+        if command[-1] == "--version":
+            return 0, version if str(entry) in command else "v22.23.2", ""
+        return 0, " ".join(adapter.capability.required_help_flags), ""
+    monkeypatch.setattr(agent_runtime, "run_local_command", probe)
+    adapter.provider_identity = capture_provider_identity(str(entry), ("--version",), probe, path=path)
+    adapter.capability_verified = True
+    prepared_input = adapter.prepare_native_provider_input(bundle, NativeCodexExecutionBoundary.production(paths["repo"]))  # allowlist:provider -- transport: production identity regression
+    try:
+        assert adapter.env["PATH"] == path
+        assert normalize(adapter, prepared_input.command)
+        after = adapter.after_provider_process
+        postchecks = []
+        def postcheck():
+            postchecks.append(True)
+            after()
+        monkeypatch.setattr(adapter, "after_provider_process", postcheck)
+        def process(_adapter, command, stdin, **kwargs):
+            assert command[:2] == [str(node_dirs[0] / "node"), str(entry)]
+            assert kwargs["env"]["PATH"] == path
+            adapter.invocation.last_message_file.write_text(json.dumps(boundary.valid_implementer_result(bundle)))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(agent_runtime, "_run_agent_process", process)
+        result = agent_runtime.run_agent(adapter, "", config=agent_runtime.OrchestratorConfig(repo_root=paths["repo"]),
+            shorten=lambda text, limit: text, operation="implementer_implementation", prepared_provider_input=prepared_input)
+        assert json.loads(result)["request_id"] == bundle.bound_context.request_id
+        assert postchecks == [True]
+    finally:
+        adapter.cleanup()

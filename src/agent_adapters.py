@@ -291,6 +291,7 @@ class AgentAdapter(Protocol):
 
     supports_stall_detection: bool
     stall_timeout_seconds: int
+    tool_timeout_seconds: int
 
     def tool_activity(self, line: str) -> tuple[tuple[str, ...], tuple[str, ...]]: ...
 
@@ -354,6 +355,7 @@ class _BaseAdapter:
         self.model = settings.model
         self.timeout = settings.timeout_seconds
         self.stall_timeout_seconds = settings.stall_timeout_seconds
+        self.tool_timeout_seconds = settings.tool_timeout_seconds
         self.effort = settings.effort
         self.max_budget_usd = settings.max_budget_usd
         self.invocation = AgentInvocationData()
@@ -494,6 +496,7 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         self.role_binding = role_binding or binding_for("codex", AgentRoleName.IMPLEMENTER)  # allowlist:provider -- certification data: hardened implementer rights
         if self.role_binding.role is not AgentRoleName.IMPLEMENTER:
             raise TypeError("native Codex adapter requires implementer role binding")
+        self._production_boundary_bound = False
         self._repository_root = None
         self._protected_paths = None
         self._scratch = None
@@ -501,25 +504,27 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         self._process_evidence_path = None
 
     def bind_implementer_boundary(self, repository_root, inbox_dir, outbox_dir, run_id) -> None:
+        self._production_boundary_bound = False
         from claude_implementer_adapter import protected_implementer_paths  # allowlist:provider -- transport: D1 implementer isolation binding
         self._repository_root = repository_root.resolve(strict=True)
         self._protected_paths = protected_implementer_paths(self._repository_root, inbox_dir, outbox_dir, run_id)
+        self._production_boundary_bound = True
 
     def bind_process_evidence(self, path: Path) -> None:
         self._process_evidence_path = path
 
     def before_provider_process(self) -> None:
-        from model_catalog import reviewer_model_row_sha256
+        from model_catalog import reviewer_model_row_sha256, catalog_row_matches
         from toolchain_paths import validate_private_scratch, validate_toolchain_read_roots
         try:
             validate_private_scratch(self._scratch, self._repository_root, self._protected_paths, self.settings.toolchain_read_roots)
             if validate_toolchain_read_roots(self.settings.toolchain_read_roots, self._repository_root, self._protected_paths) != self.settings.toolchain_read_roots:
                 raise ValueError("toolchain roots changed")
-            from agent_config import REVIEWER_ENVIRONMENT_POLICY
-            if self.env.get("TMPDIR") != str(self._scratch) or any(name not in REVIEWER_ENVIRONMENT_POLICY and not name.startswith("LC_") for name in self.env):
+            from agent_config import codex_environment_allowed  # allowlist:provider -- transport: shared environment policy
+            if self.env.get("TMPDIR") != str(self._scratch) or not codex_environment_allowed(self.env):
                 raise ValueError("process environment changed")
             path = self.invocation.runtime_dir / "model-catalog.json"
-            if path.is_symlink() or reviewer_model_row_sha256(path.read_text(encoding="utf-8"), self.model) != reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model):
+            if not catalog_row_matches(path, self.model, reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model)):
                 raise ValueError("catalog changed")
         except (OSError, TypeError, ValueError) as exc:
             raise AgentOutputError("implementer isolation changed before start", technical_text=str(exc)) from exc
@@ -602,9 +607,10 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         if bundle.capability_profile != "codex-implementer":  # allowlist:provider -- profile configuration: request transport binding
             raise AgentOutputError("Codex implementer writer profile differs")  # allowlist:provider -- profile configuration: request transport binding
         if boundary.mode is NativeCodexExecutionMode.PRODUCTION:  # allowlist:provider -- transport: D1 implementer isolation binding
-            if self._repository_root != boundary.repository_root or self._protected_paths is None:
+            if not self._production_boundary_bound or self._repository_root != boundary.repository_root or self._protected_paths is None:
                 raise AgentOutputError("Codex implementer boundary is unbound")  # allowlist:provider -- transport: fail closed
         else:
+            self._production_boundary_bound = False
             # Read-only canaries execute in a disposable directory, never the source.
             self._repository_root = boundary.repository_root
             self._protected_paths = tuple(boundary.repository_root / name for name in (".git", ".orchestrator", "inbox", "outbox"))
@@ -619,12 +625,9 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
         runtime_dir = self._new_runtime_dir()
         self._scratch = create_private_scratch()
         validate_private_scratch(self._scratch, self._repository_root, self._protected_paths, self.settings.toolchain_read_roots)
-        from agent_config import REVIEWER_ENVIRONMENT_POLICY
-        self.env = {name: value for name, value in os.environ.items()
-                    if name in REVIEWER_ENVIRONMENT_POLICY or name.startswith("LC_")}
-        self.env.setdefault("HOME", str(Path.home()))
-        self.env["PATH"] = ":".join([*(str(Path(root) / "bin") for root in self.settings.toolchain_read_roots
-                                      if (Path(root) / "bin").is_dir()), "/usr/local/bin:/usr/bin:/bin"])
+        from agent_config import codex_process_environment  # allowlist:provider -- transport: shared environment policy
+        self.env = codex_process_environment()  # allowlist:provider -- transport: shared environment policy
+        # Keep the parent PATH used for provider/interpreter identity binding.
         self.env["TMPDIR"] = str(self._scratch)
         try:
             row_digest = reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model)
@@ -683,7 +686,7 @@ class NativeCodexAdapter(CodexToolActivity, ProtectedTreeGuard, _BaseAdapter):  
     def extract_output(
         self, stdout: str, stderr: str, extra_files: dict[str, str]
     ) -> str:
-        self.after_provider_process()
+        # run_agent owns the protected-tree postcheck.
         self.metadata = event_usage(stdout)
         _ = stderr
         _ = extra_files

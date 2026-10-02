@@ -17,8 +17,21 @@ import role_occupancy
 
 DEFAULT_TIMEOUT_SECONDS: int | None = None
 DEFAULT_STALL_TIMEOUT_SECONDS = 900
+DEFAULT_TOOL_TIMEOUT_SECONDS = 3600
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 REVIEWER_ENVIRONMENT_POLICY = ("PATH", "HOME", "LANG", "LC_*", "TERM", "TMPDIR", "CODEX_HOME")  # allowlist:provider -- profile configuration: credential-free reviewer environment
+
+
+def codex_environment_allowed(environment: Mapping[str, str]) -> bool:  # allowlist:provider -- transport: shared environment policy
+    return all(name in REVIEWER_ENVIRONMENT_POLICY or name.startswith("LC_") for name in environment)
+
+
+def codex_process_environment() -> dict[str, str]:  # allowlist:provider -- transport: shared environment policy
+    environment = {name: value for name, value in os.environ.items()
+                   if codex_environment_allowed({name: value})}  # allowlist:provider -- transport: shared environment policy
+    environment.setdefault("HOME", str(Path.home()))
+    environment.setdefault("PATH", os.defpath)
+    return environment
 
 
 class AgentConfigError(ValueError):
@@ -38,6 +51,7 @@ class AgentSettings:
     antigravity_run_root: str | None = None
     toolchain_read_roots: tuple[str, ...] = ()
     stall_timeout_seconds: int = DEFAULT_STALL_TIMEOUT_SECONDS
+    tool_timeout_seconds: int = DEFAULT_TOOL_TIMEOUT_SECONDS
     reviewer_model_catalog_json: InitVar[str | None] = None
     fixed_environment: InitVar[tuple[tuple[str, str], ...]] = ()
 
@@ -61,6 +75,7 @@ class AgentProfileConfig:
     antigravity_run_root: str | None = None
     toolchain_read_roots: tuple[str, ...] = ()
     stall_timeout_seconds: int = DEFAULT_STALL_TIMEOUT_SECONDS
+    tool_timeout_seconds: int = DEFAULT_TOOL_TIMEOUT_SECONDS
 
 
 def default_antigravity_home() -> str:
@@ -146,6 +161,7 @@ def default_profiles() -> dict[str, AgentProfileConfig]:
             raw.get("provider_options", {}).get("claude", {}).get("max_budget_usd"),  # allowlist:provider -- profile configuration: shipped USD option
             home, root,
             stall_timeout_seconds=raw.get("stall_timeout_seconds", DEFAULT_STALL_TIMEOUT_SECONDS),
+            tool_timeout_seconds=raw.get("tool_timeout_seconds", DEFAULT_TOOL_TIMEOUT_SECONDS),
         )
     return profiles
 
@@ -171,7 +187,7 @@ def parse_profile_tables(
     for name, raw in (profiles_raw or {}).items():
         if not isinstance(name, str) or not name.strip() or not isinstance(raw, dict):
             raise AgentConfigError(f"agent_profiles.{name} must be a TOML table")
-        unknown = set(raw) - {"provider", "binary", "model", "effort", "timeout_seconds", "stall_timeout_seconds", "provider_options"}
+        unknown = set(raw) - {"provider", "binary", "model", "effort", "timeout_seconds", "stall_timeout_seconds", "tool_timeout_seconds", "provider_options"}
         if unknown:
             raise AgentConfigError(f"unknown agent_profiles.{name} keys: {sorted(unknown)}")
         base = profiles.get(name)
@@ -194,6 +210,9 @@ def parse_profile_tables(
         stall = raw.get("stall_timeout_seconds", base.stall_timeout_seconds if base else DEFAULT_STALL_TIMEOUT_SECONDS)
         if isinstance(stall, bool) or not isinstance(stall, int) or stall < 0:
             raise AgentConfigError(f"agent_profiles.{name}.stall_timeout_seconds must be a non-negative integer")
+        tool_timeout = raw.get("tool_timeout_seconds", base.tool_timeout_seconds if base else DEFAULT_TOOL_TIMEOUT_SECONDS)
+        if isinstance(tool_timeout, bool) or not isinstance(tool_timeout, int) or tool_timeout < 0:
+            raise AgentConfigError(f"agent_profiles.{name}.tool_timeout_seconds must be a non-negative integer")
         options = raw.get("provider_options", {})
         if not isinstance(options, dict) or set(options) - {"claude", "codex", "antigravity"}:  # allowlist:provider -- profile configuration: provider option table
             raise AgentConfigError(f"agent_profiles.{name}.provider_options is invalid")
@@ -224,7 +243,7 @@ def parse_profile_tables(
                 label=f"agent_profiles.{name}.provider_options.antigravity",
             )
         tool_roots = _profile_toolchain_roots(codex_options if provider == "codex" else claude_options, repository, name)  # allowlist:provider -- profile configuration: implementer toolchain
-        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots, stall)
+        profiles[name] = AgentProfileConfig(provider, binary, model, effort, timeout, budget, home, root, tool_roots, stall, tool_timeout)
     for slot, name in roles.items():
         if name not in profiles:
             raise AgentConfigError(f"roles.{slot.value} refers to missing agent profile {name!r}")
@@ -424,6 +443,7 @@ def resolve_agent_settings(
             antigravity_run_root=profile.antigravity_run_root,
             toolchain_read_roots=profile.toolchain_read_roots,
             stall_timeout_seconds=profile.stall_timeout_seconds,
+            tool_timeout_seconds=profile.tool_timeout_seconds,
         )
     if roles[AgentSlot.FINAL_REVIEWER] == roles[AgentSlot.REVIEWER]:
         inherited = settings["reviewer"]
@@ -440,6 +460,7 @@ def resolve_agent_settings(
             antigravity_run_root=inherited.antigravity_run_root,
             toolchain_read_roots=inherited.toolchain_read_roots,
             stall_timeout_seconds=inherited.stall_timeout_seconds,
+            tool_timeout_seconds=inherited.tool_timeout_seconds,
         )
     return settings
 

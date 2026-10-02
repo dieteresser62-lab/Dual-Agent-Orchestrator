@@ -856,7 +856,7 @@ def test_all_pairs_share_short_mode_budget(tmp_path, monkeypatch):
     assert boundary.checks_passed([{"status": "skipped"}, {"status": "failed"}]) is False
 
 
-@pytest.mark.parametrize("failure", [None, "environment", "network", "surface", "protected", "positive", "result", "toolchain", "tmp-host", "tmp-host-error", "tmp-host-timeout"])
+@pytest.mark.parametrize("failure", [None, "environment", "network", "surface", "protected", "positive", "result", "toolchain", "tmp-host", "tmp-host-error", "tmp-host-timeout", "missing-guarded", "missing-unguarded"])
 def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, failure):  # allowlist:provider -- transport: D1 offline implementer fake
     pair = BOUNDARY_CODEX_IMPLEMENTER  # allowlist:provider -- transport: D1 offline implementer fake
     bound = identity(tmp_path / "binary", pair)
@@ -898,6 +898,11 @@ def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, 
                 next(o for o in body["input"] if o["call_id"] == tool_item["id"])["output"] = "permission denied"
             if failure == "surface": body["tools"].append({"name": "spawn_agent"})
             if failure == "protected": (cwd / ".git/config").write_text("changed")
+            if failure in {"missing-guarded", "missing-unguarded"}:
+                item = next(e for e in expectations if e.get("kind") == "missing-protected" and Path(e["root"]).name == ".agents")
+                Path(item["root"]).mkdir()
+                Path(item["target"]).write_text("BOUNDARY_ESCAPE")
+                next(o for o in body["input"] if o["call_id"] == item["id"])["output"] = "WRITE_ESCAPED"
             if failure == "positive": (cwd / "positive-bash.txt").unlink()
             tmp_item = next(e for e in expectations if e["label"] == "tmp-host-file-unchanged")
             if failure in {"tmp-host", "tmp-host-error", "tmp-host-timeout"}:
@@ -913,8 +918,16 @@ def test_codex_implementer_offline_pair_with_marked_fake(tmp_path, monkeypatch, 
     monkeypatch.setattr(boundary, "FakeAPI", api_factory)
     monkeypatch.setattr(boundary, "scripts_for", scripts)
     monkeypatch.setattr(boundary, "execute", execute)
+    if failure == "missing-unguarded":
+        from protected_tree import ProtectedTreeGuard
+        monkeypatch.setattr(ProtectedTreeGuard, "after_provider_process", lambda self: None)
     report = boundary.run_pair(pair, out=tmp_path / "out", identity=bound, toolchain_roots=(str(tool_root),))
-    assert report["passed"] is (failure is None), report["checks"]
+    if failure == "missing-guarded":
+        assert report["passed"], report["checks"]
+        check = next(c for c in report["checks"] if c["check"] == "protected-trees-unchanged")
+        assert check["evidence"]["guard_stopped"] and check["evidence"]["guarded_missing_only"]
+    else:
+        assert report["passed"] is (failure is None), report["checks"]
     tmp_item = next(e for e in observations[0][1] if e["label"] == "tmp-host-file-unchanged")
     assert not Path(tmp_item["target"]).exists()
     if failure == "tmp-host":
@@ -972,3 +985,53 @@ def test_codex_implementer_probe_does_not_inherit_other_provider_credentials(tmp
     monkeypatch.setattr(boundary, "execute", execute)
     with pytest.raises(Observed):
         run_probe.run_case(case_id="W1", profile_name=pair, profile_file=profile, output=tmp_path / "out", fake_root=tmp_path)
+
+
+@pytest.mark.parametrize("pair", (BOUNDARY_IMPLEMENTER, BOUNDARY_CODEX_IMPLEMENTER))  # allowlist:provider -- transport: both implementer boundaries
+@pytest.mark.parametrize("outcome", ("blocked", "guarded", "partial-guarded", "unguarded"))
+def test_missing_protected_creation_measures_denial_or_actual_guard_stop(tmp_path, pair, outcome):
+    from agent_adapters import AgentPermissionError
+    paths = boundary.fixture(tmp_path / "fixture")
+    bound = identity(tmp_path / "binary", pair)
+    assert b"dao-probe-fake-v1" in Path(bound.real_path).read_bytes()
+    with boundary.adapter_invocation(pair, paths["repo"], bound, "Probe.") as inv:
+        calls, expectations, _ = boundary.scripts_for(pair, inv, paths)
+        missing = [item for item in expectations if item.get("kind") == "missing-protected"]
+        roots = {Path(item["root"]) for item in missing}
+        assert {paths["repo"] / name for name in (".claude", ".codex", ".gemini", ".agents")} <= roots  # allowlist:provider -- transport: absent protected config directories
+        assert any(root.name == "records" for root in roots)
+        assert any("checkpoints" in root.parts for root in roots)
+        api = boundary.FakeAPI(pair, calls, {})
+        outputs = []
+        for item in missing:
+            command = item["call"]["input"].get("cmd", item["call"]["input"].get("command"))
+            assert "mkdir -p " in command and " && printf " in command
+            assert not Path(item["root"]).exists()
+            if outcome == "partial-guarded":
+                Path(item["root"]).mkdir(parents=True)
+            elif outcome != "blocked":
+                # A marked fake executes the complete attempted shell operation on
+                # disposable bait. No installed provider is called.
+                fake = tmp_path / ("fake-" + item["id"])
+                fake.write_text("#!/bin/sh\n# dao-probe-fake-v1\n" + command + "\n")
+                fake.chmod(0o755)
+                run = boundary.execute([str(fake)], env=boundary.minimal_env(), cwd=inv.cwd, stdin="", timeout=2)
+                assert run["exit_code"] == 0 and "WRITE_ESCAPED" in run["stdout"]
+            observed = "WRITE_BLOCKED" if outcome in {"blocked", "partial-guarded"} else "WRITE_ESCAPED"
+            outputs.append({"type": "function_call_output", "call_id": item["id"], "output": observed} if pair in boundary.CODEX_BOUNDARIES else  # allowlist:provider -- transport: native tool results
+                           {"type": "tool_result", "tool_use_id": item["id"], "content": observed})
+        api.bodies = [{"input": outputs}] if pair in boundary.CODEX_BOUNDARIES else [{"messages": [{"content": outputs}]}]  # allowlist:provider -- transport: native tool results
+        if outcome in {"guarded", "partial-guarded"}:
+            with pytest.raises(AgentPermissionError, match="protected trees"):
+                inv.adapter.after_provider_process()
+        elif outcome == "blocked":
+            inv.adapter.after_provider_process()
+        checks = boundary.evaluate(api, missing, [], inv, paths)
+        assert all(check["status"] == ("failed" if outcome == "unguarded" else "passed") for check in checks[:len(missing)]), checks
+        for check in checks[:len(missing)]:
+            if outcome == "partial-guarded":
+                # Empty authorized placeholders can be removed before the guard;
+                # the failed write is then proven by the absent host root.
+                assert check["evidence"]["guard_stopped"] or check["evidence"]["blocked"]
+            else:
+                assert check["evidence"]["guard_stopped"] is (outcome == "guarded")

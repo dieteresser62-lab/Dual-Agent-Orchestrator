@@ -33,6 +33,7 @@ from native_provider_schema import (
 )
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 from role_binding import RoleBinding, binding_for
+from protected_tree import outermost_protected_paths
 
 
 def _canonical(document: object) -> str:
@@ -106,18 +107,6 @@ def implementer_disallowed_tools(settings: dict[str, object]) -> str:
     return ",".join(settings["permissions"]["deny"])  # type: ignore[index]
 
 
-def outermost_protected_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
-    """Drop paths inside another protected path.
-
-    The sandbox mounts every write denial read-only and creates a placeholder
-    for a missing one. A missing path below an already read-only parent makes
-    that placeholder impossible, and then every Bash command fails to start.
-    The outer rule already covers the inner path for file tools and Bash.
-    """
-    return tuple(
-        path for path in paths
-        if not any(other != path and path.is_relative_to(other) for other in paths)
-    )
 
 
 def implementer_settings(paths: tuple[Path, ...], root: Path, tool_roots: tuple[str, ...] = (), *, scratch: Path | None = None) -> dict[str, object]:

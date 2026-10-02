@@ -1169,7 +1169,7 @@ def codex_implementer_permission_config(package_root: Path, repository: Path, sc
     protected: tuple[Path, ...], tool_roots: tuple[str, ...], *, execution_root: Path,
 ) -> str:
     from toolchain_paths import validate_private_scratch, validate_toolchain_read_roots
-    from claude_implementer_adapter import outermost_protected_paths  # allowlist:provider -- transport: D1 implementer isolation binding
+    from protected_tree import outermost_protected_paths
     validate_codex_review_package_root(package_root)  # allowlist:provider -- transport: D1 implementer isolation binding
     if not protected or any(not path.is_absolute() for path in protected):
         raise NativeProviderSchemaError("implementer protection paths are unbound")
@@ -1216,8 +1216,8 @@ def codex_implementer_command(binary: str, model: str, effort: str, package: Pat
 def _normalize_codex_implementer(command, package, repository, execution, runtime, scratch,  # allowlist:provider -- transport: D1 implementer isolation binding
     protected, tool_roots, environment, row_digest,
 ) -> ProviderTransportProfile:
-    from agent_config import REVIEWER_ENVIRONMENT_POLICY
-    from model_catalog import reviewer_model_row_sha256
+    from agent_config import codex_environment_allowed  # allowlist:provider -- transport: shared environment policy
+    from model_catalog import catalog_row_matches
     if any(value is None for value in (package, repository, execution, runtime, scratch, protected, environment, row_digest)):
         raise NativeProviderSchemaError("implementer isolation identity is unbound")
     if len(command) < 6 or not command[3] or not re.fullmatch(r'model_reasoning_effort="[a-z]+"', command[5]):
@@ -1227,13 +1227,13 @@ def _normalize_codex_implementer(command, package, repository, execution, runtim
         expected = codex_implementer_command(command[0], model, effort, package, repository,  # allowlist:provider -- transport: D1 implementer isolation binding
                                             execution, runtime, scratch, protected, tool_roots)
         catalog_path = runtime / "model-catalog.json"
-        if catalog_path.is_symlink() or reviewer_model_row_sha256(catalog_path.read_text(encoding="utf-8"), model) != row_digest:
+        if not catalog_row_matches(catalog_path, model, row_digest):
             raise ValueError("bound catalog changed")
     except (OSError, TypeError, ValueError) as exc:
         raise NativeProviderSchemaError("implementer isolation binding differs: " + str(exc)) from exc
     if tuple(command) != expected:
         raise NativeProviderSchemaError("Codex implementer command differs from bound grammar")  # allowlist:provider -- profile configuration: implementer grammar
-    if environment.get("TMPDIR") != str(scratch) or any(name not in REVIEWER_ENVIRONMENT_POLICY and not name.startswith("LC_") for name in environment):
+    if environment.get("TMPDIR") != str(scratch) or not codex_environment_allowed(environment):  # allowlist:provider -- transport: shared environment policy
         raise NativeProviderSchemaError("implementer process environment differs from allowlist")
     return ProviderTransportProfile(provider="codex", binary_name="codex", model=model,  # allowlist:provider -- profile configuration: implementer transport
         reasoning_or_effort=effort, schema_transport="output-schema-file", semantic_flags=CODEX_IMPLEMENTER_SEMANTIC_FLAGS)  # allowlist:provider -- transport: D1 implementer isolation binding
@@ -1305,10 +1305,9 @@ def _normalize_codex_reviewer(  # allowlist:provider -- profile configuration: r
     expected_catalog = bound_runtime_dir / "model-catalog.json"
     if config[5] != "model_catalog_json=" + json.dumps(str(expected_catalog)) or expected_catalog.is_symlink():
         raise NativeProviderSchemaError("reviewer model catalog path differs from runtime binding")
-    from model_catalog import reviewer_model_row_sha256
+    from model_catalog import catalog_row_matches
     try:
-        catalog_text = expected_catalog.read_text(encoding="utf-8")
-        if reviewer_model_row_sha256(catalog_text, values[2]) != bound_model_row_sha256:
+        if not catalog_row_matches(expected_catalog, values[2], bound_model_row_sha256):
             raise ValueError("reviewer model entry changed or digest is unbound")
     except (OSError, TypeError, ValueError) as exc:
         raise NativeProviderSchemaError("reviewer model catalog is missing or unsafe") from exc

@@ -15,7 +15,7 @@ from typing import Iterator
 from agent_adapters import AgentOutputError, CapabilitySpec, CodexToolActivity, _BaseAdapter  # allowlist:provider -- transport: tool lifetime observer
 from provider_metrics import event_usage, stream_model_metrics
 from agent_config import AgentSettings
-from model_catalog import hardened_reviewer_catalog, reviewer_model_row_sha256
+from model_catalog import hardened_reviewer_catalog, reviewer_model_row_sha256, catalog_row_matches
 from agent_roles import AgentRoleName
 from native_provider_schema import (
     CODEX_REVIEW_DISABLED_FEATURES, NativeProviderSchemaError,  # allowlist:provider -- transport: reviewer CLI binding
@@ -155,7 +155,7 @@ class NativeCodexReviewAdapter(CodexToolActivity, _BaseAdapter):  # allowlist:pr
             raise AgentOutputError("Codex reviewer container changed before start")  # allowlist:provider -- transport: reviewer CLI binding
         path = self.invocation.runtime_dir / "model-catalog.json"
         try:
-            unchanged = not path.is_symlink() and reviewer_model_row_sha256(path.read_text(encoding="utf-8"), self.model) == reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model)
+            unchanged = catalog_row_matches(path, self.model, reviewer_model_row_sha256(self.settings.reviewer_model_catalog_json, self.model))
         except (OSError, TypeError, ValueError) as exc:
             raise AgentOutputError("reviewer model catalog is unavailable before start") from exc
         if not unchanged:
@@ -187,10 +187,8 @@ class NativeCodexReviewAdapter(CodexToolActivity, _BaseAdapter):  # allowlist:pr
             raise AgentOutputError("Codex reviewer rights differ from bound profile")  # allowlist:provider -- transport: reviewer CLI binding
         package_root = codex_package_root(self.provider_identity.entry_path)  # allowlist:provider -- transport: reviewer CLI binding
         runtime_dir = self._new_runtime_dir()
-        from agent_config import REVIEWER_ENVIRONMENT_POLICY
-        self.env = {name: value for name, value in os.environ.items()
-                    if name in REVIEWER_ENVIRONMENT_POLICY or name.startswith("LC_")}
-        self.env.setdefault("HOME", str(Path.home()))
+        from agent_config import codex_process_environment  # allowlist:provider -- transport: shared environment policy
+        self.env = codex_process_environment()  # allowlist:provider -- transport: shared environment policy
         self.env.setdefault("PATH", os.defpath)
         try:
             try:

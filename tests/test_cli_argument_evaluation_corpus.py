@@ -518,6 +518,7 @@ def _normalize_value(value: object) -> object:
             # D2 adds a profile field; assert it independently while preserving
             # the exact historical namespace projection and its digest.
             assert result.pop("stall_timeout_seconds") == 900
+            assert result.pop("tool_timeout_seconds") == 3600
         return result
     if isinstance(value, Enum):
         return value.value

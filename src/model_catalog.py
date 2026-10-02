@@ -3,6 +3,7 @@
 import json
 import hashlib
 import re
+from pathlib import Path
 from dataclasses import replace
 
 from agent_config import MODEL_FAMILIES
@@ -98,3 +99,8 @@ def bind_catalog_models(slots: dict, identities: dict, run_command, *, resume: b
         getLogger(__name__).info("Model bound: slot=%s model=%s%s", slot, settings.model,
                                 "→" + model if settings.model != model else "")
     slots.update(updates)
+
+
+def catalog_row_matches(path: Path, model: str, expected_digest: str) -> bool:
+    """Check the bound row without accepting a symlink at the catalog path."""
+    return not path.is_symlink() and reviewer_model_row_sha256(path.read_text(encoding="utf-8"), model) == expected_digest

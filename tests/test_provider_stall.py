@@ -186,13 +186,19 @@ def test_heartbeat_reports_model_silence_without_live_display(tmp_path, monkeypa
     assert "model silence:" in caplog.text
 
 
-def test_stall_terminates_descendants_with_the_process_group(tmp_path):
+@pytest.mark.parametrize("tool_stall", [False, True])
+def test_stall_terminates_descendants_with_the_process_group(tmp_path, tool_stall):
     from provider_process import _proc_stat
     pid_file = tmp_path / "child.pid"
     code = ("import subprocess,sys,time\n"
             "child = subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])\n"
             f"open({str(pid_file)!r},'w').write(str(child.pid))\n"
             "time.sleep(20)\n")
+    adapter = _adapter(CodexToolActivity, 0 if tool_stall else 0.3)  # allowlist:provider -- transport: group cleanup for both deadlines
+    adapter.tool_timeout_seconds = 0.3 if tool_stall else 3600
+    if tool_stall:
+        event = json.dumps({"type": "item.started", "item": {"id": "t", "type": "command_execution"}})
+        code = f"print({event!r},flush=True)\n" + code
     child_states = []
     original_stop = agent_runtime._stop_provider_group
     # Capture the child before cleanup; a PID alone would be vulnerable to reuse.
@@ -203,7 +209,88 @@ def test_stall_terminates_descendants_with_the_process_group(tmp_path):
         return original_stop(*args, **kwargs)
     with patch.object(agent_runtime, "_stop_provider_group", stop):
         with pytest.raises(agent_runtime.AgentProcessError, match="provider stalled"):
-            _run(tmp_path, _adapter(CodexToolActivity), code)  # allowlist:provider -- transport: group cleanup on stall
+            _run(tmp_path, adapter, code)
     assert child_states and child_states[0] is not None
     current = _proc_stat(int(pid_file.read_text()))
     assert current is None or current.start_ticks != child_states[0].start_ticks or current.state == "Z"
+
+
+@pytest.mark.parametrize("protocol,started", [
+    (CodexToolActivity, {"type": "item.started", "item": {"id": "t1", "type": "command_execution"}}),  # allowlist:provider -- transport: stuck tool fixture
+    (ClaudeToolActivity, {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1"}]}}),  # allowlist:provider -- transport: stuck tool fixture
+])
+@pytest.mark.parametrize("live", [False, True])
+def test_open_tool_deadline_even_with_stdout_and_disabled_silence(tmp_path, protocol, started, live):
+    adapter = _adapter(protocol, 0)
+    adapter.tool_timeout_seconds = 0.3
+    with pytest.raises(agent_runtime.AgentProcessError, match="provider stalled: tool open") as error:
+        _run(tmp_path, adapter, f"import time; print({json.dumps(started)!r}, flush=True)\n"
+             "for i in range(100):\n print('activity',flush=True); time.sleep(0.02)", live)
+    failure = agent_runtime.classify_agent_failure("test-provider", error.value, invocation_id="tool-stall")
+    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.orchestrator_diagnostic is OrchestratorDiagnostic.PROVIDER_STALLED
+
+
+def test_tool_start_is_per_id_and_duplicate_does_not_extend_deadline():
+    clock = agent_runtime._ModelSilence(0)
+    def observe(kind, identity, now):
+        clock.observe(CodexToolActivity, json.dumps({"type": kind, "item": {"id": identity, "type": "command_execution"}}), now)  # allowlist:provider -- transport: per-tool deadline fixture
+    observe("item.started", "a", 10)
+    observe("item.started", "b", 20)
+    observe("item.started", "a", 30)
+    observe("item.completed", "unknown", 40)
+    assert clock.tool_duration(50) == 40
+    observe("item.completed", "a", 50)
+    assert clock.tool_duration(50) == 30
+    observe("item.completed", "b", 60)
+    assert clock.tool_duration(1000) == 0
+
+
+def test_zero_disables_tool_deadline(tmp_path):
+    adapter = _adapter(CodexToolActivity, 0)  # allowlist:provider -- transport: disabled deadlines fixture
+    adapter.tool_timeout_seconds = 0
+    started = json.dumps({"type": "item.started", "item": {"id": "t", "type": "command_execution"}})
+    assert _run(tmp_path, adapter, f"import time; print({started!r},flush=True); time.sleep(0.6)").returncode == 0
+
+
+@pytest.mark.parametrize("protocol", [CodexToolActivity, ClaudeToolActivity])  # allowlist:provider -- transport: hostile JSON fixture
+@pytest.mark.parametrize("live", [False, True])
+def test_deep_json_observer_failure_preserves_output_and_warns_once(tmp_path, caplog, protocol, live):
+    depth = max(10000, sys.getrecursionlimit() * 10)
+    deep = '[' * depth + '0' + ']' * depth
+    # Verify that this exercises the parser's exception rather than neutral JSON.
+    with pytest.raises(RecursionError):
+        protocol.tool_activity(deep)
+    result = _run(tmp_path, _adapter(protocol, 5), f"print({deep!r}); print({deep!r}); print('after')", live)
+    assert result.stdout == deep + "\n" + deep + "\nafter\n"
+    assert caplog.text.count("tool activity observer failed") == 1
+
+
+@pytest.mark.parametrize("value", [0, 17, 3600])
+def test_profile_tool_timeout(value):
+    _, profiles = parse_profile_tables(None, {"implementation": {"tool_timeout_seconds": value}})
+    assert profiles["implementation"].tool_timeout_seconds == value
+    assert {settings.tool_timeout_seconds for settings in default_agent_settings().values()} == {3600}
+
+
+@pytest.mark.parametrize("value", [-1, True, 0.5, "3600", None])
+def test_invalid_profile_tool_timeout(value):
+    with pytest.raises(AgentConfigError, match="tool_timeout_seconds"):
+        parse_profile_tables(None, {"implementation": {"tool_timeout_seconds": value}})
+
+
+@pytest.mark.parametrize("exception", [RuntimeError, RecursionError, ValueError])
+def test_reader_retains_lines_when_entire_observer_raises(exception, caplog):
+    import io
+    process = SimpleNamespace(stdout=io.StringIO("first\nsecond\n"), stderr=io.StringIO("error\n"), stdin=None)
+    def observe(line):
+        raise exception("observer failure")
+    output, threads, _, _ = agent_runtime._start_provider_stream_readers(process, None, observe)
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+    rows = []
+    while not output.empty():
+        rows.append(output.get_nowait())
+    assert [line for channel, line in rows if channel == "stdout"] == ["first\n", "second\n", None]
+    assert caplog.text.count("stdout observer failed") == 1

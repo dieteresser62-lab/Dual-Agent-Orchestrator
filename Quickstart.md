@@ -54,6 +54,7 @@ model = "sol"
 effort = "high"
 timeout_seconds = 0
 stall_timeout_seconds = 900
+tool_timeout_seconds = 3600
 
 [agent_profiles.final_review]
 provider = "codex"
@@ -61,11 +62,12 @@ model = "sol"
 effort = "high"
 timeout_seconds = 0
 stall_timeout_seconds = 900
+tool_timeout_seconds = 3600
 ```
 
 Die Zertifizierung gilt **je Slot**, ohne Allowlist kompletter Belegungen. Topologie-Evidenz liegt für Claude / Codex / Codex und die Standardbelegung vor; für andere Mischungen, etwa Claude / AGY / AGY oder Claude / Codex / AGY, wird ein eigener Probelauf empfohlen.
 
-Das Beispiel begrenzt die **Modellstille auf 900 Sekunden**: stdout-Zeilen setzen die Uhr zurück, während gemeldeter Werkzeuge ruht sie. `stall_timeout_seconds = 0` schaltet diese Erkennung ab; `timeout_seconds` begrenzt zusätzlich die gesamte Laufzeit einschließlich Werkzeugen. Die Hänger von 20–60 Minuten werden damit als `provider stalled` über das Transportfehlerbudget wiederholt, während legitime lange Tests weiterlaufen. Deshalb ist das frühere Gesamtzeitlimit von 900 Sekunden zur Hänger-Erkennung nicht mehr empfohlen. Details und die Print-Ausnahmen stehen in der [Einrichtung](docs/reference/einrichtung.md).
+Das Beispiel begrenzt die **Modellstille auf 900 Sekunden**: stdout-Zeilen setzen die Uhr zurück, während gemeldeter Werkzeuge ruht sie. `stall_timeout_seconds = 0` schaltet diese Erkennung ab; `timeout_seconds` begrenzt zusätzlich die gesamte Laufzeit einschließlich Werkzeugen. Die Hänger von 20–60 Minuten werden damit als `provider stalled` über das Transportfehlerbudget wiederholt, während legitime lange Tests weiterlaufen. `tool_timeout_seconds = 3600` begrenzt zusätzlich jedes einzelne offene Werkzeug auf 60 Minuten; `0` schaltet diese Grenze ab. Kein Gesamtzeitlimit wird für Ereignisströme nur mit beiden aktivierten Netzen empfohlen. Details und die Print-Ausnahmen stehen in der [Einrichtung](docs/reference/einrichtung.md).
 
 
 `/absolute/node-root` ist ein Platzhalter für ein existierendes absolutes

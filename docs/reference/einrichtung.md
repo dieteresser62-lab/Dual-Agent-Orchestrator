@@ -385,6 +385,7 @@ model = "sol"
 effort = "high"
 timeout_seconds = 0
 stall_timeout_seconds = 900
+tool_timeout_seconds = 3600
 
 [agent_profiles.final_review]
 provider = "codex"
@@ -392,15 +393,18 @@ model = "sol"
 effort = "high"
 timeout_seconds = 0
 stall_timeout_seconds = 900
+tool_timeout_seconds = 3600
 ```
 
 Die Zertifizierung gilt **je Slot**, ohne Allowlist kompletter Belegungen. Topologie-Evidenz liegt für Claude / Codex / Codex und die Standardbelegung vor; für andere Mischungen, etwa Claude / AGY / AGY oder Claude / Codex / AGY, wird ein eigener Probelauf empfohlen.
 
 `stall_timeout_seconds` begrenzt je Agent-Profil die **Modellstille**, standardmäßig auf **900 Sekunden (15 Minuten)**; `0` schaltet die Erkennung ab. Jede stdout-Ausgabezeile setzt die Uhr zurück. Während gemeldeter Werkzeugausführungen ruht sie: bei Codex von `item.started` bis zum passenden `item.completed`, beim Claude-Implementer von `tool_use` bis zum passenden `tool_result`. Auch ohne Live-Anzeige wird der Ereignisstrom intern ausgewertet. stderr-Zeilen setzen die Uhr nicht zurück.
 
-`timeout_seconds` begrenzt dagegen die gesamte Aufrufdauer einschließlich Werkzeugen; `0` bedeutet kein Gesamtzeitlimit. Die zuerst erreichte Grenze beendet die Prozessgruppe. Bei Modellstille lautet die Diagnose `provider stalled`; der Aufruf wird über `max_transport_failures` mit `transient_policy.maximum_delay_seconds` Wartezeit wiederholt. Nach Budgetende bleibt der Halt resumefähig; die Diagnose nennt Stilleminuten und die letzte Aktivität. Der Wert ist an das Laufprofil gebunden; ein geänderter Wert beim Resume wird abgelehnt. Ältere Aufzeichnungen ohne dieses Feld bleiben für den Audit lesbar, erhalten aber keine nachträglich erfundene Stille-Policy; für ihren Resume ist die passende ältere Orchestratorversion erforderlich.
+`tool_timeout_seconds` begrenzt jedes einzelne offene Werkzeug auf **3600 Sekunden (60 Minuten)**; `0` schaltet diese Grenze ab. Der Start wird je Werkzeug-ID gespeichert; weitere Ausgabe, parallele Werkzeuge und doppelte Startmeldungen verlängern die Grenze nicht. Auch ein verlorenes Abschlussereignis erreicht diese Grenze.
 
-Die früheren Hänger von 20–60 Minuten erfordern eine Grenze für Modellstille. Das frühere Gesamtzeitlimit von 900 Sekunden für Codex-Reviewprofile ist dafür nicht mehr empfohlen: erfolgreiche Modellarbeit schwieg in den gemessenen Läufen höchstens 93 Sekunden, der Hänger 1.853 Sekunden. Legitime Werkzeugtests können dagegen 12–14 Minuten ohne Ausgabe dauern. Die neue Uhr erkennt Modellhänger und lässt solche Werkzeuge weiterlaufen. Ein zusätzliches Gesamtzeitlimit bleibt eine bewusste Operatorgrenze. Print-Transporte ohne Werkzeugereignisstrom (Antigravity sowie die Claude-Reviewprofile mit JSON-Print) erhalten keine Stille-Erkennung und behalten ausschließlich `timeout_seconds`.
+`timeout_seconds` begrenzt dagegen die gesamte Aufrufdauer einschließlich Werkzeugen; `0` bedeutet kein Gesamtzeitlimit. Die zuerst erreichte Grenze beendet die Prozessgruppe. Bei Modellstille oder überschrittener Werkzeuggrenze lautet die Diagnose `provider stalled`; der Aufruf wird über `max_transport_failures` mit `transient_policy.maximum_delay_seconds` Wartezeit wiederholt. Nach Budgetende bleibt der Halt resumefähig; die Diagnose nennt Stilleminuten und die letzte Aktivität oder `tool open N s`. Beide Werte sind an das Laufprofil gebunden; ein geänderter Wert beim Resume wird abgelehnt. Ältere Aufzeichnungen ohne diese Felder bleiben für den Audit lesbar, erhalten aber keine nachträglich erfundene Stille- oder Werkzeug-Policy; für ihren Resume ist die passende ältere Orchestratorversion erforderlich.
+
+Die früheren Hänger von 20–60 Minuten erfordern eine Grenze für Modellstille. Das frühere Gesamtzeitlimit von 900 Sekunden für Codex-Reviewprofile ist dafür nicht mehr empfohlen: erfolgreiche Modellarbeit schwieg in den gemessenen Läufen höchstens 93 Sekunden, der Hänger 1.853 Sekunden. Legitime Werkzeugtests können dagegen 12–14 Minuten ohne Ausgabe dauern. Die Stille-Uhr erkennt Modellhänger und lässt solche Werkzeuge bis zur separaten Werkzeuggrenze weiterlaufen. Kein Gesamtzeitlimit (`timeout_seconds = 0`) wird für Ereignisströme nur mit beiden aktivierten Netzen empfohlen. Ein zusätzliches Gesamtzeitlimit bleibt eine bewusste Operatorgrenze. Print-Transporte ohne Werkzeugereignisstrom (Antigravity sowie die Claude-Reviewprofile mit JSON-Print) erhalten keine Stille-Erkennung und behalten ausschließlich `timeout_seconds`.
 
 
 Ersetzen Sie `/absolute/node-root` durch ein existierendes absolutes
@@ -906,7 +910,7 @@ Vorrang: Kommandozeile vor `RUN_TASK_*`-Umgebungsvariablen vor
 
 Die Prozesse von Implementierer und Prüfer haben ohne ausdrückliche Angabe kein
 Gesamtzeitlimit. Für Ereignisströme gilt zusätzlich `stall_timeout_seconds` je
-Agent-Profil: 900 Sekunden Modellstille, Ruhe während Werkzeugen, `0` = aus. `--implementer-timeout` und `--reviewer-timeout` sowie die entsprechenden
+Agent-Profil: 900 Sekunden Modellstille, Ruhe während Werkzeugen, `0` = aus. `tool_timeout_seconds` begrenzt ein einzelnes Werkzeug auf 3600 Sekunden, `0` = aus. Ein Gesamtzeitlimit von `0` wird für Ereignisströme nur mit beiden aktivierten Netzen empfohlen. `--implementer-timeout` und `--reviewer-timeout` sowie die entsprechenden
 `RUN_TASK_*_TIMEOUT`-Variablen akzeptieren positive Sekundenwerte für ein hartes
 Limit; `0` bedeutet ausdrücklich kein Limit. Das Testlimit des separaten
 Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) und die Validierungszeitlimits sind
@@ -953,7 +957,7 @@ Für Codex gilt dieselbe Pfadvalidierung mit `provider_options.codex.toolchain_r
 toolchain_read_roots = ["/absolute/node-root"]
 ```
 
-Ersetzen Sie den Beispielpfad durch den absoluten Pfad einer konkreten Node-Installation, etwa `/home/operator/.nvm/versions/node/v22.23.2`; TOML expandiert `~` nicht. Die Wurzeln und deren vorhandene `bin`-Verzeichnisse werden lesbar beziehungsweise in PATH aufgenommen; Schreibrechte erhalten sie nicht. Beide Reviewslots dürfen auch keine leere Toolchain-Liste setzen.
+Ersetzen Sie den Beispielpfad durch den absoluten Pfad einer konkreten Node-Installation, etwa `/home/operator/.nvm/versions/node/v22.23.2`; TOML expandiert `~` nicht. Die Wurzeln werden lesbar freigegeben; Schreibrechte erhalten sie nicht. Der Codex-Prozess behält den Eltern-PATH seiner Identitätsbindung, damit `#!/usr/bin/env node` denselben Interpreter findet; Toolchain-Programme können über absolute Pfade aufgerufen werden. Beide Reviewslots dürfen auch keine leere Toolchain-Liste setzen.
 
 Der Codex-Implementer nutzt das Rechteprofil `dao-implementer` ohne `--sandbox`: Repository und privater Scratch pro Aufruf (0700, TMPDIR) sind beschreibbar, die gebundenen Schutzpfade einschließlich externer Worktree-Gitverzeichnisse schreibgeschützt. Der Katalog wird für alle Codex-Slots gehärtet und über den ausgewählten Modelleintrag beim Laufstart und Resume gebunden. Benutzerkonfiguration, benutzerweite und projektweite Ausführungsregeln, Websuche, Apps, Plugins, MCP aus der Benutzerkonfiguration und Unteragenten werden ausgeschaltet; die Projektanweisungen in `AGENTS.md` bleiben wirksam. Der Prozess erhält nur PATH, HOME, CODEX_HOME, LANG, LC_*, TERM und TMPDIR; Shellbefehle erben `core`. Persönliche Home-Dateien und Zugangsdaten werden nicht als Lesewurzeln freigegeben. Für Codex-Werkzeugbefehle ist `/tmp` ein privater Sandbox-Bereich: Schreiben dort ist zulässig, sofern die Host-Datei unverändert bleibt. Der private Scratch (`TMPDIR`) bleibt der vorgesehene Ort für Zwischendateien. Die Grenzprüfung weist diese Unterscheidung im Bericht aus. Details und der Befund der Steuerung stehen in der [Implementer-Zertifizierung](implementer-certification.md).
 
