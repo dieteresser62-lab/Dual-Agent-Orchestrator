@@ -96,7 +96,7 @@ passenden Werkzeuge unter `/usr` oder im Repository, entfällt die zusätzliche
 Wurzel; externe Symlink-Ziele von `node_modules` oder `.venv` brauchen sie
 ebenfalls. Der Orchestrator-Testbefehl läuft außerhalb der Agenten-Sandbox
 in der Startumgebung; dessen Erfolg beweist deren Toolchain-Sichtbarkeit nicht.
-Prüfen Sie vorher im Projektordner mit `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`; Beispiele und Messgrenzen stehen unter [Vorab prüfen](docs/reference/einrichtung.md#vorab-prüfen).
+Prüfen Sie vorher im Projektordner mit `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`, ohne parallelen Orchestratorlauf; Beispiele und Messgrenzen stehen unter [Vorab prüfen](docs/reference/einrichtung.md#vorab-prüfen).
 HOME und Credential-Verzeichnisse dürfen nicht freigegeben werden. Die Claude-Bash-
 Sandbox braucht **socat und bubblewrap** und startet mit `failIfUnavailable`
 bei fehlenden Voraussetzungen nicht. Details und Zertifizierungsnachweise:
@@ -225,11 +225,19 @@ Entsprechend aktivieren `--test-change-gate` eine zusätzliche Abnahme für Test
 
 Für bereits ausgearbeitete, maschinell erzeugte oder bewusst getrennt ausgeführte Aufträge bleiben formale Dateien unterstützt. [example-plan-task.md](example-plan-task.md) zeigt `ORCHESTRATOR_MODE: PLAN_ONLY`; [example-task.md](example-task.md) zeigt `ORCHESTRATOR_MODE: IMPLEMENT`, einen optional ausdrücklich gesetzten `TARGET_BRANCH`, `TASK_SCOPE`, Akzeptanzkriterien und Stopbedingungen.
 
-Ein formaler Einzelauftrag kann so gestartet werden:
+Ein formaler Einzelauftrag kann so gestartet werden. Setzen Sie dafür
+`TARGET_BRANCH: feature/mein-vorhaben` in `task.md`:
 
 ```bash
+git switch main
+git switch -c feature/mein-vorhaben
 run_task --task-file task.md
 ```
+
+Existiert der Branch schon, verwenden Sie `git switch feature/mein-vorhaben`.
+Im Einzelmodus muss der aufgelöste Zielbranch bereits aktiv sein, auch bei
+Ideen; nur die Wache legt ihn für neue Aufgaben selbst an
+([Einrichtung 4.4](docs/reference/einrichtung.md#44-formale-aufträge-statt-ideen)).
 
 Ein außerhalb des Watchers bewusst getrennt gestarteter Implementierungs-Handoff verwendet beispielsweise:
 
@@ -264,6 +272,8 @@ run_task --resume --task-file task.md
 
 Nur wenn der protokollierte Exitcode 4 tatsächlich eine menschliche Gate-Entscheidung verlangt — also nicht bei `bootstrap_check` — wird diese mit Begründung erteilt:
 
+Für `quota_resume_diff` verwenden Sie stattdessen den Einzelbefehl darunter.
+
 ```bash
 run_task --watch --resume \
   --approve-gate \
@@ -271,18 +281,25 @@ run_task --watch --resume \
 ```
 
 Liegen nach einem abgebrochenen Provideraufruf Teilergebnisse im Repository,
-kann `QUOTA-RESUME-DIFF` anhalten. Prüfe Fingerprint und betroffene Pfade und
-entscheide ausdrücklich mit `--approve-gate` oder `--reject-gate`; ein einfacher
-Resume genügt dann nicht. Verwende die unveränderte Aufgabe im Einzelmodus,
-da der Watch-Modus `--task-file` ignoriert:
+kann `QUOTA-RESUME-DIFF` anhalten. Prüfen Sie Fingerprint und betroffene Pfade
+und entscheiden Sie ausdrücklich mit `--approve-gate` oder `--reject-gate`; ein einfacher
+Resume genügt dann nicht. Beenden Sie die Wache und verwenden Sie die aktuelle,
+unveränderte Aufgabe im Einzelmodus, da der Watch-Modus `--task-file` ignoriert.
+Bei einer Umsetzung ist das die erzeugte `…-implement.md`, nicht die Idee;
+ermitteln Sie den gebundenen Pfad lesend:
 
 ```bash
-run_task --task-file task.md --resume --approve-gate --gate-rationale "Fingerprint und Teilergebnisse geprüft"
+aufgabe=$(python3 -c 'import json; print(json.load(open(".orchestrator/state.json"))["task_file"])')
+run_task --task-file "$aufgabe" --resume --approve-gate --gate-rationale "Fingerprint, Pfade und Teilergebnisse geprüft"
 ```
 
-Zum Ablehnen ersetze `--approve-gate` durch `--reject-gate` mit einer passenden
-Begründung. Entferne Teilergebnisse nicht, um den gebundenen Fingerprint zu
-umgehen, und bearbeite keinen State manuell.
+Zum Ablehnen ersetzen Sie `--approve-gate` durch `--reject-gate` mit einer
+passenden Begründung. Entfernen Sie Teilergebnisse nicht, um den gebundenen
+Fingerprint zu umgehen, und bearbeiten Sie keinen State manuell.
+Der Einzelbefehl kann den Lauf abschließen und verschiebt eine erfolgreich
+beendete Watch-Aufgabe nach `outbox/done/`. Starten Sie danach für weitere
+Ideen und Folgeaufgaben wieder `run_task --watch`; der vollständige Ablauf
+steht in [Einrichtung 2.9](docs/reference/einrichtung.md#29-wenn-er-anhält).
 
 Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Findings und Blocker verändern die konfigurierte Validierungsmatrix nicht — kein Befund kann sie erweitern oder anhalten.
 

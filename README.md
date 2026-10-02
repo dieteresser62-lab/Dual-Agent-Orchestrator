@@ -151,11 +151,18 @@ Der Watcher verwendet einen ausdrücklich angegebenen Zielbranch unverändert, e
 
 Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält der Watcher an, statt Änderungen zu stashen oder mitzunehmen. Die einzige enge Ausnahme ist ein bereits vorhandener, regulärer und noch unversionierter `PLAN_ONLY`-Arbeitsplan, der im Auftrag exakt als `WORK_PLAN_PATH` gebunden ist; diesen nimmt der Branchwechsel als Aufgabenartefakt mit. Andere Änderungen oder ein bereits getrackter Plan bleiben ein Stopgrund. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
 
-Formale Einzelaufgaben bleiben für fortgeschrittene und maschinell erzeugte Aufträge verfügbar. [example-plan-task.md](example-plan-task.md) zeigt einen formalen Planauftrag, [example-task.md](example-task.md) einen formalen Implementierungsauftrag:
+Formale Einzelaufgaben bleiben für fortgeschrittene und maschinell erzeugte Aufträge verfügbar. [example-plan-task.md](example-plan-task.md) zeigt einen formalen Planauftrag, [example-task.md](example-task.md) einen formalen Implementierungsauftrag. Setzen Sie für dieses Beispiel `TARGET_BRANCH: feature/mein-vorhaben` im Auftrag:
 
 ```bash
+git switch main
+git switch -c feature/mein-vorhaben
 ./run_task --task-file path/to/my-task.md
 ```
+
+Existiert der Branch schon, verwenden Sie `git switch feature/mein-vorhaben`.
+Auch bei Ideen setzt der Einzelmodus den bereits aktiven Zielbranch voraus;
+nur die Wache legt ihn für neue Aufgaben an
+([Einrichtung 4.4](docs/reference/einrichtung.md#44-formale-aufträge-statt-ideen)).
 
 Die kompatible Positionsschreibweise ist gleichwertig; verwende nicht beide Formen zugleich:
 

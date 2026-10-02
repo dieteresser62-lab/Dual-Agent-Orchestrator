@@ -38,6 +38,10 @@ dort docs/reference/einrichtung.md. Erledige Teil 1, soweit er fehlt, und
 schließe dieses Projekt nach Teil 2 an. Frag mich, statt zu raten: beim
 Testbefehl, bei den Pfadklassen, beim Inhalt der AGENTS.md und vor jeder
 Installation. Starte keinen Lauf. Zeig mir am Ende jeden Schritt mit Ergebnis.
+Prüfe die globale und die im Projekt wirksame Git-Identität nach 1.1.
+Führe die Vorabprüfung aus 2.3 ohne parallelen Lauf aus, bei Unterprozess-Tests
+auch einen gezielten Test; ergänze bei belegter Sandbox-Grenze die optionale
+Regel aus 2.4.
 ```
 
 Für einen **Neuanfang** lautet der mittlere Satz stattdessen: *„Lege nach
@@ -132,13 +136,32 @@ Die gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit
 aus. Fehlende Pflichtschalter werden abgewiesen. Die Projekt-Vorabprüfung
 aus 2.3 ergänzt dies mit den Messgrenzen aus 4.3.
 
-Der Orchestrator committet unter der Git-Identität des Projekts. Fehlt sie,
-scheitert schon der erste Commit mit `Author identity unknown`. Einmalig
-einrichten:
+Der Orchestrator committet unter der Git-Identität des Projekts. Prüfen Sie
+im Projektordner sowohl die globale als auch die dort wirksame Identität:
+
+```bash
+git config --global --get user.name
+git config --global --get user.email
+git config --get user.name
+git config --get user.email
+```
+
+Eine nur repo-lokal gesetzte Identität wird **nicht in einen Klon übernommen**.
+Fehlt dort die wirksame Identität, scheitert der erste Orchestrator-Commit mit
+`Author identity unknown` (`GIT-TRANSACTION`, fortsetzbar nach der Einrichtung).
+Für alle Repositorys einmalig einrichten:
 
 ```bash
 git config --global user.name "Ihr Name"
 git config --global user.email "ihre@adresse.example"
+```
+
+Soll die Identität nur für ein Projekt gelten, setzen Sie sie stattdessen
+**in jedem neuen Klon** ohne `--global`:
+
+```bash
+git config user.name "Ihr Name"
+git config user.email "ihre@adresse.example"
 ```
 
 ### 1.2 Herunterladen
@@ -481,6 +504,11 @@ Die vollständigen Schutz- und Messregeln stehen in der
 
 Starten Sie im **Projektordner**, in derselben Shell wie später die Wache:
 
+**Nie parallel zu einem laufenden Orchestrator prüfen.** Beenden Sie vorher
+die Wache und warten Sie auf das Prozessende. `codex sandbox` kann kurzzeitig
+Platzhalter für fehlende Schutzpfade im Projekt anlegen; ein paralleler Lauf
+würde diese Änderungen seinem Implementer zuschreiben.
+
 ```bash
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node --tool npm
@@ -531,6 +559,24 @@ Ein gezielter Befehl ist optional:
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node -- node --version
 python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --json
 ```
+
+Bei Tests, die Unterprozesse starten, prüfen Sie zusätzlich einen solchen Test.
+Wenn Ihr Projekt diesen Einzeltest-Starter verwendet, ersetzen Sie `<test>`
+durch den passenden Testnamen:
+
+```bash
+python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py --tool node -- node tests/run-single.mjs "<test>"
+```
+
+Im echten Lauf vom 02.10.2026 meldete `spawnSync` mit Pipes trotz Status `0`
+und korrekter Ausgabe `error.code = EPERM`; ein Test mit `node` als Kindprozess
+scheiterte dadurch in der Codex-Sandbox. Ein reiner `spawnSync … EPERM`-Stopp
+wird derzeit nicht automatisch an die Orchestrator-Validierung übergeben.
+Ist derselbe Test außerhalb der Sandbox grün und scheitert in der Sandbox
+nur der Port-, Browser- oder Unterprozessstart, ergänzen Sie die
+**optionale Regel aus 2.4**. Der Implementer soll die Einschränkung
+berichten und seine Arbeit übergeben; der Orchestrator führt den konfigurierten
+Testbefehl außerhalb der Sandbox aus. Ein echter Testfehler muss behoben werden.
 
 **Achtung:** Der Zusatzbefehl darf im Repository schreiben, wie der
 Implementer. Verwenden Sie gezielte, nicht verändernde Befehle. Ausgabe und
@@ -599,6 +645,13 @@ Tests: `python3 -m pytest tests/ -q` – jede Änderung braucht Tests.
 
 ## Nicht anfassen
 - `legacy/` – wird separat abgelöst.
+```
+
+**Optional bei belegten Sandbox-Grenzen** (Vorabprüfung aus 2.3): Ergänzen Sie
+unter „Regeln“ diese Zeile, etwa für Projekte mit Unterprozess-Tests:
+
+```markdown
+- Ein nur in der Agenten-Sandbox gescheiterter Port-, Browser- oder Unterprozessstart (etwa `spawnSync … EPERM` bei Tests mit `node` als Kindprozess) ist kein Grund zum Anhalten: Nennen Sie diese Prüfungen im Bericht als in der Sandbox nicht ausführbar und übergeben Sie die fertige Arbeit; der Orchestrator führt den konfigurierten Testbefehl außerhalb der Sandbox aus.
 ```
 
 Über diesen Weg wird nur `AGENTS.md` mitgegeben. Vorhandene `CLAUDE.md`,
@@ -689,7 +742,15 @@ Der Orchestrator führt die Tests mit genau dieser Umgebung aus.
 | was noch wartet | `ls inbox/` |
 | was fertig ist | `ls outbox/done/` |
 | die entstandenen Commits | `git log --oneline --graph --all -20` |
+| Änderungen im Arbeitsbaum | `GIT_OPTIONAL_LOCKS=0 git status --short` |
 | Plan und Prüfberichte | `docs/internal/` im Projekt, auf dem Zielbranch |
+
+**Während eines Laufs keine Git-Schreibbefehle im Projekt ausführen.** Auch
+ein gewöhnliches `git status` kann den Index auffrischen. Der Schutzwächter
+meldet das als `implementer changed protected trees: …/.git/index` und hält
+den Lauf mit `AGENT-PERMISSION` an. Verwenden Sie beim Zusehen stets
+`GIT_OPTIONAL_LOCKS=0 git status`; im gemessenen Lauf verhinderte das den Halt.
+Bei einem bereits ausgelösten Halt folgen Sie 2.9.
 
 Der Orchestrator arbeitet ohne Rückfragen durch: Plan, jedes Arbeitspaket mit
 Test und Prüfung, am Ende eine Abnahme des gesamten Branches. Findet die
@@ -704,7 +765,7 @@ Das Protokoll nennt am Ende einen Exitcode und einen Grund. Eindeutige Provider-
 | Exitcode | Bedeutung | Was Sie tun |
 |---:|---|---|
 | `0` | fertig | weiter mit 2.10 |
-| `2`, `3` | Kontingent erschöpft oder ein Agent ist ausgefallen | später einfach erneut `run_task --watch` starten – er setzt exakt an der Stelle fort |
+| `2`, `3` | Kontingent erschöpft oder ein Agent ist ausgefallen | später erneut `run_task --watch` starten; bei Teilergebnissen kann die unten beschriebene Gate-Freigabe folgen |
 | `4` | ein Gate hält den Lauf an | `gate=` und den Anfang von `detail=` in der Pausenzeile lesen; dann wie unten fortfahren |
 | `5` | endgültiges Urteil, etwa eine abgelehnte Prüfung | Grund im Protokoll lesen; dieser Lauf ist beendet |
 
@@ -723,8 +784,8 @@ Entscheidung über den im Zustand gebundenen Fingerprint:
 | `quota_resume_diff` | `QUOTA-RESUME-DIFF` |
 | `stop_request` | `SCOPE-EXTENSION-REQUESTED` bei einem laufenden Slice mit angeforderten Pfaden |
 
-Für diese Fälle prüfen Sie Grund und Erläuterung und erteilen oder verweigern
-Sie die Entscheidung:
+Für diese Fälle **außer `quota_resume_diff`** prüfen Sie Grund und Erläuterung
+und erteilen oder verweigern Sie die Entscheidung:
 
 ```bash
 run_task --watch --resume --approve-gate --gate-rationale "Pfade geprüft, passt"
@@ -732,16 +793,39 @@ run_task --watch --resume --approve-gate --gate-rationale "Pfade geprüft, passt
 run_task --watch --resume --reject-gate --gate-rationale "Pfade nicht freigegeben"
 ```
 
-Nach Teilergebnissen eines abgebrochenen Provideraufrufs verlangt
-`QUOTA-RESUME-DIFF` eine ausdrückliche Entscheidung über Fingerprint und Pfade.
-Bei `gate=quota_resume_diff` setzen Sie die unveränderte Aufgabendatei gezielt
-fort; im Watch-Modus wird `--task-file` ignoriert:
+Nach Teilergebnissen eines abgebrochenen Provideraufrufs kann
+`QUOTA-RESUME-DIFF` eine ausdrückliche Entscheidung über Fingerprint und Pfade
+verlangen.
+Ein gewöhnliches Resume gibt diese Änderungen nicht frei. Lesen Sie im
+Protokoll den aktuellen Fingerprint (`got …`) und `paths=…` und prüfen Sie
+die Teilergebnisse mit `git diff` und `GIT_OPTIONAL_LOCKS=0 git status --short`.
+Bei `gate=quota_resume_diff` beenden Sie die Wache und setzen die **aktuelle,
+unveränderte Aufgabendatei** im Einzelmodus fort. Ermitteln Sie ihren Pfad
+lesend aus dem Zustand, statt den Namen zu raten:
 
 ```bash
-run_task --task-file <Aufgabendatei> --resume --approve-gate --gate-rationale "Änderungen geprüft, passt"
+aufgabe=$(python3 -c 'import json; print(json.load(open(".orchestrator/state.json"))["task_file"])')
+printf '%s\n' "$aufgabe"
+run_task --task-file "$aufgabe" --resume --approve-gate --gate-rationale "Fingerprint, Pfade und Teilergebnisse geprüft"
 ```
 
-Zum Ablehnen verwenden Sie dort `--reject-gate` statt `--approve-gate`.
+Aus `inbox/meine-idee.md` entsteht nach der Planabnahme
+`inbox/meine-idee-implement.md`; bei `meine-idee-plan.md` wird `-plan` durch
+`-implement` ersetzt. Während der Umsetzung brauchen Sie diese erzeugte Datei,
+nicht die ursprüngliche Idee. Im Watch-Modus wird `--task-file` ignoriert.
+Zum Ablehnen verwenden Sie im Einzelbefehl `--reject-gate` statt `--approve-gate`
+mit einer passenden Begründung. Entfernen Sie keine Teilergebnisse, um die
+Freigabe zu umgehen, und ändern Sie keinen Zustand von Hand.
+
+Der Einzelbefehl setzt den gebundenen Lauf fort und kann ihn bis zum Ende
+ausführen. Eine erfolgreich abgeschlossene Aufgabe aus der Wache wird dabei
+nach `outbox/done/` verschoben. Danach starten Sie für weitere Ideen oder
+erzeugte Folgeaufgaben wieder die Wache; verwenden Sie dieselbe Startumgebung
+und dieselben Optionen wie in 2.7:
+
+```bash
+run_task --watch --verbose 2>&1 | tee -a ~/orchestrator-logs/mein-projekt.log
+```
 
 Bei `gate=stop_request detail=OPERATOR-PREREQUISITE-MISSING | …` stellen Sie
 die genannte Voraussetzung bereit und setzen mit `run_task --watch --resume`
@@ -774,6 +858,22 @@ Den Orchestrator beenden Sie in seiner tmux-Sitzung mit <kbd>Strg</kbd>+<kbd>C</
 Ein späterer Start mit `run_task --watch` setzt fort.
 
 ### 2.10 Abschließen
+
+**Vor einem Push, besonders bei öffentlichen Repositorys:** Die Audit-Berichte
+können derzeit absolute Home-Pfade der CLI-Binaries enthalten; im echten Lauf
+vom 02.10.2026 wurden sie mitcommittet. Der lokale Merge übernimmt sie in
+den Basisbranch. Prüfen Sie die Berichte und die zur Veröffentlichung
+vorgesehene Historie auf persönliche Pfade, auch in eingebetteten Testausgaben.
+Eine erste Suche:
+
+```bash
+git log -p -- docs/internal/ | grep -nE '/home/|/mnt/c/Users/|/Users/'
+```
+
+Bis die automatische Ausgabe bereinigt ist, veröffentlichen Sie keine Commits
+mit solchen persönlichen Pfaden. Ein späterer Bereinigungscommit entfernt
+sie nicht aus älteren Commits; eine nötige Historienänderung ist eine separate,
+bewusste Entscheidung. Prüfen Sie auch andere Ablageorte Ihrer Berichte.
 
 Der Orchestrator hat alles auf einem eigenen Branch committet, zum Beispiel
 `feature/einkaufsliste`. Nach einem befundfreien Gesamtreview archiviert er
@@ -956,6 +1056,8 @@ Sie haben zwei Wege:
 
 **Prüfliste für jedes angeschlossene Projekt**, bevor Sie neue Arbeit starten:
 
+- [ ] Prüfen Sie die globale und die im Projekt wirksame Git-Identität nach
+  1.1; repo-lokale Einstellungen fehlen in neuen Klonen.
 - [ ] `AGENTS.md` ist rollenneutral und verträglich mit dem Prüfvertrag (2.4).
   Prüfen Sie vorhandene `CLAUDE.md`, `CODEX.md` und `GEMINI.md` ebenfalls:
   feste Anbieterrollen, Git-Regeln und „kein Review ohne Findings“ dürfen
@@ -971,9 +1073,13 @@ Sie haben zwei Wege:
   2.3 und 4.3 für den tatsächlich gewählten Implementer mit
   `python3 ~/werkzeuge/Dual-Agent-Orchestrator/scripts/check_implementer_sandbox.py`
   im Projektordner. Klären Sie Warnungen und beachten Sie die ausgewiesene
-  Messgrenze. Ein grüner Host-Test beweist keine Sandbox-Sichtbarkeit.
+  Messgrenze. Prüfen Sie nie parallel zu einem Lauf. Bei Unterprozess-Tests
+  prüfen Sie einen gezielten Test und bei belegter Sandbox-Grenze die optionale
+  Regel aus 2.4. Ein grüner Host-Test beweist keine Sandbox-Sichtbarkeit.
 - [ ] Entscheiden Sie über lokalen Merge und prüfen Sie `core.hooksPath`,
   Hook-Zulässigkeit, Laufzeit und Folgen eines Timeouts nach 2.10.
+- [ ] Prüfen Sie vor einer Veröffentlichung die Audit-Berichte samt Historie
+  auf persönliche Pfade (2.10); das Update bereinigt vorhandene Commits nicht.
 - [ ] Führen Sie den Testbefehl und alle zusätzlichen Prüfbefehle aus 2.3
   in der Startumgebung aus und schreiben Sie die geprüfte Projektkonfiguration
   nach 2.5 fest.
@@ -992,6 +1098,10 @@ rollenneutrale Regeln und kennzeichne Rollendateien für den Handbetrieb.
 Vergleiche orchestrator.toml mit der aktuellen Anleitung: Rollen, Standards,
 Stille- und Werkzeuglimits, Toolchain-Wurzeln und externe Symlink-Ziele,
 Testmatrix, Basisbranch, lokaler Merge und post-merge-Hooks.
+Prüfe die globale und die im Projekt wirksame Git-Identität nach 1.1.
+Führe die Vorabprüfung aus 2.3 ohne parallelen Lauf aus, bei Unterprozess-Tests
+auch einen gezielten Test; ergänze bei belegter Sandbox-Grenze die optionale
+Regel aus 2.4. Prüfe Audit-Berichte und Historie auf persönliche Pfade nach 2.10.
 Frag mich bei fehlenden Projektentscheidungen und vor Installationen,
 Commits oder dem Aufgeben eines Laufs. Ändere keine Laufrecords von Hand.
 Führe run_task --help und die Projekt-Prüfbefehle aus; nach CLI-Updates
@@ -1408,11 +1518,21 @@ Wer Pfade und Arbeitspakete selbst vorgeben will, schreibt einen formalen
 Auftrag: [`example-plan-task.md`](../../example-plan-task.md) zeigt einen reinen
 Planungsauftrag, [`example-task.md`](../../example-task.md) einen
 Umsetzungsauftrag mit `TASK_SCOPE`, Akzeptanzkriterien und Stoppbedingungen.
-Solche Aufträge lassen sich auch ohne Wache starten:
+Solche Aufträge lassen sich auch ohne Wache starten. Setzen Sie für das
+folgende Beispiel `TARGET_BRANCH: feature/mein-vorhaben` in der Aufgabendatei:
 
 ```bash
+git switch main
+git switch -c feature/mein-vorhaben
 run_task --task-file task.md
 ```
+
+**Im Einzelmodus muss der aufgelöste Zielbranch bereits existieren und aktiv
+sein**, auch bei einer bloßen Idee. Existiert der
+Branch schon, verwenden Sie `git switch feature/mein-vorhaben` statt `-c`.
+Ohne passenden aktiven Branch hält der Start mit `STATE-SCHEMA … TARGET_BRANCH
+mismatch` an. Nur die Wache legt den Zielbranch für neue Aufgaben selbst an;
+Resume legt keinen Branch an und repariert keinen Branchwechsel.
 
 Sobald eine Datei einen formalen Marker enthält, muss der ganze formale Vertrag
 stimmen; halb formale Mischformen werden abgewiesen.
