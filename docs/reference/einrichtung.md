@@ -20,6 +20,9 @@ wollen, was dabei im Einzelnen geschieht und wo die Grenzen liegen.
 Codex und Claude Code brauchen Sie ohnehin. Einer von beiden kann diese
 Anleitung auch selbst abarbeiten; Sie treffen nur noch die Entscheidungen.
 
+Für ein bereits angeschlossenes Projekt nach einem Orchestrator-Update
+verwenden Sie den [Agentenauftrag in 2.11](#211-den-orchestrator-aktualisieren-und-ein-projekt-nachziehen).
+
 **Was Sie selbst tun müssen**, weil es kein Agent für Sie kann:
 
 1. Codex CLI und Claude Code installieren und **anmelden** (1.1).
@@ -51,6 +54,10 @@ nach, während Codex in seiner Sandbox meist keinen Netzzugang hat.
 - das Projekt steht auf dem Hauptbranch, `git status --short` ist leer;
 - `.gitignore`, `orchestrator.toml` und `AGENTS.md` sind committet;
 - der Testbefehl – und jeder zusätzliche Prüfbefehl aus 2.3 – ist grün;
+- die Werkzeugversionen und nötigen `toolchain_read_roots` sind nach 2.3 geprüft;
+- `AGENTS.md` ist rollenneutral; vorhandene Rollendateien sind als
+  Handbetrieb-Dateien gekennzeichnet (2.4);
+- lokaler Merge und mögliche `post-merge`-Hooks sind bewusst gewählt (2.10);
 - der Ordner `inbox/` existiert.
 
 Die erste Idee (2.6) und den Start (2.7) übernehmen Sie selbst. Diese
@@ -98,9 +105,9 @@ Merge können Sie in der Konfiguration abschalten.
 | Python | 3.11 | `python3 --version` |
 | Git | – | `git --version` |
 | eine Git-Identität | – | `git config user.name` und `git config user.email` |
-| Codex CLI | 0.156.1 | `codex --version` |
+| Codex CLI | **0.159.2 empfohlen** (Registerminimum 0.156.1; dessen Unterstützung der gehärteten Aufrufform ist ungeprüft) | `codex --version` |
 | Claude Code | 2.1.283 | `claude --version` |
-| ein ChatGPT-Konto mit Zugriff auf **GPT-6 Sol** | – | `codex login` |
+| ein ChatGPT-Konto mit Zugriff auf die **Modellfamilie Sol** (derzeit `gpt-6.1-sol`, Auflösung beim Laufstart) | – | `codex login` |
 | ein Claude-Konto mit Zugriff auf **Opus** | – | `claude`, dann der Anmeldung folgen |
 
 Das automatische Fortsetzen nach einem Absturz braucht Linux oder WSL mit lesbarem `/proc`; auf anderen Systemen führt der Weg über ein Freigabe-Gate.
@@ -115,8 +122,13 @@ npm install -g @anthropic-ai/claude-code
 
 > [!IMPORTANT]
 > Beide Programme müssen **angemeldet** sein, bevor der Orchestrator startet.
-> Er fragt nicht nach Zugangsdaten und legt keine an. Ältere Versionen als die
-> oben genannten weist er beim ersten Aufruf ab.
+> Er fragt nicht nach Zugangsdaten und legt keine an. Versionen unter den
+> Registermindestversionen weist er beim ersten Aufruf ab.
+
+Die gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit
+0.159.2 gemessen. Führen Sie nach CLI-Updates den Offline-Quicktest aus 2.3
+aus. Fehlende Pflichtschalter werden abgewiesen; für Rechteprofile gibt es
+keine eigene Vorabprüfung (Details in 4.3).
 
 Der Orchestrator committet unter der Git-Identität des Projekts. Fehlt sie,
 scheitert schon der erste Commit mit `Author identity unknown`. Einmalig
@@ -222,6 +234,11 @@ EOF
 Das Wichtigste an dieser Datei ist **der Testbefehl**. Der Orchestrator führt ihn
 nach jedem Arbeitspaket selbst aus; nur ein grünes Ergebnis kann zu einem
 Commit führen.
+
+Dieser Testbefehl läuft **außerhalb der Agenten-Sandbox**, in der Startumgebung
+des Orchestrators. Die Sichtbarkeitsregeln für Werkzeuge betreffen die
+gezielten Prüfungen, die der Implementer während seiner Arbeit ausführt.
+Ein grüner Testbefehl allein belegt deshalb keine passende Agenten-Toolchain.
 
 Legen Sie im Projektordner eine Datei `orchestrator.toml` an. Eine Vorlage für
 ein Python-Projekt:
@@ -409,10 +426,48 @@ Die früheren Hänger von 20–60 Minuten erfordern eine Grenze für Modellstill
 
 Ersetzen Sie `/absolute/node-root` durch ein existierendes absolutes
 Werkzeugverzeichnis, zum Beispiel die konkrete Installation
-`~/.nvm/versions/node/<version>`; TOML expandiert `~` nicht. Entfernen Sie die
-Option, wenn keine zusätzliche Toolchain nötig ist. Der Adapter nimmt deren
-`bin` in PATH auf und gibt die Wurzel schreibgeschützt frei. HOME und
-Anmeldedaten-Verzeichnisse dürfen nicht freigegeben werden (Details in 4.3).
+`~/.nvm/versions/node/v22.23.2`. Tragen Sie in TOML deren absoluten Pfad ein;
+TOML expandiert `~` nicht.
+
+**Entscheidungsregel für beide Implementer:** Liegen die benötigten Werkzeuge
+in der passenden Version unter `/usr` oder im Repository, brauchen Sie dafür
+keine zusätzliche Wurzel. Liegen sie außerhalb, etwa unter nvm, pyenv, asdf
+oder `~/.local`, geben Sie die konkrete Installation über
+`toolchain_read_roots` schreibgeschützt frei. Im Standardprofil verwenden Sie
+`[agent_profiles.implementation.provider_options.codex]`, beim
+Claude-Implementer die oben gezeigte Tabelle mit `provider_options.claude`.
+
+- **Codex** behält den Eltern-PATH. Persönliche Home-Verzeichnisse sind
+  aber nicht pauschal sichtbar. Ist etwa die nvm-Node unsichtbar, kann die
+  Suche auf `/usr/bin/node` zurückfallen. Starten Sie die Wache in einer
+  Shell, in der `command -v node` auf die freigegebene Installation zeigt
+  und deren `bin` im PATH vor `/usr/bin` steht; bei nvm aktivieren Sie vorher
+  die benötigte Version. Codex ergänzt den PATH nicht um freigegebene
+  Wurzeln. Andernfalls verwenden Sie absolute Werkzeugpfade. Nutzen Sie
+  auch beim Resume dieselbe Werkzeugumgebung (Details zur Bindung in 4.3).
+- **Claude-Implementer** nutzt einen festen PATH
+  `/usr/local/bin:/usr/bin:/bin`; vorhandene `<wurzel>/bin` werden vorangestellt.
+  Ihr persönlicher PATH allein genügt hier nicht.
+- **Verdeckter Versionsfehler:** Gibt es dasselbe Werkzeug unter `/usr` in
+  einer anderen Version, läuft still diese Version. Fehlt eine sichtbare
+  Installation, scheitert der Befehl. Prüfen Sie deshalb Pfad und Version.
+- Sind `node_modules`, `.venv` oder ähnliche Projektordner Symlinks nach
+  außerhalb, brauchen Sie auch deren aufgelöstes Ziel als Wurzel.
+
+Die Wurzel einer Installation mit `bin/node` bestimmen Sie in Ihrer
+Startumgebung so (bei anderen Layouts den Pfad entsprechend anpassen):
+
+```bash
+command -v node
+node --version
+readlink -f "$(command -v node)"
+dirname "$(dirname "$(readlink -f "$(command -v node)")")"
+readlink -f node_modules   # falls dieser Ordner ein Symlink ist
+readlink -f .venv          # falls diese Umgebung ein Symlink ist
+```
+
+Übernehmen Sie nur die benötigten Verzeichnisse; HOME und
+Anmeldedaten-Verzeichnisse dürfen nicht freigegeben werden (Grenzen in 4.3).
 Die Claude-Bash-Sandbox benötigt **socat und bubblewrap**; `failIfUnavailable`
 verhindert den ungeschützten Start bei fehlenden Voraussetzungen. Die Auswahl
 ist ausschließlich explizit; ein automatischer Anbieterwechsel findet nicht statt.
@@ -438,9 +493,13 @@ Laufzeitschutz bleibt verpflichtend.
 
 ### 2.4 Den Agenten das Projekt erklären: `AGENTS.md`
 
-Die Datei `AGENTS.md` im Projektordner bekommt der Implementer bei jedem Auftrag mit
-(die ersten 12.000 Zeichen). Sie ist keine Pflicht, aber der größte Hebel für
-gute Ergebnisse. Eine Vorlage:
+Die ersten **12.000 Zeichen** der Projektdatei `AGENTS.md` (oder der mit
+`--agents-file` gewählten Datei) werden an den Implementer-Auftrag angehängt.
+Reviewer und Final-Reviewer erhalten diesen Auftrag ebenfalls als Evidenz.
+Der Codex-Implementer lädt `AGENTS.md` zusätzlich nativ als Projektanweisung;
+beim Codex-Prüfer ist dieses native Laden mit `project_doc_max_bytes=0`
+ausgeschaltet. Die Datei ist keine Pflicht, aber der größte Hebel für gute
+Ergebnisse. Schreiben Sie sie **rollenneutral**, zum Beispiel:
 
 ```markdown
 # Mein Projekt
@@ -453,6 +512,10 @@ Sprache, Frameworks, Build: …
 Tests: `python3 -m pytest tests/ -q` – jede Änderung braucht Tests.
 
 ## Regeln
+- Diese Projektregeln gelten unabhängig von Anbieter und Rollenbesetzung.
+- Planung und Umsetzung gehören zum Implementer, Prüfung zum Reviewer;
+  Validierung, lokale Commits und der konfigurierte lokale Merge zum Orchestrator.
+- Agenten führen keine Git-Schreibbefehle aus.
 - Keine neuen Abhängigkeiten ohne Grund.
 - Keine Netzwerkaufrufe zur Laufzeit.
 - Bestehende Dateiformate bleiben lesbar.
@@ -461,9 +524,18 @@ Tests: `python3 -m pytest tests/ -q` – jede Änderung braucht Tests.
 - `legacy/` – wird separat abgelöst.
 ```
 
-Ausdrücklich mitgegeben wird nur die `AGENTS.md`. Verlassen Sie sich nicht
-darauf, dass weitere Rollendateien wie `CLAUDE.md` oder `CODEX.md` gelesen
-werden – was beide Agenten wissen sollen, gehört in die `AGENTS.md`.
+Über diesen Weg wird nur `AGENTS.md` mitgegeben. Vorhandene `CLAUDE.md`,
+`CODEX.md` und `GEMINI.md` werden im Lauf nicht automatisch als
+Rollenanweisungen geladen; kennzeichnen Sie sie als **„nur Handbetrieb“**.
+In einem vollständigen Prüfsnapshot können sie als Dateien zur Einsicht liegen;
+das macht sie nicht zum Prüfvertrag. Gemeinsames Projektwissen gehört in
+`AGENTS.md`.
+
+Übernehmen Sie keine Handbetrieb-Prüferregeln, die dem orchestrierten
+Prüfvertrag widersprechen. **„Kein Review ohne Findings“** würde befundfreie
+Abnahmen und damit den Abschluss verhindern. Legen Sie auch keine festen
+Anbieterrollen fest: Die Besetzung kommt aus `orchestrator.toml`, und die
+Agenten dürfen selbst weder committen noch mergen oder pushen.
 
 ### 2.5 Einrichtung festschreiben
 
@@ -639,19 +711,6 @@ vorhandener Zielordner oder ein ungültiger Pfad stoppt den Lauf vor dem ersten
 Umsetzungsslice. Alte Läufe ohne diesen Schlüssel behalten beim Fortsetzen das
 flache Archivziel `docs/internal/archive/`.
 
-Für die Endabnahme führt der Betreiber den vollständigen Crashbeweis auf dem
-endgültigen Zielbranch-`HEAD` nach der letzten relevanten Änderung und vor dem
-branchweiten Finalreview aus:
-
-```bash
-python3 -m pytest tests/test_crash_harness.py -v
-```
-
-Nach jeder weiteren Änderung von `HEAD` ist vor einem Merge ein neuer
-vollständiger Crashbeweis für diesen Stand nötig. Die standardmäßige
-Slice-Validierung übernimmt der Orchestrator; der eigenständige Crashbeweis
-bleibt eine Betreiberprüfung.
-
 Standardmäßig führt der Orchestrator den Zielbranch danach lokal mit `--no-ff`
 in den Basisbranch zusammen und checkt diesen aus. Der Zielbranch bleibt als
 lokaler Branch bestehen; der Orchestrator pusht nie. Während Archiv-Commit und
@@ -685,6 +744,40 @@ zurückzunehmen. Fehlt ein zulässiger Hook, wird das Auslassen protokolliert.
 Im Watch-Modus wird der Auftrag erst nach dem Nachlauf-Ergebnis nach
 `outbox/done/` verschoben.
 
+Der Hook erbt die **Umgebung der gestarteten Wache**, läuft im
+Repository-Wurzelverzeichnis und erhält Argument `0`. Zu diesem Zeitpunkt
+ist bereits der **Basisbranch** mit dem bestätigten Merge ausgecheckt.
+
+**Hooks mit möglicherweise mehr als 600 Sekunden Laufzeit**, etwa einen
+großen Build, sollten Sie separat ausführen: Setzen Sie
+`[workflow] merge_completed_branch = false` und mergen Sie manuell, halten Sie
+den Hook kurz oder bauen Sie einen eigenen Schalter zum Überspringen des
+langen Schritts ein. Der Orchestrator bietet dafür keinen eigenen
+Überspringen-Schalter; beim manuellen Merge gelten die normalen Git-Hook-Regeln.
+
+Wenn Ihr Hook selbst einen Umgebungs-Schalter wie `MEIN_PROJEKT_SKIP_BUILD`
+auswertet, setzen Sie ihn beim Start der Wache:
+
+```bash
+MEIN_PROJEKT_SKIP_BUILD=1 run_task --watch
+```
+
+Dieser Wert gilt für die **gesamte Wache und damit die Hooks aller von ihr
+bearbeiteten Aufgaben**. Er wirkt nur, wenn Ihr Hook ihn tatsächlich
+auswertet. Um den Wert zu ändern, beenden Sie die Wache und starten sie mit
+der gewünschten Umgebung neu. Bei einem separaten Resume-Aufruf müssen
+Sie den Schalter dort ebenfalls setzen, wenn er weiter gelten soll.
+
+Der Hook startet in einer neuen Sitzung mit eigener Prozessgruppe.
+Bei Timeout versucht der Orchestrator, diese Prozessgruppe
+mit SIGTERM und nötigenfalls SIGKILL zu beenden. Kann er deren Ende nicht
+bestätigen, enthält das Ergebnis `termination_uncertain: true`; die Warnung
+nennt diesen Wert. Der bestätigte Merge bleibt bestehen. **Ungeprüft** ist,
+ob dabei Kindprozesse außerhalb dieser Prozessgruppe erreicht werden,
+beispielsweise Windows-Prozesse über WSL-Interop oder mit `setsid` gestartete
+Prozesse. Solche Prozesse werden möglicherweise nicht beendet; prüfen Sie
+deren Zustand selbst.
+
 Wurde der Prozess nach dem Nachlauf-Intent unterbrochen, ist möglicherweise
 unklar, ob der Hook lief. Ein gewöhnliches Resume führt ihn deshalb nicht
 erneut aus und hält mit einer Meldung zum ungewissen Ausgang an. Prüfen Sie
@@ -717,6 +810,115 @@ git merge --no-ff feature/einkaufsliste
 > Orchestrator vom gerade aktiven Branch aus an. Steht der Arbeitsbaum noch auf
 > dem Branch der letzten Aufgabe, erbt die neue Aufgabe deren Commits – und ihre
 > Abnahme liest sie mit.
+
+### 2.11 Den Orchestrator aktualisieren und ein Projekt nachziehen
+
+Beenden Sie zunächst die laufende Wache mit <kbd>Strg</kbd>+<kbd>C</kbd>.
+Notieren Sie den bisherigen Orchestrator-Commit; er ist der Rückweg für einen
+unfertigen Lauf. Aktualisieren Sie den **Orchestrator-Checkout**:
+
+```bash
+cd ~/werkzeuge/Dual-Agent-Orchestrator
+git status --short
+git rev-parse HEAD            # bisherigen Stand für ein Resume aufbewahren
+git pull --ff-only
+run_task --help
+```
+
+Bei lokalen Änderungen oder auseinanderlaufenden Branches klären Sie diese
+vor dem Update; `--ff-only` erzeugt keinen Merge-Commit. Der Symlink aus 1.3
+zeigt weiter auf den aktualisierten Einstieg. Falls Sie auch die Provider-CLI
+aktualisiert haben, führen Sie den **Offline-Quicktest aus 2.3** aus dem
+Orchestrator-Checkout aus. Dessen Attrappen und der Probelauf aus 1.4 prüfen
+keine projektspezifische Toolchain.
+
+**Unfertige Läufe übernehmen keine neue Laufkonfiguration.** Resume prüft die
+gebundenen Profile und Zertifizierungen gegen die installierte Version.
+Ändert das Update einen Zertifizierungs- oder Profildigest, hält der Lauf
+mit `AGENT-PROFILE-DIFF` an. Ein Update muss deshalb nicht jeden Lauf
+anhalten; entscheidend ist dessen Bindung. Auch ältere, nicht mehr
+unterstützte Aufzeichnungen können die Wiederaufnahme verhindern. Die
+vollständigen Haltegründe stehen in 4.3. Es gibt keine automatische
+Migration oder Anbieterumschaltung.
+
+Sie haben zwei Wege:
+
+- **Mit dem alten Stand abschließen:** Legen Sie einen getrennten Checkout
+  des notierten alten Commits an und verwenden Sie dessen Einstieg direkt
+  im Zielprojekt. Ersetzen Sie `<alter-orchestrator-commit>` durch den
+  vollständigen Commit aus der Ausgabe vor dem Update:
+
+  ```bash
+  git -C ~/werkzeuge/Dual-Agent-Orchestrator worktree add --detach \
+    ~/werkzeuge/Dual-Agent-Orchestrator-alt <alter-orchestrator-commit>
+  cd ~/projekte/mein-projekt
+  ~/werkzeuge/Dual-Agent-Orchestrator-alt/run_task \
+    --task-file inbox/meine-idee.md --resume
+  ```
+
+  Aufgabe, Zielbranch und Records müssen unverändert zum Lauf passen; auch
+  die gebundenen CLI-Binaries, Interpreter und Toolchain-Pfade müssen noch
+  passen. Bei deren Drift genügt der alte Orchestrator-Commit allein nicht.
+  Schließen Sie den alten Lauf ab, bevor Sie das Projekt nachziehen.
+- **Den Lauf bewusst aufgeben und neu beginnen:** Prüfen und sichern Sie
+  zuerst Teilergebnisse, vorhandene Commits, das Auftragsdokument und die
+  Laufartefakte. Klären Sie offene Nebenwirkungen, besonders einen ungewissen
+  Hook-Ausgang. Der folgende Einzelaufgabenstart ersetzt den aktiven Zustand,
+  ohne die bisherigen Branch-Commits zurückzunehmen; er setzt den alten Lauf
+  nicht fort. Verwenden Sie ihn auf dem im Auftrag bestimmten Zielbranch,
+  mit sauberem Arbeitsbaum und einem zum aktuellen Stand passenden Auftrag:
+
+  ```bash
+  cd ~/projekte/mein-projekt
+  git status --short
+  run_task --task-file inbox/meine-idee.md --no-resume --force-overwrite-state
+  ```
+
+  Der neue Lauf bindet die aktuelle Konfiguration. Bearbeiten oder löschen
+  Sie dafür keine State-, Checkpoint- oder Recorddateien von Hand.
+
+**Prüfliste für jedes angeschlossene Projekt**, bevor Sie neue Arbeit starten:
+
+- [ ] `AGENTS.md` ist rollenneutral und verträglich mit dem Prüfvertrag (2.4).
+  Prüfen Sie vorhandene `CLAUDE.md`, `CODEX.md` und `GEMINI.md` ebenfalls:
+  feste Anbieterrollen, Git-Regeln und „kein Review ohne Findings“ dürfen
+  nicht ungeprüft übernommen werden. Kennzeichnen Sie Rollendateien als
+  Handbetrieb-Dateien.
+- [ ] Vergleichen Sie `orchestrator.toml` mit 2.3 und 4.2. Prüfen Sie neue
+  Schlüssel und geänderte Standards bewusst: lokaler Merge ist standardmäßig
+  an (`merge_completed_branch = true`); Modellstille und offene Werkzeuge
+  haben standardmäßig 900 beziehungsweise 3600 Sekunden Grenze
+  (`stall_timeout_seconds`, `tool_timeout_seconds`). Prüfen Sie Gesamtlimit,
+  Rollenbesetzung, Basisbranch, Pfadklassen und vollständige Prüfbefehle.
+- [ ] Prüfen Sie Toolchain-Pfade, Versionen und externe Symlink-Ziele nach
+  2.3 und 4.3 für den tatsächlich gewählten Implementer. Ein grüner Host-Test
+  beweist keine Sichtbarkeit in dessen Sandbox.
+- [ ] Entscheiden Sie über lokalen Merge und prüfen Sie `core.hooksPath`,
+  Hook-Zulässigkeit, Laufzeit und Folgen eines Timeouts nach 2.10.
+- [ ] Führen Sie den Testbefehl und alle zusätzlichen Prüfbefehle aus 2.3
+  in der Startumgebung aus und schreiben Sie die geprüfte Projektkonfiguration
+  nach 2.5 fest.
+
+**Vorhandenes Projekt einem Agenten zum Nachziehen übergeben.** Starten Sie
+ihn im Projektordner und kopieren Sie diesen Auftrag:
+
+```text
+Lies ~/werkzeuge/Dual-Agent-Orchestrator/docs/reference/einrichtung.md.
+Ziehe dieses bereits angeschlossene Projekt nach Abschnitt 2.11 nach.
+Prüfe zuerst, ob ein unfertiger Lauf existiert. Halte die Wache an, notiere
+den bisherigen Orchestrator-Commit und kläre mit mir vor dem Update, ob
+der Lauf mit der alten Version beendet oder bewusst aufgegeben werden soll.
+Prüfe AGENTS.md und vorhandene CLAUDE.md, CODEX.md und GEMINI.md auf
+rollenneutrale Regeln und kennzeichne Rollendateien für den Handbetrieb.
+Vergleiche orchestrator.toml mit der aktuellen Anleitung: Rollen, Standards,
+Stille- und Werkzeuglimits, Toolchain-Wurzeln und externe Symlink-Ziele,
+Testmatrix, Basisbranch, lokaler Merge und post-merge-Hooks.
+Frag mich bei fehlenden Projektentscheidungen und vor Installationen,
+Commits oder dem Aufgeben eines Laufs. Ändere keine Laufrecords von Hand.
+Führe run_task --help und die Projekt-Prüfbefehle aus; nach CLI-Updates
+auch den Offline-Quicktest aus 2.3. Starte keinen Agentenlauf. Zeig mir
+alle Änderungen, Ergebnisse und verbleibenden ungeprüften Annahmen.
+```
 
 ---
 
@@ -948,7 +1150,44 @@ dieses Repositorys.
 
 Der Orchestrator liest für Codex einmal beim Laufstart je identitätsgebundenem Binary den lokalen Katalog mit `codex debug models` in bereinigter Umgebung. Die Familie wird aus dem Slug abgeleitet; es gewinnt der kleinste `priority`-Wert unter `supported_in_api: true` und `visibility: "list"`. Leere oder mehrdeutige Auswahl hält den Start an. Volle Modell-IDs aus dem Katalog sind ebenfalls zulässig. Laufprofil und Log halten den aufgelösten Slug fest; Resume fragt den lokalen Katalog zur Verfügbarkeitsprüfung erneut ab und wählt nicht neu. Fehlt der gebundene Slug, stoppt der Lauf mit einer klaren Meldung; es gibt keinen Modellwechsel. Das gilt auch für Codex in beiden Reviewslots.
 
-Claude-Implementer können zusätzliche schreibgeschützte Werkzeugverzeichnisse über `provider_options.claude.toolchain_read_roots = ["/absoluter/werkzeugpfad"]` nutzen, etwa eine konkrete Node-Installation unter `~/.nvm/versions/node/`. Höchstens acht existierende Verzeichnisse sind erlaubt; Symlinks werden aufgelöst und gebunden. HOME selbst, seine Vorfahren, Repository und Schutzpfade, Credential-Verzeichnisse (etwa `.ssh`, `.codex`, `.claude`, `.aws` und `.config`) einschließlich überlappender Wurzeln sowie Komma oder Leerraum im Pfad sind ausgeschlossen. `<wurzel>/bin` wird, wenn vorhanden, dem festen PATH vorangestellt; die Wurzeln werden ausschließlich als `sandbox.filesystem.allowRead` freigegeben. Reviewprofile dürfen die Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
+Die Entscheidungsregel aus 2.3 gilt für **beide Implementer**. Für Claude
+steht die Option unter `provider_options.claude.toolchain_read_roots`;
+`<wurzel>/bin` wird, wenn vorhanden, dem festen PATH
+`/usr/local/bin:/usr/bin:/bin` vorangestellt. Die Wurzeln werden ausschließlich
+als `sandbox.filesystem.allowRead` freigegeben. Codex übernimmt den Eltern-PATH
+und gibt zusätzliche Wurzeln über sein Rechteprofil lesbar frei; er ergänzt
+deren `bin` nicht automatisch im PATH. Starten Sie die Wache in einer Shell,
+in der `command -v node` auf die freigegebene Installation zeigt und deren
+`bin` im PATH vor `/usr/bin` steht. Bei nvm aktivieren Sie dafür vor dem
+Start die benötigte Version. Andernfalls verwenden Sie absolute
+Werkzeugpfade. Externe Symlink-Ziele von `node_modules`, `.venv` und ähnlichen
+Ordnern brauchen ebenfalls eine Freigabe.
+
+**PATH und Wiederaufnahme:** Der Codex-Aufruf übernimmt den PATH seiner
+aktuellen Startumgebung. Die Identitätsbindung speichert nicht den gesamten
+PATH, sondern die darüber ausgewählte CLI und deren Interpreter mit Pfaden,
+Versionen und Digests. Bei einem `#!/usr/bin/env node`-Einstieg wird dafür
+die erste ausführbare Node im PATH gewählt. Beim Resume wird diese Auswahl
+erneut ermittelt und mit der gespeicherten Identität verglichen. Eine andere
+Start-Shell kann daher `AGENT-PROFILE-DIFF` auslösen, wenn sie eine andere CLI
+oder einen anderen Interpreter auswählt. Eine PATH-Änderung mit gleicher
+CLI-/Interpreter-Identität löst allein keinen solchen Halt aus; gezielte
+Werkzeugbefehle können trotzdem eine andere Installation finden. Verwenden
+Sie beim Resume dieselbe Werkzeugumgebung und prüfen Sie Pfad und Version
+erneut. Die Identitätsprüfung ersetzt diese Prüfung nicht.
+
+Für beide gelten dieselben Grenzen aus `toolchain_paths.py`: höchstens acht
+existierende absolute Verzeichnisse, ohne Komma oder Leerraum; Symlinks
+werden aufgelöst, doppelte aufgelöste Ziele abgewiesen. Ausgeschlossen sind
+HOME selbst und seine Vorfahren (auch `/`), Repository und dessen Vorfahren
+oder Unterverzeichnisse sowie Überschneidungen mit Schutzpfaden. Ebenso
+ausgeschlossen sind diese Credential-Pfade unter HOME, ihre aufgelösten
+Ziele und alle überlappenden Wurzeln: `.ssh`, `.gnupg`, `.aws`, `.azure`,
+`.config`, `.codex`, `.claude`, `.claude.json`, `.gemini`, `.docker`, `.kube`,
+`.netrc`, `.git-credentials`, `.password-store`, `.local/share/keyrings`,
+`.npmrc` und `.pypirc`. Eine konkrete Installation unter HOME ist erlaubt,
+sofern sie keine dieser Grenzen überschneidet. Reviewprofile dürfen die
+Option nicht setzen. Die Pfadbindung wird bei Resume auf Drift geprüft.
 
 Für Codex gilt dieselbe Pfadvalidierung mit `provider_options.codex.toolchain_read_roots`. Beispielsweise ergänzt diese Tabelle das ausgelieferte Implementerprofil:
 
@@ -957,7 +1196,22 @@ Für Codex gilt dieselbe Pfadvalidierung mit `provider_options.codex.toolchain_r
 toolchain_read_roots = ["/absolute/node-root"]
 ```
 
-Ersetzen Sie den Beispielpfad durch den absoluten Pfad einer konkreten Node-Installation, etwa `/home/operator/.nvm/versions/node/v22.23.2`; TOML expandiert `~` nicht. Die Wurzeln werden lesbar freigegeben; Schreibrechte erhalten sie nicht. Der Codex-Prozess behält den Eltern-PATH seiner Identitätsbindung, damit `#!/usr/bin/env node` denselben Interpreter findet; Toolchain-Programme können über absolute Pfade aufgerufen werden. Beide Reviewslots dürfen auch keine leere Toolchain-Liste setzen.
+Ersetzen Sie den Beispielpfad durch den absoluten Pfad einer konkreten
+Node-Installation, etwa der mit nvm aktivierten Version; TOML expandiert `~`
+nicht. Schreibrechte erhalten die Wurzeln nicht. Beide
+Reviewslots dürfen auch keine leere Toolchain-Liste setzen.
+
+**Gemessener Rückfall (02.10.2026):** Mit Codex CLI 0.159.2 und dem erzeugten
+`dao-implementer`-Profil ohne Toolchain-Wurzeln zeigte `ls -A "$HOME"` nur
+`.nvm` als Pfad zum Codex-Paket. Die dort installierte Node v22.23.2 war
+unsichtbar; `command -v node` ergab trotz vorangestelltem nvm-PATH
+`/usr/bin/node`. Diese Systeminstallation hatte ebenfalls v22.23.2, und ein
+gezielter Node-Test war grün. `.git` meldete `Read-only file system`.
+Das ist eine Messung dieses Hosts, keine Garantie für andere Installationen:
+Eine abweichende Systemversion kann still anstelle Ihrer Home-Toolchain
+laufen. Die Paketfreigabe für Codex macht Home-Werkzeuge nicht allgemein
+sichtbar. Die Pfadbefehle aus 2.3 laufen auf dem Host; eine Prüfung Ihres
+Projekts in der Agenten-Sandbox ersetzen sie nicht.
 
 Der Codex-Implementer nutzt das Rechteprofil `dao-implementer` ohne `--sandbox`: Repository und privater Scratch pro Aufruf (0700, TMPDIR) sind beschreibbar, die gebundenen Schutzpfade einschließlich externer Worktree-Gitverzeichnisse schreibgeschützt. Der Katalog wird für alle Codex-Slots gehärtet und über den ausgewählten Modelleintrag beim Laufstart und Resume gebunden. Benutzerkonfiguration, benutzerweite und projektweite Ausführungsregeln, Websuche, Apps, Plugins, MCP aus der Benutzerkonfiguration und Unteragenten werden ausgeschaltet; die Projektanweisungen in `AGENTS.md` bleiben wirksam. Der Prozess erhält nur PATH, HOME, CODEX_HOME, LANG, LC_*, TERM und TMPDIR; Shellbefehle erben `core`. Persönliche Home-Dateien und Zugangsdaten werden nicht als Lesewurzeln freigegeben. Für Codex-Werkzeugbefehle ist `/tmp` ein privater Sandbox-Bereich: Schreiben dort ist zulässig, sofern die Host-Datei unverändert bleibt. Der private Scratch (`TMPDIR`) bleibt der vorgesehene Ort für Zwischendateien. Die Grenzprüfung weist diese Unterscheidung im Bericht aus. Details und der Befund der Steuerung stehen in der [Implementer-Zertifizierung](implementer-certification.md).
 
@@ -972,6 +1226,17 @@ verwendet ihre Angaben für jede Aufgabe, die sie neu beginnt. Ein bereits
 begonnener Lauf behält seine Werte; wird er mit abweichenden Angaben
 fortgesetzt, hält er mit `AGENT-PROFILE-DIFF` an – starten Sie die Wache zum
 Fortsetzen also ohne oder mit denselben Angaben.
+
+**Haltegründe nach einem Orchestrator-Update (2.11):** `AGENT-PROFILE-DIFF`
+entsteht bei geänderten Zertifizierungs-, Policy-, Rechte-, Transport- oder
+Fähigkeitsdigests. Auch eine geänderte CLI-/Interpreter-Identität,
+Modellkatalogeinträge, Isolationspfade und abweichende gebundene Profilwerte
+können diesen Halt auslösen. Fehlt in alten Aufzeichnungen die gebundene
+Stille-/Werkzeug-Policy oder passt deren Reducer-Version nicht mehr, wird
+die Wiederaufnahme ebenfalls abgewiesen. `legacy-state-v3` und
+`structured-v1` werden mit `UNSUPPORTED-PROTOCOL` abgewiesen. Verwenden Sie
+die passende ältere Orchestratorversion oder beginnen Sie bewusst einen
+neuen Lauf; die konkreten Befehle stehen in 2.11.
 
 Das Fähigkeitsregister
 [`schemas/native-provider-schema-capabilities-v2.json`](../../schemas/native-provider-schema-capabilities-v2.json)
@@ -992,6 +1257,25 @@ Dasselbe Register legt die geprüften CLI-Mindestversionen fest. Alle
 wohlgeformten neueren Versionen werden akzeptiert, auch neue Hauptversionen;
 ältere Versionen werden abgewiesen. Die effektiven Rechte und die Isolation
 aller ausgewählten Rollenpaare werden weiterhin je Aufruf geprüft. Nach CLI-Updates gehört der Offline-Quicktest aus 2.3 zur Operatorprüfung.
+
+**Grenze der Codex-Kompatibilitätsprüfung:** Das Register nennt 0.156.1;
+die gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit
+0.159.2 gemessen, nicht mit 0.156.1. Vor dem ersten Arbeitsaufruf prüft
+`verify_agent_capabilities` unter anderem `codex exec --help`. Fehlen
+`--ignore-user-config`, `--ignore-rules`, `--disable` oder `--config`, endet
+der Versuch mit `AgentCompatibilityError` und der Diagnose
+`missing required capability flags`; ein ungeschützter Ersatzaufruf erfolgt
+nicht. Rechteprofile (`permissions.dao-implementer`, `default_permissions`)
+sind dagegen Konfigurationswerte und werden nicht durch eine eigene
+CLI-Fähigkeitsprobe vorab geprüft. Lehnt die CLI sie beim Arbeitsaufruf ab,
+wird das als technischer Prozess-/Ausgabefehler behandelt; fehlen gültige
+native Ergebnisse, gibt es keine Freigabe. Ein stilles Ignorieren unbekannter
+Konfigurationswerte lässt sich damit nicht allgemein ausschließen.
+Der Code prüft die erzeugte Aufrufform und Änderungen an Schutzpfaden,
+belegt aber nicht die Rechteprofil-Unterstützung jeder älteren CLI.
+Verwenden Sie deshalb den gemessenen Stand oder einen neueren Stand mit
+grünem Offline-Quicktest; eine Anhebung des Registerminimums ist damit noch
+nicht vorgenommen.
 
 ### 4.4 Formale Aufträge statt Ideen
 
@@ -1048,9 +1332,9 @@ nebeneinander, jedes in seiner eigenen tmux-Sitzung und mit eigenem Protokoll.
 | `validation request requires at least one command` | kein Testbefehl konfiguriert oder erkannt | `default_command` in `orchestrator.toml` setzen |
 | `shell_command is unsupported in structured-v2` oder `text validation commands cannot contain shell syntax` | Shell-Schlüssel oder Shell-Operatoren in einem Textbefehl | Den passenden Argv-Schlüssel in `orchestrator.toml` setzen: `default_command`, `product_command` oder `command` in `[[validation.rules]]`, jeweils als Liste wie `["sh", "-c", "cd app && flutter test"]` |
 | `current gate has no fingerprint` mit Gate-Grund und Stoppgrund | `--approve-gate` oder `--reject-gate` wurde für einen Stopp ohne Fingerprint benutzt; keine Freigabe erforderlich | Voraussetzung bereitstellen, dann `run_task --watch --resume` ohne `--approve-gate` |
-| `Unsupported codex CLI version` oder `Unsupported claude CLI version` | CLI zu alt oder aus einer anderen Hauptversion | CLI aktualisieren |
+| `Unsupported codex CLI version` oder `Unsupported claude CLI version` | CLI unter dem Registerminimum oder Versionsformat nicht unterstützt; neuere Hauptversionen sind zulässig | Version und Format prüfen, gegebenenfalls CLI aktualisieren |
 | `model must be one of …` | ein Modell außerhalb der wählbaren Familien | einen der genannten Werte verwenden (4.3) |
-| `AGENT-PROFILE-DIFF` | ein begonnener Lauf wurde mit anderem Modell oder Effort fortgesetzt | ohne abweichende Angaben fortsetzen (4.3) |
+| `AGENT-PROFILE-DIFF` | anderes Modell, Effort oder Profil; auch: Orchestrator aktualisiert, Lauf aus älterer Version mit geändertem Zertifizierungs-/Profildigest | gleiche Bindung wiederherstellen; alte Orchestratorversion verwenden oder bewusst neu starten (2.11, 4.3) |
 | `transport differs from its probed schema capability` | die Aufrufform einer Kommandozeile weicht vom Register ab, etwa nach einem größeren CLI-Update | CLI-Version prüfen, Orchestrator aktualisieren |
 | `Another watcher is already running on inbox` | es läuft schon eine Wache für dieses Projekt | die laufende Sitzung verwenden (`tmux attach`) |
 | `fatal: stash failed` beim Zusammenführen | Git ist auf automatisches Zwischenspeichern eingestellt | `git -c merge.autoStash=false merge --no-ff <branch>` |

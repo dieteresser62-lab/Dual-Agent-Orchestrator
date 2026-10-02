@@ -466,7 +466,7 @@ def test_reviewer_profile_is_loaded_from_toml() -> None:
 def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
     forbidden = (
         "two-phase", "phase 1", "phase 2", "phase1", "phase2",
-        "GEMINI.md", "OPEN_FINDINGS", "allow-fallback-to-gemini", "--from-phase",
+        "OPEN_FINDINGS", "allow-fallback-to-gemini", "--from-phase",
         "--manual-gate", "--phase1-max-cycles", "--phase2-max-cycles",
         "--max-agent-retries", "--max-shared-chars", "--file-snapshot-max-lines",
         "--file-snapshot-max-files", "--no-recover",
@@ -479,6 +479,11 @@ def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
             for term in forbidden
             if term.lower() in text
         )
+        # Existing role files may be documented as manual-operation files,
+        # without restoring the retired third workflow role.
+        for paragraph in text.split("\n\n"):
+            if "gemini.md" in paragraph and "handbetrieb" not in paragraph:
+                hits.append(f"{path.name}: GEMINI.md without Handbetrieb context")
     assert not hits, "Legacy user-document terms found:\n" + "\n".join(hits)
 
 
@@ -832,7 +837,7 @@ def test_readme_local_links_exist_and_help_examples_start() -> None:
     for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", readme):
         if target.startswith(("http://", "https://", "#")):
             continue
-        local_targets.append((readme_path.parent / target).resolve())
+        local_targets.append((readme_path.parent / target.split("#", 1)[0]).resolve())
     assert local_targets
     assert all(path.is_file() for path in local_targets), local_targets
 
@@ -888,7 +893,9 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "Der Implementer nutzt standardmäßig Codex mit Sol (`sol`), Reviewer und Final-Reviewer nutzen Claude mit Opus",
         "nano inbox/meine-idee.md",
         "run_task --watch",
-        "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
+        "einen lokalen Merge mit `--no-ff` in den Basisbranch",
+        "merge_completed_branch = false",
+        "pusht und force-pusht niemals und schreibt die Historie nicht um",
         "`.orchestrator/state.json` und Checkpoints führen denselben Lauf",
     ):
         assert required in quickstart
@@ -900,7 +907,7 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
     for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", quickstart):
         if target.startswith(("http://", "https://", "#")):
             continue
-        local_targets.append((quickstart_path.parent / target).resolve())
+        local_targets.append((quickstart_path.parent / target.split("#", 1)[0]).resolve())
     assert local_targets
     assert all(path.is_file() for path in local_targets), local_targets
 

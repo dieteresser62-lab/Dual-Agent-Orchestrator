@@ -22,6 +22,16 @@ claude --version
 
 Der Orchestrator läuft unter Linux oder WSL2 mit lesbarem `/proc`. Andere Plattformen werden nicht unterstützt. Fehlt etwas davon, hilft Teil 1 der [Einrichtung](docs/reference/einrichtung.md). Implementer (standardmäßig Codex), Reviewer und Final-Reviewer (standardmäßig Claude) werden über `[roles]` und `[agent_profiles]` in `orchestrator.toml` besetzt.
 
+Nach einem Orchestrator-Update führen Sie `run_task --help` aus und ziehen das
+Projekt nach [Abschnitt 2.11 der Einrichtung](docs/reference/einrichtung.md#211-den-orchestrator-aktualisieren-und-ein-projekt-nachziehen)
+nach. Unfertige Läufe können bei geänderten Zertifizierungs- oder
+Profildigests mit `AGENT-PROFILE-DIFF` anhalten; sie brauchen dann den
+passenden alten Stand oder einen bewusst begonnenen neuen Lauf.
+Das Codex-Registerminimum bleibt 0.156.1; die gehärtete
+Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit 0.159.2 gemessen.
+Die Unterstützung durch 0.156.1 ist ungeprüft; verwenden Sie den
+gemessenen oder einen neueren Stand und beachten Sie die Prüfgrenzen in Abschnitt 4.3.
+
 Antigravity (AGY) ist eine **experimentelle, ausdrücklich per TOML wählbare** Reviewer-Option für private DIY-Nutzung unter WSL 2 / Ubuntu / ext4. Die beiden Live-Canaries sind seit dem 29.09.2026 bestanden; beide AGY-Slots sind `experimental`. Bei AGY wird der vollständige Review-Snapshot samt Anfrage und Evidenz an Google gesendet. Die [Antigravity-Anleitung](docs/reference/antigravity-reviewer.md) beschreibt Nachweise und Auswahl. Die Standardbelegung bleibt Codex / Claude / Claude.
 
 Andere Belegungen sind nur mit gültiger `certified`- oder `experimental`-
@@ -73,8 +83,20 @@ Das Beispiel begrenzt die **Modellstille auf 900 Sekunden**: stdout-Zeilen setze
 `/absolute/node-root` ist ein Platzhalter für ein existierendes absolutes
 Verzeichnis, etwa `~/.nvm/versions/node/<version>`; `~` muss im TOML durch den
 absoluten Pfad ersetzt werden. Die Wurzel bleibt schreibgeschützt und ihr `bin`
-kommt in PATH; ohne zusätzliche Werkzeuge entfällt die Option. HOME und
-Credential-Verzeichnisse dürfen nicht freigegeben werden. Die Claude-Bash-
+kommt beim Claude-Implementer vor den festen PATH `/usr/local/bin:/usr/bin:/bin`.
+Codex behält dagegen den Eltern-PATH; ohne Freigabe einer Home-Installation
+kann er still auf eine andere Version unter `/usr` zurückfallen. Starten Sie
+die Wache für Aufrufe per Namen in einer Shell, in der `command -v node`
+auf die freigegebene Installation zeigt und deren `bin`
+im PATH vor `/usr/bin` steht; andernfalls nutzen Sie absolute Werkzeugpfade.
+Codex fügt freigegebene Wurzeln nicht zum PATH hinzu. Die Identitätsbindung
+speichert die ausgewählte CLI und deren Interpreter, nicht den gesamten
+PATH; beachten Sie das beim Resume (Einrichtung 4.3). Liegen die
+passenden Werkzeuge unter `/usr` oder im Repository, entfällt die zusätzliche
+Wurzel; externe Symlink-Ziele von `node_modules` oder `.venv` brauchen sie
+ebenfalls. Der Orchestrator-Testbefehl läuft außerhalb der Agenten-Sandbox
+in der Startumgebung; dessen Erfolg beweist deren Toolchain-Sichtbarkeit nicht.
+HOME und Credential-Verzeichnisse dürfen nicht freigegeben werden. Die Claude-Bash-
 Sandbox braucht **socat und bubblewrap** und startet mit `failIfUnavailable`
 bei fehlenden Voraussetzungen nicht. Details und Zertifizierungsnachweise:
 [Einrichtung](docs/reference/einrichtung.md),
@@ -115,7 +137,20 @@ Beim ersten Start verhält er sich so:
 - Erfordert die Aufgabe einen Branchwechsel, während nicht ignorierte Arbeitsbaum- oder Indexänderungen vorliegen, stoppt der Orchestrator ohne Stash, Bereinigung oder Übernahme dieser Änderungen.
 - Bei einem Resume bleibt der persistierte Zielbranch bindend; ein abweichender aktiver Branch führt zum `BRANCH-MISMATCH`-Gate.
 
-Agenten selbst führen keine Branchoperationen aus. Der Orchestrator erstellt ausschließlich lokale, pfadgenau geprüfte Commits. Er pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um.
+Agenten selbst führen keine Branchoperationen aus. Der Orchestrator erstellt
+lokale, pfadgenau geprüfte Commits und nach befundfreier Abnahme standardmäßig
+einen lokalen Merge mit `--no-ff` in den Basisbranch. Mit
+`[workflow] merge_completed_branch = false` bleibt das Mergen beim Benutzer.
+Er pusht und force-pusht niemals und schreibt die Historie nicht um.
+
+Schreiben Sie `AGENTS.md` rollenneutral: Die ersten 12.000 Zeichen gelangen in den
+Implementer-Auftrag und als dessen Evidenz auch zu beiden Prüfern.
+Codex-Implementer laden die Datei zusätzlich nativ; Codex-Prüfer haben
+`project_doc_max_bytes=0`. Vorhandene `CLAUDE.md`, `CODEX.md` und `GEMINI.md`
+werden nicht automatisch als Rollenanweisungen geladen; kennzeichnen Sie sie als
+Handbetrieb-Dateien. Regeln wie „kein Review ohne Findings“ widersprechen
+dem Prüfvertrag und verhindern befundfreie Abschlüsse. Details und Vorlage
+stehen in Abschnitt 2.4 der [Einrichtung](docs/reference/einrichtung.md).
 
 ## 3. Eine Idee in die Inbox legen
 
@@ -263,4 +298,14 @@ git log --oneline --decorate -n 15
 git status --short
 ```
 
-Der Zielbranch enthält einen lokalen Plancommit, je einen Commit für jeden freigegebenen Slice und die abschließende Auditprojektion. Hat der Abnahmereview eine Folgeaufgabe erzeugt, wiederholt sich das für deren Slices auf demselben Branch. Arbeitsplan, Slice-Auditdokumente und Gesamtreview liegen unter den erzeugten Pfaden in `docs/internal/`. Die abgearbeitete Inbox-Datei liegt mit UTC-Zeitstempel unter `outbox/done/`. Push, Pull Request, Merge, Release und Deployment bleiben bewusste nachgelagerte Benutzeraktionen.
+Der Zielbranch enthält einen lokalen Plancommit, je einen Commit für jeden freigegebenen Slice und die abschließende Auditprojektion. Hat der Abnahmereview eine Folgeaufgabe erzeugt, wiederholt sich das für deren Slices auf demselben Branch. Arbeitsplan, Slice-Auditdokumente und Gesamtreview liegen unter den erzeugten Pfaden in `docs/internal/`. Die abgearbeitete Inbox-Datei liegt mit UTC-Zeitstempel unter `outbox/done/`. Nach befundfreier Abnahme ist standardmäßig der Basisbranch mit dem lokalen Merge ausgecheckt; der Zielbranch bleibt erhalten. Push, Pull Request, Release und Deployment bleiben bewusste nachgelagerte Benutzeraktionen.
+
+Ein zulässiger `post-merge`-Hook läuft nach dem bestätigten Merge höchstens
+600 Sekunden. Bei Timeout wird das Beenden seiner Prozessgruppe versucht;
+Warnung und `termination_uncertain` werden protokolliert, der Merge bleibt bestehen.
+Die Wirkung auf Windows-Kindprozesse über WSL-Interop oder `setsid`-Prozesse
+außerhalb der Gruppe ist ungeprüft. Führen Sie längere Builds separat aus,
+verwenden Sie einen kurzen Hook oder einen eigenen Überspringen-Schalter;
+alternativ deaktivieren Sie den automatischen Merge. Regeln und Umgang mit
+ungewissem Ausgang stehen in Abschnitt 2.10 der
+[Einrichtung](docs/reference/einrichtung.md).

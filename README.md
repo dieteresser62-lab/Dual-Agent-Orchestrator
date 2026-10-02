@@ -108,7 +108,26 @@ Beide Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend m�
 - `codex`
 - `claude`
 
-Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle. Freigegebene Major-/Minor-Linien akzeptieren numerische Patchupdates automatisch; ein Major- oder Minor-Wechsel bleibt bis zu einer erneuten Capability-Freigabe gesperrt. Unabhängig von der Patchversion müssen alle erforderlichen CLI-Flags vorhanden sein.
+Das Codex-Fähigkeitsregister nennt 0.156.1 als Mindestversion; die
+gehärtete Codex-Implementer-Aufrufform (Stand Oktober 2026) wurde mit 0.159.2
+gemessen. Deren Unterstützung durch 0.156.1 ist ungeprüft. Verwenden Sie den
+gemessenen oder einen neueren Stand und führen Sie nach CLI-Updates den
+Offline-Quicktest aus Abschnitt 2.3
+der [Einrichtung](docs/reference/einrichtung.md) aus. Fehlende Pflichtschalter
+werden über `exec --help` abgewiesen; die Unterstützung von Rechteprofilen
+wird nicht separat vorab geprüft (Abschnitt 4.3).
+
+Nach einem Orchestrator-Update gehören `run_task --help` und die
+Projekt-Prüfliste aus [Abschnitt 2.11 der Einrichtung](docs/reference/einrichtung.md#211-den-orchestrator-aktualisieren-und-ein-projekt-nachziehen)
+zum Nachziehen. Geänderte Zertifizierungs- oder Profildigests können unfertige
+Läufe mit `AGENT-PROFILE-DIFF` anhalten. Der Abschnitt beschreibt den
+Rückweg zur passenden alten Version und den bewussten Neustart.
+
+Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten
+verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle. Die
+Versionspolitik akzeptiert jede wohlgeformte Version ab dem Registerminimum,
+auch neue Hauptversionen. Die erforderlichen CLI-Flags müssen weiterhin
+vorhanden sein; nach CLI-Updates gehört der Offline-Quicktest zur Operatorprüfung.
 
 ## Schnellstart
 
@@ -313,6 +332,14 @@ Nachdem der Reviewer den Slice-Fingerprint freigegeben hat, führt der Orchestra
 
 Nach einem befundfreien Gesamtreview archiviert der Orchestrator neue interne Dokumente in einem eigenen Commit. Standardmäßig erstellt er anschließend einen lokalen Merge-Commit ohne Fast-Forward in den Basisbranch. Bei diesen Git-Transaktionen bleiben Hooks und Signierung deaktiviert. Erst nach dem bestätigten Merge-Ergebnis prüft er den wirksamen `post-merge`-Hook und führt einen zulässigen Hook mit Argument `0` aus; Fehler oder eine Überschreitung von 600 Sekunden erzeugen eine Warnung, und begrenzte Ausgaben werden im Ergebnisrecord festgehalten, ohne den Merge zurückzunehmen. Bei ungewissem Hook-Ausgang hält Resume an, bis der Operator den offenen Intent für den bestätigten Merge-Commit begründet quittiert. Der Zielbranch bleibt nach dem Merge lokal erhalten, während der Basisbranch ausgecheckt ist. Mit `merge_completed_branch = false` bleibt der Zielbranch ausgecheckt und der Hook wird ausgelassen. Der Orchestrator pusht und force-pusht nie und schreibt die Historie nicht um. Einzelheiten und der Quittierungsbefehl stehen in [Abschnitt 2.10 der Einrichtung](docs/reference/einrichtung.md).
 
+Bei Hook-Timeout versucht der Orchestrator, die eigene Prozessgruppe mit
+SIGTERM und nötigenfalls SIGKILL zu beenden. Das Ergebnisfeld
+`termination_uncertain` zeigt, ob deren Ende bestätigt werden konnte. Die Wirkung auf Kindprozesse
+außerhalb der Gruppe, etwa über WSL-Interop oder `setsid`, ist ungeprüft.
+Für möglicherweise längere Hooks empfehlen sich ein manueller Merge mit
+`merge_completed_branch = false`, ein kurzer Hook oder ein eigener Schalter
+zum Überspringen des langen Schritts.
+
 ## Watch-Modus
 
 Der Orchestrator kann als FIFO-Warteschlangenworker ausgeführt werden:
@@ -458,7 +485,7 @@ Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und ans
 
 Providerprozesse beider Rollen laufen standardmäßig bis zu ihrem Ende. `--implementer-timeout` und `--reviewer-timeout` beziehungsweise `RUN_TASK_IMPLEMENTER_TIMEOUT` und `RUN_TASK_REVIEWER_TIMEOUT` setzen bei einem positiven Sekundenwert ein hartes Zeitlimit; `0` hebt es ausdrücklich auf. Für Ereignisströme begrenzen `stall_timeout_seconds = 900` die Modellstille und `tool_timeout_seconds = 3600` jedes einzelne offene Werkzeug. Kein Gesamtzeitlimit wird nur mit beiden aktivierten Netzen empfohlen; Print-Transporte benötigen bei Bedarf eine eigene Gesamtgrenze. Die Lebenszeichen im Log bleiben aktiv. Die Zeitlimits der Validierungsbefehle und des separaten Review-Harness (`RUN_TASK_REVIEW_TIMEOUT`) bleiben bestehen. Nach einem Absturz prüft `--resume` Boot-ID, PID und Prozessstartzeit: Ein sicher beendeter Versuch wird als Prozessfehler abgeschlossen und im selben Aufruf mit der nächsten Versuchsnummer wiederholt. Ein noch laufender Prozess hält mit seiner PID an. Ohne sicheren Nachweis erscheint ein Gate mit Fingerprint und geänderten Pfaden; erst `--resume --approve-gate --gate-rationale "…"` schließt den Versuch und setzt fort.
 
-Das Modell wählt man über seine Familie: für Codex `sol` (Standard), `terra`, `luna` oder `astra`, für Claude `opus` (Standard), `sonnet` oder `fable`. Codex-Familien werden einmal beim Laufstart über `codex debug models` am identitätsgebundenen Binary aufgelöst: Unter sichtbaren, API-fähigen Einträgen gewinnt der kleinste `priority`-Wert; eine leere oder mehrdeutige Auswahl wird abgewiesen. Explizite volle Modell-IDs sind zulässig, wenn sie im Katalog stehen. Das aufgelöste Modell wird im Laufprofil und Log gebunden. Resume behält dieses Modell und prüft nur seine Verfügbarkeit im Katalog; ein verschwundenes Modell wird ohne Ausweichen abgewiesen. Claude löst seine Aliase selbst auf. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v1.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
+Das Modell wählt man über seine Familie: für Codex `sol` (Standard), `terra`, `luna` oder `astra`, für Claude `opus` (Standard), `sonnet` oder `fable`. Codex-Familien werden einmal beim Laufstart über `codex debug models` am identitätsgebundenen Binary aufgelöst: Unter sichtbaren, API-fähigen Einträgen gewinnt der kleinste `priority`-Wert; eine leere oder mehrdeutige Auswahl wird abgewiesen. Explizite volle Modell-IDs sind zulässig, wenn sie im Katalog stehen. Das aufgelöste Modell wird im Laufprofil und Log gebunden. Resume behält dieses Modell und prüft nur seine Verfügbarkeit im Katalog; ein verschwundenes Modell wird ohne Ausweichen abgewiesen. Claude löst seine Aliase selbst auf. Der Effort ist für beide Rollen frei wählbar: `low`, `medium`, `high` (Standard), `xhigh` oder `max`. Modell und Effort werden beim Start eines Laufs festgeschrieben; eine Wiederaufnahme mit abweichenden Angaben hält mit `AGENT-PROFILE-DIFF` an. Das geprüfte Fähigkeitsregister `schemas/native-provider-schema-capabilities-v2.json` bindet Aufrufform und Schemaübergabe, nicht Modell und Effort: Die Schemamerkmale wurden für alle wählbaren Modelle und Effort-Stufen identisch gemessen.
 
 Beispiele:
 
@@ -593,13 +620,39 @@ Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Prefligh
 
 ## Agentenanweisungen und nativer Ausgabevertrag
 
-Die aktiven Anweisungsdateien des Repositorys sind:
+Der konfigurierte Testbefehl läuft außerhalb der Agenten-Sandbox in der
+Startumgebung des Orchestrators. Für gezielte Implementer-Tests brauchen
+Werkzeuge außerhalb von `/usr` oder dem Repository konkrete
+`provider_options.codex.toolchain_read_roots` beziehungsweise
+`provider_options.claude.toolchain_read_roots`; das gilt auch für externe
+Symlink-Ziele von `node_modules` oder `.venv`. Codex behält den Eltern-PATH,
+kann bei unsichtbaren Home-Werkzeugen aber still auf eine andere Systemversion
+zurückfallen. Starten Sie die Wache in einer Shell, in der `command -v node`
+auf die freigegebene Installation zeigt; deren `bin` muss für den Aufruf per
+Namen im PATH vor `/usr/bin` stehen. Andernfalls nutzen Sie absolute
+Werkzeugpfade. Die Identitätsbindung speichert die ausgewählte CLI und deren
+Interpreter, nicht den gesamten PATH; beachten Sie das beim Resume (4.3).
+Claude nutzt den festen PATH `/usr/local/bin:/usr/bin:/bin`
+mit vorangestellten vorhandenen `<wurzel>/bin`. Die Wurzeln bleiben
+schreibgeschützt; HOME und Credential-Verzeichnisse sind ausgeschlossen.
+Die Entscheidungsregel und vollständigen Pfadgrenzen stehen in Abschnitten
+2.3 und 4.3 der [Einrichtung](docs/reference/einrichtung.md).
+
+Die Anweisungsdateien dieses Repositorys bleiben für den Handbetrieb
+synchronisiert. Im orchestrierten Zielprojekt gilt dagegen:
 
 | Datei | Verantwortung |
 |---|---|
-| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
-| `CODEX.md` | Dünner Einstieg der Codex CLI; verweist auf `AGENTS.md`. |
-| `CLAUDE.md` | Dünner Einstieg der Claude CLI; verweist auf `AGENTS.md`. |
+| `AGENTS.md` | Rollenneutrales Projektwissen; die ersten 12.000 Zeichen werden an den Implementer-Auftrag angehängt und erreichen beide Prüfer als Auftragsevidenz. |
+| `CODEX.md`, `CLAUDE.md`, `GEMINI.md` | Vorhandene Rollendateien als „nur Handbetrieb“ kennzeichnen; sie werden nicht automatisch als Rollenanweisungen geladen. |
+
+Der Codex-Implementer lädt `AGENTS.md` zusätzlich nativ als Projektanweisung;
+der Codex-Prüfer deaktiviert dieses Laden mit `project_doc_max_bytes=0`.
+Rollendateien können in vollständigen Prüfsnapshots als Evidenz sichtbar sein.
+Anbieterrollen bestimmt das Laufprofil. Projektregeln dürfen dem Prüfvertrag
+nicht widersprechen: „kein Review ohne Findings“ verhindert befundfreie
+Abnahmen. Vorlage und Einzelheiten stehen in Abschnitt 2.4 der
+[Einrichtung](docs/reference/einrichtung.md).
 
 Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Der Implementer
 erhält `native-agent-implementer-request-v3` und antwortet gemäß
@@ -645,8 +698,9 @@ python3 -m pytest tests/ -v -m "not crash_harness"
 python3 -m pytest tests/test_crash_harness.py -v
 ```
 
-Der erste Pytest-Aufruf entspricht der standardmäßigen Slice- und
-Korrekturvalidierung. Den vollständigen Crash-Harness führt der Betreiber nach
+Diese Verifikation betrifft die **Entwicklung des Orchestrators**, nicht
+angeschlossene Zielprojekte. Der erste Pytest-Aufruf entspricht der
+standardmäßigen Slice- und Korrekturvalidierung. Den vollständigen Crash-Harness führt der Betreiber nach
 der letzten relevanten Änderung auf dem exakten Branch-HEAD und vor dem
 branchweiten Finalreview und einem Merge separat aus. Nach jeder Änderung von
 `HEAD` ist der vollständige Crashbeweis erneut nötig; der Orchestrator
